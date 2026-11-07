@@ -21,9 +21,11 @@ python3 drivers/TegraGpu/tools/build.py \
 ```
 
 `TegraGpuCore.lib` contains WDDM resource acquisition/release helpers, GM20B
-4 KiB page-entry encoders and the unchanged mesa-switch report encoder.
-The host tests cover address encoding and packet boundaries, not GPU execution.
-No GPU rail, clock, MMU or channel is enabled by this library alone.
+4 KiB page-entry encoders, the unchanged mesa-switch report encoder, and an
+explicit T214 idle-GPU power sequence. The host tests cover address formats,
+packet boundaries, power ordering and failure cleanup; they do not execute GPU
+commands. Power functions require a platform I/O owner to call them; there is no
+driver entry point, GPU MMU setup or channel submission yet.
 
 The firmware consumes `platform/t214_resources.h` through its WindowsDrivers
 submodule. Build it with `-D SWITCH_LITE_GPU=1` to expose the separate ACPI

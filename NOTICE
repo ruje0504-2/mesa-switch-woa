@@ -31,3 +31,11 @@ Retain Mesa's license notices when distributing a linked binary.
 WDDM resource ownership is based on the public Microsoft render-only sample
 at de4a2161991eda254013da6c18226f5ea06e4a9c. Its Raspberry Pi hardware
 initialization and software renderer are not used.
+
+platform/t214_power.c and its interface/test are GPL-2.0-only, with power
+ordering adapted from Switchroot nvgpu platform_gk20a_tegra.c at
+1ae0167d360287ca78f5a2572f0de42594140312 (Copyright 2014-2019 NVIDIA), and
+MC drain ordering from Switchroot drivers/platform/tegra/mc/mc.c
+(Copyright 2010 Google and 2011-2021 NVIDIA). The repository LICENSE contains
+the GPL version 2 text. B01 rail assignments and register definitions follow
+Switchroot's tegra210b01-nx-pmic.dtsi and CTCaer's Hekate max77812.h.
