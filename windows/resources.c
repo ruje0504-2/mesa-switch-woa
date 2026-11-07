@@ -1,0 +1,96 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright 2026 ruje0504-2 */
+#include "resources.h"
+#include "../platform/t214_resources.h"
+
+static const ULONG TgGpuBases[TgGpuApertureCount] = {
+    T214_GPU_REG_BASE, T214_GPU_BAR1_BASE, T214_GPU_AUX_BASE
+};
+static const ULONG TgGpuSizes[TgGpuApertureCount] = {
+    T214_GPU_REG_SIZE, T214_GPU_BAR1_SIZE, T214_GPU_AUX_SIZE
+};
+
+NTSTATUS
+TgGpuReleaseResources(const DXGKRNL_INTERFACE *Dxgk,
+                      TG_GPU_RESOURCES *Resources)
+{
+    NTSTATUS result = STATUS_SUCCESS;
+    ULONG i;
+    PAGED_CODE();
+    for (i = TgGpuApertureCount; i != 0; --i) {
+        if (Resources->Mapping[i - 1]) {
+            NTSTATUS status = Dxgk->DxgkCbUnmapMemory(
+                Dxgk->DeviceHandle, Resources->Mapping[i - 1]);
+            if (NT_SUCCESS(status))
+                Resources->Mapping[i - 1] = NULL;
+            else if (NT_SUCCESS(result))
+                result = status;
+        }
+    }
+    return result;
+}
+
+NTSTATUS
+TgGpuAcquireResources(const DXGKRNL_INTERFACE *Dxgk,
+                      TG_GPU_RESOURCES *Resources)
+{
+    DXGK_DEVICE_INFO info = {0};
+    PCM_PARTIAL_RESOURCE_LIST list;
+    ULONG i, memoryMask = 0, interruptCount = 0;
+    NTSTATUS status;
+    PAGED_CODE();
+
+    for (i = 0; i < TgGpuApertureCount; ++i)
+        if (Resources->Mapping[i])
+            return STATUS_INVALID_DEVICE_STATE;
+    RtlZeroMemory(Resources, sizeof(*Resources));
+
+    status = Dxgk->DxgkCbGetDeviceInformation(Dxgk->DeviceHandle, &info);
+    if (!NT_SUCCESS(status))
+        return status;
+    /* The single ACPI render node supplies one resource list. Neither the
+     * POST framebuffer nor shared clock/PMC ranges belong to this node.
+     */
+    if (!info.TranslatedResourceList || info.TranslatedResourceList->Count != 1)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    list = &info.TranslatedResourceList->List[0].PartialResourceList;
+    for (i = 0; i < list->Count; ++i) {
+        const CM_PARTIAL_RESOURCE_DESCRIPTOR *resource = &list->PartialDescriptors[i];
+        if (resource->Type == CmResourceTypeMemory) {
+            ULONG aperture;
+            for (aperture = 0; aperture < TgGpuApertureCount; ++aperture)
+                if (resource->u.Memory.Start.QuadPart == TgGpuBases[aperture])
+                    break;
+            if (aperture == TgGpuApertureCount ||
+                resource->u.Memory.Length != TgGpuSizes[aperture] ||
+                (memoryMask & (1u << aperture)) != 0 ||
+                resource->ShareDisposition != CmResourceShareDeviceExclusive)
+                return STATUS_DEVICE_CONFIGURATION_ERROR;
+            Resources->Memory[aperture] = *resource;
+            memoryMask |= 1u << aperture;
+        } else if (resource->Type == CmResourceTypeInterrupt) {
+            if (interruptCount == 2 ||
+                (resource->Flags & (CM_RESOURCE_INTERRUPT_LATCHED |
+                                    CM_RESOURCE_INTERRUPT_MESSAGE)) != 0)
+                return STATUS_DEVICE_CONFIGURATION_ERROR;
+            /* Preserve translated Windows vectors, levels and affinity.
+             * They are not the raw GSI values from _CRS. Order is stall then
+             * nonstall, as emitted by the shared firmware resource profile.
+             */
+            Resources->Interrupt[interruptCount++] = *resource;
+        }
+    }
+    if (memoryMask != (1u << TgGpuApertureCount) - 1u || interruptCount != 2)
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+
+    for (i = 0; i < TgGpuApertureCount; ++i) {
+        status = Dxgk->DxgkCbMapMemory(Dxgk->DeviceHandle,
+            Resources->Memory[i].u.Memory.Start, TgGpuSizes[i],
+            FALSE, FALSE, MmNonCached, &Resources->Mapping[i]);
+        if (!NT_SUCCESS(status)) {
+            NTSTATUS cleanup = TgGpuReleaseResources(Dxgk, Resources);
+            return NT_SUCCESS(cleanup) ? status : cleanup;
+        }
+    }
+    return STATUS_SUCCESS;
+}
