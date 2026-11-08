@@ -101,9 +101,10 @@ enum tg_gpu_acr_hw_result tg_gpu_acr_hw_prepare(const struct tg_gpu_power_io *io
     if (!wait_reg(io,s,PMU+0x10c,6,0,1000)) return fail(io,p,s,TG_GPU_ACR_HW_SCRUB_TIMEOUT);
     if (!wait_reg(io,s,PMU+0x04c,0xffff,0,200000)) return fail(io,p,s,TG_GPU_ACR_HW_IDLE_TIMEOUT);
     s->hwcfg=get(io,PMU+0x108);
+    s->scp_status=get(io,PMU+0xc08);
     s->imem_size=(s->hwcfg&0x1ff)*256;
     s->dmem_size=((s->hwcfg>>9)&0x1ff)*256;
-    if (s->hwcfg==UINT32_MAX || !s->imem_size || s->dmem_size<76)
+    if (s->hwcfg==UINT32_MAX || s->scp_status==UINT32_MAX || !s->imem_size || s->dmem_size<76)
         return fail(io,p,s,TG_GPU_ACR_HW_MEMORY);
     put(io,PMU+0x014,UINT32_MAX);
     s->stage=4;
@@ -134,6 +135,7 @@ enum tg_gpu_acr_hw_result tg_gpu_acr_hw_boot(const struct tg_gpu_power_io *io,
     for (unsigned i=0;i<5;++i) put(io,PMU+0xe00+i*4,aperture[i]);
     put(io,PMU+0x044,0);
     itfen=get(io,PMU+0x048);
+    s->last_register=PMU+0x048; s->last_value=itfen;
     if (itfen==UINT32_MAX) return fail(io,p,s,TG_GPU_ACR_HW_REGISTER);
     put(io,PMU+0x048,itfen|1);
     /* PMU's dedicated instance register uses bit 30 VALID and the explicit
@@ -141,12 +143,18 @@ enum tg_gpu_acr_hw_result tg_gpu_acr_hw_boot(const struct tg_gpu_power_io *io,
      * The private page tables still use the established SoC DRAM PTE policy.
      */
     put(io,PMU+0x480,(uint32_t)(instance>>12)|0x70000000);
-    if (get(io,PMU+0x480)!=((uint32_t)(instance>>12)|0x70000000))
+    s->last_register=PMU+0x480; s->last_value=get(io,PMU+0x480);
+    /* NEW_INSTBLK defines PTR[27:0], TARGET[29:28] and VALID[30]. This Lite
+     * additionally reads bit 31 as one. Check every programmed field without
+     * treating that unprogrammed bit as an address/target mismatch.
+     */
+    if ((s->last_value&0x7fffffffu)!=((uint32_t)(instance>>12)|0x70000000))
         return fail(io,p,s,TG_GPU_ACR_HW_REGISTER);
     s->stage=6;
     put(io,PMU+0x1c0,0x01000000);
     for (unsigned i=0;i<19;++i) stream(io,PMU+0x1c4,desc[i]);
-    if ((get(io,PMU+0x1c0)&0xfffc)!=76) return fail(io,p,s,TG_GPU_ACR_HW_MEMORY);
+    s->last_register=PMU+0x1c0; s->last_value=get(io,PMU+0x1c0);
+    if ((s->last_value&0xfffc)!=76) return fail(io,p,s,TG_GPU_ACR_HW_MEMORY);
     put(io,PMU+0x180,(s->imem_size-bytes)|0x01000000);
     for (uint32_t i=0;i<bytes;i+=4) {
         uint32_t word=0;

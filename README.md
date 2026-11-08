@@ -13,7 +13,10 @@ Build with LLVM and the official Windows WDK/SDK headers. `WDK_INCLUDE` and
 ARM64 and the Windows 11 22H2 baseline, using WDDM 2.4 private-memory
 callbacks. `GR_FIRMWARE` is a local directory containing NVIDIA's external
 `NETB_img.bin`, `fecs.bin` and `gpccs.bin` for `tegra21x`/`gm20b`. The files
-are supplied by the operator, not stored in this repository. From the repository root:
+are supplied by the operator, not stored in this repository. `ACR_FIRMWARE`
+contains the external NVIDIA 32.7.6 `nv_acr_ucode_prod.bin`, `pmu_bl.bin`,
+`gpmu_ucode_image.bin`, `gpmu_ucode_desc.bin`, `pmu_sig.bin` and `fecs_sig.bin`.
+Both sets are required for the secure T214 probe. From the repository root:
 
 ```sh
 git clone --depth 1 https://github.com/danfromtico/mesa-switch.git build/mesa-switch
@@ -21,7 +24,8 @@ git -C build/mesa-switch checkout 0ff52079ca9e9e837ed27eb95a8d239f439a1864
 python3 drivers/TegraGpu/tools/build.py \
   --mesa build/mesa-switch \
   --wdk-include "$WDK_INCLUDE" --sdk-include "$SDK_INCLUDE" \
-  --out build/tegra-gpu --probe --gr-firmware "$GR_FIRMWARE"
+  --out build/tegra-gpu --probe --gr-firmware "$GR_FIRMWARE" \
+  --acr-firmware "$ACR_FIRMWARE"
 ```
 
 `TegraGpuCore.lib` contains WDDM resource/private-memory helpers, GM20B 4 KiB
@@ -31,8 +35,10 @@ T214 power/clock control. The default target is **729.6 MHz**, with an opt-in
 the conservative Switchroot B01 CVB table and are checked by a GPCCLK counter.
 OUT5 at 204 MHz is a separate power/reference clock. The KMDF probe uses a
 private uncached arena, bounded read-only firmware mappings and one channel
-to release two FIFO semaphores with different values. It loads the non-secure
-GR bootstrap before channel binding and powers down afterward. This does not
+to release two FIFO semaphores with different values. On non-secure hardware it
+loads GR before channel binding. Secure T214 instead runs the signed ACR
+bootstrap and currently stops before the pending PMU RTOS/FECS queue step.
+Both paths power down afterward. This does not
 create a graphics context or execute shaders. The future WDDM adapter uses the
 separate Dxgkrnl private-memory helpers; VidMm/scheduler integration is open.
 The diagnostic requires exclusive cold GPU ownership, resets/enables PFIFO
@@ -86,7 +92,7 @@ through execution and is restored on clock release. FIFO/FB/LTC use the
 upstream force-run clock-gating profiles until a PMU governor exists. LTC
 active counts feed both L2 and FBHUB; physical-security setup is restricted
 to the upstream non-secure branch. Two bounded FB flushes must finish before
-the channel becomes runnable. ABI 11 (292 bytes) records the initialization
+the channel becomes runnable. ABI 12 (376 bytes) records the initialization
 stage, LTC/flush counts, BUS/PRI faults, FIFO binding/engine state and the
 separate BAR1 step/expected/GPU/CPU values. Bounded L2 writeback and invalidation
 timeouts stop submission; a successful FB flush alone is not DRAM visibility.
@@ -124,11 +130,22 @@ build/tegra-gpu/test-gr-firmware NETB_img.bin fecs.bin gpccs.bin
 instance binding, FECS/GPCCS DMA bootloader transfer and FECS-ready handshake.
 It waits for Falcon DMA IDLE to become set, retains failure-stage/register
 information, and refuses the non-secure route when PRIV security is enabled.
-Secure ACR/WPR bootstrap and golden graphics contexts remain unimplemented.
+The secure path uses `platform/t214_acr.c`: discover the existing protected WPR,
+reset/scrub PMU, select the hardware production/debug signature profile, and
+run the vendor HS bootloader with bounded authentication/HALT checks. It never
+changes security fuses or maps WPR into the CPU. Golden graphics contexts and
+the PMU RTOS command queues remain separate implementation work.
 `windows/gr_firmware_io.c` reads only fixed administrator-protected driver paths
 at PASSIVE_LEVEL before GPU power-up. The packed surface is copied into a
 64 KiB private arena region mapped read-only, with a separate firmware instance.
-Teardown resets GR/FIFO before MC drain; backing memory is retained until power
+The ACR surface occupies another 128 KiB with its own PMU instance, within the
+same owned 512 KiB arena. Its page entries are installed before BAR1; packing
+uses the hardware WPR/DMEM sizes and completes FB/L2 synchronization before
+PMU DMA. Only the supported GM20B firmware version 20490253 and its 32-byte
+command-line layout are accepted. Stage 309 reports ACR errors; stage 310
+means ACR authenticated but PMU RTOS/secure FECS startup is still pending,
+and explicitly cannot pass the FIFO test. Teardown resets PMU/GR/FIFO before
+MC drain; backing memory is retained until power
 retirement. No shader or Vulkan execution claim follows from these local checks.
 
 The diagnostic accepts only owned physical buffers below 4 GiB. Switchroot's

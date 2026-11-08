@@ -23,7 +23,7 @@ parser.add_argument("--link", default="lld-link")
 parser.add_argument("--dlltool", default="llvm-dlltool")
 parser.add_argument("--probe", action="store_true", help="also build the opt-in KMDF probe and its SwitchFan bridge")
 parser.add_argument("--gr-firmware", type=Path, help="external NVIDIA tegra21x NETB_img.bin/fecs.bin/gpccs.bin directory (required for --probe)")
-parser.add_argument("--acr-firmware", type=Path, help="also check the external NVIDIA 32.7.6 ACR/PMU/FECS files against the WPR packer; does not install or start ACR")
+parser.add_argument("--acr-firmware", type=Path, help="external NVIDIA 32.7.6 ACR/PMU/FECS files; required for the secure T214 probe")
 parser.add_argument("--keep-fan", action="store_true", help="with --probe, preserve the existing signed SwitchFan package")
 parser.add_argument("--windows-tests", action="store_true", help="build the real-WDK paging test executable for ARM64 Windows")
 args = parser.parse_args()
@@ -32,6 +32,11 @@ if args.keep_fan and not args.probe:
 if args.probe and (not args.gr_firmware or
     any(not (args.gr_firmware / n).is_file() for n in ("NETB_img.bin", "fecs.bin", "gpccs.bin"))):
     parser.error("--probe requires --gr-firmware with the three external NVIDIA GR files")
+acr_names=("nv_acr_ucode_prod.bin", "pmu_bl.bin", "gpmu_ucode_image.bin",
+           "gpmu_ucode_desc.bin", "pmu_sig.bin", "fecs_sig.bin")
+if args.probe and (not args.acr_firmware or
+    any(not (args.acr_firmware / n).is_file() for n in acr_names)):
+    parser.error("--probe requires --acr-firmware with all six external NVIDIA ACR files")
 revision = subprocess.check_output(
     ["git", "-C", str(args.mesa), "rev-parse", "HEAD"], text=True).strip()
 if revision != MESA_REVISION:
@@ -178,6 +183,8 @@ if args.probe:
             libs.extend([firmware_io, library])
             for filename in ("NETB_img.bin", "fecs.bin", "gpccs.bin"):
                 shutil.copyfile(args.gr_firmware / filename, dest / filename)
+            for filename in acr_names:
+                shutil.copyfile(args.acr_firmware / filename, dest / filename)
         subprocess.run([args.link, "/nologo", "/driver", "/subsystem:native,10.0", "/machine:arm64",
                         "/entry:FxDriverEntry", "/nodefaultlib", "/release", "/opt:ref", "/opt:icf",
                         "/tsaware:no", "/section:.text,ERP", "/section:.rdata,RP",

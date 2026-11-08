@@ -5,7 +5,7 @@
 #include <string.h>
 #define GPU 0x57000000u
 #define PMU 0x10a000u
-enum failure { NONE, VPR_BUSY, BAD_WPR, BUSY, RESET, SCRUB, BAD_HWCFG,
+enum failure { NONE, VPR_BUSY, BAD_WPR, BUSY, RESET, SCRUB, BAD_HWCFG, BAD_INSTANCE, BAD_TARGET, BAD_VALID,
                DMEM_SHORT, NO_HALT, AUTH_ERROR, STALE_MAILBOX };
 struct model {
     enum failure fail;
@@ -34,7 +34,8 @@ static uint32_t read32(void *ctx, uint32_t address)
     case PMU+0x10c:return m->fail==SCRUB ? 6 : 0;
     case PMU+0x1c0:return m->dmemc;
     case PMU+0x180:return m->imemc;
-    case PMU+0x480:return m->instance;
+    case PMU+0x480:return (m->instance|0x80000000u) ^
+        (m->fail==BAD_INSTANCE ? 1 : m->fail==BAD_TARGET ? 0x10000000 : m->fail==BAD_VALID ? 0x40000000 : 0);
     case PMU+0x100:return m->starts ? (m->fail==NO_HALT ? 2 : 0x10) : 0;
     case PMU+0x040:
         if (!m->starts || m->fail==STALE_MAILBOX) return m->mailbox;
@@ -118,16 +119,18 @@ int main(void)
     check_prepare_fail(RESET,TG_GPU_ACR_HW_RESET);
     check_prepare_fail(SCRUB,TG_GPU_ACR_HW_SCRUB_TIMEOUT);
     check_prepare_fail(BAD_HWCFG,TG_GPU_ACR_HW_MEMORY);
-    const enum failure cases[]={DMEM_SHORT,NO_HALT,AUTH_ERROR,STALE_MAILBOX};
+    const enum failure cases[]={DMEM_SHORT,NO_HALT,AUTH_ERROR,STALE_MAILBOX,BAD_INSTANCE,BAD_TARGET,BAD_VALID};
     const enum tg_gpu_acr_hw_result result[]={TG_GPU_ACR_HW_MEMORY,TG_GPU_ACR_HW_HALT_TIMEOUT,
-        TG_GPU_ACR_HW_AUTHENTICATION,TG_GPU_ACR_HW_AUTHENTICATION};
-    for (unsigned i=0;i<4;++i) {
+        TG_GPU_ACR_HW_AUTHENTICATION,TG_GPU_ACR_HW_AUTHENTICATION,TG_GPU_ACR_HW_REGISTER,
+        TG_GPU_ACR_HW_REGISTER,TG_GPU_ACR_HW_REGISTER};
+    for (unsigned i=0;i<7;++i) {
         m=fresh(NONE);io=io_for(&m);
         assert(tg_gpu_acr_hw_prepare(&io,&power,&s)==TG_GPU_ACR_HW_OK);
         m.fail=cases[i];
         assert(tg_gpu_acr_hw_boot(&io,&power,&image,desc,0x80000000,&s)==result[i]);
         assert(s.reset_confirmed && !(m.mc&0x2000));
         if (cases[i]==DMEM_SHORT) assert(!m.starts && !m.iwords);
+        if (i>=4) assert(!m.starts && !m.dwords && s.last_register==PMU+0x480 && s.last_value!=0xf0080000u);
         if (cases[i]==NO_HALT) assert(m.delayed>=10000000 && m.delayed<10001000);
     }
     /* Bad backing and oversized boot must fail before firmware starts. */

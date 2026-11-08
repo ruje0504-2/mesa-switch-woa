@@ -34,10 +34,12 @@ struct tg_gpu_gr_image {
 /* CPU-owned, immutable input. Execution copies only the packed surface into
  * its bounded GPU arena; the NETB views remain valid until bootstrap returns.
  */
+struct tg_gpu_acr_files;
 struct tg_gpu_gr_payload {
     struct tg_gpu_gr_netlist netlist;
     struct tg_gpu_gr_image image;
     const uint8_t *surface;
+    const struct tg_gpu_acr_files *acr;
 };
 enum tg_gpu_gr_firmware_result tg_gpu_gr_netlist_parse(
     struct tg_gpu_gr_blob input, struct tg_gpu_gr_netlist *out);

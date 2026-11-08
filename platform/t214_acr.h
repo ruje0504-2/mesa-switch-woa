@@ -14,6 +14,7 @@ struct tg_gpu_acr_hw_status {
     uint32_t stage, result, security, hwcfg, imem_size, dmem_size;
     uint32_t mc_enable, mailbox0, mailbox1, cpuctl, sctl;
     uint32_t last_register, last_value, reset_confirmed;
+    uint32_t scp_status;
     uint64_t wpr_base, wpr_size;
 };
 /* Cold, exclusively owned GPU with CPU interrupt outputs disabled. Discover

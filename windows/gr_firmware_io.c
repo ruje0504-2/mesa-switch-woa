@@ -39,6 +39,8 @@ VOID TgGpuFirmwareFree(TG_GPU_FIRMWARE *firmware)
 {
     if (firmware->surface) ExFreePoolWithTag(firmware->surface,FW_TAG);
     if (firmware->netlist) ExFreePoolWithTag(firmware->netlist,FW_TAG);
+    for (unsigned i=0;i<6;++i)
+        if (firmware->acr_files[i].data) ExFreePoolWithTag((PVOID)firmware->acr_files[i].data,FW_TAG);
     RtlZeroMemory(firmware,sizeof(*firmware));
 }
 NTSTATUS TgGpuFirmwareLoad(TG_GPU_FIRMWARE *firmware)
@@ -48,6 +50,16 @@ NTSTATUS TgGpuFirmwareLoad(TG_GPU_FIRMWARE *firmware)
         L"\\SystemRoot\\System32\\drivers\\TegraGpu\\fecs.bin",
         L"\\SystemRoot\\System32\\drivers\\TegraGpu\\gpccs.bin"
     };
+    static PCWSTR const acr_names[] = {
+        L"\\SystemRoot\\System32\\drivers\\TegraGpu\\nv_acr_ucode_prod.bin",
+        L"\\SystemRoot\\System32\\drivers\\TegraGpu\\pmu_bl.bin",
+        L"\\SystemRoot\\System32\\drivers\\TegraGpu\\gpmu_ucode_image.bin",
+        L"\\SystemRoot\\System32\\drivers\\TegraGpu\\gpmu_ucode_desc.bin",
+        L"\\SystemRoot\\System32\\drivers\\TegraGpu\\pmu_sig.bin",
+        L"\\SystemRoot\\System32\\drivers\\TegraGpu\\fecs_sig.bin"
+    };
+    static const ULONG acr_maximum[]={0x10000,0x10000,0x40000,0x10000,0x1000,0x1000};
+    struct tg_gpu_acr_image image;
     struct tg_gpu_gr_blob files[3] = {0};
     struct tg_gpu_gr_payload *p=&firmware->payload;
     NTSTATUS status=STATUS_SUCCESS;
@@ -70,6 +82,17 @@ NTSTATUS TgGpuFirmwareLoad(TG_GPU_FIRMWARE *firmware)
         !=TG_GPU_GR_FW_OK) { status=STATUS_INVALID_IMAGE_FORMAT; goto done; }
     p->surface=firmware->surface;
     firmware->netlist=(PVOID)files[0].data; files[0].data=NULL;
+    for (unsigned i=0;i<6;++i) {
+        status=ReadFirmware(acr_names[i],acr_maximum[i],&firmware->acr_files[i]);
+        if (!NT_SUCCESS(status)) goto done;
+    }
+    firmware->acr=(struct tg_gpu_acr_files){firmware->acr_files[0],firmware->acr_files[1],
+        firmware->acr_files[2],firmware->acr_files[3],firmware->acr_files[4],firmware->acr_files[5],p};
+    if (tg_gpu_acr_prepare(&firmware->acr,false,&image)!=TG_GPU_ACR_OK ||
+        image.pmu_version!=20490253u || image.size>TG_GPU_ACR_SURFACE_BYTES) {
+        status=STATUS_INVALID_IMAGE_FORMAT; goto done;
+    }
+    p->acr=&firmware->acr;
 done:
     for (unsigned i=0;i<3;++i) if (files[i].data) ExFreePoolWithTag((PVOID)files[i].data,FW_TAG);
     if (!NT_SUCCESS(status)) TgGpuFirmwareFree(firmware);

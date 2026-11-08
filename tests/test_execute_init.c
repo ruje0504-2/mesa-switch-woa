@@ -14,6 +14,7 @@ struct fifo_model {
     uint32_t gr_access, gr_gate[2];
     bool fail_gr_enable;
     bool engine_event, stuck_event, late_pb_fault;
+    bool secure;
     unsigned event_acks, summary_acks;
     uint32_t pb_fault, mmu_fault;
 };
@@ -23,6 +24,7 @@ static uint32_t read32(void *context, uint32_t address)
     struct fifo_model *m = context;
     if (address == 0x57000200) return m->mc;
     if (address == 0x57000204) return m->pb;
+    if (address == 0x57021434) return m->secure;
     if (address == 0x57400500) return m->gr_access;
     if (address == 0x57020200 || address == 0x57020204) return m->gr_gate[(address-0x57020200)/4];
     if (address == 0x57002390) return m->runlist_map;
@@ -253,6 +255,31 @@ void test_execute_init(void)
     assert(state.stage==7 && result.frontend.stage==10 && !m.runlist && !m.put && !m.instance);
     tg_gpu_execute_stop(&io,&state);
     assert(!m.pb && !m.runlist && !m.instance);
+
+    /* A secure GPU without a usable WPR must stop before firmware DMA,
+     * channel binding or semaphore submission. Cleanup also resets PMU.
+     */
+    {
+        uint8_t surface[0x1600]={0};
+        struct tg_gpu_gr_payload fw={0};
+        struct tg_gpu_acr_files acr={.gr=&fw};
+        fw.acr=&acr;fw.surface=surface;fw.image.size=sizeof(surface);
+        for(unsigned j=0;j<2;++j) {
+            struct tg_gpu_gr_falcon_image *f=&fw.image.falcon[j];
+            f->boot=(struct tg_gpu_gr_segment){j*0x1000,4};
+            f->code=(struct tg_gpu_gr_segment){j*0x1000+0x100,4};
+            f->data=(struct tg_gpu_gr_segment){j*0x1000+0x200,4};
+            f->boot_signature=j?0x3d3d65e2:0x9121ab5c;
+        }
+        memset(&m,0,sizeof(m));memset(&state,0,sizeof(state));memset(&result,0,sizeof(result));
+        result.expected[0]=0x13579bdf;result.expected[1]=0x2468ace0;
+        m.runlist_map=1;m.allow_mmu=true;m.secure=true;
+        assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&fw,&state,&result)==TG_GPU_EXEC_ACR_BOOT);
+        assert(state.stage==9 && state.acr_owned && result.acr.result==TG_GPU_ACR_HW_WPR);
+        assert(!m.runlist && !m.put && !m.instance && result.observed[0]==0xdeadbeef && result.observed[1]==0xdeadbeef);
+        tg_gpu_execute_stop(&io,&state);
+        assert(!(m.mc&0x2000) && !state.acr_owned);
+    }
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state)); memset(&result.frontend,0,sizeof(result.frontend));
     m.runlist_map=1; m.allow_mmu=true; m.l2_timeout=true;

@@ -128,6 +128,28 @@ bool tg_gpu_prepare_gr_arena(void *cpu, uint64_t physical, size_t bytes,
     return true;
 }
 
+/* Install only driver-owned pages before the root becomes visible. The signed
+ * ACR image is packed later, once hardware supplies the protected WPR range.
+ * WPR itself is never mapped into the CPU or this GPU address space.
+ */
+bool tg_gpu_prepare_acr_arena(void *cpu, uint64_t physical, size_t bytes)
+{
+    uint64_t *pt, pdb;
+    uint32_t *inst;
+    if (!cpu || ((uintptr_t)cpu&4095) || (physical&4095) ||
+        bytes<TG_GPU_ARENA_BYTES || physical<0x80000000 ||
+        physical>UINT64_C(0x100000000)-TG_GPU_ARENA_BYTES ||
+        !tg_gpu_instance_pdb(physical,&pdb)) return false;
+    pt=(uint64_t *)((uint8_t *)cpu+0x20000);
+    inst=(uint32_t *)((uint8_t *)cpu+TG_GPU_ACR_INSTANCE_OFFSET);
+    inst[128]=(uint32_t)pdb; inst[129]=(uint32_t)(pdb>>32);
+    inst[130]=0x00fff000;
+    for (unsigned i=0;i<TG_GPU_ACR_SURFACE_BYTES/4096;++i)
+        if (!tg_gpu_pte_4k(physical+TG_GPU_ACR_SURFACE_OFFSET+i*4096,true,true,
+                          &pt[(TG_GPU_ACR_SURFACE_VA>>12)+i])) return false;
+    return true;
+}
+
 static uint32_t ex_read(const struct tg_gpu_power_io *io, uint32_t reg)
 { return io->read32(io->context, GPU + reg); }
 static void ex_write(const struct tg_gpu_power_io *io, uint32_t reg, uint32_t val)
@@ -198,6 +220,9 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         !tg_gpu_prepare_arena(cpu, physical, TG_GPU_ARENA_BYTES, s->expected))
         return TG_GPU_EXEC_ARGUMENT;
     if (firmware && !tg_gpu_prepare_gr_arena(cpu,physical,TG_GPU_ARENA_BYTES,firmware))
+        return TG_GPU_EXEC_ARGUMENT;
+    if (firmware && firmware->acr &&
+        !tg_gpu_prepare_acr_arena(cpu,physical,TG_GPU_ARENA_BYTES))
         return TG_GPU_EXEC_ARGUMENT;
     fence = (volatile uint32_t *)((uint8_t *)cpu + FENCE);
     userd = (volatile uint32_t *)((uint8_t *)cpu + USERD);
@@ -329,6 +354,46 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         return TG_GPU_EXEC_FRONTEND;
     if (firmware) {
         state->stage = 8;
+        s->gr.priv_security=ex_read(io,0x21434);
+        if (s->gr.priv_security && s->gr.priv_security!=UINT32_MAX && firmware->acr) {
+            struct tg_gpu_acr_image image;
+            struct tg_gpu_acr_addresses addresses;
+            uint32_t descriptor[19];
+            state->stage=9; state->acr_owned=true;
+            if (tg_gpu_acr_hw_prepare(io,power,&s->acr)!=TG_GPU_ACR_HW_OK)
+                return TG_GPU_EXEC_ACR_BOOT;
+            s->acr_firmware_result=tg_gpu_acr_prepare(firmware->acr,
+                (s->acr.scp_status&(1u<<20))!=0,&image);
+            if (s->acr_firmware_result) return TG_GPU_EXEC_ACR_BOOT;
+            /* Switchroot APP_VERSION_GM20B uses the 32-byte cmdline_args_v3.
+             * ACR only stages its address; the PMU RTOS is not started here.
+             */
+            if (image.pmu_version!=20490253u || image.size>TG_GPU_ACR_SURFACE_BYTES ||
+                (physical<s->acr.wpr_base+s->acr.wpr_size &&
+                 physical+TG_GPU_ARENA_BYTES>s->acr.wpr_base)) {
+                s->acr_firmware_result=TG_GPU_ACR_ADDRESS;
+                return TG_GPU_EXEC_ACR_BOOT;
+            }
+            addresses=(struct tg_gpu_acr_addresses){TG_GPU_ACR_SURFACE_VA,
+                physical+TG_GPU_ACR_SURFACE_OFFSET,s->acr.wpr_base,s->acr.wpr_size,
+                s->acr.dmem_size,32};
+            s->acr_firmware_result=tg_gpu_acr_pack(&image,&addresses,
+                (uint8_t *)cpu+TG_GPU_ACR_SURFACE_OFFSET,TG_GPU_ACR_SURFACE_BYTES,descriptor);
+            if (s->acr_firmware_result) return TG_GPU_EXEC_ACR_BOOT;
+            /* Page tables were installed before BAR1, but the staged firmware
+             * was written afterward. Publish it before any PMU DMA can start.
+             */
+            if (tg_gpu_frontend_sync_memory(io,power,&s->frontend)!=TG_GPU_FE_OK)
+                return TG_GPU_EXEC_FRONTEND;
+            if (tg_gpu_acr_hw_boot(io,power,&image,descriptor,
+                                  physical+TG_GPU_ACR_INSTANCE_OFFSET,&s->acr)!=TG_GPU_ACR_HW_OK)
+                return TG_GPU_EXEC_ACR_BOOT;
+            state->stage=10;
+            /* Authenticated ACR is a prerequisite, not a GR-ready handshake.
+             * PMU RTOS queues and secure FECS bootstrap must precede submission.
+             */
+            return TG_GPU_EXEC_PMU_PENDING;
+        }
         if (tg_gpu_gr_boot(io,power,&s->frontend,&firmware->netlist,&firmware->image,
                           TG_GPU_GR_SURFACE_VA,physical+TG_GPU_GR_INSTANCE_OFFSET,&s->gr)
             != TG_GPU_GR_OK) return TG_GPU_EXEC_GR_BOOT;
@@ -410,8 +475,10 @@ void tg_gpu_execute_stop(const struct tg_gpu_power_io *io, struct tg_gpu_executi
     /* Stop FECS/GPCCS DMA too before the caller drains MC or frees the arena.
      * Their boot surface remains mapped until full GPU power retirement.
      */
-    ex_write(io, 0x200, ex_read(io, 0x200) & ~(s->gr_owned ? 0x18001100u : 0x100u));
+    uint32_t reset=(s->gr_owned ? 0x18001100u : 0x100u) | (s->acr_owned ? 0x2000u : 0);
+    ex_write(io, 0x200, ex_read(io, 0x200) & ~reset);
     io->delay_us(io->context, 20);
     s->gr_owned = false;
+    s->acr_owned = false;
     s->fifo_ready = false;
 }

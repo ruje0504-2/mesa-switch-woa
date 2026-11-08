@@ -5,7 +5,7 @@ Class=System
 ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
 Provider=%Mfg%
 CatalogFile=tegragpuprobe.cat
-DriverVer=11/08/2026,0.1.0.17
+DriverVer=11/08/2026,0.1.0.20
 PnpLockdown=1
 
 [DestinationDirs]
@@ -18,6 +18,12 @@ tegragpuprobe.sys=1
 NETB_img.bin=1
 fecs.bin=1
 gpccs.bin=1
+nv_acr_ucode_prod.bin=1
+pmu_bl.bin=1
+gpmu_ucode_image.bin=1
+gpmu_ucode_desc.bin=1
+pmu_sig.bin=1
+fecs_sig.bin=1
 [Manufacturer]
 %Mfg%=Models,NTarm64
 [Models.NTarm64]
@@ -30,6 +36,12 @@ tegragpuprobe.sys
 NETB_img.bin
 fecs.bin
 gpccs.bin
+nv_acr_ucode_prod.bin
+pmu_bl.bin
+gpmu_ucode_image.bin
+gpmu_ucode_desc.bin
+pmu_sig.bin
+fecs_sig.bin
 [Install.NT.Services]
 AddService=tegragpuprobe,0x00000002,Service
 [Service]

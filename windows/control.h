@@ -4,12 +4,13 @@
 #include <stdint.h>
 #include "../platform/t214_frontend.h"
 #include "../platform/t214_gr.h"
+#include "../platform/t214_acr.h"
 
 /* Shared by the kernel backend and the existing LitePerformanceCheck UI.
  * METHOD_BUFFERED, FILE_DEVICE_UNKNOWN. RUN requires write access; the
  * device grants write access only to administrators and SYSTEM.
  */
-#define TG_GPU_CONTROL_VERSION 11u
+#define TG_GPU_CONTROL_VERSION 12u
 #define TG_GPU_IOCTL_STATUS 0x00226400u
 #define TG_GPU_IOCTL_RUN    0x0022a404u
 #define TG_GPU_CONTROL_DEFAULT_KHZ 729600u
@@ -95,5 +96,7 @@ struct tg_gpu_status {
     uint32_t bar1_phase, bar1_expected, bar1_read, bar1_cpu;
     struct tg_gpu_gr_status gr;
     uint32_t firmware_status; /* NTSTATUS from fixed-path file loading/packing */
+    uint32_t acr_firmware_result; /* tg_gpu_acr_result; not hardware authentication */
+    struct tg_gpu_acr_hw_status acr;
 };
 #endif
