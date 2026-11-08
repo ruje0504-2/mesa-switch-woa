@@ -8,7 +8,7 @@
  * METHOD_BUFFERED, FILE_DEVICE_UNKNOWN. RUN requires write access; the
  * device grants write access only to administrators and SYSTEM.
  */
-#define TG_GPU_CONTROL_VERSION 6u
+#define TG_GPU_CONTROL_VERSION 7u
 #define TG_GPU_IOCTL_STATUS 0x00226400u
 #define TG_GPU_IOCTL_RUN    0x0022a404u
 #define TG_GPU_CONTROL_DEFAULT_KHZ 729600u
@@ -79,5 +79,9 @@ struct tg_gpu_status {
     uint32_t bind_error;
     uint32_t chsw_error;
     uint32_t engine_status[2];
+    /* BAR1 check phase: initial read, posted write, DRAM sync, zero restore,
+     * ready. These scratch values are not GPU execution fence results.
+     */
+    uint32_t bar1_phase, bar1_expected, bar1_read, bar1_cpu;
 };
 #endif

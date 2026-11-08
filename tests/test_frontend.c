@@ -8,6 +8,8 @@
 static uint32_t regs[0x180000 / 4];
 static unsigned writes, flushes, busy_reads, fail_flush, secure_writes, irq_masked;
 static uint32_t fault_on;
+static unsigned l2_flushes, l2_invalidations;
+static uint32_t fail_l2;
 static uint32_t read32(void *ctx, uint32_t address)
 {
     uint32_t reg = address - 0x57000000;
@@ -18,6 +20,7 @@ static uint32_t read32(void *ctx, uint32_t address)
         if (busy_reads) { --busy_reads; return 3; }
         return 0;
     }
+    if (reg == 0x70010 || reg == 0x70004) return reg == fail_l2 ? 3 : 0;
     return regs[reg / 4];
 }
 static void write32(void *ctx, uint32_t address, uint32_t value)
@@ -34,6 +37,8 @@ static void write32(void *ctx, uint32_t address, uint32_t value)
         assert(value == 1 && regs[0x100c10 / 4] && (regs[0x1704 / 4] & 0x80000000));
         ++flushes; busy_reads = 3;
     }
+    if (reg == 0x70010) { assert(value == 1 && flushes >= 2); ++l2_flushes; }
+    if (reg == 0x70004) { assert(value == 1 && l2_flushes > l2_invalidations); ++l2_invalidations; }
     if (reg == 0x100ce4) { assert(!regs[0x21434 / 4]); ++secure_writes; }
     regs[reg / 4] = value;
     if (reg == fault_on) {
@@ -48,6 +53,7 @@ static void reset(void)
     memset(regs, 0, sizeof(regs));
     writes = flushes = busy_reads = fail_flush = secure_writes = irq_masked = 0;
     fault_on = UINT32_MAX;
+    fail_l2 = l2_flushes = l2_invalidations = 0;
     regs[0x22454 / 4] = regs[0x12006c / 4] = 1;
     regs[0x21434 / 4] = 1;
     regs[0x140518 / 4] = 0xa0;
@@ -72,6 +78,14 @@ int main(void)
     regs[0x100c10 / 4] = 0xc000046; regs[0x1704 / 4] = 0xb00c0040;
     assert(tg_gpu_frontend_flush(&io, &power, &s) == TG_GPU_FE_OK);
     assert(s.stage == 6 && s.fb_flushes == 2 && flushes == 2);
+    assert(tg_gpu_frontend_sync_memory(&io, &power, &s) == TG_GPU_FE_OK);
+    assert(s.stage == 9 && s.l2_flushes == 1 && s.l2_invalidations == 1);
+    fail_l2 = 0x70010;
+    assert(tg_gpu_frontend_sync_memory(&io, &power, &s) == TG_GPU_FE_L2_TIMEOUT);
+    assert(s.stage == 7 && s.l2_invalidations == 1 && l2_invalidations == 1);
+    fail_l2 = 0x70004;
+    assert(tg_gpu_frontend_sync_memory(&io, &power, &s) == TG_GPU_FE_L2_TIMEOUT);
+    assert(s.stage == 8 && s.l2_flushes == 2 && s.l2_invalidations == 1);
 
     reset(); memset(&s,0,sizeof(s)); regs[0x21434 / 4] = 0;
     assert(tg_gpu_frontend_memory(&io, &power, &s) == TG_GPU_FE_OK && secure_writes == 1);

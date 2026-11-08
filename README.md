@@ -56,7 +56,12 @@ the first entry through BAR1 after binding and scheduling. It publishes the
 second only after the first GPU-written fence completes. It does not assume
 that a preloaded RAMFC value substitutes for a submission notification.
 A two-way BAR1 visibility check restores its scratch word before enabling
-snoop; that CPU MMIO write is never treated as a GPU fence. Live PBDMA
+snoop. A posted BAR1 write can be visible through the GPU alias while CPU
+RAM still contains the old value. The probe orders FB writes, flushes dirty
+L2 lines to DRAM, and invalidates clean lines before requiring CPU visibility.
+It polls GPU fences through BAR1, then requires CPU readback after the same
+writeback sequence. Neither alias is CPU-assigned an expected fence value.
+The BAR1 scratch check is never treated as a GPU fence. Live PBDMA
 GP registers are sampled only when its status identifies valid channel zero;
 idle/context-switch SRAM readouts are not interpreted as execution progress.
 
@@ -66,9 +71,11 @@ through execution and is restored on clock release. FIFO/FB/LTC use the
 upstream force-run clock-gating profiles until a PMU governor exists. LTC
 active counts feed both L2 and FBHUB; physical-security setup is restricted
 to the upstream non-secure branch. Two bounded FB flushes must finish before
-the channel becomes runnable. ABI 6 (212 bytes) records the initialization
-stage, active LTC count, completed flushes, BUS/PRI faults and FIFO bind,
-channel-switch and engine state. This is
+the channel becomes runnable. ABI 7 (236 bytes) records the initialization
+stage, LTC/flush counts, BUS/PRI faults, FIFO binding/engine state and the
+separate BAR1 step/expected/GPU/CPU values. Bounded L2 writeback and invalidation
+timeouts stop submission; a successful FB flush alone is not DRAM visibility.
+This is
 a local cold-start candidate, not a hardware execution pass. Source reference:
 [Switchroot NVIDIA driver](https://github.com/CTCaer/switch-l4t-kernel-nvgpu/tree/1ae0167d360287ca78f5a2572f0de42594140312/drivers/gpu/nvgpu).
 
@@ -112,6 +119,15 @@ descriptor, bounded byte-offset resolver and uncached CPU mapping. It uses
 WDDM 2.4 allocation callbacks with physical bounds of 2–4 GiB, leaves bit 34
 clear, reports `PopulatedFromSystemMemory` for correct accounting, and
 publishes no cache-coherence or sleep-retention capability.
+The paging builder now uses its production `TgGpuResolveVidMmPage` resolver:
+PTE segment zero is a resident physical byte address supplied by VidMm, while
+the nonzero table segment uses offsets. The implicit allocation preference
+ID 2 is not a PTE segment-zero substitute. Ordinary physical pages above
+4 GiB are preserved; addresses carrying Tegra's bit-34 IOMMU tag are rejected
+by this WDDM 2.4 physical path. The resolver does not pin memory or translate
+logical DMA addresses. Native tests mix system and table pages in one queued
+update, retain high address bits/read-only flags, and reject a bad trailing
+page before emitting a partial DMA buffer.
 VidMm remains responsible for allocations within the segment; there is no
 second suballocator. The adapter must finish GPU work/drain/reset and stop
 paging before destroying the segment. Failed frees retain the tracking handle.

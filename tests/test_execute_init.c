@@ -5,12 +5,12 @@
 
 struct fifo_model {
     uint32_t mc, instance, asid[2], pb, runlist_map, put;
-    uint32_t sched, runlist_base, stall, fifo_fault, intr0, intr1;
+    uint32_t sched, runlist_base, stall, fifo_fault, intr0, intr1, bar1_value;
     unsigned writes, channel_reads, channel_writes, asid_writes, ticks, enabled_at;
     bool fail_enable, unreadable_channel, fail_pb_enable, allow_mmu, runlist;
     bool fail_sched_allow, hce_fault;
-    bool bad_ltc, flush_timeout, niso, bar1, bad_bar1_write;
-    unsigned fb_flushes;
+    bool bad_ltc, flush_timeout, niso, bar1, bad_bar1_write, bar1_dirty, l2_timeout;
+    unsigned fb_flushes, l2_flushes, l2_invalidations;
 };
 static uint32_t *arena_userd;
 static uint32_t read32(void *context, uint32_t address)
@@ -38,7 +38,8 @@ static uint32_t read32(void *context, uint32_t address)
     if (address == 0x57022454) return 1;
     if (address == 0x5712006c) return m->bad_ltc ? 0 : 1;
     if (address == 0x57070000) return m->flush_timeout ? 3 : 0;
-    if (address == 0x58013000 && m->allow_mmu) return arena_userd[0];
+    if (address == 0x57070010) return m->l2_timeout ? 3 : 0;
+    if (address == 0x58013000 && m->allow_mmu) return m->bar1_dirty ? m->bar1_value : arena_userd[0];
     if (address == 0x5801308c) return arena_userd[35];
     if (address == 0x57040048 || address == 0x57040050 ||
         address == 0x57040014 || address == 0x57040000)
@@ -73,7 +74,7 @@ static void write32(void *context, uint32_t address, uint32_t value)
         assert(!value); /* local fault enables must not turn on CPU IRQs */
     } else if (address == 0x57002274) {
         assert(m->sched & 1);
-        if (value) assert((m->pb & 1) && m->instance && m->fb_flushes == 2);
+        if (value) assert((m->pb & 1) && m->instance && m->fb_flushes == 6 && m->l2_invalidations == 2);
         m->runlist = value != 0;
     } else if (address == 0x57002270) {
         assert(m->sched & 1);
@@ -92,12 +93,24 @@ static void write32(void *context, uint32_t address, uint32_t value)
     } else if (address == 0x57001704) {
         m->bar1 = (value & 0x80000000) != 0;
     } else if (address == 0x57070000) {
-        assert(m->niso && m->bar1 && !m->runlist);
+        assert(m->niso && m->bar1);
         ++m->fb_flushes;
+    } else if (address == 0x57070010) {
+        assert(m->fb_flushes >= 4 && value == 1);
+        if (!m->l2_timeout) {
+            if (m->bar1_dirty) arena_userd[0] = m->bar1_value;
+            m->bar1_dirty = false; ++m->l2_flushes;
+        }
+    } else if (address == 0x57070004) {
+        assert(value == 1 && m->l2_flushes > m->l2_invalidations && !m->bar1_dirty);
+        ++m->l2_invalidations;
     } else if (address == 0x58013000) {
-        assert(m->bar1 && m->fb_flushes == 2 && !m->runlist);
+        assert(m->bar1 && m->fb_flushes >= 2 && !m->runlist);
         assert(value == 0x337755aa || value == 0);
-        if (!m->bad_bar1_write) arena_userd[0]=value;
+        /* Model posted BAR1 data in GPU cache: a BAR1 read sees it, whereas
+         * CPU RAM remains unchanged until L2 dirty writeback completes.
+         */
+        if (!m->bad_bar1_write) { m->bar1_value=value; m->bar1_dirty=true; }
     } else if (address == 0x5801308c) {
         assert((m->pb & 1) && m->runlist && !(m->sched & 1));
         assert(!(m->stall & 0x100) && arena_userd[0] == 0);
@@ -179,10 +192,21 @@ void test_execute_init(void)
     assert(result.runlist_status == 1 && result.runlist_base == 0x300c0045);
     assert(m.stall == 0xfffffeff && result.pbdma_interrupt_1 == 0);
     assert(m.intr0 == 0xfffffeff && m.intr1 == 0xe);
+    assert(result.bar1_phase == 5 && !result.bar1_read && !result.bar1_cpu);
+    assert(result.frontend.l2_flushes == 2 && result.frontend.l2_invalidations == 2);
     assert(result.engine_status[0] == 0x80008000 && result.engine_status[1] == 0x2000);
     tg_gpu_execute_stop(&io,&state);
     assert(!m.pb && !m.runlist && !m.instance && !state.pbdma_owned);
     assert(m.sched == 0xa5);
+
+    memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state)); memset(&result.frontend,0,sizeof(result.frontend));
+    m.runlist_map=1; m.allow_mmu=true; m.l2_timeout=true;
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_FRONTEND);
+    assert(result.frontend.stage == 7 && result.frontend.result == TG_GPU_FE_L2_TIMEOUT);
+    assert(result.bar1_phase == 3 && result.bar1_read == 0x337755aa && result.bar1_cpu == 0x55aa3377);
+    assert(!m.runlist && !m.put && !m.l2_invalidations);
+    tg_gpu_execute_stop(&io,&state);
+    assert(!m.pb && !m.runlist && !m.instance && !state.pbdma_owned);
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state));
     m.runlist_map=1; m.allow_mmu=true; m.fail_sched_allow=true;

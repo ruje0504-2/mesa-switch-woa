@@ -164,7 +164,7 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     struct tg_gpu_status *s)
 {
     volatile uint32_t *fence, *userd;
-    uint32_t i, intr_stall;
+    uint32_t i, intr_stall, gpu_first, gpu_second = 0xdeadbeef;
     if (!io || !io->read32 || !io->write32 || !io->delay_us || !power ||
         !power->owned || !power->ready || !cpu || !state || !s || state->owned ||
         !tg_gpu_prepare_arena(cpu, physical, TG_GPU_ARENA_BYTES, s->expected))
@@ -263,17 +263,31 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     if (!ex_wait(io, 0x1710, 3, 0)) return TG_GPU_EXEC_BAR1;
     if (tg_gpu_frontend_flush(io, power, &s->frontend) != TG_GPU_FE_OK)
         return TG_GPU_EXEC_FRONTEND;
-    if (io->read32(io->context, BAR1 + USERD_VA) != 0x55aa3377)
+    s->bar1_phase = 1; s->bar1_expected = 0x55aa3377;
+    s->bar1_read = io->read32(io->context, BAR1 + USERD_VA); s->bar1_cpu = userd[0];
+    if (s->bar1_read != s->bar1_expected)
         return TG_GPU_EXEC_BAR1;
     /* Complete the upstream two-way BAR1 test before enabling snoop. Leave
      * USERD reserved words and GP_GET/GP_PUT clean; this is CPU MMIO, never
      * used as evidence of GPU command execution or as a fence value.
      */
-    io->write32(io->context, BAR1 + USERD_VA, 0x337755aa);
-    if (io->read32(io->context, BAR1 + USERD_VA) != 0x337755aa || userd[0] != 0x337755aa)
+    s->bar1_phase = 2; s->bar1_expected = 0x337755aa;
+    io->write32(io->context, BAR1 + USERD_VA, s->bar1_expected);
+    s->bar1_read = io->read32(io->context, BAR1 + USERD_VA); s->bar1_cpu = userd[0];
+    if (s->bar1_read != s->bar1_expected)
         return TG_GPU_EXEC_BAR1;
+    s->bar1_phase = 3;
+    if (tg_gpu_frontend_sync_memory(io, power, &s->frontend) != TG_GPU_FE_OK)
+        return TG_GPU_EXEC_FRONTEND;
+    s->bar1_cpu = userd[0];
+    if (s->bar1_cpu != s->bar1_expected) return TG_GPU_EXEC_BAR1;
+    s->bar1_phase = 4; s->bar1_expected = 0;
     io->write32(io->context, BAR1 + USERD_VA, 0);
-    if (io->read32(io->context, BAR1 + USERD_VA) || userd[0]) return TG_GPU_EXEC_BAR1;
+    if (tg_gpu_frontend_sync_memory(io, power, &s->frontend) != TG_GPU_FE_OK)
+        return TG_GPU_EXEC_FRONTEND;
+    s->bar1_read = io->read32(io->context, BAR1 + USERD_VA); s->bar1_cpu = userd[0];
+    if (s->bar1_read || s->bar1_cpu) return TG_GPU_EXEC_BAR1;
+    s->bar1_phase = 5;
     ex_write(io, 0x2254, (USERD_VA >> 12) | 0x10000000); /* USERD BAR1 snoop */
 
     state->stage = 3;
@@ -296,19 +310,31 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
      */
     if (ex_fault(io)) { tg_gpu_execute_snapshot(io, state, s); return TG_GPU_EXEC_FAULT; }
     io->write32(io->context, BAR1 + USERD_VA + 35 * 4, 1);
-    for (i = 0; i < 10000 && fence[0] != s->expected[0]; ++i) {
+    gpu_first = io->read32(io->context, BAR1 + FENCE_VA);
+    for (i = 0; i < 10000 && gpu_first != s->expected[0]; ++i) {
         if (ex_fault(io)) break;
         io->delay_us(io->context, 10);
+        gpu_first = io->read32(io->context, BAR1 + FENCE_VA);
     }
     s->observed[0] = fence[0];
-    if (fence[0] == s->expected[0]) {
+    if (gpu_first == s->expected[0]) {
         state->stage = 5;
         io->write32(io->context, BAR1 + USERD_VA + 35 * 4, 2);
-        for (i = 0; i < 10000 && fence[1] != s->expected[1]; ++i) {
+        gpu_second = io->read32(io->context, BAR1 + FENCE_VA + 4);
+        for (i = 0; i < 10000 && gpu_second != s->expected[1]; ++i) {
             if (ex_fault(io)) break;
             io->delay_us(io->context, 10);
+            gpu_second = io->read32(io->context, BAR1 + FENCE_VA + 4);
         }
     }
+    /* Observe the GPU alias while polling, but require matching CPU/DRAM
+     * readback after real L2 writeback before reporting a completed test.
+     * Neither alias is ever assigned the expected value by the probe.
+     */
+    if (gpu_first == s->expected[0] && gpu_second == s->expected[1] &&
+        tg_gpu_frontend_sync_memory(io, power, &s->frontend) != TG_GPU_FE_OK)
+        return TG_GPU_EXEC_FRONTEND;
+    s->observed[0] = fence[0];
     s->observed[1] = fence[1];
     tg_gpu_execute_snapshot(io, state, s);
     if (s->frontend.result != TG_GPU_FE_OK) return TG_GPU_EXEC_FRONTEND;

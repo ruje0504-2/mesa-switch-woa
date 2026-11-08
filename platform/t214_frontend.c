@@ -161,3 +161,32 @@ enum tg_gpu_frontend_result tg_gpu_frontend_flush(const struct tg_gpu_power_io *
     s->stage = 6;
     return finish(io, s, TG_GPU_FE_OK);
 }
+
+enum tg_gpu_frontend_result tg_gpu_frontend_sync_memory(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power, struct tg_gpu_frontend_status *s)
+{
+    static const uint32_t registers[] = {0x70010, 0x70004};
+    static const unsigned limits[] = {2000, 200};
+    unsigned pass, retry;
+    uint32_t value;
+    if (!owned(io, power, s)) return TG_GPU_FE_ARGUMENT;
+    if (tg_gpu_frontend_flush(io, power, s) != TG_GPU_FE_OK)
+        return (enum tg_gpu_frontend_result)s->result;
+    /* Switchroot gk20a_mm_l2_flush(true): dirty writeback precedes clean-line
+     * invalidation. FB flush alone expressly does not guarantee DRAM visibility.
+     */
+    for (pass = 0; pass < 2; ++pass) {
+        s->stage = 7 + pass;
+        put(io, registers[pass], 1);
+        for (retry = 0; retry < limits[pass]; ++retry) {
+            value = get(io, registers[pass]);
+            if (value == UINT32_MAX) return finish(io, s, TG_GPU_FE_REGISTER);
+            if (!(value & 3)) break;
+            io->delay_us(io->context, 5);
+        }
+        if (retry == limits[pass]) return finish(io, s, TG_GPU_FE_L2_TIMEOUT);
+        if (pass) ++s->l2_invalidations; else ++s->l2_flushes;
+    }
+    s->stage = 9;
+    return finish(io, s, TG_GPU_FE_OK);
+}
