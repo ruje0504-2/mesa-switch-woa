@@ -3,6 +3,7 @@
  * fifo_gk20a.c and nouveau gk104.c/gf100.c. See ../NOTICE.
  */
 #include "channel.h"
+#include "fault.h"
 #include "runlist.h"
 #include "../windows/control.h"
 #include <stddef.h>
@@ -33,10 +34,12 @@ static bool wait_bits(const struct tg_gpu_power_io *io,struct tg_gpu_channel *c,
 }
 static enum tg_gpu_channel_result fault(const struct tg_gpu_power_io *io,struct tg_gpu_channel *c)
 {
-    c->fifo_interrupt=get(io,0x2100); c->mmu_fault=get(io,0x259c);
-    c->pbdma_interrupt=get(io,0x40108); c->pbdma_interrupt_1=get(io,0x40148);
+    struct tg_gpu_fault_status status;
+    bool pending=tg_gpu_fault_poll(io,&status);
+    c->fifo_interrupt=status.fifo; c->mmu_fault=status.mmu;
+    c->pbdma_interrupt=status.pbdma; c->pbdma_interrupt_1=status.pbdma1;
     tg_gpu_frontend_snapshot(io,&c->frontend);
-    return tg_gpu_fifo_has_error(c->fifo_interrupt) || c->mmu_fault || c->pbdma_interrupt || c->pbdma_interrupt_1 || c->frontend.result ?
+    return pending || c->frontend.result ?
         TG_GPU_CHANNEL_FAULT : TG_GPU_CHANNEL_OK;
 }
 enum tg_gpu_channel_result tg_gpu_channel_submit(const struct tg_gpu_power_io *io,

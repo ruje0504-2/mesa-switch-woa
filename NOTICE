@@ -86,3 +86,7 @@ ordering in the same Switchroot nvgpu gk20a/fifo_gk20a.c and common/fifo/channel
 with Linux nouveau v6.12 engine/fifo/gk104.c and gf100.c as references.
 Copyright (c) 2014-2018 NVIDIA CORPORATION. All rights reserved.
 Copyright 2012 Red Hat Inc. The MIT license text above applies.
+
+core/fault.c follows the same Switchroot GM20B interrupt classification and
+W1C order in gm20b/fifo_gm20b.c and gk20a/fifo_gk20a.c.
+Copyright (c) 2014-2018 NVIDIA CORPORATION. The MIT license text above applies.

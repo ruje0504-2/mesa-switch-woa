@@ -36,7 +36,7 @@ mesa_src = args.mesa / "src"
 mesa_includes = [mesa_src, mesa_src / "nouveau/headers",
                  mesa_src / "nouveau/headers/nvidia/classes"]
 encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
-core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c",
+core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c", root / "core/fault.c",
         root / "core/execute.c", root / "core/submission.c", root / "platform/t214_frontend.c", encoder]
 host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",

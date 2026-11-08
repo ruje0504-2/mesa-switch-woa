@@ -13,6 +13,9 @@ struct fifo_model {
     unsigned fb_flushes, l2_flushes, l2_invalidations;
     uint32_t gr_access, gr_gate[2];
     bool fail_gr_enable;
+    bool engine_event, stuck_event, late_pb_fault;
+    unsigned event_acks, summary_acks;
+    uint32_t pb_fault, mmu_fault;
 };
 static uint32_t *arena_userd, *arena_runlist;
 static uint32_t read32(void *context, uint32_t address)
@@ -30,7 +33,11 @@ static uint32_t read32(void *context, uint32_t address)
     if (address == 0x57040140) return 0xf;
     if (address == 0x5704010c) return m->intr0;
     if (address == 0x5704014c) return m->intr1;
-    if (address == 0x57002100 && m->runlist && !(m->sched & 1)) return m->fifo_fault;
+    if (address == 0x57002100 && m->runlist && !(m->sched & 1)) return m->fifo_fault |
+        ((m->pb_fault || (m->engine_event && (!m->summary_acks || m->stuck_event))) ? 0x20000000 : 0);
+    if (address == 0x57040108 && m->runlist && !(m->sched & 1))
+        return m->pb_fault | ((m->engine_event && (!m->event_acks || m->stuck_event)) ? 0x1000000 : 0);
+    if (address == 0x5700259c) return m->runlist ? m->mmu_fault : 0;
     if (address == 0x5700254c) return (m->fifo_fault & 0x100) ? 0x0a : 0;
     if (address == 0x5700252c) return (m->fifo_fault & 1) ? 0x05 : 0;
     if (address == 0x5700256c) return (m->fifo_fault & 0x10000) ? 0x1234 : 0;
@@ -112,6 +119,12 @@ static void write32(void *context, uint32_t address, uint32_t value)
         assert(value == m->stall && !(value & 0x100)); m->intr0=value;
     } else if (address == 0x5704014c) {
         assert(value == 0xe); m->intr1=value;
+    } else if (address == 0x57040108 && m->runlist) {
+        assert(value == 0x1000000 && !m->pb_fault && !m->hce_fault && !m->mmu_fault && !m->fifo_fault);
+        ++m->event_acks;
+        if (m->late_pb_fault) m->pb_fault=0x8000;
+    } else if (address == 0x57002100 && m->runlist) {
+        assert(value == 0x20000000 && m->event_acks); ++m->summary_acks;
     } else if (address == 0x57100c10) {
         m->niso = value != 0;
     } else if (address == 0x57100cc8) {
@@ -300,6 +313,23 @@ void test_execute_init(void)
         assert(result.scheduler_error == (j==1 ? 0xau : 0u));
         assert(result.chsw_error == (j==2 ? 0x1234u : 0u));
         assert(result.observed[0] == 0xdeadbeef && result.observed[1] == 0xdeadbeef);
+        tg_gpu_execute_stop(&io,&state);
+    }
+    /* Reproduce the live ABI 10 ENGINE notification. Only its successful W1C
+     * acknowledgement permits GP_PUT. No model GPU writes a completion fence.
+     * Sticky events, co-occurring true faults and faults arriving during W1C
+     * still stop submission; never widen the event exception to unknown bits.
+     */
+    for (unsigned j=0;j<7;++j) {
+        memset(&m,0,sizeof(m));memset(&state,0,sizeof(state));memset(&result.frontend,0,sizeof(result.frontend));
+        m.runlist_map=1;m.allow_mmu=true;m.engine_event=true;
+        m.stuck_event=j==1;m.pb_fault=j==2?0x8000:0;m.hce_fault=j==3;
+        m.fifo_fault=j==4?1:0;m.mmu_fault=j==5?1:0;m.late_pb_fault=j==6;
+        assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result)==
+               (j==0?TG_GPU_EXEC_TIMEOUT:TG_GPU_EXEC_FAULT));
+        assert(m.put==(j==0?1u:0u));
+        assert(m.event_acks==((j<2 || j==6)?1u:0u) && m.summary_acks==m.event_acks);
+        assert(result.observed[0]==0xdeadbeef && result.observed[1]==0xdeadbeef);
         tg_gpu_execute_stop(&io,&state);
     }
 }

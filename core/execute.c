@@ -8,6 +8,7 @@
 #include "execute.h"
 #include "gm20b_mmu.h"
 #include "gpfifo.h"
+#include "fault.h"
 #include "runlist.h"
 #include "nouveau/headers/drf.h"
 #include "nouveau/headers/nvidia/classes/clb06f.h"
@@ -151,8 +152,8 @@ void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io,
 
 static bool ex_fault(const struct tg_gpu_power_io *io)
 {
-    return tg_gpu_fifo_has_error(ex_read(io, 0x2100)) ||
-        ex_read(io, 0x259c) || ex_read(io, 0x40108) || ex_read(io, 0x40148);
+    struct tg_gpu_fault_status status;
+    return tg_gpu_fault_poll(io, &status);
 }
 
 enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,

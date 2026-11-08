@@ -48,6 +48,14 @@ by `gk20a_runlist_construct_locked`. Switchroot's channel setup requires TSG
 membership. This closes that source mismatch; physical scheduling is still
 unverified. Local PBDMA/FIFO fault
 enables follow Switchroot while the MC CPU interrupt outputs stay disabled.
+The shared cold-probe/hot-channel fault poll W1C-acknowledges a lone PBDMA
+`ENGINE` event (bit 24), then its FIFO summary, following the GM20B ISR. The
+upstream fatal/restartable masks do not include that event; treating every raw
+PBDMA bit as fatal had stopped 0.1.0.15 before publishing GP_PUT. After the
+acknowledgement all fault sources are re-read. Sticky events, concurrent true
+faults, unknown bits and new faults arriving during the acknowledgement still
+stop submission. Nothing writes an expected completion value or converts an
+unchanged sentinel to a pass. The physical result is tracked in the status page.
 Bind, scheduler and channel-switch interrupts stop submission as faults;
 ordinary runlist events do not. Scheduler error is read from `0x254c`, not
 the distinct runlist-fault register at `0x262c`. The status includes binding,
