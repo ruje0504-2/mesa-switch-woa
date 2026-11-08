@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "../windows/context.h"
 #include "../windows/work_queue.h"
+#include "../windows/allocation.h"
 #include <ntimage.h>
 
 static ULONG_PTR image_cookie=0x00002b992ddfa232ULL;
@@ -21,6 +22,7 @@ void *memcpy(void *p,const void *source,size_t n)
  */
 static _Alignas(PAGE_SIZE) UCHAR pools[64][PAGE_SIZE], memory[64][TG_GPU_TABLE_BYTES];
 static BOOLEAN pool_used[64], memory_used[64], fail_pool, fail_allocate, fail_free;
+static UINT pool_fail_after=UINT32_MAX;
 static BOOLEAN fail_sync, in_sync;
 static BOOLEAN fail_reserve;
 static UINT interrupts, dpcs, queues, frees, expected_fence;
@@ -41,6 +43,10 @@ static PVOID NTAPI Pool(POOL_FLAGS flags,SIZE_T bytes,ULONG tag)
     UINT i;
     CHECK(flags==POOL_FLAG_NON_PAGED && bytes<=PAGE_SIZE && tag!=0 && level==PASSIVE_LEVEL);
     if(fail_pool) return NULL;
+    if(pool_fail_after!=UINT32_MAX) {
+        if(!pool_fail_after) return NULL;
+        --pool_fail_after;
+    }
     for(i=0;i<64;++i) if(!pool_used[i]) {
         pool_used[i]=TRUE; memset(pools[i],0,PAGE_SIZE); return pools[i];
     }
@@ -119,6 +125,143 @@ static NTSTATUS NTAPI Reserve(HANDLE device,DXGKARGCB_RESERVEGPUVIRTUALADDRESSRA
     CHECK(!a->Flags && !a->BaseAddress);
     if(fail_reserve) return STATUS_INSUFFICIENT_RESOURCES;
     a->StartVirtualAddress=TG_GPU_INTERNAL_COVERAGE;return STATUS_SUCCESS;
+}
+
+/* The allocation handle table below is a Dxgkrnl test substitute, not a KMD
+ * table. Release can destroy the referenced object synchronously, as the OS
+ * contract allows. Its callbacks also enforce APC-or-lower/no-spinlock use.
+ */
+static HANDLE os_allocation[8];
+static UINT os_references[8],handle_acquires,handle_releases,destroy_on_release;
+static TG_GPU_CONTEXT_ENGINE *release_engine;
+static VOID *APIENTRY AcquireHandle(const DXGKARGCB_GETHANDLEDATA *a,DXGKARG_RELEASE_HANDLE *release)
+{
+    CHECK(a && release && level==PASSIVE_LEVEL && a->Type==DXGK_HANDLE_ALLOCATION && !a->Flags.Value);
+    *release=NULL;
+    if(!a->hObject || a->hObject>=8 || !os_allocation[a->hObject]) return NULL;
+    ++os_references[a->hObject];++handle_acquires;
+    *release=(HANDLE)(ULONG_PTR)a->hObject;return os_allocation[a->hObject];
+}
+static VOID APIENTRY ReleaseHandle(const DXGKARGCB_RELEASEHANDLEDATA a)
+{
+    UINT id=(UINT)(ULONG_PTR)a.ReleaseHandle;HANDLE allocation;
+    DXGKARG_DESTROYALLOCATION destroy={.NumAllocations=1};
+    CHECK(level==PASSIVE_LEVEL && a.Type==DXGK_HANDLE_ALLOCATION && id>0 && id<8 && os_references[id]);
+    --os_references[id];++handle_releases;
+    if(destroy_on_release==id && !os_references[id]) {
+        allocation=os_allocation[id];destroy.pAllocationList=&allocation;
+        CHECK(release_engine && NT_SUCCESS(TgGpuDdiDestroyAllocation(release_engine,&destroy)));
+        os_allocation[id]=NULL;destroy_on_release=0;
+    }
+}
+static UINT PoolsInUse(void)
+{ UINT i,count=0;for(i=0;i<64;++i) count+=pool_used[i]!=FALSE;return count; }
+
+static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *other,
+                            DRIVER_INITIALIZATION_DATA *ddi,TG_GPU_DEVICE *device)
+{
+    struct tg_gpu_allocation_request desc[2]={
+        {TG_GPU_ALLOCATION_ABI,TG_GPU_ALLOCATION_CPU_VISIBLE,4097},
+        {TG_GPU_ALLOCATION_ABI,0,65536}
+    };
+    DXGK_ALLOCATIONINFO info[2]={
+        {.pPrivateDriverData=&desc[0],.PrivateDriverDataSize=sizeof(desc[0])},
+        {.pPrivateDriverData=&desc[1],.PrivateDriverDataSize=sizeof(desc[1])}
+    };
+    DXGKARG_CREATEALLOCATION create={.NumAllocations=2,.pAllocationInfo=info,.Flags.Resource=1};
+    DXGKARG_DESTROYALLOCATION destroy={0};
+    DXGK_OPENALLOCATIONINFO oi[2]={{.hAllocation=1},{.hAllocation=2}},oi2={.hAllocation=1};
+    DXGKARG_OPENALLOCATION open={.NumAllocations=2,.pOpenAllocation=oi,.Flags.Create=1};
+    DXGKARG_OPENALLOCATION open2={.NumAllocations=1,.pOpenAllocation=&oi2,.Flags.ReadOnly=1};
+    DXGKARG_CLOSEALLOCATION close={0};
+    DXGKARG_CREATEDEVICE second={.hDevice=(HANDLE)202,.hKmdProcess=device->Process};
+    HANDLE resource,handles[2],opened[2],readonly;UINT before=PoolsInUse(),i;
+    CHECK(NT_SUCCESS(ddi->DxgkDdiCreateDevice(e,&second)));
+    ++before;
+    desc[1].version=99;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_GRAPHICS_DRIVER_MISMATCH);
+    CHECK(!info[0].hAllocation && !info[1].hAllocation && !create.hResource && PoolsInUse()==before);
+    desc[1].version=TG_GPU_ALLOCATION_ABI;
+    desc[1].bytes=UINT64_MAX;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    desc[1].bytes=65536;info[0].FlagsWddm2.CreateInVpr=1;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    info[0].FlagsWddm2.Value=0x80000800;
+    for(i=0;i<3;++i) {
+        pool_fail_after=i;
+        CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_NO_MEMORY);
+        CHECK(!info[0].hAllocation && !info[1].hAllocation && !create.hResource);
+        CHECK(!e->AllocationCount && !e->ResourceCount && !e->Creating && PoolsInUse()==before);
+    }
+    pool_fail_after=UINT32_MAX;
+    CHECK(NT_SUCCESS(ddi->DxgkDdiCreateAllocation(e,&create)));
+    resource=create.hResource;handles[0]=info[0].hAllocation;handles[1]=info[1].hAllocation;
+    CHECK(resource && handles[0] && handles[1] && e->AllocationCount==2 && e->ResourceCount==1);
+    CHECK(info[0].Size==8192 && info[1].Size==65536 && info[0].Alignment==PAGE_SIZE);
+    CHECK(info[0].PreferredSegment.SegmentId0==2 && info[0].SupportedWriteSegmentSet==2);
+    CHECK(info[0].FlagsWddm2.Value==0x80000881 && info[1].FlagsWddm2.Value==0x80);
+    CHECK(!info[0].FlagsWddm2.AccessedPhysically && !info[0].FlagsWddm2.Cached &&
+          !info[0].FlagsWddm2.ExplicitResidencyNotification && info[0].AllocationPriority==D3DDDI_ALLOCATIONPRIORITY_NORMAL);
+    /* Appending failure must not free or alter the existing resource. */
+    pool_fail_after=1;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_NO_MEMORY);
+    CHECK(create.hResource==resource && e->AllocationCount==2 && e->ResourceCount==1 && PoolsInUse()==before+3);
+    pool_fail_after=UINT32_MAX;
+    os_allocation[1]=handles[0];os_allocation[2]=handles[1];
+    /* Each failure unwinds acquired OS references and all device-open objects. */
+    pool_fail_after=1;
+    CHECK(ddi->DxgkDdiOpenAllocation(device,&open)==STATUS_NO_MEMORY);
+    CHECK(!oi[0].hDeviceSpecificAllocation && !oi[1].hDeviceSpecificAllocation);
+    CHECK(!os_references[1] && !os_references[2] && !device->OpenAllocations);
+    pool_fail_after=UINT32_MAX;oi[1].hAllocation=7;
+    CHECK(ddi->DxgkDdiOpenAllocation(device,&open)==STATUS_INVALID_PARAMETER);
+    CHECK(!os_references[1] && !device->OpenAllocations && PoolsInUse()==before+3);
+    oi[1].hAllocation=2;
+    CHECK(NT_SUCCESS(ddi->DxgkDdiOpenAllocation(device,&open)));
+    opened[0]=oi[0].hDeviceSpecificAllocation;opened[1]=oi[1].hDeviceSpecificAllocation;
+    CHECK(os_references[1]==1 && os_references[2]==1 && device->OpenAllocations==2);
+    CHECK(NT_SUCCESS(ddi->DxgkDdiOpenAllocation(second.hDevice,&open2)));readonly=oi2.hDeviceSpecificAllocation;
+    CHECK(os_references[1]==2);
+    CHECK(TgGpuValidateOpenAllocationRange(device,opened[0],8191,1,TRUE)==STATUS_SUCCESS);
+    CHECK(TgGpuValidateOpenAllocationRange(device,opened[0],8192,1,FALSE)==STATUS_INVALID_BUFFER_SIZE);
+    CHECK(TgGpuValidateOpenAllocationRange(device,opened[0],UINT64_MAX,2,FALSE)==STATUS_INVALID_BUFFER_SIZE);
+    CHECK(TgGpuValidateOpenAllocationRange(second.hDevice,readonly,0,4,TRUE)==STATUS_ACCESS_DENIED);
+    CHECK(TgGpuValidateOpenAllocationRange(device,readonly,0,4,FALSE)==STATUS_INVALID_PARAMETER);
+    CHECK(ddi->DxgkDdiDestroyDevice(device)==STATUS_DEVICE_BUSY);
+    destroy.NumAllocations=2;destroy.pAllocationList=handles;destroy.hResource=resource;destroy.Flags.DestroyResource=1;
+    CHECK(ddi->DxgkDdiDestroyAllocation(e,&destroy)==STATUS_DEVICE_BUSY);
+    CHECK(ddi->DxgkDdiDestroyAllocation(other,&destroy)==STATUS_INVALID_PARAMETER);
+    close.NumAllocations=2;close.pOpenHandleList=opened;
+    CHECK(ddi->DxgkDdiCloseAllocation(second.hDevice,&close)==STATUS_INVALID_PARAMETER);
+    opened[1]=opened[0];
+    CHECK(ddi->DxgkDdiCloseAllocation(device,&close)==STATUS_INVALID_PARAMETER && device->OpenAllocations==2);
+    opened[1]=oi[1].hDeviceSpecificAllocation;
+    CHECK(NT_SUCCESS(ddi->DxgkDdiCloseAllocation(device,&close)));
+    CHECK(!device->OpenAllocations && os_references[1]==1 && !os_references[2]);
+    close.NumAllocations=1;close.pOpenHandleList=&readonly;
+    CHECK(NT_SUCCESS(ddi->DxgkDdiCloseAllocation(second.hDevice,&close)) && !os_references[1]);
+    /* A failed bulk destroy has no partial side effects. */
+    handles[1]=handles[0];
+    CHECK(ddi->DxgkDdiDestroyAllocation(e,&destroy)==STATUS_INVALID_PARAMETER && e->AllocationCount==2);
+    handles[1]=os_allocation[2];destroy.NumAllocations=1;
+    CHECK(ddi->DxgkDdiDestroyAllocation(e,&destroy)==STATUS_DEVICE_BUSY && e->AllocationCount==2);
+    destroy.NumAllocations=2;
+    CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)));
+    CHECK(!e->AllocationCount && !e->ResourceCount && PoolsInUse()==before);
+    os_allocation[1]=os_allocation[2]=NULL;
+    /* Model the owner requesting destruction while a second device still has
+     * an open reference. The final ReleaseHandle destroys the allocation.
+     */
+    create.NumAllocations=1;create.hResource=NULL;create.Flags.Value=0;
+    CHECK(NT_SUCCESS(ddi->DxgkDdiCreateAllocation(e,&create)));
+    os_allocation[3]=info[0].hAllocation;oi2.hAllocation=3;
+    CHECK(NT_SUCCESS(ddi->DxgkDdiOpenAllocation(second.hDevice,&open2)));
+    readonly=oi2.hDeviceSpecificAllocation;destroy_on_release=3;release_engine=e;
+    CHECK(NT_SUCCESS(ddi->DxgkDdiCloseAllocation(second.hDevice,&close)));
+    CHECK(!destroy_on_release && !os_allocation[3] && !e->AllocationCount && !e->Creating);
+    CHECK(handle_acquires==handle_releases);
+    CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyDevice(second.hDevice)));
+    CHECK(PoolsInUse()==before-1);
 }
 
 /* Register-state substitute for the hot channel path, not a GPU emulator.
@@ -235,12 +378,13 @@ void start(void)
     struct tg_gpu_power_io io={.context=&hw,.read32=Read,.write32=Write,.delay_us=Delay,
         .read_pmic=ReadPmic,.write_pmic=WritePmic};
     UINT32 *instance,*fence;UINT i,before;ULONG written;UINT64 pde;
-    static const char pass[]="PASS: WDK ordered work queue, root/fence lifetime, immediate private-buffer reuse and failed preempt/reset retention (controlled substitutes)\r\n";
+    static const char pass[]="PASS: WDK allocation lifecycle/rollback, ordered work queue and verified retirement (controlled substitutes)\r\n";
     dxgk.Version=DXGKDDI_INTERFACE_VERSION_WDDM2_4;dxgk.DeviceHandle=(HANDLE)1;
     dxgk.DxgkCbAllocateContiguousMemory=Allocate;dxgk.DxgkCbFreeContiguousMemory=Free;
     dxgk.DxgkCbSynchronizeExecution=Synchronize;dxgk.DxgkCbNotifyInterrupt=Interrupt;
     dxgk.DxgkCbQueueDpc=Queue;dxgk.DxgkCbNotifyDpc=Dpc;
     dxgk.DxgkCbReserveGpuVirtualAddressRange=Reserve;
+    dxgk.DxgkCbAcquireHandleData=AcquireHandle;dxgk.DxgkCbReleaseHandleData=ReleaseHandle;
     CHECK(NT_SUCCESS(TgGpuInitializeContextEngine(&e,&dxgk,&tables)));
     CHECK(NT_SUCCESS(TgGpuInitializeContextEngine(&other,&dxgk,&tables)));
     TgGpuRegisterContextDdis(&ddi);
@@ -256,6 +400,7 @@ void start(void)
     device.hKmdProcess=process.hKmdProcess;
     CHECK(ddi.DxgkDdiCreateDevice(&other,&device)==STATUS_INVALID_PARAMETER);
     CHECK(NT_SUCCESS(ddi.DxgkDdiCreateDevice(&e,&device)));
+    TestAllocations(&e,&other,&ddi,device.hDevice);
     CHECK(ddi.DxgkDdiDestroyProcess(&e,process.hKmdProcess)==STATUS_DEVICE_BUSY);
     create.Flags.VirtualAddressing=1;
     fail_allocate=TRUE;

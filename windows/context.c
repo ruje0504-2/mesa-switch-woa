@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "context.h"
 #include "work_queue.h"
+#include "allocation.h"
 
 #define TAG 0x43674754u
 
@@ -46,7 +47,7 @@ NTSTATUS TgGpuStopContextEngine(TG_GPU_CONTEXT_ENGINE *e)
     if (!e) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);
     e->Stopping=TRUE;
-    status=e->Active || e->Notification || e->QueueOwner || e->Channel.referenced || e->Creating || !IsListEmpty(&e->Contexts) || !IsListEmpty(&e->Devices) ||
+    status=e->Active || e->Notification || e->QueueOwner || e->Channel.referenced || e->Creating || e->AllocationCount || e->ResourceCount || !IsListEmpty(&e->Contexts) || !IsListEmpty(&e->Devices) ||
         !IsListEmpty(&e->Processes) ? STATUS_DEVICE_BUSY : STATUS_SUCCESS;
     KeReleaseSpinLock(&e->Lock,irql);
     if (!NT_SUCCESS(status)) return status;
@@ -103,7 +104,7 @@ NTSTATUS APIENTRY TgGpuDdiDestroyDevice(HANDLE device)
     TG_GPU_DEVICE *d=device; TG_GPU_CONTEXT_ENGINE *e; KIRQL irql;
     if (!d) return STATUS_INVALID_PARAMETER;
     e=d->Engine; KeAcquireSpinLock(&e->Lock,&irql);
-    if (d->Contexts) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_BUSY; }
+    if (d->Contexts || d->OpenAllocations) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_BUSY; }
     RemoveEntryList(&d->Link); if (d->Process) --d->Process->Devices;
     KeReleaseSpinLock(&e->Lock,irql); ExFreePoolWithTag(d,TAG); return STATUS_SUCCESS;
 }
@@ -188,6 +189,7 @@ void TgGpuRegisterContextDdis(DRIVER_INITIALIZATION_DATA *d)
     d->DxgkDdiSetRootPageTable=TgGpuDdiSetRootPageTable;
     d->DxgkDdiQueryCurrentFence=TgGpuDdiQueryCurrentFence;
     d->DxgkDdiDpcRoutine=TgGpuDdiDpcRoutine;
+    TgGpuRegisterAllocationDdis(d);
 }
 NTSTATUS APIENTRY TgGpuDdiQueryCurrentFence(HANDLE adapter, DXGKARG_QUERYCURRENTFENCE *a)
 {

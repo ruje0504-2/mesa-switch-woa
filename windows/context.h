@@ -27,6 +27,7 @@ struct _TG_GPU_DEVICE {
     TG_GPU_PROCESS *Process;
     HANDLE Runtime;
     UINT Contexts;
+    UINT OpenAllocations;
 };
 struct _TG_GPU_CONTEXT {
     LIST_ENTRY Link;
@@ -52,6 +53,7 @@ struct _TG_GPU_CONTEXT_ENGINE {
     volatile UINT LastCompletedFence;
     UINT Marker;
     UINT Creating;
+    UINT AllocationCount,ResourceCount;
     BOOLEAN Stopping;
 };
 /* The single physical execution slot is serialized; the number of software

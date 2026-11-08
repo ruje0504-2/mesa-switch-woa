@@ -82,7 +82,7 @@ for source in [*core, power, clock, tlb, root / "core/channel.c", root / "window
                root / "windows/table_segment.c", root / "windows/root_table.c",
                root / "windows/paging_buffer.c", root / "windows/context.c",
                root / "windows/internal_va.c", root / "windows/submit_worker.c",
-               root / "windows/work_queue.c"]:
+               root / "windows/work_queue.c", root / "windows/allocation.c"]:
     obj = args.out / (source.stem + ".obj")
     subprocess.run([args.clang_cl, *flags, f"/Fo{obj}", "--", str(source)], check=True)
     objects.append(obj)

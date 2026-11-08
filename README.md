@@ -73,6 +73,30 @@ untagged. The probe therefore leaves Tegra's global GPU/GPUB ASID registers
 unchanged; a nonzero ASID readback is not a failure for this physical path.
 This does not provide a Windows IOMMU domain or authorize arbitrary DMA.
 
+`windows/allocation.c` implements the real-WDK create/destroy/open/close
+allocation callbacks. ABI 1 describes opaque GPU storage with a byte count and
+optional CPU visibility; it carries no physical address. The adapter exposes
+one explicit page-table segment, so ordinary buffers select VidMm's appended
+implicit system-memory segment (ID 2). VidMm owns backing pages and GPU VA;
+the KMD allocates only metadata, not a second heap or global handle table.
+Sizes are rounded to 4 KiB, CPU-visible memory starts write-combined, and no
+physical-access, cached/coherent, protected or scanout capability is implied.
+Bulk validation/allocation failures unwind every new object while preserving
+an existing resource. OS-reserved allocation input flags are retained.
+OpenAllocation resolves D3DKMT handles through `DxgkCbAcquireHandleData` and
+holds the OS reference until CloseAllocation. Allocation metadata belongs to
+the adapter, not its creating device, allowing a resource to outlive that
+device. Close drops local references before `DxgkCbReleaseHandleData`, which
+may immediately destroy the allocation; the adapter operation stays retained
+through that callback. A range helper checks device ownership, read-only opens
+and bounds, but does not establish residency or validate a command stream.
+Native ARM64 tests cover batch rollback, resource append failure, shared opens,
+read-only/bounds rejection, duplicate close/destroy rejection, and synchronous
+destruction from the final OS release. The callbacks populate the initialization
+table but still require the complete adapter/UMD path and live VidMm validation.
+[Microsoft GPUVA allocation example](https://github.com/microsoft/graphics-driver-samples/blob/de4a2161991eda254013da6c18226f5ea06e4a9c/compute-only-sample/coskmd/CosKmdAdapter.cpp)
+and [handle lifetime contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkcb_acquirehandledata).
+
 `windows/paging.c` translates real WDK `DXGK_PTE` entries into GM20B entries
 for an uncached, idle address space. It validates the entire update before
 publishing, supports repeat/invalid entries, and rejects unsupported flags.
