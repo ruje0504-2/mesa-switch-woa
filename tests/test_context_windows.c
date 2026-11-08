@@ -325,12 +325,12 @@ static void Write(void *context,UINT32 address,UINT32 value)
     case 0x57002274:
         CHECK(hw.sched&1);
         if(value) {
-            CHECK(value==1 && hw.ctrl && hw.inst && hw.runbase==0x30091003);
-            hw.pbdma=0x2000;
+            CHECK(value==2 && hw.ctrl && hw.inst && hw.runbase==0x30091003);
+            hw.pbdma=0x3000; /* valid TSG zero */
         } else CHECK(!hw.ctrl && !hw.preempt);
         hw.runlist=value;break;
     case 0x57002634:
-        CHECK(!value && !hw.ctrl && (hw.sched&1));
+        CHECK(value==0x01000000 && !hw.ctrl && (hw.sched&1));
         hw.preempt=hw.fail_preempt ? 0x100000 : 0;
         if(!hw.preempt) hw.pbdma=0;
         break;
@@ -439,7 +439,7 @@ void start(void)
     hw.fifo_fault=0x40000000; /* normal runlist event cannot reject the channel */
     CHECK(NT_SUCCESS(TgGpuSubmitContextWork(&e,&work,&io,&power)));
     hw.fifo_fault=0;
-    CHECK(work.Submitted && e.Channel.referenced && !hw.sched && hw.runlist==1);
+    CHECK(work.Submitted && e.Channel.referenced && !hw.sched && hw.runlist==2);
     CHECK(hw.inst==((UINT32)((UINT64)c->Instance.SystemPhysicalAddress.QuadPart>>12)|0xb0000000));
     before=hw.writes;
     CHECK(TgGpuSubmitContextWork(&e,&work,&io,&power)==STATUS_INVALID_DEVICE_STATE && hw.writes==before);

@@ -8,7 +8,7 @@
  * METHOD_BUFFERED, FILE_DEVICE_UNKNOWN. RUN requires write access; the
  * device grants write access only to administrators and SYSTEM.
  */
-#define TG_GPU_CONTROL_VERSION 7u
+#define TG_GPU_CONTROL_VERSION 8u
 #define TG_GPU_IOCTL_STATUS 0x00226400u
 #define TG_GPU_IOCTL_RUN    0x0022a404u
 #define TG_GPU_CONTROL_DEFAULT_KHZ 729600u
@@ -21,14 +21,23 @@
 static inline int tg_gpu_fifo_has_error(uint32_t status)
 { return (status & TG_GPU_FIFO_ERROR_MASK) != 0; }
 
-/* Live PBDMA RAMFC registers are meaningful only for a valid, matching bare
- * channel. Idle/context-switch readouts can contain unrelated SRAM contents.
+/* Live PBDMA RAMFC registers are meaningful only for a valid, matching
+ * channel/group. Idle/context-switch readouts contain unrelated SRAM contents.
  * FIFO_PBDMA_STATUS fields follow Switchroot hw_fifo_gm20b.h.
  */
 static inline int tg_gpu_pbdma_owns_channel(uint32_t status, uint32_t channel)
 {
     return channel < 0x1000 && ((status >> 13) & 7) == 1 &&
         (status & 0x1fff) == channel;
+}
+
+/* This private slot has exactly one channel (0) in exactly one TSG (0).
+ * A valid matching TSG is therefore sufficient to attribute its RAMFC here.
+ * This must not be used for a group containing several channels.
+ */
+static inline int tg_gpu_pbdma_owns_slot(uint32_t status)
+{
+    return ((status >> 13) & 7) == 1 && (status & 0xfff) == 0;
 }
 
 struct tg_gpu_request {

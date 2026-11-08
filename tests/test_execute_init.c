@@ -12,7 +12,7 @@ struct fifo_model {
     bool bad_ltc, flush_timeout, niso, bar1, bad_bar1_write, bar1_dirty, l2_timeout;
     unsigned fb_flushes, l2_flushes, l2_invalidations;
 };
-static uint32_t *arena_userd;
+static uint32_t *arena_userd, *arena_runlist;
 static uint32_t read32(void *context, uint32_t address)
 {
     struct fifo_model *m = context;
@@ -21,7 +21,7 @@ static uint32_t read32(void *context, uint32_t address)
     if (address == 0x57002390) return m->runlist_map;
     if (address == 0x57002630) return m->sched;
     if (address == 0x57002280) return m->runlist_base;
-    if (address == 0x57002284) return m->runlist ? 1 : 0;
+    if (address == 0x57002284) return m->runlist ? 2 : 0;
     if (address == 0x5704013c) return m->stall;
     if (address == 0x57040140) return 0xf;
     if (address == 0x5704010c) return m->intr0;
@@ -74,7 +74,18 @@ static void write32(void *context, uint32_t address, uint32_t value)
         assert(!value); /* local fault enables must not turn on CPU IRQs */
     } else if (address == 0x57002274) {
         assert(m->sched & 1);
-        if (value) assert((m->pb & 1) && m->instance && m->fb_flushes == 6 && m->l2_invalidations == 2);
+        if (value) {
+            assert((m->pb & 1) && m->instance && m->fb_flushes == 6 && m->l2_invalidations == 2);
+            /* Decode independently: TSG zero, one member, timeout 128 at
+             * scale 3; the following entry is CHID zero, not an instance.
+             */
+            assert(value == 2 && arena_runlist[1] == 0);
+            assert((arena_runlist[0] & 0x3fff) == 0x2000);
+            assert(((arena_runlist[0] >> 14) & 15) == 3);
+            assert(((arena_runlist[0] >> 18) & 255) == 128);
+            assert((arena_runlist[0] >> 26) == 1);
+            assert(arena_runlist[2] == 0 && arena_runlist[3] == 0);
+        }
         m->runlist = value != 0;
     } else if (address == 0x57002270) {
         assert(m->sched & 1);
@@ -139,6 +150,7 @@ void test_execute_init(void)
     struct tg_gpu_execution state = {0};
     struct tg_gpu_status result = {.expected={0x13579bdf,0x2468ace0}};
     arena_userd = (uint32_t *)(arena + 0x41000);
+    arena_runlist = (uint32_t *)(arena + 0x45000);
     assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_ARGUMENT);
     assert(m.writes == 0 && m.channel_reads == 0);
     power.owned = power.ready = true;
@@ -189,7 +201,7 @@ void test_execute_init(void)
     assert(m.put == 1 && result.pbdma_gp_base == UINT32_MAX);
     assert(result.observed[0] == 0xdeadbeef && result.observed[1] == 0xdeadbeef);
     assert(result.scheduler_before == 0xa5 && result.scheduler_after == 0xa4);
-    assert(result.runlist_status == 1 && result.runlist_base == 0x300c0045);
+    assert(result.runlist_status == 2 && result.runlist_base == 0x300c0045);
     assert(m.stall == 0xfffffeff && result.pbdma_interrupt_1 == 0);
     assert(m.intr0 == 0xfffffeff && m.intr1 == 0xe);
     assert(result.bar1_phase == 5 && !result.bar1_read && !result.bar1_cpu);

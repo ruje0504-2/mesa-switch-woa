@@ -39,10 +39,14 @@ as a live channel. The probe separately enables PBDMA0 through `MC_ENABLE_PB`,
 checks its runlist-zero mapping, and disables it before the final FIFO reset.
 Runlist zero is blocked during binding, explicitly allowed after submission,
 and blocked again before teardown, following Switchroot's scheduler control.
-The diagnostic uses the vendor GM20B HAL's `gk20a_get_ch_runlist_entry`:
-channel ID and a zero reserved word, with the RAMFC physical address in CCSR.
-This deliberately follows Switchroot's bare-channel path rather than mixing
-in nouveau's `gm107_runl_insert_chan` instance word. Local PBDMA/FIFO fault
+The diagnostic and WDDM encoder use Switchroot's complete single-channel TSG
+layout: a TSG-zero header (one member, timeslice 128 at scale 3), followed by
+CHID zero and a reserved zero word. The RAMFC address is supplied through
+CCSR. Submission counts both entries; WDDM retirement preempts TSG zero.
+Copying `gk20a_get_ch_runlist_entry` alone had omitted the group header emitted
+by `gk20a_runlist_construct_locked`. Switchroot's channel setup requires TSG
+membership. This closes that source mismatch; physical scheduling is still
+unverified. Local PBDMA/FIFO fault
 enables follow Switchroot while the MC CPU interrupt outputs stay disabled.
 Bind, scheduler and channel-switch interrupts stop submission as faults;
 ordinary runlist events do not. Scheduler error is read from `0x254c`, not
@@ -62,7 +66,7 @@ L2 lines to DRAM, and invalidates clean lines before requiring CPU visibility.
 It polls GPU fences through BAR1, then requires CPU readback after the same
 writeback sequence. Neither alias is CPU-assigned an expected fence value.
 The BAR1 scratch check is never treated as a GPU fence. Live PBDMA
-GP registers are sampled only when its status identifies valid channel zero;
+GP registers are sampled only for valid channel zero or its single-channel TSG zero;
 idle/context-switch SRAM readouts are not interpreted as execution progress.
 
 The cold path now follows Switchroot's bus/private-ring, clock, FIFO reset,
@@ -71,7 +75,7 @@ through execution and is restored on clock release. FIFO/FB/LTC use the
 upstream force-run clock-gating profiles until a PMU governor exists. LTC
 active counts feed both L2 and FBHUB; physical-security setup is restricted
 to the upstream non-secure branch. Two bounded FB flushes must finish before
-the channel becomes runnable. ABI 7 (236 bytes) records the initialization
+the channel becomes runnable. ABI 8 (236 bytes) records the initialization
 stage, LTC/flush counts, BUS/PRI faults, FIFO binding/engine state and the
 separate BAR1 step/expected/GPU/CPU values. Bounded L2 writeback and invalidation
 timeouts stop submission; a successful FB flush alone is not DRAM visibility.

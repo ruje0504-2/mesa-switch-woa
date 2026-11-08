@@ -8,6 +8,7 @@
 #include "execute.h"
 #include "gm20b_mmu.h"
 #include "gpfifo.h"
+#include "runlist.h"
 #include "nouveau/headers/drf.h"
 #include "nouveau/headers/nvidia/classes/clb06f.h"
 
@@ -93,11 +94,7 @@ bool tg_gpu_prepare_arena(void *cpu, uint64_t physical, size_t bytes,
     release_packet(push + 5, FENCE_VA + 4, expected[1]);
     if (!tg_gpu_build_gpfifo(PUSH_VA, 5, false, &ring[0]) ||
         !tg_gpu_build_gpfifo(PUSH_VA + 20, 5, true, &ring[1])) return false;
-    /* The T214 vendor HAL uses gk20a_get_ch_runlist_entry: a bare CHID and a
-     * zero reserved word. Its RAMFC address is supplied by CCSR, not here.
-     * Do not mix this path with nouveau's gm107 instance-word encoding.
-     */
-    runlist[0] = runlist[1] = 0; /* standalone channel zero */
+    tg_gpu_runlist_single(runlist);
     return true;
 }
 
@@ -137,7 +134,7 @@ void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io,
         s->pbdma_status = ex_read(io, 0x3080);
         s->pbdma_gp_base = s->pbdma_gp_fetch =
             s->pbdma_gp_get = s->pbdma_gp_put = UINT32_MAX;
-        if (tg_gpu_pbdma_owns_channel(s->pbdma_status, 0)) {
+        if (tg_gpu_pbdma_owns_slot(s->pbdma_status)) {
             s->pbdma_gp_base = ex_read(io, 0x40048);
             s->pbdma_gp_fetch = ex_read(io, 0x40050);
             s->pbdma_gp_get = ex_read(io, 0x40014);
@@ -297,7 +294,7 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         return TG_GPU_EXEC_FIFO_INIT;
     ex_write(io, 0x800004, (ex_read(io, 0x800004) & ~0x400u) | 0x400);
     ex_write(io, 0x2270, (uint32_t)((physical + RUNLIST) >> 12) | 0x30000000);
-    ex_write(io, 0x2274, 1); /* runlist 0, one channel */
+    ex_write(io, 0x2274, TG_GPU_RUNLIST_ENTRIES); /* TSG zero + its one channel */
     if (!ex_wait(io, 0x2284, 0x100000, 0)) return TG_GPU_EXEC_RUNLIST;
     ex_write(io, 0x2630, ex_read(io, 0x2630) & ~1u);
     s->scheduler_after = ex_read(io, 0x2630);

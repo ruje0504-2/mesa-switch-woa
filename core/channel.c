@@ -3,6 +3,7 @@
  * fifo_gk20a.c and nouveau gk104.c/gf100.c. See ../NOTICE.
  */
 #include "channel.h"
+#include "runlist.h"
 #include "../windows/control.h"
 #include <stddef.h>
 
@@ -74,7 +75,7 @@ enum tg_gpu_channel_result tg_gpu_channel_submit(const struct tg_gpu_power_io *i
     if(value==UINT32_MAX) return TG_GPU_CHANNEL_IO;
     put(io,0x800004,(value&~0xc00u)|0x400);
     put(io,0x2270,(uint32_t)(runlist>>12)|0x30000000);
-    put(io,0x2274,1);
+    put(io,0x2274,TG_GPU_RUNLIST_ENTRIES);
     if(!wait_bits(io,c,0x2284,0x100000,0)) return TG_GPU_CHANNEL_TIMEOUT;
     value=get(io,0x2630);
     if(value==UINT32_MAX) return TG_GPU_CHANNEL_IO;
@@ -102,7 +103,7 @@ enum tg_gpu_channel_result tg_gpu_channel_retire(const struct tg_gpu_power_io *i
     if(value==UINT32_MAX) return TG_GPU_CHANNEL_IO;
     put(io,0x800004,(value&~0xc00u)|0x800);
     if(!wait_bits(io,c,0x800004,1,0)) return TG_GPU_CHANNEL_IO;
-    put(io,0x2634,0); /* preempt bare channel zero */
+    put(io,0x2634,TG_GPU_PREEMPT_TSG0); /* preempt the group, not a bare CHID */
     if(!wait_bits(io,c,0x2634,0x100000,0)) return TG_GPU_CHANNEL_TIMEOUT;
     put(io,0x2274,0);
     if(!wait_bits(io,c,0x2284,0x100000,0)) return TG_GPU_CHANNEL_TIMEOUT;

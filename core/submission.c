@@ -4,6 +4,7 @@
 #include "submission.h"
 #include "gpfifo.h"
 #include "gm20b_mmu.h"
+#include "runlist.h"
 #include "nouveau/headers/drf.h"
 #include "nouveau/headers/nvidia/classes/clb06f.h"
 
@@ -53,6 +54,6 @@ bool tg_gpu_prepare_submission(void *commands, size_t bytes, uint64_t physical,
     ramfc[39]=0x100; ramfc[43]=0x1f;
     ramfc[57]=0x20; /* allow the KMD-generated privileged GPFIFO entry */
     ramfc[62]=0x10003080; ramfc[63]=0x10000010;
-    runlist[0]=0; runlist[1]=(uint32_t)(instance_physical>>12);
+    tg_gpu_runlist_single(runlist);
     return true;
 }

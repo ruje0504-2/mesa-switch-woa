@@ -96,11 +96,11 @@ static void test_private_channel(void)
     assert(commands[2] == 0x12000 && commands[3] == values[0]);
     assert(commands[7] == 0x12004 && commands[8] == values[1]);
     assert(fence[0] == 0xdeadbeef && fence[1] == 0xdeadbeef);
-    /* Vendor GM20B bare channel: reserved word zero; CCSR carries RAMFC. */
-    assert(runlist[0] == 0 && runlist[1] == 0);
+    /* Vendor runlist: one-channel TSG, default timeslice, then CHID zero. */
+    assert(runlist[0] == 0x0600e000 && runlist[1] == 0);
     assert(runlist[2] == 0 && runlist[3] == 0);
     assert(tg_gpu_prepare_arena(arena, 0xfffb0000, sizeof(arena), values));
-    assert(runlist[0] == 0 && runlist[1] == 0);
+    assert(runlist[0] == 0x0600e000 && runlist[1] == 0);
     assert(!tg_gpu_prepare_arena(arena, 0xc0000001, sizeof(arena), values));
     assert(!tg_gpu_prepare_arena(arena, 0xffff0000, sizeof(arena), values));
     assert(!tg_gpu_prepare_arena(arena, 0xc0000000, 4096, values));
@@ -121,7 +121,8 @@ static void test_submission(void)
     assert(command[TG_GPU_COMMAND_FENCE/4]==0xeca86420 && userd[35]==2);
     assert(instance[0]==2 && instance[2]==0xc0002003 && instance[18]==0x4000000 && instance[57]==0x20);
     assert(instance[128]==0xa5a5a5a5 && instance[131]==0xa5a5a5a5);
-    assert(runlist[0]==0 && runlist[1]==0xc0040);
+    assert(runlist[0]==0x0600e000 && runlist[1]==0);
+    assert(runlist[2]==0 && runlist[3]==0);
     assert(!tg_gpu_prepare_submission(command,sizeof(command),UINT64_C(1)<<34,0x4000000,
         instance,sizeof(instance),0xc0040000,0x20000000,40,0x2468ace0));
     assert(!tg_gpu_prepare_submission(command,sizeof(command),0xc0000000,0x4000000,
@@ -133,7 +134,7 @@ int main(void)
 {
     struct tg_gpu_gpfifo_entry entry;
     struct tg_gpu_identity identity;
-    _Static_assert(sizeof(struct tg_gpu_status) == 236, "control ABI 7 size");
+    _Static_assert(sizeof(struct tg_gpu_status) == 236, "control ABI 8 size");
     assert(tg_gpu_fifo_has_error(1) && tg_gpu_fifo_has_error(0x100) && tg_gpu_fifo_has_error(0x10000));
     assert(!tg_gpu_fifo_has_error(0xc0000000)); /* ordinary notification events */
     assert(tg_gpu_identify(0x12e000b1, &identity));
@@ -148,6 +149,12 @@ int main(void)
     assert(!tg_gpu_pbdma_owns_channel(0x3000, 0)); /* TSG, not our bare channel */
     assert(!tg_gpu_pbdma_owns_channel(0x10000004, 0)); /* idle/stale SRAM */
     assert(!tg_gpu_pbdma_owns_channel(0xa000, 0)); /* context load in progress */
+    assert(tg_gpu_pbdma_owns_slot(0x2000));
+    assert(tg_gpu_pbdma_owns_slot(0x3000)); /* valid single-channel TSG zero */
+    assert(!tg_gpu_pbdma_owns_slot(0x3001)); /* a different TSG */
+    assert(!tg_gpu_pbdma_owns_slot(0x10040001)); /* physical idle readout */
+    assert(!tg_gpu_pbdma_owns_slot(0xb000)); /* TSG context load */
+    assert(!tg_gpu_pbdma_owns_slot(UINT32_MAX));
     assert(tg_gpu_build_gpfifo(UINT64_C(0x1234567000), 6, false, &entry));
     assert(entry.low == 0x34567000 && entry.high == 0x00001812);
     assert(tg_gpu_build_gpfifo(UINT64_C(0x1234567000), 6, true, &entry));
