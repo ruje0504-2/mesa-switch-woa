@@ -3,6 +3,7 @@
 #include "../windows/paging.h"
 #include "../windows/table_segment.h"
 #include "../windows/root_table.h"
+#include "../windows/paging_buffer.h"
 #include <ntimage.h>
 
 /* Same ARM64 loader metadata as the existing performance tool. */
@@ -34,13 +35,19 @@ void *memset(void *destination, int value, size_t bytes)
  * are test-owned bytes, not GPU-accessible memory or a physical allocation.
  */
 static _Alignas(PAGE_SIZE) UCHAR segment_bytes[TG_GPU_TABLE_BYTES * 2];
+static _Alignas(PAGE_SIZE) UCHAR alias_bytes[TG_GPU_TABLE_BYTES * 2];
+static BOOLEAN bad_alias_page;
 static BOOLEAN fail_allocate, fail_free;
 static UINT allocate_calls, free_calls;
 static PHYSICAL_ADDRESS NTAPI TestPhysical(PVOID Address)
 {
     PHYSICAL_ADDRESS result;
-    CHECK(Address == segment_bytes);
-    result.QuadPart = 0x90000000;
+    ULONG_PTR p = (ULONG_PTR)Address, base;
+    BOOLEAN alias = p >= (ULONG_PTR)alias_bytes && p < (ULONG_PTR)alias_bytes + sizeof(alias_bytes);
+    base = alias ? (ULONG_PTR)alias_bytes : (ULONG_PTR)segment_bytes;
+    CHECK(p >= base && p < base + sizeof(segment_bytes));
+    result.QuadPart = 0x90000000 + p - base;
+    if (alias && bad_alias_page && p - base == PAGE_SIZE) result.QuadPart += PAGE_SIZE;
     return result;
 }
 PHYSICAL_ADDRESS (NTAPI * const __imp_MmGetPhysicalAddress)(PVOID) = TestPhysical;
@@ -137,7 +144,10 @@ static void TestSegment(void)
     CHECK(NT_SUCCESS(TgGpuDestroyTableSegment(&dxgk,&segment)) && free_calls == 2);
 }
 
-struct tlb_model { UINT32 Control, Root, Trigger; UINT Writes; };
+struct tlb_model {
+    UINT32 Control, Root, Trigger; UINT Writes;
+    volatile UINT64 *ExpectedEntry; UINT64 Expected;
+};
 static uint32_t TlbRead(void *Context, uint32_t Address)
 {
     struct tlb_model *m = Context;
@@ -147,6 +157,7 @@ static uint32_t TlbRead(void *Context, uint32_t Address)
 static void TlbWrite(void *Context, uint32_t Address, uint32_t Value)
 {
     struct tlb_model *m = Context;
+    if (m->ExpectedEntry) CHECK(*m->ExpectedEntry == m->Expected);
     ++m->Writes;
     if (Address == 0x57100cb8) m->Root = Value;
     else { CHECK(Address == 0x57100cbc); m->Trigger = Value; }
@@ -220,6 +231,90 @@ static NTSTATUS Resolve(PVOID Context, UINT Segment, UINT64 Offset, SIZE_T Bytes
     return STATUS_SUCCESS;
 }
 
+static void TestPagingBuffer(void)
+{
+    static _Alignas(8) UCHAR commands[512];
+    TG_GPU_TABLE_SEGMENT segment = {
+        .Memory = {(HANDLE)2,segment_bytes,{.QuadPart=0x90000000},sizeof(segment_bytes)},
+        .SegmentId = 1
+    };
+    TG_GPU_ROOT_TABLE root = {0};
+    DXGKARG_SETROOTPAGETABLE set = {.Address={1,0,TG_GPU_TABLE_BYTES},.NumEntries=1};
+    TG_GPU_PAGING_BUILD build = {&segment,TG_GPU_TABLE_BYTES,&root,
+        TgGpuResolveTableSegment,&segment,scratch,TG_GPU_TABLE_ENTRIES,TRUE,TRUE};
+    DXGK_PTE ptes[3] = {0};
+    DXGKARG_BUILDPAGINGBUFFER args = {0}, flush = {0};
+    UINT64 *entries = (UINT64 *)segment_bytes;
+    struct tlb_model model = {.Control=0x18000,.ExpectedEntry=&entries[7],.Expected=UINT64_C(0x100900011)};
+    struct tg_gpu_power_io io = {&model,TlbRead,TlbWrite,NULL,NULL,TlbDelay};
+    struct tg_gpu_power power = {.owned=true,.ready=true};
+    SIZE_T prefix, bytes, completed = 99;
+    UINT saved, i;
+    CHECK(NT_SUCCESS(TgGpuResolveRootTable(&segment,&set,&root)));
+    memset(segment_bytes,0xa5,sizeof(segment_bytes));
+    memset(commands,0xcc,sizeof(commands));
+    for (i=0;i<3;++i) { ptes[i].Valid=1;ptes[i].Segment=1;ptes[i].PageAddress=(i+1)*PAGE_SIZE; }
+    args.Operation=DXGK_OPERATION_UPDATE_PAGE_TABLE;
+    args.UpdatePageTable.UpdateMode=DXGK_PAGETABLEUPDATE_GPU_PHYSICAL;
+    args.UpdatePageTable.PageTableAddress.GpuPhysical=(D3DGPU_PHYSICAL_ADDRESS){1,0,0};
+    args.UpdatePageTable.StartIndex=7;args.UpdatePageTable.NumPageTableEntries=3;
+    args.UpdatePageTable.pPageTableEntries=ptes;
+    args.pDmaBuffer=commands;args.DmaSize=64;
+    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER);
+    CHECK(args.pDmaBuffer==commands && args.MultipassOffset==0 && commands[0]==0xcc);
+    /* A bad last entry cannot publish a valid first partial record. */
+    args.DmaSize=72;ptes[2].NoExecute=1;
+    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_NOT_SUPPORTED);
+    CHECK(args.pDmaBuffer==commands && args.MultipassOffset==0 && commands[0]==0xcc);
+    ptes[2].NoExecute=0;
+    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER);
+    CHECK(args.MultipassOffset==1 && args.pDmaBuffer==commands+72);
+    args.DmaSize=sizeof(commands)-72;
+    CHECK(NT_SUCCESS(TgGpuBuildPagingBuffer(&args,&build)) && args.MultipassOffset==0);
+    prefix=(UCHAR *)args.pDmaBuffer-commands;
+    CHECK(entries[7]==UINT64_C(0xa5a5a5a5a5a5a5a5) && model.Writes==0);
+    flush.Operation=DXGK_OPERATION_FLUSH_TLB;flush.pDmaBuffer=args.pDmaBuffer;
+    flush.DmaSize=(UINT)(sizeof(commands)-prefix);
+    flush.FlushTlb.RootPageTableAddress=set.Address;
+    CHECK(NT_SUCCESS(TgGpuBuildPagingBuffer(&flush,&build)) && model.Writes==0);
+    bytes=(UCHAR *)flush.pDmaBuffer-commands;
+    /* No borrowed PTE pointer survives BuildPagingBuffer. */
+    memset(ptes,0,sizeof(ptes));
+    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,FALSE,&io,&power,&completed)==STATUS_GRAPHICS_ALLOCATION_BUSY);
+    CHECK(completed==0 && entries[7]==UINT64_C(0xa5a5a5a5a5a5a5a5) && !model.Writes);
+    power.ready=false;
+    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed)==STATUS_DEVICE_NOT_READY);
+    CHECK(completed==0 && !model.Writes);power.ready=true;
+    /* Corrupt the trailing operation, retaining the valid update prefix. */
+    saved=*(UINT *)(commands+prefix);*(UINT *)(commands+prefix)=UINT32_MAX;
+    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed)==STATUS_INVALID_PARAMETER);
+    CHECK(completed==0 && entries[7]==UINT64_C(0xa5a5a5a5a5a5a5a5) && !model.Writes);
+    *(UINT *)(commands+prefix)=saved;
+    CHECK(NT_SUCCESS(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed)));
+    CHECK(completed==bytes && model.Writes==2 && model.Root==0x900202);
+    CHECK(entries[7]==UINT64_C(0x100900011) && entries[8]==UINT64_C(0x100900021) && entries[9]==UINT64_C(0x100900031));
+    model.Control=0x10000;
+    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed)==STATUS_IO_TIMEOUT);
+    CHECK(completed==prefix && completed!=bytes); /* do not complete the paging fence */
+
+    /* Mandatory immediate initialization accepts a different CPU alias only
+     * when every page resolves to the owned contiguous table span.
+     */
+    args.pDmaBuffer=NULL;args.MultipassOffset=0;
+    args.UpdatePageTable.UpdateMode=DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;
+    args.UpdatePageTable.PageTableAddress.CpuVirtual=alias_bytes;
+    args.UpdatePageTable.StartIndex=12;args.UpdatePageTable.NumPageTableEntries=1;
+    ptes[0].Valid=1;ptes[0].Segment=1;ptes[0].PageAddress=PAGE_SIZE;
+    CHECK(NT_SUCCESS(TgGpuBuildPagingBuffer(&args,&build)));
+    CHECK(entries[12]==UINT64_C(0x100900011));
+    entries[12]=0;bad_alias_page=TRUE;
+    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_INVALID_ADDRESS && entries[12]==0);
+    bad_alias_page=FALSE;build.InitialMappingUncached=FALSE;
+    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_NOT_SUPPORTED && entries[12]==0);
+    build.InitialMappingUncached=TRUE;args.pDmaBuffer=commands;
+    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_NOT_SUPPORTED && entries[12]==0);
+}
+
 void start(void)
 {
     DXGK_PTE ptes[3] = {0};
@@ -229,9 +324,10 @@ void start(void)
     DXGK_PAGE_TABLE_LEVEL_DESC desc;
     UINT64 before;
     ULONG i, written;
-    static const char message[] = "PASS: real WDK paging, segment lifetime, root bounds/RAMIN and TLB error propagation\r\n";
+    static const char message[] = "PASS: WDK paging buffers, multipass ordering, alias bounds, root/RAMIN and TLB failures\r\n";
     TestSegment();
     TestRoot();
+    TestPagingBuffer();
     for (i = 0; i < TG_GPU_TABLE_ENTRIES; ++i) table[i] = UINT64_C(0xa5a5a5a5a5a5a5a5);
     u.PageTableAddress.CpuVirtual = table;
     u.UpdateMode = DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;

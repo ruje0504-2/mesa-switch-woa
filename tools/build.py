@@ -74,7 +74,8 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
 objects = []
 for source in [*core, power, clock, tlb, root / "windows/resources.c",
                root / "windows/private_memory.c", root / "windows/paging.c",
-               root / "windows/table_segment.c", root / "windows/root_table.c"]:
+               root / "windows/table_segment.c", root / "windows/root_table.c",
+               root / "windows/paging_buffer.c"]:
     obj = args.out / (source.stem + ".obj")
     subprocess.run([args.clang_cl, *flags, f"/Fo{obj}", "--", str(source)], check=True)
     objects.append(obj)
@@ -99,6 +100,7 @@ if args.windows_tests:
                     str(args.out / "paging.obj"), str(args.out / "gm20b_mmu.obj"),
                     str(args.out / "table_segment.obj"), str(args.out / "private_memory.obj"),
                     str(args.out / "root_table.obj"), str(args.out / "t214_mmu.obj"),
+                    str(args.out / "paging_buffer.obj"),
                     str(sdk_lib)], check=True)
 
 if args.probe:

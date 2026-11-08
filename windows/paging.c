@@ -37,20 +37,18 @@ static NTSTATUS EncodePage(UINT Level, const DXGK_PTE *Pte,
     return STATUS_SUCCESS;
 }
 
-NTSTATUS TgGpuUpdatePageTable(const DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *Update,
-                              const TG_GPU_PAGE_UPDATE_TARGET *Target)
+NTSTATUS TgGpuEncodePageTable(const DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *Update,
+                             const TG_GPU_PAGE_UPDATE_TARGET *Target)
 {
     UINT i, count;
     SIZE_T entries;
     NTSTATUS status;
-    if (!Update || !Target || !Target->Entries || !Target->Resolve ||
+    if (!Update || !Target || !Target->Resolve ||
         !Target->Scratch || !Target->Size || Target->Size > TG_GPU_TABLE_BYTES ||
-        (Target->Size & (PAGE_SIZE - 1)) || ((ULONG_PTR)Target->Entries & 7) ||
-        Update->PageTableLevel > 1 ||
-        Update->PageTableAddress.CpuVirtual != (PVOID)Target->Entries ||
-        Update->UpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
+        (Target->Size & (PAGE_SIZE - 1)) || ((ULONG_PTR)Target->Scratch & 7) ||
+        Update->PageTableLevel > 1 || Update->Reserved0)
         return STATUS_INVALID_PARAMETER;
-    if (!Target->CpuMappingUncached || Update->Flags.Use64KBPages ||
+    if (Update->Flags.Use64KBPages ||
         Update->Flags.Reserved || Update->DriverProtection || Update->pPageTableEntries64KB)
         return STATUS_NOT_SUPPORTED;
     if (!Update->PageTableLevel && Target->Size != TG_GPU_TABLE_BYTES)
@@ -69,8 +67,23 @@ NTSTATUS TgGpuUpdatePageTable(const DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *Upda
             &Update->pPageTableEntries[Update->Flags.Repeat ? 0 : i], Target, &Target->Scratch[i]);
         if (!NT_SUCCESS(status)) return status;
     }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS TgGpuUpdatePageTable(const DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *Update,
+                              const TG_GPU_PAGE_UPDATE_TARGET *Target)
+{
+    UINT i;
+    NTSTATUS status;
+    if (!Update || !Target || !Target->Entries || ((ULONG_PTR)Target->Entries & 7) ||
+        Update->PageTableAddress.CpuVirtual != (PVOID)Target->Entries ||
+        Update->UpdateMode != DXGK_PAGETABLEUPDATE_CPU_VIRTUAL)
+        return STATUS_INVALID_PARAMETER;
+    if (!Target->CpuMappingUncached) return STATUS_NOT_SUPPORTED;
+    status = TgGpuEncodePageTable(Update, Target);
+    if (!NT_SUCCESS(status)) return status;
     KeMemoryBarrier();
-    for (i = 0; i < count; ++i)
+    for (i = 0; i < Update->NumPageTableEntries; ++i)
         Target->Entries[Update->StartIndex + i] = Target->Scratch[i];
     KeMemoryBarrier();
     return STATUS_SUCCESS;

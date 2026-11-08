@@ -79,8 +79,19 @@ Do not use the pool's own CPU VA to validate a different VidMm CPU mapping.
 WDDM callback wiring and physical use of this segment remain open.
 The CPU-update helper is valid for initialization/test-owned mappings; do not
 advertise `CPU_VIRTUAL` updates for the dedicated memory segment without
-resolving the documented local-segment restriction. Ordered GPU-physical
-paging submission and initial CPU mapping handling still need adapter wiring.
+resolving the documented local-segment restriction.
+
+`windows/paging_buffer.c` builds bounded, private kernel records for
+`UPDATE_PAGE_TABLE` and `FLUSH_TLB`. GPU-physical updates snapshot translated
+entries without writing the table, support DMA-buffer multipass, and retain
+no borrowed PTE array. The mandatory NULL-DMA CPU initialization path checks
+every page of VidMm's uncached alias against the owned table backing.
+At ordered submission, the worker helper publishes uncached entries before
+real TLB MMIO. It rejects an invalid trailing record before any publication.
+A TLB error returns incomplete progress, never permission to complete the
+paging fence or recycle old pages. The adapter still has to supply residency,
+address-space serialization, submission/DDI wiring, and fence/fault handling;
+this library is not yet an advertised WDDM paging mode.
 
 `windows/root_table.c` consumes real WDK root-table arguments. It rounds root
 sizes to whole CPU pages, resolves the complete segment span, writes the RAMIN
@@ -93,7 +104,9 @@ and scheduler fence notification remain unfinished.
 `platform/t214_mmu.c` performs the Switchroot TLB invalidate sequence and
 reports timeout/read failures. Add `--windows-tests` to build `test-paging.exe`
 against the real WDK types, then run it in ARM64 Windows/WinPE. This test uses
-owned test memory and does not access a GPU. The same executable covers segment
+owned test memory and controlled MMIO/OS callbacks, and does not access a GPU.
+It covers deferred/initial updates, multipass, alias rejection, PTE-before-TLB
+ordering and incomplete progress after TLB failure, as well as segment
 bounds, real-WDK callback shapes, allocation failure and cleanup retry with
 controlled OS-call substitutes; it does not test real Dxgkrnl allocation.
 

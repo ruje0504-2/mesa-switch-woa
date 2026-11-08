@@ -26,6 +26,12 @@ typedef struct _TG_GPU_PAGE_UPDATE_TARGET {
     PVOID ResolveContext;
 } TG_GPU_PAGE_UPDATE_TARGET;
 
+/* Translate into caller-owned scratch only. Used while building an ordered
+ * paging buffer; it must not publish PTEs or retain VidMm's input pointers.
+ */
+NTSTATUS TgGpuEncodePageTable(const DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *Update,
+                             const TG_GPU_PAGE_UPDATE_TARGET *Target);
+
 /* No unsupported attribute is silently dropped. Validate/translate the
  * complete update before publishing any entry. On success the caller must
  * still submit and wait for a real GPU TLB invalidate before page reuse.
