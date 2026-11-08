@@ -39,6 +39,9 @@ as a live channel. The probe separately enables PBDMA0 through `MC_ENABLE_PB`,
 checks its runlist-zero mapping, and disables it before the final FIFO reset.
 Runlist zero is blocked during binding, explicitly allowed after submission,
 and blocked again before teardown, following Switchroot's scheduler control.
+Its eight-byte channel entry uses the Maxwell layout from nouveau's GM20B
+`gm200_fifo` / `gm107_runl_insert_chan`: channel ID plus the RAMFC physical
+page, matching the CCSR binding. A zero second word is the older GK20A layout.
 The PBDMA notification stall mask follows nouveau's `gf100_runq_init`; both
 PBDMA interrupt words remain visible to polling. Status ABI 4 adds scheduler,
 committed-runlist and live PBDMA fetch observations to distinguish a pending

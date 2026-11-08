@@ -57,6 +57,9 @@ Physical/IOMMU address selection follows gk20a/mm_gk20a.c and
 common/mm/nvgpu_mem.c in that revision (Copyright 2017-2020 NVIDIA).
 PBDMA enable ordering follows Linux nouveau v6.12 engine/fifo/gk104.c,
 gk104_fifo_init_pbdmas (Copyright 2012 Red Hat Inc.; MIT notice above).
+PBDMA stall setup follows engine/fifo/gf100.c (Copyright 2012 Red Hat Inc.).
+The Maxwell runlist instance pointer follows engine/fifo/gm107.c through
+gm200.c (Copyright 2015-2016 Red Hat Inc.). The MIT notice above applies.
 Copyright (c) 2014-2018 NVIDIA CORPORATION. All rights reserved.
 The MIT license text above applies. The Windows probe links this code with
 the GPL-2.0-only power sequence and is distributed under GPL-2.0-only.

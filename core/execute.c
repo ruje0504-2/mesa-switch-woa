@@ -90,7 +90,12 @@ bool tg_gpu_prepare_arena(void *cpu, uint64_t physical, size_t bytes,
     release_packet(push + 5, FENCE_VA + 4, expected[1]);
     if (!tg_gpu_build_gpfifo(PUSH_VA, 5, false, &ring[0]) ||
         !tg_gpu_build_gpfifo(PUSH_VA + 20, 5, true, &ring[1])) return false;
-    runlist[0] = runlist[1] = 0; /* standalone channel zero */
+    /* Maxwell's runlist entry also carries the RAMFC instance page. Nouveau
+     * routes GM20B through gm200_fifo -> gm107_runl_insert_chan, not the older
+     * GK20A entry with a zero second word. Match the CCSR binding below.
+     */
+    runlist[0] = 0; /* standalone channel zero */
+    runlist[1] = (uint32_t)((physical + INST) >> 12);
     return true;
 }
 

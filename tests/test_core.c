@@ -81,6 +81,7 @@ static void test_private_channel(void)
     uint32_t *ramfc = (uint32_t *)(arena + 0x40000);
     uint32_t *commands = (uint32_t *)(arena + 0x43000);
     uint32_t *fence = (uint32_t *)(arena + 0x44000);
+    uint32_t *runlist = (uint32_t *)(arena + 0x45000);
     assert(tg_gpu_prepare_arena(arena, 0xc0000000, sizeof(arena), values));
     assert(pde[0] == UINT64_C(0x00c0020300000000));
     assert(pde[1] == 0 && pte[0] == 0 && pte[20] == 0);
@@ -92,6 +93,13 @@ static void test_private_channel(void)
     assert(commands[2] == 0x12000 && commands[3] == values[0]);
     assert(commands[7] == 0x12004 && commands[8] == values[1]);
     assert(fence[0] == 0xdeadbeef && fence[1] == 0xdeadbeef);
+    /* GM20B/Maxwell entry: channel ID followed by the physical instance page.
+     * A valid runlist length alone cannot detect an omitted RAMFC pointer.
+     */
+    assert(runlist[0] == 0 && runlist[1] == 0x000c0040);
+    assert(runlist[2] == 0 && runlist[3] == 0);
+    assert(tg_gpu_prepare_arena(arena, 0xfffb0000, sizeof(arena), values));
+    assert(runlist[0] == 0 && runlist[1] == 0x000ffff0);
     assert(!tg_gpu_prepare_arena(arena, 0xc0000001, sizeof(arena), values));
     assert(!tg_gpu_prepare_arena(arena, 0xffff0000, sizeof(arena), values));
     assert(!tg_gpu_prepare_arena(arena, 0xc0000000, 4096, values));
