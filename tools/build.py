@@ -23,6 +23,7 @@ parser.add_argument("--link", default="lld-link")
 parser.add_argument("--dlltool", default="llvm-dlltool")
 parser.add_argument("--probe", action="store_true", help="also build the opt-in KMDF probe and its SwitchFan bridge")
 parser.add_argument("--gr-firmware", type=Path, help="external NVIDIA tegra21x NETB_img.bin/fecs.bin/gpccs.bin directory (required for --probe)")
+parser.add_argument("--acr-firmware", type=Path, help="also check the external NVIDIA 32.7.6 ACR/PMU/FECS files against the WPR packer; does not install or start ACR")
 parser.add_argument("--keep-fan", action="store_true", help="with --probe, preserve the existing signed SwitchFan package")
 parser.add_argument("--windows-tests", action="store_true", help="build the real-WDK paging test executable for ARM64 Windows")
 args = parser.parse_args()
@@ -42,7 +43,7 @@ mesa_includes = [mesa_src, mesa_src / "nouveau/headers",
 encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
 core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c", root / "core/fault.c",
         root / "core/execute.c", root / "core/submission.c", root / "platform/t214_frontend.c",
-        root / "platform/t214_gr.c", root / "core/gr_firmware.c", encoder]
+        root / "platform/t214_gr.c", root / "core/gr_firmware.c", root / "core/acr_firmware.c", encoder]
 host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 *[f"-I{p}" for p in mesa_includes], *map(str, core), str(root / "tests/test_core.c"),
@@ -75,6 +76,11 @@ subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(gr_firmware), str(root / "tests/test_gr_firmware.c"),
                 "-o", str(gr_firmware_test)], check=True)
 subprocess.run([str(gr_firmware_test.resolve())], check=True)
+acr_test = args.out / "test-acr-firmware"
+subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                str(root / "core/acr_firmware.c"), str(gr_firmware),
+                str(root / "tests/test_acr_firmware.c"), "-o", str(acr_test)], check=True)
+subprocess.run([str(acr_test.resolve()), *([str(args.acr_firmware.resolve())] if args.acr_firmware else [])], check=True)
 gr = root / "platform/t214_gr.c"
 gr_test = args.out / "test-gr-boot"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",

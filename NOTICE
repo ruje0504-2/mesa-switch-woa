@@ -88,6 +88,15 @@ Copyright (c) 2014-2018 NVIDIA CORPORATION. The MIT license text above applies.
 Falcon DMA IDLE bit semantics were checked against Linux v6.12 drm/tegra/falcon.h
 and falcon.c; no Linux Tegra implementation is copied into this helper.
 
+core/acr_firmware.c follows the signed-binary headers, GM20B WPR/LSB layout
+and PMU/FECS loader descriptors in Switchroot nvgpu 1ae0167d,
+gm20b/acr_gm20b.c and include/nvgpu/acr/{nvgpu_acr,acr_lsfm,acr_flcnbl}.h.
+Copyright (c) 2015-2018 NVIDIA CORPORATION. The MIT license above applies.
+Linux nouveau v6.12 subdev/acr/gm20b.c and gm200.c were consulted to confirm
+that the existing WPR carveout is read and used, not allocated from OS RAM.
+The NVIDIA signatures and firmware remain external licensed files; no
+firmware binary is embedded in this repository. Packing is not authentication.
+
 core/channel.c follows the channel bind, disable, preempt and runlist removal
 ordering in the same Switchroot nvgpu gk20a/fifo_gk20a.c and common/fifo/channel.c,
 with Linux nouveau v6.12 engine/fifo/gk104.c and gf100.c as references.
