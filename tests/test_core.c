@@ -111,6 +111,7 @@ int main(void)
 {
     struct tg_gpu_gpfifo_entry entry;
     struct tg_gpu_identity identity;
+    _Static_assert(sizeof(struct tg_gpu_status) == 196, "control ABI 5 size");
     assert(tg_gpu_identify(0x12e000b1, &identity));
     assert(identity.chipset == TG_GPU_CHIP_GM20B_B);
     assert(identity.major_revision == 0xb && identity.minor_revision == 1);

@@ -37,7 +37,7 @@ mesa_includes = [mesa_src, mesa_src / "nouveau/headers",
                  mesa_src / "nouveau/headers/nvidia/classes"]
 encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
 core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c",
-        root / "core/execute.c", encoder]
+        root / "core/execute.c", root / "platform/t214_frontend.c", encoder]
 host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 *[f"-I{p}" for p in mesa_includes], *map(str, core), str(root / "tests/test_core.c"),
@@ -54,6 +54,11 @@ clock_test = args.out / "test-t214-clock"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(clock), str(root / "tests/test_clock.c"), "-o", str(clock_test)], check=True)
 subprocess.run([str(clock_test.resolve())], check=True)
+frontend_test = args.out / "test-t214-frontend"
+subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                str(root / "platform/t214_frontend.c"), str(root / "tests/test_frontend.c"),
+                "-o", str(frontend_test)], check=True)
+subprocess.run([str(frontend_test.resolve())], check=True)
 tlb = root / "platform/t214_mmu.c"
 tlb_test = args.out / "test-tlb"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",

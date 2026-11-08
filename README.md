@@ -43,7 +43,7 @@ Its eight-byte channel entry uses the Maxwell layout from nouveau's GM20B
 `gm200_fifo` / `gm107_runl_insert_chan`: channel ID plus the RAMFC physical
 page, matching the CCSR binding. A zero second word is the older GK20A layout.
 The PBDMA notification stall mask follows nouveau's `gf100_runq_init`; both
-PBDMA interrupt words remain visible to polling. Status ABI 4 adds scheduler,
+PBDMA interrupt words remain visible to polling. The status includes scheduler,
 committed-runlist and live PBDMA fetch observations to distinguish a pending
 channel from a loaded reader. A queued command or enabled channel is not
 proof of execution. `--probe --keep-fan`
@@ -55,6 +55,17 @@ GPU-written fence completes. This separates context bootstrap from doorbell
 delivery without replacing either GPU write with a CPU result. Live PBDMA
 GP registers are sampled only when its status identifies valid channel zero;
 idle/context-switch SRAM readouts are not interpreted as execution progress.
+
+The cold path now follows Switchroot's bus/private-ring, clock, FIFO reset,
+LTC routing, FB setup and BAR1/FB-flush order. Idle slowdown stays disabled
+through execution and is restored on clock release. FIFO/FB/LTC use the
+upstream force-run clock-gating profiles until a PMU governor exists. LTC
+active counts feed both L2 and FBHUB; physical-security setup is restricted
+to the upstream non-secure branch. Two bounded FB flushes must finish before
+the channel becomes runnable. ABI 5 (196 bytes) records the initialization
+stage, active LTC count, completed flushes and BUS/PRI fault details. This is
+a local cold-start candidate, not a hardware execution pass. Source reference:
+[Switchroot NVIDIA driver](https://github.com/CTCaer/switch-l4t-kernel-nvgpu/tree/1ae0167d360287ca78f5a2572f0de42594140312/drivers/gpu/nvgpu).
 
 The diagnostic accepts only owned physical buffers below 4 GiB. Switchroot's
 GM20B path tags IOMMU addresses with bit 34 and leaves physical addresses

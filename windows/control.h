@@ -2,12 +2,13 @@
 #ifndef TEGRA_GPU_CONTROL_H
 #define TEGRA_GPU_CONTROL_H
 #include <stdint.h>
+#include "../platform/t214_frontend.h"
 
 /* Shared by the kernel backend and the existing LitePerformanceCheck UI.
  * METHOD_BUFFERED, FILE_DEVICE_UNKNOWN. RUN requires write access; the
  * device grants write access only to administrators and SYSTEM.
  */
-#define TG_GPU_CONTROL_VERSION 4u
+#define TG_GPU_CONTROL_VERSION 5u
 #define TG_GPU_IOCTL_STATUS 0x00226400u
 #define TG_GPU_IOCTL_RUN    0x0022a404u
 #define TG_GPU_CONTROL_DEFAULT_KHZ 729600u
@@ -67,5 +68,6 @@ struct tg_gpu_status {
     uint32_t pbdma_gp_get;
     uint32_t pbdma_gp_put;
     uint32_t pbdma_interrupt_1;
+    struct tg_gpu_frontend_status frontend;
 };
 #endif

@@ -155,7 +155,7 @@ static VOID GpuSaveResult(WDFDEVICE device)
     (VOID)WdfRegistryAssignValue(key, &result_name, REG_BINARY, sizeof(d->last), &d->last);
     (VOID)WdfRegistryAssignValue(key, &time_name, REG_QWORD, sizeof(now), &now);
     if (!d->last.power_result && !d->last.clock_result && !d->last.execution_result &&
-        !d->last.restore_result && !d->last.resources_owned)
+        !d->last.frontend.result && !d->last.restore_result && !d->last.resources_owned)
         (VOID)WdfRegistryAssignULong(key, &target_name, d->last.target_khz);
     WdfRegistryClose(key);
 }
@@ -230,10 +230,11 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target)
     d->last.stage = 100 + d->power.stage;
     if (d->last.power_result != TG_GPU_POWER_OK) goto done;
     d->last.boot0 = GpuRead(d, T214_GPU_REG_BASE);
-    /* Switchroot GM20B private-ring setup, before GPC broadcast registers. */
-    GpuWrite(d, T214_GPU_REG_BASE + 0x12004c, 4);
-    GpuWrite(d, T214_GPU_REG_BASE + 0x122204, 2);
-    GpuDelay(d, 10);
+    if (tg_gpu_frontend_start(&io, &d->power, &d->last.frontend) != TG_GPU_FE_OK) {
+        d->last.execution_result = TG_GPU_EXEC_FRONTEND;
+        d->last.stage = 150;
+        goto done;
+    }
     d->last.clock_result = tg_gpu_clock_start(&io, &d->power, target, &d->clock);
     d->last.stage = 200 + d->clock.stage;
     d->last.measured_khz = d->clock.measured_khz;
@@ -244,6 +245,7 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target)
         (uint64_t)d->arena_address.QuadPart, &d->execution, &d->last);
     d->last.stage = 300 + d->execution.stage;
 done:
+    if (d->power.ready) tg_gpu_frontend_snapshot(&io, &d->last.frontend);
     if (d->execution.fifo_ready && d->last.execution_result != TG_GPU_EXEC_OK)
         tg_gpu_execute_snapshot(&io, &d->execution, &d->last);
     GpuCleanup(d);

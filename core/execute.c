@@ -149,6 +149,7 @@ void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io,
         s->userd_gp_get = io->read32(io->context, BAR1 + USERD_VA + 34 * 4);
         s->userd_gp_put = io->read32(io->context, BAR1 + USERD_VA + 35 * 4);
     }
+    tg_gpu_frontend_snapshot(io, &s->frontend);
 }
 
 enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
@@ -177,7 +178,6 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
      * Switchroot: reset/enable PFIFO, then initialize our unbound slot.
      */
     ex_write(io, 0x140, 0); ex_write(io, 0x144, 0);
-    ex_write(io, 0x20c, ex_read(io, 0x20c) | 0x20100004); /* FB/XBAR/HUB */
     ex_write(io, 0x200, s->mc_enable_before & ~0x100u);
     io->delay_us(io->context, 20);
     ex_write(io, 0x200, s->mc_enable_before | 0x100);
@@ -185,6 +185,8 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     s->mc_enable_after = ex_read(io, 0x200);
     if (s->mc_enable_after == UINT32_MAX || !(s->mc_enable_after & 0x100))
         return TG_GPU_EXEC_FIFO_INIT;
+    if (tg_gpu_frontend_fifo(io, power, &s->frontend) != TG_GPU_FE_OK)
+        return TG_GPU_EXEC_FRONTEND;
     s->channel_instance_after = ex_read(io, 0x800000);
     if (s->channel_instance_after == UINT32_MAX) return TG_GPU_EXEC_FIFO_INIT;
     ex_write(io, 0x800004, 0x800); /* disable our channel before unbinding */
@@ -233,10 +235,10 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     ex_write(io, 0x2100, UINT32_MAX);
     ex_write(io, 0x40108, UINT32_MAX); ex_write(io, 0x40148, UINT32_MAX);
     ex_write(io, 0x2a00, UINT32_MAX);
-    ex_write(io, 0x2a04, ex_read(io, 0x2a04) | 0xffff);
-    ex_write(io, 0x4012c, ex_read(io, 0x4012c) | 0xffff);
 
     state->stage = 2;
+    if (tg_gpu_frontend_memory(io, power, &s->frontend) != TG_GPU_FE_OK)
+        return TG_GPU_EXEC_FRONTEND;
     ex_write(io, 0x100c80, ex_read(io, 0x100c80) | 0x800);
     ex_write(io, 0x100c10, (uint32_t)((physical + FLUSH) >> 8));
     ex_write(io, 0x100cc8, (uint32_t)((physical + DEBUG_WR) >> 8) | 3);
@@ -249,6 +251,8 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     if (!ex_wait(io, 0x100c80, 0x8000, 0x8000)) return TG_GPU_EXEC_MMU_TIMEOUT;
     ex_write(io, 0x1704, (uint32_t)((physical + INST) >> 12) | 0xb0000000);
     if (!ex_wait(io, 0x1710, 3, 0)) return TG_GPU_EXEC_BAR1;
+    if (tg_gpu_frontend_flush(io, power, &s->frontend) != TG_GPU_FE_OK)
+        return TG_GPU_EXEC_FRONTEND;
     if (io->read32(io->context, BAR1 + USERD_VA) != 0x55aa3377)
         return TG_GPU_EXEC_BAR1;
     ex_write(io, 0x2254, (USERD_VA >> 12) | 0x10000000); /* USERD BAR1 snoop */
@@ -284,6 +288,7 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     }
     s->observed[1] = fence[1];
     tg_gpu_execute_snapshot(io, state, s);
+    if (s->frontend.result != TG_GPU_FE_OK) return TG_GPU_EXEC_FRONTEND;
     if (s->mmu_fault || s->pbdma_interrupt || s->pbdma_interrupt_1)
         return TG_GPU_EXEC_FAULT;
     if (s->observed[0] != s->expected[0] || s->observed[1] != s->expected[1])

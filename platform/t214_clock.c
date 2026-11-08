@@ -30,12 +30,12 @@
 
 static const uint32_t clock_regs[TG_GPU_CLOCK_SAVED_REGS] = {
     CFG, COEFF, CFG2, CFG3, DVFS0, DVFS1, DVFS2, VCO, OUT, BYPASS,
-    SVOP, SVOP_OVERRIDE
+    SVOP, SVOP_OVERRIDE, SLOW
 };
 /* Ignore read-only lock/calibration/testout bits when restoring control. */
 static const uint32_t clock_masks[TG_GPU_CLOCK_SAVED_REGS] = {
     0x17, 0x3fffff, 0xff0000ff, 0x00ff01ff, 0x00007f7f,
-    0x7fff0000, 0x0001007f, 1, 0x80003f3f, 1, 3, 1
+    0x7fff0000, 0x0001007f, 1, 0x80003f3f, 1, 3, 1, 0x003f0000
 };
 
 static uint32_t clk_read(const struct tg_gpu_power_io *io, uint32_t reg)
@@ -135,6 +135,13 @@ enum tg_gpu_clock_result tg_gpu_clock_start(const struct tg_gpu_power_io *io,
         clk_update(io, SVOP, 3, 2);
         clk_update(io, SVOP_OVERRIDE, 1, 1);
     }
+    /* Switchroot disables idle slowdown during clock setup, not only while
+     * measuring. Keep the fixed profile through command execution and restore
+     * this field with the other controls when relinquishing the GPU.
+     */
+    clk_update(io, SLOW, 0x003f0000, 0);
+    if (clk_read(io, SLOW) & 0x003f0000)
+        return TG_GPU_CLOCK_READBACK_ERROR;
 
     /* NA mode is required on B01. Use C1 VCO_CTRL/DFS_CTRL, not B1. */
     clk_update(io, DVFS1, 0x2fff0000, 0x2c000000);
