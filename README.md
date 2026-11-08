@@ -110,8 +110,9 @@ PDB and address limit only for an idle context, and propagates real TLB errors.
 A failed root move clears the software binding's valid flag, so the adapter
 must not reschedule it with the old root. Flushes belong at the ordered paging
 submission point, with old pages retained through completion/reset; they must
-not run early from `BuildPagingBuffer`. Context registration, instance rebind
-and scheduler fence notification remain unfinished.
+not run early from `BuildPagingBuffer`. The context DDIs below now consume
+these helpers; hardware channel rebind and complete miniport registration
+remain unfinished.
 `platform/t214_mmu.c` performs the Switchroot TLB invalidate sequence and
 reports timeout/read failures. Add `--windows-tests` to build `test-paging.exe`
 against the real WDK types, then run it in ARM64 Windows/WinPE. This test uses
@@ -120,6 +121,29 @@ It covers deferred/initial updates, multipass, alias rejection, PTE-before-TLB
 ordering and incomplete progress after TLB failure, as well as segment
 bounds, real-WDK callback shapes, allocation failure and cleanup retry with
 controlled OS-call substitutes; it does not test real Dxgkrnl allocation.
+
+`windows/context.c` supplies the process/device/context creation and destruction
+DDIs, root-table DDIs, completed-fence query and DPC callback. Its registration
+helper fills those entries in the caller's initialization table; it does not
+register a display adapter alone. Each context owns an uncached RAMIN page
+allocated through Dxgkrnl. Parent references prevent teardown during pending
+work; failed frees preserve the context for retry. Software contexts are
+dynamically allocated, while hardware work uses one serialized execution slot.
+Root changes cannot rewrite an active instance, and failed changes prevent
+future submission with a stale binding.
+
+The submission-worker helpers capture a bounded context/root snapshot and
+initialize only the complement of a private fence marker. Notification occurs
+through `DxgkCbSynchronizeExecution`, `DxgkCbNotifyInterrupt` and the DPC path
+only after the uncached marker equals the expected GPU result. Completion does
+not release RAMIN: the hardware backend must also unbind/drain the channel or
+complete reset before releasing the work reference. Aborted work never advances
+the completed fence. The virtual submission DDI, command validation, VidMm
+residency, actual GPU binding and fault/TDR integration remain to be connected.
+`--windows-tests` also builds `test-context.exe`; it calls the registered WDK
+function pointers using explicit allocation, interrupt and GPU-write substitutes.
+It checks lifetime, failed root changes, pending/duplicate notification, retained
+references and failed-free retry, not live Dxgkrnl or GPU execution.
 
 The existing `LitePerformanceCheck.exe` is the UI for both clock profiles and
 the combined readback check. The optional probe requires matching firmware
