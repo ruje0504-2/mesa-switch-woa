@@ -93,10 +93,13 @@ through execution and is restored on clock release. FIFO/FB/LTC use the
 upstream force-run clock-gating profiles until a PMU governor exists. LTC
 active counts feed both L2 and FBHUB; physical-security setup is restricted
 to the upstream non-secure branch. Two bounded FB flushes must finish before
-the channel becomes runnable. ABI 14 (488 bytes) records the initialization
+the channel becomes runnable. ABI 15 (504 bytes) records the initialization
 stage, LTC/flush counts, BUS/PRI faults, FIFO binding/engine state and the
 separate BAR1 step/expected/GPU/CPU values. Bounded L2 writeback and invalidation
 timeouts stop submission; a successful FB flush alone is not DRAM visibility.
+After FECS reports ready, its temporary DMA context is invalidated, the watchdog
+is configured, and image/zcull/PM size queries initialize the firmware RAM chains.
+The reported sizes are not allocated graphics contexts or shader execution.
 This is
 a local cold-start candidate, not a hardware execution pass. Source reference:
 [Switchroot NVIDIA driver](https://github.com/CTCaer/switch-l4t-kernel-nvgpu/tree/1ae0167d360287ca78f5a2572f0de42594140312/drivers/gpu/nvgpu).

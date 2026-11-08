@@ -182,6 +182,42 @@ static enum tg_gpu_gr_result boot(const struct tg_gpu_power_io *io,
     if (!wait_reg(io,s,FECS+0x800,UINT32_MAX,1))
         return finish(io,frontend,s,TG_GPU_GR_READY_TIMEOUT);
     s->stage = 8;
+    /* Switchroot wait_ctxsw_ready invalidates the DMA-bootstrap marker before
+     * setting the watchdog. Leaving that temporary instance current is not a
+     * usable graphics context. These operations precede channel admission.
+     */
+    write_reg(io,FECS+0xb00,0);
+    if (!wait_reg(io,s,FECS+0xb00,0x80000000,0))
+        return finish(io,frontend,s,TG_GPU_GR_REGISTER);
+    s->current_context=read_reg(io,FECS+0xb00);
+    s->stage=9;
+    write_reg(io,FECS+0x840,UINT32_MAX);
+    write_reg(io,FECS+0x500,0x7fffffff);
+    write_reg(io,FECS+0x504,0x21); /* SET_WATCHDOG_TIMEOUT, no reply required */
+    {
+        const uint32_t methods[3]={0x10,0x16,0x25};
+        uint32_t *sizes[3]={&s->context_bytes,&s->zcull_bytes,&s->pm_bytes};
+        /* init_ctx_state also initializes RAM chains in FECS; these are not
+         * optional software queries. No context allocation is claimed here.
+         */
+        for(unsigned i=0;i<3;++i) {
+            s->stage=10+i;
+            write_reg(io,FECS+0x840,UINT32_MAX);
+            write_reg(io,FECS+0x500,0);
+            write_reg(io,FECS+0x504,methods[i]);
+            s->last_register=FECS+0x800;
+            for(unsigned n=0;n<10000;++n) {
+                s->last_value=read_reg(io,FECS+0x800);
+                if(s->last_value==UINT32_MAX)
+                    return finish(io,frontend,s,TG_GPU_GR_REGISTER);
+                if(s->last_value) break;
+                io->delay_us(io->context,10);
+            }
+            if(!s->last_value) return finish(io,frontend,s,TG_GPU_GR_CONTEXT_TIMEOUT);
+            *sizes[i]=s->last_value;
+        }
+    }
+    s->stage=13;
     return finish(io,frontend,s,TG_GPU_GR_OK);
 }
 

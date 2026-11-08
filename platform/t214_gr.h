@@ -9,11 +9,12 @@ enum tg_gpu_gr_result {
     TG_GPU_GR_OK, TG_GPU_GR_ARGUMENT, TG_GPU_GR_SECURITY_REQUIRED,
     TG_GPU_GR_REGISTER, TG_GPU_GR_SCRUB_TIMEOUT, TG_GPU_GR_ARB_TIMEOUT,
     TG_GPU_GR_DMA_TIMEOUT, TG_GPU_GR_READY_TIMEOUT, TG_GPU_GR_PRI_FAULT,
-    TG_GPU_GR_FIRMWARE_FORMAT, TG_GPU_GR_IDLE_TIMEOUT
+    TG_GPU_GR_FIRMWARE_FORMAT, TG_GPU_GR_IDLE_TIMEOUT, TG_GPU_GR_CONTEXT_TIMEOUT
 };
 struct tg_gpu_gr_status {
     uint32_t stage, result, priv_security, last_register, last_value;
     uint32_t fecs_hwcfg, gpccs_hwcfg, fecs_mailbox, gr_interrupt;
+    uint32_t current_context, context_bytes, zcull_bytes, pm_bytes;
 };
 /* Non-secure Switchroot DMA bootstrap. Caller owns a cold GR with its reset/
  * access preamble complete, a valid instance/PDB and an immutable image mapped

@@ -9,7 +9,9 @@ struct model {
     uint32_t *reg;
     unsigned writes, delays, commands, started[2], dma_reads[2], header_words[2];
     uint32_t headers[2][17], stop_reg;
-    bool no_ready, pri_error, secure;
+    bool no_ready, pri_error, secure, stuck_current;
+    unsigned watchdog, context_queries;
+    uint32_t timeout_method, bad_method;
 };
 static uint32_t read32(void *ctx, uint32_t address)
 {
@@ -46,6 +48,25 @@ static void write32(void *ctx, uint32_t address, uint32_t value)
     }
     if (r == 0x400100) { m->reg[r/4] &= ~value; return; }
     if (r == 0x409840) { m->reg[0x409800/4] &= ~value; return; }
+    if (r == 0x409b00 && value==0) {
+        assert(m->started[0] && m->started[1] && m->reg[0x409800/4]==1);
+        if(m->stuck_current) return;
+    }
+    if (r == 0x409504) {
+        const uint32_t methods[]={0x10,0x16,0x25},sizes[]={0x17000,0x4000,0x9000};
+        assert(m->started[0] && m->started[1]);
+        assert(!(m->reg[0x409b00/4]&0x80000000) && !m->reg[0x409800/4]);
+        if(value==0x21) {
+            assert(!m->watchdog && !m->context_queries && m->reg[0x409500/4]==0x7fffffff);
+            ++m->watchdog;
+        } else {
+            assert(m->watchdog && m->context_queries<3 && !m->reg[0x409500/4]);
+            assert(value==methods[m->context_queries]);
+            m->reg[0x409800/4]=value==m->timeout_method?0:
+                value==m->bad_method?UINT32_MAX:sizes[m->context_queries];
+            ++m->context_queries;
+        }
+    }
     if (r == 0x409a10) {
         assert(value == (m->commands ? 5u : 7u));
         assert(m->reg[0x409b04/4] == 0x80080040 && m->reg[0x409a0c/4] == 0x80040);
@@ -113,7 +134,9 @@ int main(void)
         f->boot_signature=i ? 0x3d3d65e2 : 0x9121ab5c;
     }
     reset(&m); assert(run(&m,&image,&net,&s)==TG_GPU_GR_OK);
-    assert(s.stage==8 && s.fecs_mailbox==1 && m.started[0]==1 && m.started[1]==1);
+    assert(s.stage==13 && s.fecs_mailbox==0x9000 && m.started[0]==1 && m.started[1]==1);
+    assert(!s.current_context && s.context_bytes==0x17000 && s.zcull_bytes==0x4000 && s.pm_bytes==0x9000);
+    assert(m.watchdog==1 && m.context_queries==3);
     assert(m.delays>=4 && m.commands==2 && m.reg[0x400080/4]==0x1234);
     for (unsigned i=0;i<2;++i) {
         assert(m.headers[i][8]==4 && m.headers[i][9]==0x201+i*3);
@@ -147,7 +170,7 @@ int main(void)
     reset(&m); m.pri_error=true;
     assert(run(&m,&image,&net,&s)==TG_GPU_GR_PRI_FAULT);
     reset(&m); m.secure=true; m.reg[0x21434/4]=1; m.reg[0x409100/4]=0x40;
-    assert(run(&m,&image,&net,&s)==TG_GPU_GR_OK && s.stage==8);
+    assert(run(&m,&image,&net,&s)==TG_GPU_GR_OK && s.stage==13);
     assert(m.started[0]==1 && m.started[1]==1 && !m.header_words[0] && m.header_words[1]==17);
     reset(&m); m.secure=true; m.reg[0x21434/4]=1;
     assert(run(&m,&image,&net,&s)==TG_GPU_GR_SECURITY_REQUIRED && !m.writes);
@@ -160,6 +183,16 @@ int main(void)
     assert(m.started[0]==1 && m.started[1]==1 && !m.header_words[0]);
     assert(tg_gpu_gr_boot_secure(NULL,NULL,NULL,NULL,NULL,0,0,NULL,NULL,&s)
            ==TG_GPU_GR_SECURITY_REQUIRED);
+    reset(&m);m.stuck_current=true;
+    assert(run(&m,&image,&net,&s)==TG_GPU_GR_REGISTER && s.stage==8 && !m.watchdog);
+    for(unsigned i=0;i<3;++i) {
+        const uint32_t methods[]={0x10,0x16,0x25};
+        reset(&m);m.timeout_method=methods[i];
+        assert(run(&m,&image,&net,&s)==TG_GPU_GR_CONTEXT_TIMEOUT && s.stage==10+i);
+        assert(m.context_queries==i+1 && !s.pm_bytes);
+        reset(&m);m.bad_method=methods[i];
+        assert(run(&m,&image,&net,&s)==TG_GPU_GR_REGISTER && s.stage==10+i);
+    }
     free(m.reg);
     puts("GM20B GR bootstrap order, DMA idle, security, and bounded failure paths: PASS (model)");
     return 0;
