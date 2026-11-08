@@ -2,6 +2,7 @@
 #ifndef TEGRA_GPU_CONTEXT_H
 #define TEGRA_GPU_CONTEXT_H
 #include "root_table.h"
+#include "internal_va.h"
 
 typedef struct _TG_GPU_CONTEXT_ENGINE TG_GPU_CONTEXT_ENGINE;
 typedef struct _TG_GPU_PROCESS TG_GPU_PROCESS;
@@ -15,6 +16,8 @@ struct _TG_GPU_PROCESS {
     HANDLE Runtime;
     UINT Devices;
     DXGK_CREATEPROCESSFLAGS Flags;
+    TG_GPU_INTERNAL_VA Internal;
+    BOOLEAN Closing;
 };
 struct _TG_GPU_DEVICE {
     LIST_ENTRY Link;
@@ -40,8 +43,10 @@ struct _TG_GPU_CONTEXT_ENGINE {
     KSPIN_LOCK Lock;
     LIST_ENTRY Processes, Devices, Contexts;
     TG_GPU_CONTEXT_WORK *Active;
+    TG_GPU_PRIVATE_MEMORY Commands;
     volatile UINT LastCompletedFence;
     UINT Marker;
+    UINT Creating;
     BOOLEAN Stopping;
 };
 /* The single physical execution slot is serialized; the number of software
@@ -51,9 +56,9 @@ struct _TG_GPU_CONTEXT_ENGINE {
 struct _TG_GPU_CONTEXT_WORK {
     TG_GPU_CONTEXT *Context;
     TG_GPU_ROOT_TABLE Root;
-    UINT64 DmaAddress, FencePhysicalAddress;
+    UINT64 DmaAddress, FencePhysicalAddress, InternalVa;
     UINT DmaBytes, SubmissionFence, Expected;
-    BOOLEAN Signaling, Notified;
+    BOOLEAN Signaling, Notified, Prepared;
 };
 
 NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *, const DXGKRNL_INTERFACE *,
@@ -84,6 +89,12 @@ DXGKDDI_DPC_ROUTINE TgGpuDdiDpcRoutine;
  */
 NTSTATUS TgGpuAcquireContextWork(TG_GPU_CONTEXT_ENGINE *,
     const DXGKARG_SUBMITCOMMANDVIRTUAL *, TG_GPU_CONTEXT_WORK *);
+/* After acquisition and before hardware binding, repair the reserved PDE and
+ * encode the USER workload plus a driver-generated KERNEL completion packet.
+ * This performs no MMIO. The hardware backend still binds RAMIN, invalidates
+ * the root TLB and submits the runlist before polling completion.
+ */
+NTSTATUS TgGpuPrepareContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
 /* Poll the GPU-owned fence in private uncached memory. Only the expected
  * hardware value can notify VidSch. Still retain RAMIN/root ownership after
  * notification: completion alone does not evict a channel's loaded context.

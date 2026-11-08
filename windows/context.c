@@ -2,7 +2,6 @@
 #include "context.h"
 
 #define TAG 0x43674754u
-#define FENCE_OFFSET 0x800u /* outside RAMFC and RAMIN PDB/VA-limit words */
 
 static PVOID object(SIZE_T bytes)
 { return ExAllocatePool2(POOL_FLAG_NON_PAGED, bytes, TAG); }
@@ -31,13 +30,14 @@ NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *e,
         dxgk->Version<DXGKDDI_INTERFACE_VERSION_WDDM2_4 ||
         !dxgk->DxgkCbAllocateContiguousMemory || !dxgk->DxgkCbFreeContiguousMemory ||
         !dxgk->DxgkCbSynchronizeExecution || !dxgk->DxgkCbNotifyInterrupt ||
-        !dxgk->DxgkCbQueueDpc || !dxgk->DxgkCbNotifyDpc)
+        !dxgk->DxgkCbQueueDpc || !dxgk->DxgkCbNotifyDpc ||
+        !dxgk->DxgkCbReserveGpuVirtualAddressRange)
         return STATUS_INVALID_PARAMETER;
     RtlZeroMemory(e,sizeof(*e));
     e->Dxgk=*dxgk; e->Tables=tables;
     KeInitializeSpinLock(&e->Lock);
     InitializeListHead(&e->Processes); InitializeListHead(&e->Devices); InitializeListHead(&e->Contexts);
-    return STATUS_SUCCESS;
+    return TgGpuAllocatePrivateMemory(dxgk,TG_GPU_COMMAND_BYTES,0x80000000,0xffffffff,&e->Commands);
 }
 NTSTATUS TgGpuStopContextEngine(TG_GPU_CONTEXT_ENGINE *e)
 {
@@ -45,19 +45,26 @@ NTSTATUS TgGpuStopContextEngine(TG_GPU_CONTEXT_ENGINE *e)
     if (!e) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);
     e->Stopping=TRUE;
-    status=e->Active || !IsListEmpty(&e->Contexts) || !IsListEmpty(&e->Devices) ||
+    status=e->Active || e->Creating || !IsListEmpty(&e->Contexts) || !IsListEmpty(&e->Devices) ||
         !IsListEmpty(&e->Processes) ? STATUS_DEVICE_BUSY : STATUS_SUCCESS;
     KeReleaseSpinLock(&e->Lock,irql);
-    return status;
+    if (!NT_SUCCESS(status)) return status;
+    return TgGpuFreePrivateMemory(&e->Dxgk,&e->Commands);
 }
 NTSTATUS APIENTRY TgGpuDdiCreateProcess(HANDLE adapter, DXGKARG_CREATEPROCESS *a)
 {
-    TG_GPU_CONTEXT_ENGINE *e=adapter; TG_GPU_PROCESS *p; KIRQL irql;
+    TG_GPU_CONTEXT_ENGINE *e=adapter; TG_GPU_PROCESS *p; KIRQL irql; NTSTATUS status;
     if (!e || !a) return STATUS_INVALID_PARAMETER;
     p=object(sizeof(*p)); if (!p) return STATUS_NO_MEMORY;
     p->Engine=e; p->Runtime=a->hDxgkProcess; p->Flags=a->Flags;
     KeAcquireSpinLock(&e->Lock,&irql);
     if (e->Stopping) { KeReleaseSpinLock(&e->Lock,irql); ExFreePoolWithTag(p,TAG); return STATUS_DEVICE_NOT_READY; }
+    ++e->Creating; KeReleaseSpinLock(&e->Lock,irql);
+    status=TgGpuCreateInternalVa(&e->Dxgk,p->Runtime,&e->Commands,&p->Internal);
+    KeAcquireSpinLock(&e->Lock,&irql); --e->Creating;
+    if (!NT_SUCCESS(status)) {
+        KeReleaseSpinLock(&e->Lock,irql); ExFreePoolWithTag(p,TAG); return status;
+    }
     InsertTailList(&e->Processes,&p->Link);
     KeReleaseSpinLock(&e->Lock,irql);
     a->hKmdProcess=p;
@@ -65,10 +72,14 @@ NTSTATUS APIENTRY TgGpuDdiCreateProcess(HANDLE adapter, DXGKARG_CREATEPROCESS *a
 }
 NTSTATUS APIENTRY TgGpuDdiDestroyProcess(HANDLE adapter, HANDLE process)
 {
-    TG_GPU_CONTEXT_ENGINE *e=adapter; TG_GPU_PROCESS *p; KIRQL irql;
+    TG_GPU_CONTEXT_ENGINE *e=adapter; TG_GPU_PROCESS *p; KIRQL irql; NTSTATUS status;
     if (!e) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql); p=find_process(e,process);
-    if (!p || p->Devices) { KeReleaseSpinLock(&e->Lock,irql); return p ? STATUS_DEVICE_BUSY : STATUS_INVALID_PARAMETER; }
+    if (!p || p->Devices || p->Closing) { KeReleaseSpinLock(&e->Lock,irql); return p ? STATUS_DEVICE_BUSY : STATUS_INVALID_PARAMETER; }
+    p->Closing=TRUE; KeReleaseSpinLock(&e->Lock,irql);
+    status=TgGpuFreePrivateMemory(&e->Dxgk,&p->Internal.Leaf);
+    KeAcquireSpinLock(&e->Lock,&irql);
+    if (!NT_SUCCESS(status)) { p->Closing=FALSE; KeReleaseSpinLock(&e->Lock,irql); return status; }
     RemoveEntryList(&p->Link); KeReleaseSpinLock(&e->Lock,irql);
     ExFreePoolWithTag(p,TAG); return STATUS_SUCCESS;
 }
@@ -78,7 +89,7 @@ NTSTATUS APIENTRY TgGpuDdiCreateDevice(HANDLE adapter, DXGKARG_CREATEDEVICE *a)
     if (!e || !a) return STATUS_INVALID_PARAMETER;
     d=object(sizeof(*d)); if (!d) return STATUS_NO_MEMORY;
     KeAcquireSpinLock(&e->Lock,&irql); p=find_process(e,a->hKmdProcess);
-    if (e->Stopping || (!p && (!a->Flags.SystemDevice || a->hKmdProcess))) {
+    if (e->Stopping || (p && p->Closing) || (!p && (!a->Flags.SystemDevice || a->hKmdProcess))) {
         KeReleaseSpinLock(&e->Lock,irql); ExFreePoolWithTag(d,TAG); return STATUS_INVALID_PARAMETER;
     }
     d->Engine=e; d->Process=p; d->Runtime=a->hDevice;
@@ -152,6 +163,8 @@ VOID APIENTRY TgGpuDdiSetRootPageTable(HANDLE adapter, const DXGKARG_SETROOTPAGE
         if (c->References || c->Closing) c->RootStatus=STATUS_GRAPHICS_ALLOCATION_BUSY;
         else {
             c->RootStatus=TgGpuResolveRootTable(e->Tables,a,&c->Root);
+            if (NT_SUCCESS(c->RootStatus)) c->RootStatus=c->Device->Process ?
+                TgGpuInstallInternalRoot(e->Tables,&c->Root,&c->Device->Process->Internal) : STATUS_INVALID_DEVICE_STATE;
             if (NT_SUCCESS(c->RootStatus)) c->RootStatus=TgGpuWriteRootInstance(&c->Root,&c->Instance,TRUE);
         }
         /* This DDI has no return status. Never schedule a stale root after a
@@ -195,9 +208,13 @@ NTSTATUS TgGpuAcquireContextWork(TG_GPU_CONTEXT_ENGINE *e,
         return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql); c=find_context(e,a->hContext);
     if (e->Stopping || e->Active) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_BUSY; }
-    if (!c || c->Closing || !c->Flags.VirtualAddressing || !c->Root.Valid ||
+    if (!c || c->Closing || !c->Device->Process || !c->Flags.VirtualAddressing || !c->Root.Valid ||
         !NT_SUCCESS(c->RootStatus) || a->DmaBufferVirtualAddress>=c->Root.VaLimit ||
         a->DmaBufferSize>c->Root.VaLimit-a->DmaBufferVirtualAddress) {
+        KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER;
+    }
+    if (a->DmaBufferVirtualAddress<c->Device->Process->Internal.Base+TG_GPU_INTERNAL_COVERAGE &&
+        a->DmaBufferVirtualAddress+a->DmaBufferSize>c->Device->Process->Internal.Base) {
         KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER;
     }
     marker=++e->Marker;
@@ -205,11 +222,28 @@ NTSTATUS TgGpuAcquireContextWork(TG_GPU_CONTEXT_ENGINE *e,
     RtlZeroMemory(w,sizeof(*w));
     w->Context=c; w->Root=c->Root; w->DmaAddress=a->DmaBufferVirtualAddress;
     w->DmaBytes=a->DmaBufferSize; w->SubmissionFence=a->SubmissionFenceId; w->Expected=marker;
-    w->FencePhysicalAddress=(UINT64)c->Instance.SystemPhysicalAddress.QuadPart+FENCE_OFFSET;
+    w->InternalVa=c->Device->Process->Internal.Base;
+    w->FencePhysicalAddress=(UINT64)e->Commands.SystemPhysicalAddress.QuadPart+TG_GPU_COMMAND_FENCE;
     /* CPU initializes only the complement, never the expected completion. */
-    *(volatile UINT32 *)((UCHAR *)c->Instance.CpuAddress+FENCE_OFFSET)=~marker;
+    *(volatile UINT32 *)((UCHAR *)e->Commands.CpuAddress+TG_GPU_COMMAND_FENCE)=~marker;
     KeMemoryBarrier(); ++c->References; e->Active=w;
     KeReleaseSpinLock(&e->Lock,irql); return STATUS_SUCCESS;
+}
+NTSTATUS TgGpuPrepareContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w)
+{
+    KIRQL irql;NTSTATUS status;TG_GPU_CONTEXT *c;
+    if (!e || !w) return STATUS_INVALID_PARAMETER;
+    KeAcquireSpinLock(&e->Lock,&irql);c=w->Context;
+    if (e->Active!=w || !c || w->Prepared || w->Signaling || w->Notified) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_DEVICE_STATE;
+    }
+    status=TgGpuInstallInternalRoot(e->Tables,&w->Root,&c->Device->Process->Internal);
+    if (NT_SUCCESS(status) && !tg_gpu_prepare_submission(e->Commands.CpuAddress,e->Commands.Bytes,
+        (UINT64)e->Commands.SystemPhysicalAddress.QuadPart,w->InternalVa,
+        c->Instance.CpuAddress,c->Instance.Bytes,(UINT64)c->Instance.SystemPhysicalAddress.QuadPart,
+        w->DmaAddress,w->DmaBytes,w->Expected)) status=STATUS_INVALID_PARAMETER;
+    if (NT_SUCCESS(status)) { KeMemoryBarrier();w->Prepared=TRUE; }
+    KeReleaseSpinLock(&e->Lock,irql);return status;
 }
 static BOOLEAN NotifyFence(PVOID context)
 {
@@ -230,9 +264,10 @@ NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w
     if (!e || !w) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);
     if (e->Active!=w || !w->Context) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER; }
+    if (!w->Prepared) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_NOT_READY; }
     if (w->Signaling) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_BUSY; }
     if (w->Notified) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_SUCCESS; }
-    if (*(volatile UINT32 *)((UCHAR *)w->Context->Instance.CpuAddress+FENCE_OFFSET)!=w->Expected) {
+    if (*(volatile UINT32 *)((UCHAR *)e->Commands.CpuAddress+TG_GPU_COMMAND_FENCE)!=w->Expected) {
         KeReleaseSpinLock(&e->Lock,irql); return STATUS_PENDING;
     }
     KeMemoryBarrier(); w->Signaling=TRUE; KeReleaseSpinLock(&e->Lock,irql);

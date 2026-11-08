@@ -145,6 +145,26 @@ function pointers using explicit allocation, interrupt and GPU-write substitutes
 It checks lifetime, failed root changes, pending/duplicate notification, retained
 references and failed-free retry, not live Dxgkrnl or GPU execution.
 
+`windows/internal_va.c` reserves one leaf-table coverage range (64 MiB) through
+`DxgkCbReserveGpuVirtualAddressRange` inside process creation, with user-mode
+mapping disabled. A private 128 KiB leaf maps only the engine's command ring,
+completion packet and USERD/fence pages, all using GM20B privileged PTEs. Ring
+and packet mappings are read-only; RAMIN and the physical runlist are not mapped.
+VidMm owns the reservation lifetime, while the driver owns the leaf and shared
+command backing. The reserved PDE is restored before context preparation because
+VidMm may invalidate it when the root becomes resident again. Hardware submission
+must invalidate the TLB after these updates.
+
+`core/submission.c` prepares an application GPFIFO entry with USER privilege,
+followed by a KMD-generated KERNEL semaphore release with WFI enabled. Its fixed
+command buffer is serialized across contexts; it is not a general VA allocator.
+Preparation preserves RAMIN's PDB/VA limit and initializes only the complement
+of the fence value. The context helper rejects application command ranges that
+overlap the reservation. Native tests check the callback contract, PTE/packet
+encoding, restored reserved PDE and separate fence backing. This does not yet
+bind a real hardware channel or prove hardware privilege enforcement; actual
+submission, workload barriers, IRQ and recovery remain required.
+
 The existing `LitePerformanceCheck.exe` is the UI for both clock profiles and
 the combined readback check. The optional probe requires matching firmware
 resources and the `SWITCH_LITE_GPU` build of SwitchFan. The build emits unsigned

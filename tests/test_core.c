@@ -4,6 +4,7 @@
 #include "../core/identity.h"
 #include "../core/gpfifo.h"
 #include "../core/execute.h"
+#include "../core/submission.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -107,6 +108,29 @@ static void test_private_channel(void)
     assert(!tg_gpu_prepare_arena(arena, 0xc0000000, 4096, values));
 }
 
+static void test_submission(void)
+{
+    static _Alignas(4096) uint32_t command[TG_GPU_COMMAND_BYTES/4], instance[4096/4];
+    uint32_t *push=command+TG_GPU_COMMAND_PUSH/4, *userd=command+TG_GPU_COMMAND_USERD/4;
+    uint32_t *runlist=command+TG_GPU_COMMAND_RUNLIST/4;
+    memset(instance,0xa5,sizeof(instance));
+    assert(tg_gpu_prepare_submission(command,sizeof(command),0xc0000000,0x4000000,
+        instance,sizeof(instance),0xc0040000,0x20000000,40,0x13579bdf));
+    assert(command[0]==0x20000000 && command[1]==0x2800); /* USER application */
+    assert(command[2]==0x4001000 && command[3]==0x80001500); /* KERNEL completion, wait */
+    assert(push[0]==0x20040004 && push[1]==0 && push[2]==0x4002800 && push[3]==0x13579bdf);
+    assert(push[4]==0x01000002); /* WFI enabled, not a FIFO-consumption-only fence */
+    assert(command[TG_GPU_COMMAND_FENCE/4]==0xeca86420 && userd[35]==2);
+    assert(instance[0]==2 && instance[2]==0xc0002003 && instance[18]==0x4000000 && instance[57]==0x20);
+    assert(instance[128]==0xa5a5a5a5 && instance[131]==0xa5a5a5a5);
+    assert(runlist[0]==0 && runlist[1]==0xc0040);
+    assert(!tg_gpu_prepare_submission(command,sizeof(command),UINT64_C(1)<<34,0x4000000,
+        instance,sizeof(instance),0xc0040000,0x20000000,40,0x2468ace0));
+    assert(!tg_gpu_prepare_submission(command,sizeof(command),0xc0000000,0x4000000,
+        instance,sizeof(instance),0xc0040000,0x20000000,0x800000,0x2468ace0));
+    assert(command[TG_GPU_COMMAND_FENCE/4]==0xeca86420 && push[3]==0x13579bdf);
+}
+
 int main(void)
 {
     struct tg_gpu_gpfifo_entry entry;
@@ -136,6 +160,7 @@ int main(void)
     test_mmu();
     test_report();
     test_private_channel();
+    test_submission();
     test_execute_init();
     puts("GM20B format tests passed (host only; no GPU execution).");
     return 0;
