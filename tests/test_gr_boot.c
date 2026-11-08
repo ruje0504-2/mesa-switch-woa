@@ -12,6 +12,8 @@ struct model {
     bool no_ready, pri_error, secure, stuck_current;
     unsigned watchdog, context_queries;
     uint32_t timeout_method, bad_method;
+    unsigned gpc_writes;
+    bool gpc_pri;
 };
 static uint32_t read32(void *ctx, uint32_t address)
 {
@@ -35,6 +37,12 @@ static void write32(void *ctx, uint32_t address, uint32_t value)
     /* No fuse, memory-controller, channel, global IRQ, or PMIC writes. */
     assert(r >= 0x400000 && r < 0x600000);
     ++m->writes;
+    if(r>=0x418880 && r<=0x4188b8) {
+        const uint32_t order[]={0x418880,0x418890,0x418894,0x4188b0,0x4188b4,0x4188b8,0x4188ac};
+        assert(m->context_queries==3 && m->gpc_writes<7 && r==order[m->gpc_writes]);
+        ++m->gpc_writes;
+        if(m->gpc_pri) m->reg[0x120058/4]=0x100;
+    }
     if (m->secure) {
         assert(r!=0x409100 && r!=0x409104 && r!=0x40910c &&
                r!=0x409110 && r!=0x409114 && r!=0x409118 &&
@@ -183,6 +191,30 @@ int main(void)
     assert(m.started[0]==1 && m.started[1]==1 && !m.header_words[0]);
     assert(tg_gpu_gr_boot_secure(NULL,NULL,NULL,NULL,NULL,0,0,NULL,NULL,&s)
            ==TG_GPU_GR_SECURITY_REQUIRED);
+    {
+        struct tg_gpu_power_io io={&m,read32,write32,NULL,NULL,delay};
+        struct tg_gpu_power power={.owned=true,.ready=true};
+        struct tg_gpu_frontend_status fe={.stage=11,.ltc_count=2};
+        reset(&m);assert(run(&m,&image,&net,&s)==TG_GPU_GR_OK);
+        m.reg[0x100c80/4]=0x8123987f;m.reg[0x100cc4/4]=0x10000;
+        m.reg[0x100cc8/4]=0xc00480;m.reg[0x100ccc/4]=0xc00470;
+        assert(tg_gpu_gr_gpc_mmu(&io,&power,&fe,&s)==TG_GPU_GR_OK && s.stage==15);
+        assert(m.gpc_writes==7 && m.reg[0x418880/4]==0x8000187f);
+        assert(!m.reg[0x418890/4] && !m.reg[0x418894/4]);
+        assert(m.reg[0x4188b0/4]==0x10000 && m.reg[0x4188b4/4]==0xc00480);
+        assert(m.reg[0x4188b8/4]==0xc00470 && m.reg[0x4188ac/4]==2);
+        unsigned writes=m.writes;
+        assert(tg_gpu_gr_gpc_mmu(&io,&power,&fe,&s)==TG_GPU_GR_ARGUMENT && m.writes==writes);
+        const uint32_t src[]={0x100c80,0x100cc4,0x100cc8,0x100ccc};
+        for(unsigned i=0;i<4;++i) {
+            reset(&m);assert(run(&m,&image,&net,&s)==TG_GPU_GR_OK);m.writes=0;
+            m.reg[src[i]/4]=UINT32_MAX;
+            assert(tg_gpu_gr_gpc_mmu(&io,&power,&fe,&s)==TG_GPU_GR_REGISTER && !m.writes);
+            assert(s.stage==14 && s.last_register==src[i]);
+        }
+        reset(&m);assert(run(&m,&image,&net,&s)==TG_GPU_GR_OK);m.gpc_pri=true;
+        assert(tg_gpu_gr_gpc_mmu(&io,&power,&fe,&s)==TG_GPU_GR_PRI_FAULT && m.gpc_writes==7);
+    }
     reset(&m);m.stuck_current=true;
     assert(run(&m,&image,&net,&s)==TG_GPU_GR_REGISTER && s.stage==8 && !m.watchdog);
     for(unsigned i=0;i<3;++i) {

@@ -172,7 +172,7 @@ int main(void)
 {
     struct tg_gpu_gpfifo_entry entry;
     struct tg_gpu_identity identity;
-    _Static_assert(sizeof(struct tg_gpu_status) == 504, "control ABI 15 size");
+    _Static_assert(sizeof(struct tg_gpu_status) == 504, "control ABI 16 size");
     assert(tg_gpu_fifo_has_error(1) && tg_gpu_fifo_has_error(0x100) && tg_gpu_fifo_has_error(0x10000));
     assert(!tg_gpu_fifo_has_error(0xc0000000)); /* ordinary notification events */
     assert(tg_gpu_identify(0x12e000b1, &identity));

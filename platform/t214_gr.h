@@ -37,4 +37,11 @@ enum tg_gpu_gr_result tg_gpu_gr_boot_secure(const struct tg_gpu_power_io *io,
     uint64_t gpu_va, uint64_t instance_physical,
     const struct tg_gpu_acr_hw_status *acr, const struct tg_gpu_pmu_status *pmu,
     struct tg_gpu_gr_status *status);
+/* Mirror the initialized FB translation/debug policy into GPCs after FECS
+ * context-state discovery, before channel admission. This configures routing;
+ * it does not allocate or save a graphics context.
+ */
+enum tg_gpu_gr_result tg_gpu_gr_gpc_mmu(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power, struct tg_gpu_frontend_status *frontend,
+    struct tg_gpu_gr_status *status);
 #endif

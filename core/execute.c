@@ -407,6 +407,8 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         } else if (tg_gpu_gr_boot(io,power,&s->frontend,&firmware->netlist,&firmware->image,
                           TG_GPU_GR_SURFACE_VA,physical+TG_GPU_GR_INSTANCE_OFFSET,&s->gr)
             != TG_GPU_GR_OK) return TG_GPU_EXEC_GR_BOOT;
+        if (tg_gpu_gr_gpc_mmu(io,power,&s->frontend,&s->gr)!=TG_GPU_GR_OK)
+            return TG_GPU_EXEC_GR_BOOT;
     }
     state->stage = 3;
     ex_write(io, 0x800000, (uint32_t)((physical + INST) >> 12) | 0x80000000);

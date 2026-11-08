@@ -244,3 +244,34 @@ enum tg_gpu_gr_result tg_gpu_gr_boot_secure(const struct tg_gpu_power_io *io,
     }
     return boot(io,power,frontend,netlist,image,gpu_va,instance_physical,true,s);
 }
+
+enum tg_gpu_gr_result tg_gpu_gr_gpc_mmu(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power, struct tg_gpu_frontend_status *frontend,
+    struct tg_gpu_gr_status *s)
+{
+    const uint32_t source[4]={0x100c80,0x100cc4,0x100cc8,0x100ccc};
+    const uint32_t target[4]={0x418880,0x4188b0,0x4188b4,0x4188b8};
+    uint32_t values[4];
+    if(!s || !io || !io->read32 || !io->write32 || !power || !power->owned ||
+       !power->ready || !frontend || frontend->result || !frontend->ltc_count ||
+       s->result || s->stage!=13 || !s->context_bytes || !s->zcull_bytes || !s->pm_bytes)
+        return TG_GPU_GR_ARGUMENT;
+    s->stage=14;
+    for(unsigned i=0;i<4;++i) {
+        s->last_register=source[i];s->last_value=values[i]=read_reg(io,source[i]);
+        if(values[i]==UINT32_MAX) return finish(io,frontend,s,TG_GPU_GR_REGISTER);
+    }
+    /* gr_gm20b_init_gpc_mmu copies only the documented policy bits, excluding
+     * FB's PRI FIFO status. Existing private debug pages remain owned by the
+     * caller through GR reset/MC drain; no new DMA backing is created here.
+     */
+    values[0]&=0xf000187f;
+    write_reg(io,target[0],values[0]);
+    write_reg(io,0x418890,0);write_reg(io,0x418894,0);
+    for(unsigned i=1;i<4;++i) write_reg(io,target[i],values[i]);
+    write_reg(io,0x4188ac,frontend->ltc_count);
+    s->last_register=0x4188ac;s->last_value=read_reg(io,0x4188ac);
+    if(s->last_value==UINT32_MAX) return finish(io,frontend,s,TG_GPU_GR_REGISTER);
+    s->stage=15;
+    return finish(io,frontend,s,TG_GPU_GR_OK);
+}
