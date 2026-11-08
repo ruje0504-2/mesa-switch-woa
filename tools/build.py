@@ -48,7 +48,7 @@ mesa_includes = [mesa_src, mesa_src / "nouveau/headers",
 encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
 core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c", root / "core/fault.c",
         root / "core/execute.c", root / "core/submission.c", root / "platform/t214_frontend.c",
-        root / "platform/t214_gr.c", root / "platform/t214_acr.c",
+        root / "platform/t214_gr.c", root / "platform/t214_acr.c", root / "platform/t214_pmu.c",
         root / "core/gr_firmware.c", root / "core/acr_firmware.c", encoder]
 host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -92,6 +92,11 @@ subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(root / "platform/t214_acr.c"), str(root / "tests/test_acr_boot.c"),
                 "-o", str(acr_boot_test)], check=True)
 subprocess.run([str(acr_boot_test.resolve())], check=True)
+pmu_test = args.out / "test-pmu-boot"
+subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                str(root / "platform/t214_pmu.c"), str(root / "tests/test_pmu_boot.c"),
+                "-o", str(pmu_test)], check=True)
+subprocess.run([str(pmu_test.resolve())], check=True)
 gr = root / "platform/t214_gr.c"
 gr_test = args.out / "test-gr-boot"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",

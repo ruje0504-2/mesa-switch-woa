@@ -65,10 +65,10 @@ static bool gr_idle(const struct tg_gpu_power_io *io, struct tg_gpu_gr_status *s
     }
     return false;
 }
-enum tg_gpu_gr_result tg_gpu_gr_boot(const struct tg_gpu_power_io *io,
+static enum tg_gpu_gr_result boot(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, struct tg_gpu_frontend_status *frontend,
     const struct tg_gpu_gr_netlist *netlist, const struct tg_gpu_gr_image *image,
-    uint64_t gpu_va, uint64_t instance_physical, struct tg_gpu_gr_status *s)
+    uint64_t gpu_va, uint64_t instance_physical, bool secure, struct tg_gpu_gr_status *s)
 {
     const uint32_t bases[2] = {FECS,GPCCS};
     uint32_t headers[2][17], counts[2], configs[2], inst;
@@ -100,7 +100,13 @@ enum tg_gpu_gr_result tg_gpu_gr_boot(const struct tg_gpu_power_io *io,
     /* The secure branch requires authenticated ACR/WPR setup; do not bypass
      * it or start the non-secure bootloader when the fuse selects that path.
      */
-    if (s->priv_security) return finish(io,frontend,s,TG_GPU_GR_SECURITY_REQUIRED);
+    if (!!s->priv_security!=secure)
+        return finish(io,frontend,s,TG_GPU_GR_SECURITY_REQUIRED);
+    if (secure) {
+        uint32_t fecs=read_reg(io,FECS+0x100),gpccs=read_reg(io,GPCCS+0x100);
+        if (fecs==UINT32_MAX || gpccs==UINT32_MAX || !(fecs&0x40) || (gpccs&0x40))
+            return finish(io,frontend,s,TG_GPU_GR_SECURITY_REQUIRED);
+    }
     configs[0] = s->fecs_hwcfg = read_reg(io,FECS+0x108);
     configs[1] = s->gpccs_hwcfg = read_reg(io,GPCCS+0x108);
     for (unsigned i = 0; i < 2; ++i) {
@@ -145,7 +151,7 @@ enum tg_gpu_gr_result tg_gpu_gr_boot(const struct tg_gpu_power_io *io,
     write_reg(io,FECS+0xa10,5);
     if (!arb_idle(io,s)) return finish(io,frontend,s,TG_GPU_GR_ARB_TIMEOUT);
     write_reg(io,FECS+0x840,UINT32_MAX);
-    for (unsigned i = 0; i < 2; ++i) {
+    for (unsigned i = secure?1u:0u; i < 2; ++i) {
         const struct tg_gpu_gr_falcon_image *f = &image->falcon[i];
         uint32_t base = bases[i];
         s->stage = 5+i;
@@ -163,9 +169,42 @@ enum tg_gpu_gr_result tg_gpu_gr_boot(const struct tg_gpu_power_io *io,
         write_reg(io,base+0x104,f->entry);
         write_reg(io,base+0x100,2);
     }
+    if (secure) {
+        /* ACR loaded signed FECS eagerly. Start it only after GPCCS, using
+         * the LS alias; retain WPR, IMEM, DMEM and security configuration.
+         */
+        write_reg(io,FECS+0x840,UINT32_MAX);
+        write_reg(io,FECS+0x804,1);
+        write_reg(io,FECS+0x858,UINT32_MAX);
+        write_reg(io,FECS+0x130,2);
+    }
     s->stage = 7;
     if (!wait_reg(io,s,FECS+0x800,UINT32_MAX,1))
         return finish(io,frontend,s,TG_GPU_GR_READY_TIMEOUT);
     s->stage = 8;
     return finish(io,frontend,s,TG_GPU_GR_OK);
+}
+
+enum tg_gpu_gr_result tg_gpu_gr_boot(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power, struct tg_gpu_frontend_status *frontend,
+    const struct tg_gpu_gr_netlist *netlist, const struct tg_gpu_gr_image *image,
+    uint64_t gpu_va, uint64_t instance_physical, struct tg_gpu_gr_status *s)
+{
+    return boot(io,power,frontend,netlist,image,gpu_va,instance_physical,false,s);
+}
+
+enum tg_gpu_gr_result tg_gpu_gr_boot_secure(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power, struct tg_gpu_frontend_status *frontend,
+    const struct tg_gpu_gr_netlist *netlist, const struct tg_gpu_gr_image *image,
+    uint64_t gpu_va, uint64_t instance_physical,
+    const struct tg_gpu_acr_hw_status *acr, const struct tg_gpu_pmu_status *pmu,
+    struct tg_gpu_gr_status *s)
+{
+    if (!s) return TG_GPU_GR_ARGUMENT;
+    if (!acr || acr->stage!=9 || acr->result || acr->mailbox0 ||
+        !pmu || pmu->stage!=6 || pmu->result || pmu->reply_code) {
+        *s=(struct tg_gpu_gr_status){.result=TG_GPU_GR_SECURITY_REQUIRED};
+        return TG_GPU_GR_SECURITY_REQUIRED;
+    }
+    return boot(io,power,frontend,netlist,image,gpu_va,instance_physical,true,s);
 }

@@ -10,7 +10,7 @@
  * METHOD_BUFFERED, FILE_DEVICE_UNKNOWN. RUN requires write access; the
  * device grants write access only to administrators and SYSTEM.
  */
-#define TG_GPU_CONTROL_VERSION 12u
+#define TG_GPU_CONTROL_VERSION 13u
 #define TG_GPU_IOCTL_STATUS 0x00226400u
 #define TG_GPU_IOCTL_RUN    0x0022a404u
 #define TG_GPU_CONTROL_DEFAULT_KHZ 729600u
@@ -98,5 +98,6 @@ struct tg_gpu_status {
     uint32_t firmware_status; /* NTSTATUS from fixed-path file loading/packing */
     uint32_t acr_firmware_result; /* tg_gpu_acr_result; not hardware authentication */
     struct tg_gpu_acr_hw_status acr;
+    struct tg_gpu_pmu_status pmu;
 };
 #endif

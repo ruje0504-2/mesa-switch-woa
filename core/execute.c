@@ -365,9 +365,7 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
             s->acr_firmware_result=tg_gpu_acr_prepare(firmware->acr,
                 (s->acr.scp_status&(1u<<20))!=0,&image);
             if (s->acr_firmware_result) return TG_GPU_EXEC_ACR_BOOT;
-            /* Switchroot APP_VERSION_GM20B uses the 32-byte cmdline_args_v3.
-             * ACR only stages its address; the PMU RTOS is not started here.
-             */
+            /* Switchroot APP_VERSION_GM20B uses the 32-byte cmdline_args_v3. */
             if (image.pmu_version!=20490253u || image.size>TG_GPU_ACR_SURFACE_BYTES ||
                 (physical<s->acr.wpr_base+s->acr.wpr_size &&
                  physical+TG_GPU_ARENA_BYTES>s->acr.wpr_base)) {
@@ -389,12 +387,13 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
                                   physical+TG_GPU_ACR_INSTANCE_OFFSET,&s->acr)!=TG_GPU_ACR_HW_OK)
                 return TG_GPU_EXEC_ACR_BOOT;
             state->stage=10;
-            /* Authenticated ACR is a prerequisite, not a GR-ready handshake.
-             * PMU RTOS queues and secure FECS bootstrap must precede submission.
-             */
-            return TG_GPU_EXEC_PMU_PENDING;
-        }
-        if (tg_gpu_gr_boot(io,power,&s->frontend,&firmware->netlist,&firmware->image,
+            if (tg_gpu_pmu_start(io,power,&s->acr,&s->pmu)!=TG_GPU_PMU_OK)
+                return TG_GPU_EXEC_PMU_BOOT;
+            state->stage=8;
+            if (tg_gpu_gr_boot_secure(io,power,&s->frontend,&firmware->netlist,&firmware->image,
+                    TG_GPU_GR_SURFACE_VA,physical+TG_GPU_GR_INSTANCE_OFFSET,&s->acr,&s->pmu,&s->gr)
+                !=TG_GPU_GR_OK) return TG_GPU_EXEC_GR_BOOT;
+        } else if (tg_gpu_gr_boot(io,power,&s->frontend,&firmware->netlist,&firmware->image,
                           TG_GPU_GR_SURFACE_VA,physical+TG_GPU_GR_INSTANCE_OFFSET,&s->gr)
             != TG_GPU_GR_OK) return TG_GPU_EXEC_GR_BOOT;
     }

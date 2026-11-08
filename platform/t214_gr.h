@@ -3,6 +3,7 @@
 #define TG_GPU_T214_GR_H
 #include "t214_power.h"
 #include "t214_frontend.h"
+#include "t214_pmu.h"
 #include "../core/gr_firmware.h"
 enum tg_gpu_gr_result {
     TG_GPU_GR_OK, TG_GPU_GR_ARGUMENT, TG_GPU_GR_SECURITY_REQUIRED,
@@ -25,4 +26,14 @@ enum tg_gpu_gr_result tg_gpu_gr_boot(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, struct tg_gpu_frontend_status *frontend,
     const struct tg_gpu_gr_netlist *netlist, const struct tg_gpu_gr_image *image,
     uint64_t gpu_va, uint64_t instance_physical, struct tg_gpu_gr_status *status);
+/* Cold secure GM20B path: ACR has authenticated/loaded FECS, PMU RTOS has
+ * acknowledged WPR. Never overwrite FECS code or weaken its security mode.
+ * GPCCS uses the non-secure loader selected by Switchroot's gm20b fuse policy.
+ */
+enum tg_gpu_gr_result tg_gpu_gr_boot_secure(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power, struct tg_gpu_frontend_status *frontend,
+    const struct tg_gpu_gr_netlist *netlist, const struct tg_gpu_gr_image *image,
+    uint64_t gpu_va, uint64_t instance_physical,
+    const struct tg_gpu_acr_hw_status *acr, const struct tg_gpu_pmu_status *pmu,
+    struct tg_gpu_gr_status *status);
 #endif

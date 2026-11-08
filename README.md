@@ -37,7 +37,8 @@ OUT5 at 204 MHz is a separate power/reference clock. The KMDF probe uses a
 private uncached arena, bounded read-only firmware mappings and one channel
 to release two FIFO semaphores with different values. On non-secure hardware it
 loads GR before channel binding. Secure T214 instead runs the signed ACR
-bootstrap and currently stops before the pending PMU RTOS/FECS queue step.
+bootstrap, starts the authenticated PMU RTOS, waits for its WPR reply, then
+starts secure FECS and non-secure GPCCS before binding the channel.
 Both paths power down afterward. This does not
 create a graphics context or execute shaders. The future WDDM adapter uses the
 separate Dxgkrnl private-memory helpers; VidMm/scheduler integration is open.
@@ -92,7 +93,7 @@ through execution and is restored on clock release. FIFO/FB/LTC use the
 upstream force-run clock-gating profiles until a PMU governor exists. LTC
 active counts feed both L2 and FBHUB; physical-security setup is restricted
 to the upstream non-secure branch. Two bounded FB flushes must finish before
-the channel becomes runnable. ABI 12 (376 bytes) records the initialization
+the channel becomes runnable. ABI 13 (448 bytes) records the initialization
 stage, LTC/flush counts, BUS/PRI faults, FIFO binding/engine state and the
 separate BAR1 step/expected/GPU/CPU values. Bounded L2 writeback and invalidation
 timeouts stop submission; a successful FB flush alone is not DRAM visibility.
@@ -133,8 +134,16 @@ information, and refuses the non-secure route when PRIV security is enabled.
 The secure path uses `platform/t214_acr.c`: discover the existing protected WPR,
 reset/scrub PMU, select the hardware production/debug signature profile, and
 run the vendor HS bootloader with bounded authentication/HALT checks. It never
-changes security fuses or maps WPR into the CPU. Golden graphics contexts and
-the PMU RTOS command queues remain separate implementation work.
+changes security fuses or maps WPR into the CPU.
+`platform/t214_pmu.c` writes the versioned 32-byte RTOS arguments, clears the
+HS halt event, and starts the LS CPU through its alias. It validates the initial
+DMEM queue descriptors, posts one fixed WPR initialization command, and matches
+the response unit/type/sequence and result. Queue wrap, bounds and waits are
+bounded; trace, GC6 and the PMU power governor remain off. Only a successful
+response admits the cold secure GR path: GPCCS uses the GM20B non-secure loader,
+while FECS retains its authenticated code and starts through CPUCTL_ALIAS.
+No host upload overwrites secure FECS IMEM/DMEM. Golden graphics contexts remain
+separate implementation work.
 `windows/gr_firmware_io.c` reads only fixed administrator-protected driver paths
 at PASSIVE_LEVEL before GPU power-up. The packed surface is copied into a
 64 KiB private arena region mapped read-only, with a separate firmware instance.
@@ -143,8 +152,9 @@ same owned 512 KiB arena. Its page entries are installed before BAR1; packing
 uses the hardware WPR/DMEM sizes and completes FB/L2 synchronization before
 PMU DMA. Only the supported GM20B firmware version 20490253 and its 32-byte
 command-line layout are accepted. Stage 309 reports ACR errors; stage 310
-means ACR authenticated but PMU RTOS/secure FECS startup is still pending,
-and explicitly cannot pass the FIFO test. Teardown resets PMU/GR/FIFO before
+reports PMU RTOS/queue failures with initialization headers, queue pointers and
+WPR reply status. Authentication or an RTOS reply cannot pass the FIFO test.
+Teardown resets PMU/GR/FIFO before
 MC drain; backing memory is retained until power
 retirement. No shader or Vulkan execution claim follows from these local checks.
 

@@ -9,7 +9,7 @@ struct model {
     uint32_t *reg;
     unsigned writes, delays, commands, started[2], dma_reads[2], header_words[2];
     uint32_t headers[2][17], stop_reg;
-    bool no_ready, pri_error;
+    bool no_ready, pri_error, secure;
 };
 static uint32_t read32(void *ctx, uint32_t address)
 {
@@ -33,6 +33,17 @@ static void write32(void *ctx, uint32_t address, uint32_t value)
     /* No fuse, memory-controller, channel, global IRQ, or PMIC writes. */
     assert(r >= 0x400000 && r < 0x600000);
     ++m->writes;
+    if (m->secure) {
+        assert(r!=0x409100 && r!=0x409104 && r!=0x40910c &&
+               r!=0x409110 && r!=0x409114 && r!=0x409118 &&
+               r!=0x40911c && r!=0x4091c0 && r!=0x4091c4);
+        if (r==0x409130) {
+            assert(value==2 && m->started[1]==1 && !m->header_words[0]);
+            assert(m->reg[0x409804/4]==1 && m->reg[0x409858/4]==UINT32_MAX);
+            ++m->started[0];
+            if (!m->no_ready) m->reg[0x409800/4]=1;
+        }
+    }
     if (r == 0x400100) { m->reg[r/4] &= ~value; return; }
     if (r == 0x409840) { m->reg[0x409800/4] &= ~value; return; }
     if (r == 0x409a10) {
@@ -77,6 +88,12 @@ static enum tg_gpu_gr_result run(struct model *m, struct tg_gpu_gr_image *image,
     struct tg_gpu_power_io io = {m,read32,write32,NULL,NULL,delay};
     struct tg_gpu_power power = {.owned=true,.ready=true};
     struct tg_gpu_frontend_status frontend = {.stage=11};
+    if (m->secure) {
+        struct tg_gpu_acr_hw_status acr={.stage=9,.security=1};
+        struct tg_gpu_pmu_status pmu={.stage=6};
+        return tg_gpu_gr_boot_secure(&io,&power,&frontend,netlist,image,0x20000,
+                                    0x80040000,&acr,&pmu,s);
+    }
     return tg_gpu_gr_boot(&io,&power,&frontend,netlist,image,0x20000,0x80040000,s);
 }
 int main(void)
@@ -129,6 +146,20 @@ int main(void)
     assert(run(&m,&image,&net,&s)==TG_GPU_GR_READY_TIMEOUT && m.started[0] && m.started[1]);
     reset(&m); m.pri_error=true;
     assert(run(&m,&image,&net,&s)==TG_GPU_GR_PRI_FAULT);
+    reset(&m); m.secure=true; m.reg[0x21434/4]=1; m.reg[0x409100/4]=0x40;
+    assert(run(&m,&image,&net,&s)==TG_GPU_GR_OK && s.stage==8);
+    assert(m.started[0]==1 && m.started[1]==1 && !m.header_words[0] && m.header_words[1]==17);
+    reset(&m); m.secure=true; m.reg[0x21434/4]=1;
+    assert(run(&m,&image,&net,&s)==TG_GPU_GR_SECURITY_REQUIRED && !m.writes);
+    reset(&m); m.secure=true; m.reg[0x21434/4]=1;
+    m.reg[0x409100/4]=m.reg[0x41a100/4]=0x40;
+    assert(run(&m,&image,&net,&s)==TG_GPU_GR_SECURITY_REQUIRED && !m.writes);
+    reset(&m); m.secure=true; m.no_ready=true;
+    m.reg[0x21434/4]=1; m.reg[0x409100/4]=0x40;
+    assert(run(&m,&image,&net,&s)==TG_GPU_GR_READY_TIMEOUT);
+    assert(m.started[0]==1 && m.started[1]==1 && !m.header_words[0]);
+    assert(tg_gpu_gr_boot_secure(NULL,NULL,NULL,NULL,NULL,0,0,NULL,NULL,&s)
+           ==TG_GPU_GR_SECURITY_REQUIRED);
     free(m.reg);
     puts("GM20B GR bootstrap order, DMA idle, security, and bounded failure paths: PASS (model)");
     return 0;
