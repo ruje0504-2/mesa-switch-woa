@@ -55,6 +55,8 @@ common/bus/bus_gm20b.c, common/fb/fb_gm20b.c, common/mc/mc_gm20b.c,
 common/priv_ring/priv_ring_gm20b.c and their GM20B register headers.
 Physical/IOMMU address selection follows gk20a/mm_gk20a.c and
 common/mm/nvgpu_mem.c in that revision (Copyright 2017-2020 NVIDIA).
+PBDMA enable ordering follows Linux nouveau v6.12 engine/fifo/gk104.c,
+gk104_fifo_init_pbdmas (Copyright 2012 Red Hat Inc.; MIT notice above).
 Copyright (c) 2014-2018 NVIDIA CORPORATION. All rights reserved.
 The MIT license text above applies. The Windows probe links this code with
 the GPL-2.0-only power sequence and is distributed under GPL-2.0-only.

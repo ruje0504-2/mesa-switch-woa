@@ -111,12 +111,19 @@ static bool ex_wait(const struct tg_gpu_power_io *io, uint32_t reg,
     }
     return false;
 }
-void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io, struct tg_gpu_status *s)
+void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_execution *state, struct tg_gpu_status *s)
 {
     s->fifo_interrupt = ex_read(io, 0x2100);
     s->mmu_fault = ex_read(io, 0x259c);
     s->pbdma_interrupt = ex_read(io, 0x40108);
     s->channel_status = ex_read(io, 0x800004);
+    if (s->pbdma_enable_after != UINT32_MAX && (s->pbdma_enable_after & 1))
+        s->pbdma_status = ex_read(io, 0x3080);
+    if (state->stage >= 4) {
+        s->userd_gp_get = io->read32(io->context, BAR1 + USERD_VA + 34 * 4);
+        s->userd_gp_put = io->read32(io->context, BAR1 + USERD_VA + 35 * 4);
+    }
 }
 
 enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
@@ -160,6 +167,20 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     s->channel_instance_after = ex_read(io, 0x800000);
     if (s->channel_instance_after & 0x80000000) return TG_GPU_EXEC_BUSY;
     state->fifo_ready = true;
+    /* PFIFO reset/enable does not enable its pushbuffer readers. Nouveau's
+     * gk104_fifo_init_pbdmas explicitly programs MC_ENABLE_PB (0x204).
+     * Own only PBDMA0, and require that it serves our single runlist (0).
+     */
+    s->pbdma_enable_before = ex_read(io, 0x204);
+    s->pbdma_runlist_map = ex_read(io, 0x2390);
+    if (s->pbdma_enable_before == UINT32_MAX || s->pbdma_runlist_map == UINT32_MAX ||
+        !(s->pbdma_runlist_map & 1)) return TG_GPU_EXEC_PBDMA_INIT;
+    state->old_pbdma_enable = s->pbdma_enable_before;
+    state->pbdma_owned = true;
+    ex_write(io, 0x204, state->old_pbdma_enable | 1);
+    s->pbdma_enable_after = ex_read(io, 0x204);
+    if (s->pbdma_enable_after == UINT32_MAX || !(s->pbdma_enable_after & 1))
+        return TG_GPU_EXEC_PBDMA_INIT;
     /* GM20B selects Tegra SMMU translation with GPU address bit 34:
      * Switchroot gk20a_mm_get_iommu_bit + nvgpu_mem_iommu_translate.
      * prepare_arena accepts only physical backing below 4 GiB, so every
@@ -216,7 +237,7 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         }
     }
     s->observed[1] = fence[1];
-    tg_gpu_execute_snapshot(io, s);
+    tg_gpu_execute_snapshot(io, state, s);
     if (s->mmu_fault || s->pbdma_interrupt) return TG_GPU_EXEC_FAULT;
     if (s->observed[0] != s->expected[0] || s->observed[1] != s->expected[1])
         return TG_GPU_EXEC_TIMEOUT;
@@ -233,6 +254,10 @@ void tg_gpu_execute_stop(const struct tg_gpu_power_io *io, struct tg_gpu_executi
         (void)ex_wait(io, 0x2284, 0x100000, 0);
         ex_write(io, 0x800000, 0);
         ex_write(io, 0x1704, 0);
+    }
+    if (s->pbdma_owned) {
+        ex_write(io, 0x204, s->old_pbdma_enable & ~1u);
+        s->pbdma_owned = false;
     }
     /* Reset the test FIFO even if runlist removal times out; MC drain and
      * full GPU reset still must succeed before the arena is freed.

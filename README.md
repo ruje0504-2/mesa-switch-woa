@@ -35,8 +35,11 @@ separate Dxgkrnl private-memory helpers; VidMm/scheduler integration is open.
 The diagnostic requires exclusive cold GPU ownership, resets/enables PFIFO
 before reading or initializing its channel slot, and preserves init-register
 snapshots in the existing status response. Do not interpret a reset CCSR slot
-as a live channel. `--probe --keep-fan` rebuilds only the GPU probe when the
-matching SwitchFan bridge is already installed and verified.
+as a live channel. The probe separately enables PBDMA0 through `MC_ENABLE_PB`,
+checks its runlist-zero mapping, and disables it before the final FIFO reset.
+Status ABI 3 includes PBDMA enable and USERD GET/PUT observations; a queued
+command or enabled channel is not proof of execution. `--probe --keep-fan`
+rebuilds only the GPU probe when the matching SwitchFan bridge is verified.
 
 The diagnostic accepts only owned physical buffers below 4 GiB. Switchroot's
 GM20B path tags IOMMU addresses with bit 34 and leaves physical addresses

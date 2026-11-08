@@ -245,7 +245,7 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target)
     d->last.stage = 300 + d->execution.stage;
 done:
     if (d->execution.fifo_ready && d->last.execution_result != TG_GPU_EXEC_OK)
-        tg_gpu_execute_snapshot(&io, &d->last);
+        tg_gpu_execute_snapshot(&io, &d->execution, &d->last);
     GpuCleanup(d);
     if (!d->power.owned) GpuClosePlatform(d);
     GpuSaveResult(device);
