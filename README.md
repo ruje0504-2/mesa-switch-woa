@@ -38,6 +38,11 @@ the combined readback check. The optional probe requires matching firmware
 resources and the `SWITCH_LITE_GPU` build of SwitchFan. The build emits unsigned
 SYS/INF files; generate Windows catalogs and sign the final files before
 installation. Host tests and compilation do not establish a hardware pass.
+Use a **CA:FALSE code-signing leaf** issued by the trusted development root;
+do not sign SYS/CAT files with the CA certificate itself. Before installation,
+verify the SYS signature and the INF/SYS catalog membership with Windows
+SignTool (`verify /pa /c package.cat file`). A successful PnPUtil import alone
+does not establish a valid Authenticode signature or an active device binding.
 
 The firmware consumes `platform/t214_resources.h` through its WindowsDrivers
 submodule. Build it with `-D SWITCH_LITE_GPU=1` to expose the separate ACPI
