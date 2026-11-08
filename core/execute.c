@@ -458,7 +458,10 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     s->observed[1] = fence[1];
     tg_gpu_execute_snapshot(io, state, s);
     if (s->frontend.result != TG_GPU_FE_OK) return TG_GPU_EXEC_FRONTEND;
-    if (tg_gpu_fifo_has_error(s->fifo_interrupt) || s->mmu_fault || s->pbdma_interrupt || s->pbdma_interrupt_1)
+    const struct tg_gpu_fault_status faults = {
+        s->fifo_interrupt, s->mmu_fault, s->pbdma_interrupt, s->pbdma_interrupt_1
+    };
+    if (tg_gpu_fault_pending(&faults))
         return TG_GPU_EXEC_FAULT;
     if (s->observed[0] != s->expected[0] || s->observed[1] != s->expected[1])
         return TG_GPU_EXEC_TIMEOUT;

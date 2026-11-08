@@ -346,23 +346,22 @@ void test_execute_init(void)
     /* An actual scheduler fault must not be disguised as another E6 timeout.
      * Runlist event bit 30 alone remains nonfatal and cannot create a PASS.
      */
-    const uint32_t faults[] = {1,0x100,0x10000,0x40000000};
+    const uint32_t faults[] = {1,0x100,0x10000,0x20000000,0x40000000};
     for (unsigned j=0;j<sizeof(faults)/sizeof(faults[0]);++j) {
         memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state)); memset(&result.frontend,0,sizeof(result.frontend));
         m.runlist_map=1; m.allow_mmu=true; m.fifo_fault=faults[j];
         assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) ==
-               (j<3 ? TG_GPU_EXEC_FAULT : TG_GPU_EXEC_TIMEOUT));
-        assert(result.fifo_interrupt == faults[j] && m.put == (j<3 ? 0u : 1u));
+               (j<4 ? TG_GPU_EXEC_FAULT : TG_GPU_EXEC_TIMEOUT));
+        assert(result.fifo_interrupt == faults[j] && m.put == (j<4 ? 0u : 1u));
         assert(result.bind_error == (j==0 ? 5u : 0u));
         assert(result.scheduler_error == (j==1 ? 0xau : 0u));
         assert(result.chsw_error == (j==2 ? 0x1234u : 0u));
         assert(result.observed[0] == 0xdeadbeef && result.observed[1] == 0xdeadbeef);
         tg_gpu_execute_stop(&io,&state);
     }
-    /* Reproduce the live ABI 10 ENGINE notification. Only its successful W1C
-     * acknowledgement permits GP_PUT. No model GPU writes a completion fence.
-     * Sticky events, co-occurring true faults and faults arriving during W1C
-     * still stop submission; never widen the event exception to unknown bits.
+    /* Reproduce the live ENGINE notification, including immediate reassertion.
+     * Both allow GP_PUT but must time out without GPU-written fences. True
+     * concurrent faults and faults arriving during W1C still stop submission.
      */
     for (unsigned j=0;j<7;++j) {
         memset(&m,0,sizeof(m));memset(&state,0,sizeof(state));memset(&result.frontend,0,sizeof(result.frontend));
@@ -370,9 +369,13 @@ void test_execute_init(void)
         m.stuck_event=j==1;m.pb_fault=j==2?0x8000:0;m.hce_fault=j==3;
         m.fifo_fault=j==4?1:0;m.mmu_fault=j==5?1:0;m.late_pb_fault=j==6;
         assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result)==
-               (j==0?TG_GPU_EXEC_TIMEOUT:TG_GPU_EXEC_FAULT));
-        assert(m.put==(j==0?1u:0u));
-        assert(m.event_acks==((j<2 || j==6)?1u:0u) && m.summary_acks==m.event_acks);
+               (j<2?TG_GPU_EXEC_TIMEOUT:TG_GPU_EXEC_FAULT));
+        assert(m.put==(j<2?1u:0u));
+        if (j==1) {
+            assert(m.event_acks>1 && m.ticks>=100000 && m.ticks<200000);
+            assert(result.pbdma_interrupt==0x01000000 && result.fifo_interrupt==0x20000000);
+        } else assert(m.event_acks==((j==0 || j==6)?1u:0u));
+        assert(m.summary_acks==m.event_acks);
         assert(result.observed[0]==0xdeadbeef && result.observed[1]==0xdeadbeef);
         tg_gpu_execute_stop(&io,&state);
     }

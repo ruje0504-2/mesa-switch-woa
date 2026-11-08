@@ -8,6 +8,15 @@
 #define GPU 0x57000000u
 #define ENGINE_EVENT 0x01000000u
 #define PBDMA_SUMMARY 0x20000000u
+bool tg_gpu_fault_pending(const struct tg_gpu_fault_status *s)
+{
+    uint32_t fifo = s->fifo, pbdma = s->pbdma;
+    if (pbdma == ENGINE_EVENT && !s->pbdma1 && !s->mmu) {
+        fifo &= ~PBDMA_SUMMARY;
+        pbdma = 0;
+    }
+    return tg_gpu_fifo_has_error(fifo) || s->mmu || pbdma || s->pbdma1;
+}
 static void read_status(const struct tg_gpu_power_io *io, struct tg_gpu_fault_status *s)
 {
     s->fifo = io->read32(io->context, GPU + 0x2100);
@@ -21,7 +30,9 @@ bool tg_gpu_fault_poll(const struct tg_gpu_power_io *io, struct tg_gpu_fault_sta
     /* ENGINE (bit 24) is absent from GM20B's fatal/restartable masks. The
      * upstream ISR returns NO_RC for that lone bit, then W1C-acks it and the
      * FIFO PBDMA summary. Do not clear or mask concurrent real/unknown faults.
-     * Read all sources again: failed W1C or a new fault must still stop work.
+     * Re-read for concurrent faults, but do not invent channel recovery for a
+     * reasserted ENGINE notification: the upstream handler returns NO_RC.
+     * The caller's bounded fence wait still requires actual GPU completion.
      */
     if (s->pbdma == ENGINE_EVENT && !s->pbdma1 && !s->mmu &&
         !tg_gpu_fifo_has_error(s->fifo & ~PBDMA_SUMMARY)) {
@@ -31,5 +42,5 @@ bool tg_gpu_fault_poll(const struct tg_gpu_power_io *io, struct tg_gpu_fault_sta
         (void)io->read32(io->context, GPU + 0x2100);
         read_status(io, s);
     }
-    return tg_gpu_fifo_has_error(s->fifo) || s->mmu || s->pbdma || s->pbdma1;
+    return tg_gpu_fault_pending(s);
 }
