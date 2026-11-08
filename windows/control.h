@@ -8,11 +8,18 @@
  * METHOD_BUFFERED, FILE_DEVICE_UNKNOWN. RUN requires write access; the
  * device grants write access only to administrators and SYSTEM.
  */
-#define TG_GPU_CONTROL_VERSION 5u
+#define TG_GPU_CONTROL_VERSION 6u
 #define TG_GPU_IOCTL_STATUS 0x00226400u
 #define TG_GPU_IOCTL_RUN    0x0022a404u
 #define TG_GPU_CONTROL_DEFAULT_KHZ 729600u
 #define TG_GPU_CONTROL_OC_KHZ 1228800u
+
+/* Switchroot FIFO_INTR_0: bind, scheduler, channel switch, FB flush, LB,
+ * dropped MMU, MMU and PBDMA faults. Runlist/channel events are not faults.
+ */
+#define TG_GPU_FIFO_ERROR_MASK 0x39810101u
+static inline int tg_gpu_fifo_has_error(uint32_t status)
+{ return (status & TG_GPU_FIFO_ERROR_MASK) != 0; }
 
 /* Live PBDMA RAMFC registers are meaningful only for a valid, matching bare
  * channel. Idle/context-switch readouts can contain unrelated SRAM contents.
@@ -69,5 +76,8 @@ struct tg_gpu_status {
     uint32_t pbdma_gp_put;
     uint32_t pbdma_interrupt_1;
     struct tg_gpu_frontend_status frontend;
+    uint32_t bind_error;
+    uint32_t chsw_error;
+    uint32_t engine_status[2];
 };
 #endif

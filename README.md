@@ -39,20 +39,24 @@ as a live channel. The probe separately enables PBDMA0 through `MC_ENABLE_PB`,
 checks its runlist-zero mapping, and disables it before the final FIFO reset.
 Runlist zero is blocked during binding, explicitly allowed after submission,
 and blocked again before teardown, following Switchroot's scheduler control.
-Its eight-byte channel entry uses the Maxwell layout from nouveau's GM20B
-`gm200_fifo` / `gm107_runl_insert_chan`: channel ID plus the RAMFC physical
-page, matching the CCSR binding. A zero second word is the older GK20A layout.
-The PBDMA notification stall mask follows nouveau's `gf100_runq_init`; both
-PBDMA interrupt words remain visible to polling. The status includes scheduler,
-committed-runlist and live PBDMA fetch observations to distinguish a pending
-channel from a loaded reader. A queued command or enabled channel is not
-proof of execution. `--probe --keep-fan`
+The diagnostic uses the vendor GM20B HAL's `gk20a_get_ch_runlist_entry`:
+channel ID and a zero reserved word, with the RAMFC physical address in CCSR.
+This deliberately follows Switchroot's bare-channel path rather than mixing
+in nouveau's `gm107_runl_insert_chan` instance word. Local PBDMA/FIFO fault
+enables follow Switchroot while the MC CPU interrupt outputs stay disabled.
+Bind, scheduler and channel-switch interrupts stop submission as faults;
+ordinary runlist events do not. Scheduler error is read from `0x254c`, not
+the distinct runlist-fault register at `0x262c`. The status includes binding,
+engine, committed-runlist and valid PBDMA state. An enabled or pending channel
+does not prove execution. `--probe --keep-fan`
 rebuilds only the GPU probe when the matching SwitchFan bridge is verified.
 
-The first ring entry is preloaded in saved RAMFC and USERD `GP_PUT` before
-binding. The second entry is published by a BAR1 USERD write after the first
-GPU-written fence completes. This separates context bootstrap from doorbell
-delivery without replacing either GPU write with a CPU result. Live PBDMA
+The diagnostic starts with empty saved RAMFC and USERD `GP_PUT`, then publishes
+the first entry through BAR1 after binding and scheduling. It publishes the
+second only after the first GPU-written fence completes. It does not assume
+that a preloaded RAMFC value substitutes for a submission notification.
+A two-way BAR1 visibility check restores its scratch word before enabling
+snoop; that CPU MMIO write is never treated as a GPU fence. Live PBDMA
 GP registers are sampled only when its status identifies valid channel zero;
 idle/context-switch SRAM readouts are not interpreted as execution progress.
 
@@ -62,8 +66,9 @@ through execution and is restored on clock release. FIFO/FB/LTC use the
 upstream force-run clock-gating profiles until a PMU governor exists. LTC
 active counts feed both L2 and FBHUB; physical-security setup is restricted
 to the upstream non-secure branch. Two bounded FB flushes must finish before
-the channel becomes runnable. ABI 5 (196 bytes) records the initialization
-stage, active LTC count, completed flushes and BUS/PRI fault details. This is
+the channel becomes runnable. ABI 6 (212 bytes) records the initialization
+stage, active LTC count, completed flushes, BUS/PRI faults and FIFO bind,
+channel-switch and engine state. This is
 a local cold-start candidate, not a hardware execution pass. Source reference:
 [Switchroot NVIDIA driver](https://github.com/CTCaer/switch-l4t-kernel-nvgpu/tree/1ae0167d360287ca78f5a2572f0de42594140312/drivers/gpu/nvgpu).
 

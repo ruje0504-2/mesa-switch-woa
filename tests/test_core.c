@@ -91,18 +91,16 @@ static void test_private_channel(void)
     assert((pte[18] & 5) == 1 && (pte[19] & 5) == 1); /* writable fence/userd */
     assert(ramfc[128] == 0xc0000807 && ramfc[130] == 0x00fff000);
     assert(ramfc[2] == 0xc0041003 && ramfc[18] == 0x10000);
-    assert(ramfc[0] == 1 && ramfc[5] == 0 && userd[35] == 1 && userd[34] == 0);
+    assert(ramfc[0] == 0 && ramfc[5] == 0 && userd[35] == 0 && userd[34] == 0);
     assert(commands[0] == 0x20040004 && commands[4] == 0x01100002);
     assert(commands[2] == 0x12000 && commands[3] == values[0]);
     assert(commands[7] == 0x12004 && commands[8] == values[1]);
     assert(fence[0] == 0xdeadbeef && fence[1] == 0xdeadbeef);
-    /* GM20B/Maxwell entry: channel ID followed by the physical instance page.
-     * A valid runlist length alone cannot detect an omitted RAMFC pointer.
-     */
-    assert(runlist[0] == 0 && runlist[1] == 0x000c0040);
+    /* Vendor GM20B bare channel: reserved word zero; CCSR carries RAMFC. */
+    assert(runlist[0] == 0 && runlist[1] == 0);
     assert(runlist[2] == 0 && runlist[3] == 0);
     assert(tg_gpu_prepare_arena(arena, 0xfffb0000, sizeof(arena), values));
-    assert(runlist[0] == 0 && runlist[1] == 0x000ffff0);
+    assert(runlist[0] == 0 && runlist[1] == 0);
     assert(!tg_gpu_prepare_arena(arena, 0xc0000001, sizeof(arena), values));
     assert(!tg_gpu_prepare_arena(arena, 0xffff0000, sizeof(arena), values));
     assert(!tg_gpu_prepare_arena(arena, 0xc0000000, 4096, values));
@@ -135,7 +133,9 @@ int main(void)
 {
     struct tg_gpu_gpfifo_entry entry;
     struct tg_gpu_identity identity;
-    _Static_assert(sizeof(struct tg_gpu_status) == 196, "control ABI 5 size");
+    _Static_assert(sizeof(struct tg_gpu_status) == 212, "control ABI 6 size");
+    assert(tg_gpu_fifo_has_error(1) && tg_gpu_fifo_has_error(0x100) && tg_gpu_fifo_has_error(0x10000));
+    assert(!tg_gpu_fifo_has_error(0xc0000000)); /* ordinary notification events */
     assert(tg_gpu_identify(0x12e000b1, &identity));
     assert(identity.chipset == TG_GPU_CHIP_GM20B_B);
     assert(identity.major_revision == 0xb && identity.minor_revision == 1);

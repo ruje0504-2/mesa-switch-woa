@@ -72,11 +72,9 @@ bool tg_gpu_prepare_arena(void *cpu, uint64_t physical, size_t bytes,
         !tg_gpu_pte_4k(physical + FENCE, false, true, &pt[FENCE_VA >> 12]) ||
         !tg_gpu_pte_4k(physical + USERD, false, true, &pt[USERD_VA >> 12])) return false;
 
-    /* Bootstrap the first entry through saved RAMFC/USERD state. This tests
-     * context loading independently of the later BAR1 notification. Entry
-     * two is still published through the normal USERD GP_PUT doorbell.
+    /* Start empty, then publish both entries through BAR1 after binding, as
+     * gk20a_fifo_userd_gp_put does. Saved GP_PUT alone is not a notification.
      */
-    instance[0] = 1; /* RAMFC GP_PUT */
     instance[2] = (uint32_t)(physical + USERD) | 3; /* USERD, sysmem NCOH */
     instance[3] = 0;
     instance[4] = 0xface; /* hardware signature */
@@ -90,18 +88,16 @@ bool tg_gpu_prepare_arena(void *cpu, uint64_t physical, size_t bytes,
     instance[62] = 0x10003080; /* runlist timeslice */
     instance[63] = 0x10000010; /* pushbuffer timeslice */
     userd[0] = 0x55aa3377; /* BAR1 visibility check only */
-    userd[35] = 1; /* USERD GP_PUT agrees with saved RAMFC */
     fence[0] = fence[1] = 0xdeadbeef;
     release_packet(push, FENCE_VA, expected[0]);
     release_packet(push + 5, FENCE_VA + 4, expected[1]);
     if (!tg_gpu_build_gpfifo(PUSH_VA, 5, false, &ring[0]) ||
         !tg_gpu_build_gpfifo(PUSH_VA + 20, 5, true, &ring[1])) return false;
-    /* Maxwell's runlist entry also carries the RAMFC instance page. Nouveau
-     * routes GM20B through gm200_fifo -> gm107_runl_insert_chan, not the older
-     * GK20A entry with a zero second word. Match the CCSR binding below.
+    /* The T214 vendor HAL uses gk20a_get_ch_runlist_entry: a bare CHID and a
+     * zero reserved word. Its RAMFC address is supplied by CCSR, not here.
+     * Do not mix this path with nouveau's gm107 instance-word encoding.
      */
-    runlist[0] = 0; /* standalone channel zero */
-    runlist[1] = (uint32_t)((physical + INST) >> 12);
+    runlist[0] = runlist[1] = 0; /* standalone channel zero */
     return true;
 }
 
@@ -130,7 +126,11 @@ void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io,
     s->pbdma_interrupt = ex_read(io, 0x40108);
     s->channel_status = ex_read(io, 0x800004);
     s->scheduler_after = ex_read(io, 0x2630);
-    s->scheduler_error = ex_read(io, 0x262c);
+    s->scheduler_error = ex_read(io, 0x254c); /* FIFO_INTR_SCHED_ERROR, not RUNLIST_FAULT */
+    s->bind_error = ex_read(io, 0x252c);
+    s->chsw_error = ex_read(io, 0x256c);
+    s->engine_status[0] = ex_read(io, 0x2640);
+    s->engine_status[1] = ex_read(io, 0x2648);
     s->runlist_base = ex_read(io, 0x2280);
     s->runlist_status = ex_read(io, 0x2284);
     if (s->pbdma_enable_after != UINT32_MAX && (s->pbdma_enable_after & 1)) {
@@ -152,18 +152,25 @@ void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io,
     tg_gpu_frontend_snapshot(io, &s->frontend);
 }
 
+static bool ex_fault(const struct tg_gpu_power_io *io)
+{
+    return tg_gpu_fifo_has_error(ex_read(io, 0x2100)) ||
+        ex_read(io, 0x259c) || ex_read(io, 0x40108) || ex_read(io, 0x40148);
+}
+
 enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *cpu, uint64_t physical,
     struct tg_gpu_execution *state,
     struct tg_gpu_status *s)
 {
-    volatile uint32_t *fence;
-    uint32_t i;
+    volatile uint32_t *fence, *userd;
+    uint32_t i, intr_stall;
     if (!io || !io->read32 || !io->write32 || !io->delay_us || !power ||
         !power->owned || !power->ready || !cpu || !state || !s || state->owned ||
         !tg_gpu_prepare_arena(cpu, physical, TG_GPU_ARENA_BYTES, s->expected))
         return TG_GPU_EXEC_ARGUMENT;
     fence = (volatile uint32_t *)((uint8_t *)cpu + FENCE);
+    userd = (volatile uint32_t *)((uint8_t *)cpu + USERD);
     s->observed[0] = fence[0]; s->observed[1] = fence[1];
     state->stage = 1;
     state->fifo_ready = false;
@@ -225,15 +232,18 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
      * MC_SMMU_GPU/GPUB_ASID or require those registers to read as zero.
      * The GPU's own MMU still limits this channel to the private arena.
      */
-    ex_write(io, 0x2140, 0); ex_write(io, 0x2528, 0);
-    ex_write(io, 0x4010c, 0); ex_write(io, 0x4014c, 0);
-    /* nouveau gf100_runq_init, also used by gk104/gm20b: do not stall the
-     * pushbuffer reader on LB request or device-method notifications. Fault
-     * status remains visible to polling; no CPU interrupt line is enabled.
+    /* Match Switchroot's local fault enables. MC interrupt outputs remain
+     * disabled above, so polling does not require an ISR. In particular,
+     * bind/scheduler/channel-switch faults must not become generic timeouts.
      */
-    ex_write(io, 0x4013c, ex_read(io, 0x4013c) & ~0x10000100u);
+    intr_stall = ex_read(io, 0x4013c) & ~0x100u; /* LB request is not fatal */
+    ex_write(io, 0x4013c, intr_stall);
     ex_write(io, 0x2100, UINT32_MAX);
     ex_write(io, 0x40108, UINT32_MAX); ex_write(io, 0x40148, UINT32_MAX);
+    ex_write(io, 0x4010c, intr_stall);
+    ex_write(io, 0x4014c, ex_read(io, 0x40140) & ~1u); /* unused HCE illegal-op */
+    ex_write(io, 0x2140, TG_GPU_FIFO_ERROR_MASK | 0x40000000u);
+    ex_write(io, 0x2528, 0x80000000);
     ex_write(io, 0x2a00, UINT32_MAX);
 
     state->stage = 2;
@@ -255,10 +265,22 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         return TG_GPU_EXEC_FRONTEND;
     if (io->read32(io->context, BAR1 + USERD_VA) != 0x55aa3377)
         return TG_GPU_EXEC_BAR1;
+    /* Complete the upstream two-way BAR1 test before enabling snoop. Leave
+     * USERD reserved words and GP_GET/GP_PUT clean; this is CPU MMIO, never
+     * used as evidence of GPU command execution or as a fence value.
+     */
+    io->write32(io->context, BAR1 + USERD_VA, 0x337755aa);
+    if (io->read32(io->context, BAR1 + USERD_VA) != 0x337755aa || userd[0] != 0x337755aa)
+        return TG_GPU_EXEC_BAR1;
+    io->write32(io->context, BAR1 + USERD_VA, 0);
+    if (io->read32(io->context, BAR1 + USERD_VA) || userd[0]) return TG_GPU_EXEC_BAR1;
     ex_write(io, 0x2254, (USERD_VA >> 12) | 0x10000000); /* USERD BAR1 snoop */
 
     state->stage = 3;
     ex_write(io, 0x800000, (uint32_t)((physical + INST) >> 12) | 0xb0000000);
+    s->channel_instance_after = ex_read(io, 0x800000);
+    if (s->channel_instance_after != ((uint32_t)((physical + INST) >> 12) | 0xb0000000))
+        return TG_GPU_EXEC_FIFO_INIT;
     ex_write(io, 0x800004, (ex_read(io, 0x800004) & ~0x400u) | 0x400);
     ex_write(io, 0x2270, (uint32_t)((physical + RUNLIST) >> 12) | 0x30000000);
     ex_write(io, 0x2274, 1); /* runlist 0, one channel */
@@ -269,12 +291,13 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         return TG_GPU_EXEC_SCHEDULER;
 
     state->stage = 4;
-    /* The initial GP_PUT was already one when the context became runnable.
-     * Do not issue its BAR1 doorbell here: distinguish context bootstrap from
-     * notification. The second release below exercises the BAR1 path.
+    /* Both notifications use the vendor's BAR1 path after the runlist is
+     * runnable. A CPU store to saved RAMFC/USERD is not a replacement.
      */
+    if (ex_fault(io)) { tg_gpu_execute_snapshot(io, state, s); return TG_GPU_EXEC_FAULT; }
+    io->write32(io->context, BAR1 + USERD_VA + 35 * 4, 1);
     for (i = 0; i < 10000 && fence[0] != s->expected[0]; ++i) {
-        if (ex_read(io, 0x259c) || ex_read(io, 0x40108) || ex_read(io, 0x40148)) break;
+        if (ex_fault(io)) break;
         io->delay_us(io->context, 10);
     }
     s->observed[0] = fence[0];
@@ -282,14 +305,14 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         state->stage = 5;
         io->write32(io->context, BAR1 + USERD_VA + 35 * 4, 2);
         for (i = 0; i < 10000 && fence[1] != s->expected[1]; ++i) {
-            if (ex_read(io, 0x259c) || ex_read(io, 0x40108) || ex_read(io, 0x40148)) break;
+            if (ex_fault(io)) break;
             io->delay_us(io->context, 10);
         }
     }
     s->observed[1] = fence[1];
     tg_gpu_execute_snapshot(io, state, s);
     if (s->frontend.result != TG_GPU_FE_OK) return TG_GPU_EXEC_FRONTEND;
-    if (s->mmu_fault || s->pbdma_interrupt || s->pbdma_interrupt_1)
+    if (tg_gpu_fifo_has_error(s->fifo_interrupt) || s->mmu_fault || s->pbdma_interrupt || s->pbdma_interrupt_1)
         return TG_GPU_EXEC_FAULT;
     if (s->observed[0] != s->expected[0] || s->observed[1] != s->expected[1])
         return TG_GPU_EXEC_TIMEOUT;

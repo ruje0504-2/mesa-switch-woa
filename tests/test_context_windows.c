@@ -272,6 +272,7 @@ static struct {
     UINT32 mc,pb,map,sched,inst,ctrl,preempt,pbdma,runlist,runbase,root,expected_root;
     UINT32 clamp,reset,clocks,out5,mc_flush;
     UINT tlbs,flushes,reads,writes;
+    UINT32 fifo_fault;
     UCHAR enable,voltage;
     BOOLEAN fail_preempt,fail_reset,fail_tlb;
 } hw={.mc=0x100,.pb=1,.map=1,.sched=1,.enable=0x41,.voltage=110,.expected_root=0x900002};
@@ -292,7 +293,8 @@ static UINT32 Read(void *context,UINT32 address)
     case 0x57003080:return hw.pbdma;
     case 0x57100c80:return hw.fail_tlb ? 0x10000 : 0x18000;
     case 0x57070000:return 0;
-    case 0x57002100:case 0x5700259c:case 0x57040108:case 0x57040148:
+    case 0x57002100:return hw.fifo_fault;
+    case 0x5700259c:case 0x57040108:case 0x57040148:
     case 0x57001100:case 0x57120058:case 0x5712005c:return 0;
     case 0x7000e6d4:return hw.clamp;
     case 0x6000628c:return hw.reset;
@@ -378,7 +380,12 @@ void start(void)
     struct tg_gpu_power_io io={.context=&hw,.read32=Read,.write32=Write,.delay_us=Delay,
         .read_pmic=ReadPmic,.write_pmic=WritePmic};
     UINT32 *instance,*fence;UINT i,before;ULONG written;UINT64 pde;
+    struct tg_gpu_channel rejected={0};
     static const char pass[]="PASS: WDK allocation lifecycle/rollback, ordered work queue and verified retirement (controlled substitutes)\r\n";
+    hw.fifo_fault=0x100;before=hw.writes;
+    CHECK(tg_gpu_channel_submit(&io,&power,0x90000000,0x91004000,0x91003000,&e,&rejected)==TG_GPU_CHANNEL_FAULT);
+    CHECK(!rejected.referenced && hw.writes==before && rejected.fifo_interrupt==0x100);
+    hw.fifo_fault=0;
     dxgk.Version=DXGKDDI_INTERFACE_VERSION_WDDM2_4;dxgk.DeviceHandle=(HANDLE)1;
     dxgk.DxgkCbAllocateContiguousMemory=Allocate;dxgk.DxgkCbFreeContiguousMemory=Free;
     dxgk.DxgkCbSynchronizeExecution=Synchronize;dxgk.DxgkCbNotifyInterrupt=Interrupt;
@@ -429,7 +436,9 @@ void start(void)
     CHECK(TgGpuAcquireContextWork(&e,&submit,&blocked)==STATUS_DEVICE_BUSY && !blocked.Context);
     CHECK(ddi.DxgkDdiDestroyContext(c)==STATUS_DEVICE_BUSY);
     CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY && !interrupts);
+    hw.fifo_fault=0x40000000; /* normal runlist event cannot reject the channel */
     CHECK(NT_SUCCESS(TgGpuSubmitContextWork(&e,&work,&io,&power)));
+    hw.fifo_fault=0;
     CHECK(work.Submitted && e.Channel.referenced && !hw.sched && hw.runlist==1);
     CHECK(hw.inst==((UINT32)((UINT64)c->Instance.SystemPhysicalAddress.QuadPart>>12)|0xb0000000));
     before=hw.writes;
