@@ -56,3 +56,7 @@ common/priv_ring/priv_ring_gm20b.c and their GM20B register headers.
 Copyright (c) 2014-2018 NVIDIA CORPORATION. All rights reserved.
 The MIT license text above applies. The Windows probe links this code with
 the GPL-2.0-only power sequence and is distributed under GPL-2.0-only.
+
+platform/t214_mmu.c follows the TLB invalidate sequence in the same
+Switchroot nvgpu common/fb/fb_gm20b.c (Copyright 2014-2018 NVIDIA).
+The MIT license text above applies.

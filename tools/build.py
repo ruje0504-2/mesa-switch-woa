@@ -20,7 +20,9 @@ parser.add_argument("--cc", default="clang")
 parser.add_argument("--clang-cl", default="clang-cl")
 parser.add_argument("--lib", default="llvm-lib")
 parser.add_argument("--link", default="lld-link")
+parser.add_argument("--dlltool", default="llvm-dlltool")
 parser.add_argument("--probe", action="store_true", help="also build the opt-in KMDF probe and its SwitchFan bridge")
+parser.add_argument("--windows-tests", action="store_true", help="build the real-WDK paging test executable for ARM64 Windows")
 args = parser.parse_args()
 revision = subprocess.check_output(
     ["git", "-C", str(args.mesa), "rev-parse", "HEAD"], text=True).strip()
@@ -48,6 +50,11 @@ clock_test = args.out / "test-t214-clock"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(clock), str(root / "tests/test_clock.c"), "-o", str(clock_test)], check=True)
 subprocess.run([str(clock_test.resolve())], check=True)
+tlb = root / "platform/t214_mmu.c"
+tlb_test = args.out / "test-tlb"
+subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                str(tlb), str(root / "tests/test_tlb.c"), "-o", str(tlb_test)], check=True)
+subprocess.run([str(tlb_test.resolve())], check=True)
 
 includes = [args.wdk_include / "km/crt", args.wdk_include / "km",
             args.wdk_include / "shared", args.sdk_include / "shared",
@@ -61,7 +68,8 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
          "/DDXGKDDI_INTERFACE_VERSION=DXGKDDI_INTERFACE_VERSION_WDDM2_4",
          *[f"/I{p}" for p in mesa_includes], *[f"/imsvc{p}" for p in includes]]
 objects = []
-for source in [*core, power, clock, root / "windows/resources.c", root / "windows/private_memory.c"]:
+for source in [*core, power, clock, tlb, root / "windows/resources.c",
+               root / "windows/private_memory.c", root / "windows/paging.c"]:
     obj = args.out / (source.stem + ".obj")
     subprocess.run([args.clang_cl, *flags, f"/Fo{obj}", "--", str(source)], check=True)
     objects.append(obj)
@@ -69,6 +77,22 @@ library = args.out / "TegraGpuCore.lib"
 subprocess.run([args.lib, "/nologo", "/machine:arm64", f"/out:{library}",
                 *map(str, objects)], check=True)
 print(f"ARM64 kernel library: {library} (hardware execution not tested)")
+
+if args.windows_tests:
+    test_obj = args.out / "test_paging_windows.obj"
+    subprocess.run([args.clang_cl, *flags, "/clang:-funwind-tables", f"/Fo{test_obj}", "--",
+                    str(root / "tests/test_paging_windows.c")], check=True)
+    # The SDK header NuGet does not ship import libraries. Use the same LLVM
+    # import-library construction as the existing performance tool.
+    exports = args.out / "paging-kernel32.def"
+    exports.write_text("LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nGetStdHandle\nWriteFile\n")
+    sdk_lib = args.out / "paging-kernel32.lib"
+    subprocess.run([args.dlltool, "-m", "arm64", "-d", str(exports), "-l", str(sdk_lib)], check=True)
+    subprocess.run([args.link, "/nologo", "/machine:arm64", "/subsystem:console,10.0",
+                    "/entry:start", "/include:_load_config_used", "/nodefaultlib", "/release", "/opt:ref", "/timestamp:0",
+                    f"/out:{args.out / 'test-paging.exe'}", str(test_obj),
+                    str(args.out / "paging.obj"), str(args.out / "gm20b_mmu.obj"),
+                    str(sdk_lib)], check=True)
 
 if args.probe:
     import shutil
@@ -97,6 +121,8 @@ if args.probe:
         if name == "tegragpuprobe": libs.append(library)
         subprocess.run([args.link, "/nologo", "/driver", "/subsystem:native,10.0", "/machine:arm64",
                         "/entry:FxDriverEntry", "/nodefaultlib", "/release", "/opt:ref", "/opt:icf",
+                        "/tsaware:no", "/section:.text,ERP", "/section:.rdata,RP",
+                        "/section:.data,RWP", "/section:.pdata,RP", "/section:INIT,ERD",
                         "/timestamp:0", f"/out:{dest / (name + '.sys')}",
                         str(obj), str(support), *map(str, libs)], check=True)
         shutil.copyfile(inf, dest / inf.name)

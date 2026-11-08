@@ -33,6 +33,17 @@ FIFO semaphores with different values. It powers down afterward; it does not
 load graphics firmware or execute shaders. The future WDDM adapter uses the
 separate Dxgkrnl private-memory helpers; VidMm/scheduler integration is open.
 
+`windows/paging.c` translates real WDK `DXGK_PTE` entries into GM20B entries
+for an uncached, idle address space. It validates the entire update before
+publishing, supports repeat/invalid entries, and rejects unsupported flags.
+The resolver must pin and validate GPU mappings. GM20B's 128 KiB tables need
+a dedicated nonzero CPU-visible segment; WDDM limits segment-zero tables to
+4 KiB. The segment pool and WDDM callback wiring are not implemented yet.
+`platform/t214_mmu.c` performs the Switchroot TLB invalidate sequence and
+reports timeout/read failures. Add `--windows-tests` to build `test-paging.exe`
+against the real WDK types, then run it in ARM64 Windows/WinPE. This test uses
+owned test memory and does not access a GPU.
+
 The existing `LitePerformanceCheck.exe` is the UI for both clock profiles and
 the combined readback check. The optional probe requires matching firmware
 resources and the `SWITCH_LITE_GPU` build of SwitchFan. The build emits unsigned
@@ -43,6 +54,11 @@ do not sign SYS/CAT files with the CA certificate itself. Before installation,
 verify the SYS signature and the INF/SYS catalog membership with Windows
 SignTool (`verify /pa /c package.cat file`). A successful PnPUtil import alone
 does not establish a valid Authenticode signature or an active device binding.
+The probe/bridge linker uses the working T214 kernel image profile: resident
+code/data/unwind sections, discardable INIT, and `/tsaware:no`. The default
+image profile compiled and signed but failed native driver loading with
+Win32 error 487. The corrected images load in ARM64 WinPE with test signing;
+that loader check does not exercise the Lite's ACPI resources or GPU.
 
 The firmware consumes `platform/t214_resources.h` through its WindowsDrivers
 submodule. Build it with `-D SWITCH_LITE_GPU=1` to expose the separate ACPI
