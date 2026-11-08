@@ -5,12 +5,17 @@
 #include "../windows/control.h"
 #include <stddef.h>
 
-#define TG_GPU_ARENA_BYTES 0x50000u
+#define TG_GPU_ARENA_BYTES 0x60000u
+#define TG_GPU_GR_SURFACE_OFFSET 0x50000u
+#define TG_GPU_GR_SURFACE_BYTES 0x10000u
+#define TG_GPU_GR_SURFACE_VA 0x20000u
+#define TG_GPU_GR_INSTANCE_OFFSET 0x49000u
 enum tg_gpu_execute_result {
     TG_GPU_EXEC_OK, TG_GPU_EXEC_ARGUMENT, TG_GPU_EXEC_BUSY,
     TG_GPU_EXEC_MMU_TIMEOUT, TG_GPU_EXEC_BAR1, TG_GPU_EXEC_RUNLIST,
     TG_GPU_EXEC_TIMEOUT, TG_GPU_EXEC_FAULT, TG_GPU_EXEC_FIFO_INIT,
-    TG_GPU_EXEC_PBDMA_INIT, TG_GPU_EXEC_SCHEDULER, TG_GPU_EXEC_FRONTEND
+    TG_GPU_EXEC_PBDMA_INIT, TG_GPU_EXEC_SCHEDULER, TG_GPU_EXEC_FRONTEND,
+    TG_GPU_EXEC_GR_BOOT
 };
 
 /* A single diagnostic channel using caller-owned contiguous, uncached
@@ -22,15 +27,20 @@ struct tg_gpu_execution {
     bool owned;
     bool fifo_ready;
     bool pbdma_owned;
+    bool gr_owned;
     uint32_t old_pbdma_enable;
     uint32_t stage;
 };
 
 bool tg_gpu_prepare_arena(void *cpu, uint64_t device_address, size_t bytes,
                           const uint32_t expected[2]);
+/* Called only after prepare_arena, before any GPU mapping becomes live. */
+bool tg_gpu_prepare_gr_arena(void *cpu, uint64_t device_address, size_t bytes,
+                            const struct tg_gpu_gr_payload *firmware);
 enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *uncached_cpu,
-    uint64_t device_address, struct tg_gpu_execution *state,
+    uint64_t device_address, const struct tg_gpu_gr_payload *firmware,
+    struct tg_gpu_execution *state,
     struct tg_gpu_status *result);
 /* Stop channel fetch before the caller drains MC, stops the PLL and powers
  * down. Clear execution ownership/free the arena only AFTER power_down

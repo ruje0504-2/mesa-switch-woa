@@ -99,6 +99,35 @@ bool tg_gpu_prepare_arena(void *cpu, uint64_t physical, size_t bytes,
     return true;
 }
 
+bool tg_gpu_prepare_gr_arena(void *cpu, uint64_t physical, size_t bytes,
+                            const struct tg_gpu_gr_payload *firmware)
+{
+    uint64_t *pt, pdb;
+    uint32_t *inst;
+    uint8_t *surface;
+    uint32_t words[17], count, pages;
+    if (!cpu || ((uintptr_t)cpu & 0xfff) || (physical & 0xfff) ||
+        bytes < TG_GPU_ARENA_BYTES || physical < 0x80000000 ||
+        physical > UINT64_C(0x100000000)-TG_GPU_ARENA_BYTES ||
+        !firmware || !firmware->surface || !firmware->image.size ||
+        firmware->image.size > TG_GPU_GR_SURFACE_BYTES) return false;
+    for (unsigned i=0;i<2;++i)
+        if (tg_gpu_gr_boot_header(&firmware->image,i,TG_GPU_GR_SURFACE_VA,words,&count)
+            != TG_GPU_GR_FW_OK) return false;
+    if (!tg_gpu_instance_pdb(physical,&pdb)) return false;
+    inst = (uint32_t *)((uint8_t *)cpu+TG_GPU_GR_INSTANCE_OFFSET);
+    inst[128]=(uint32_t)pdb; inst[129]=(uint32_t)(pdb>>32);
+    inst[130]=0x00fff000;
+    pt = (uint64_t *)((uint8_t *)cpu+0x20000);
+    pages = (firmware->image.size+4095)/4096;
+    for (uint32_t i=0;i<pages;++i)
+        if (!tg_gpu_pte_4k(physical+TG_GPU_GR_SURFACE_OFFSET+i*4096,true,true,
+                          &pt[(TG_GPU_GR_SURFACE_VA>>12)+i])) return false;
+    surface=(uint8_t *)cpu+TG_GPU_GR_SURFACE_OFFSET;
+    for (uint32_t i=0;i<firmware->image.size;++i) surface[i]=firmware->surface[i];
+    return true;
+}
+
 static uint32_t ex_read(const struct tg_gpu_power_io *io, uint32_t reg)
 { return io->read32(io->context, GPU + reg); }
 static void ex_write(const struct tg_gpu_power_io *io, uint32_t reg, uint32_t val)
@@ -158,6 +187,7 @@ static bool ex_fault(const struct tg_gpu_power_io *io)
 
 enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *cpu, uint64_t physical,
+    const struct tg_gpu_gr_payload *firmware,
     struct tg_gpu_execution *state,
     struct tg_gpu_status *s)
 {
@@ -166,6 +196,8 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     if (!io || !io->read32 || !io->write32 || !io->delay_us || !power ||
         !power->owned || !power->ready || !cpu || !state || !s || state->owned ||
         !tg_gpu_prepare_arena(cpu, physical, TG_GPU_ARENA_BYTES, s->expected))
+        return TG_GPU_EXEC_ARGUMENT;
+    if (firmware && !tg_gpu_prepare_gr_arena(cpu,physical,TG_GPU_ARENA_BYTES,firmware))
         return TG_GPU_EXEC_ARGUMENT;
     fence = (volatile uint32_t *)((uint8_t *)cpu + FENCE);
     userd = (volatile uint32_t *)((uint8_t *)cpu + USERD);
@@ -292,8 +324,15 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     ex_write(io, 0x2254, (USERD_VA >> 12) | 0x10000000); /* USERD BAR1 snoop */
 
     state->stage = 7; /* distinguish GR preamble failure from BAR1 failure */
+    state->gr_owned = true;
     if (tg_gpu_frontend_gr_prepare(io, power, &s->frontend) != TG_GPU_FE_OK)
         return TG_GPU_EXEC_FRONTEND;
+    if (firmware) {
+        state->stage = 8;
+        if (tg_gpu_gr_boot(io,power,&s->frontend,&firmware->netlist,&firmware->image,
+                          TG_GPU_GR_SURFACE_VA,physical+TG_GPU_GR_INSTANCE_OFFSET,&s->gr)
+            != TG_GPU_GR_OK) return TG_GPU_EXEC_GR_BOOT;
+    }
     state->stage = 3;
     ex_write(io, 0x800000, (uint32_t)((physical + INST) >> 12) | 0x80000000);
     s->channel_instance_after = ex_read(io, 0x800000);
@@ -368,7 +407,11 @@ void tg_gpu_execute_stop(const struct tg_gpu_power_io *io, struct tg_gpu_executi
     /* Reset the test FIFO even if runlist removal times out; MC drain and
      * full GPU reset still must succeed before the arena is freed.
      */
-    ex_write(io, 0x200, ex_read(io, 0x200) & ~0x100u);
+    /* Stop FECS/GPCCS DMA too before the caller drains MC or frees the arena.
+     * Their boot surface remains mapped until full GPU power retirement.
+     */
+    ex_write(io, 0x200, ex_read(io, 0x200) & ~(s->gr_owned ? 0x18001100u : 0x100u));
     io->delay_us(io->context, 20);
+    s->gr_owned = false;
     s->fifo_ready = false;
 }

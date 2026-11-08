@@ -187,10 +187,10 @@ void test_execute_init(void)
     struct tg_gpu_status result = {.expected={0x13579bdf,0x2468ace0}};
     arena_userd = (uint32_t *)(arena + 0x41000);
     arena_runlist = (uint32_t *)(arena + 0x45000);
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_ARGUMENT);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_ARGUMENT);
     assert(m.writes == 0 && m.channel_reads == 0);
     power.owned = power.ready = true;
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_MMU_TIMEOUT);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_MMU_TIMEOUT);
     assert(state.stage == 2 && state.owned && state.fifo_ready);
     assert(result.mc_enable_before == 0 && result.channel_instance_before == UINT32_MAX);
     assert(result.mc_enable_after == 0x100 && result.channel_instance_after == 0);
@@ -204,35 +204,35 @@ void test_execute_init(void)
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state));
     /* Never admit an address carrying GM20B's SMMU translation tag. */
-    assert(tg_gpu_execute(&io,&power,arena,UINT64_C(1)<<34,&state,&result) == TG_GPU_EXEC_ARGUMENT);
+    assert(tg_gpu_execute(&io,&power,arena,UINT64_C(1)<<34,NULL,&state,&result) == TG_GPU_EXEC_ARGUMENT);
     assert(m.writes == 0 && m.channel_reads == 0 && !state.owned);
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state)); m.fail_enable=true;
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_FIFO_INIT);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_FIFO_INIT);
     assert(state.stage == 1 && !state.fifo_ready && m.channel_reads == 0);
     tg_gpu_execute_stop(&io,&state);
     assert(m.channel_writes == 0);
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state)); m.unreadable_channel=true;
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_FIFO_INIT);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_FIFO_INIT);
     assert(result.channel_instance_after == UINT32_MAX && m.channel_writes == 0);
     tg_gpu_execute_stop(&io,&state);
     assert(m.channel_writes == 0);
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state));
     m.runlist_map=1; m.fail_pb_enable=true;
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_PBDMA_INIT);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_PBDMA_INIT);
     assert(state.stage == 1 && result.pbdma_enable_after == 0 && !m.put);
     tg_gpu_execute_stop(&io,&state);
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state)); m.allow_mmu=true;
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_PBDMA_INIT);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_PBDMA_INIT);
     assert(!state.pbdma_owned && !m.put); /* no PBDMA serves runlist zero */
     tg_gpu_execute_stop(&io,&state);
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state));
     m.runlist_map=1; m.allow_mmu=true; m.sched=0xa5; m.stall=UINT32_MAX;
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_TIMEOUT);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_TIMEOUT);
     assert(state.stage == 4 && result.userd_gp_put == 1 && result.userd_gp_get == 0);
     assert(m.put == 1 && result.pbdma_gp_base == UINT32_MAX);
     assert(result.observed[0] == 0xdeadbeef && result.observed[1] == 0xdeadbeef);
@@ -249,14 +249,14 @@ void test_execute_init(void)
 
     memset(&m,0,sizeof(m));memset(&state,0,sizeof(state));memset(&result.frontend,0,sizeof(result.frontend));
     m.runlist_map=1;m.allow_mmu=true;m.fail_gr_enable=true;
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result)==TG_GPU_EXEC_FRONTEND);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result)==TG_GPU_EXEC_FRONTEND);
     assert(state.stage==7 && result.frontend.stage==10 && !m.runlist && !m.put && !m.instance);
     tg_gpu_execute_stop(&io,&state);
     assert(!m.pb && !m.runlist && !m.instance);
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state)); memset(&result.frontend,0,sizeof(result.frontend));
     m.runlist_map=1; m.allow_mmu=true; m.l2_timeout=true;
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_FRONTEND);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_FRONTEND);
     assert(result.frontend.stage == 7 && result.frontend.result == TG_GPU_FE_L2_TIMEOUT);
     assert(result.bar1_phase == 3 && result.bar1_read == 0x337755aa && result.bar1_cpu == 0x55aa3377);
     assert(!m.runlist && !m.put && !m.l2_invalidations);
@@ -265,21 +265,21 @@ void test_execute_init(void)
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state));
     m.runlist_map=1; m.allow_mmu=true; m.fail_sched_allow=true;
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_SCHEDULER);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_SCHEDULER);
     assert(state.stage == 3 && !m.put && (result.scheduler_after & 1));
     tg_gpu_execute_stop(&io,&state);
     assert(!m.pb && !m.runlist && !m.instance);
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state));
     m.runlist_map=1; m.allow_mmu=true; m.hce_fault=true;
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_FAULT);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_FAULT);
     assert(state.stage == 4 && result.pbdma_interrupt_1 == 8);
     assert(result.observed[0] == 0xdeadbeef && result.observed[1] == 0xdeadbeef);
     tg_gpu_execute_stop(&io,&state);
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state));
     memset(&result.frontend,0,sizeof(result.frontend));
     m.runlist_map=1; m.allow_mmu=true; m.bad_ltc=true;
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_FRONTEND);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_FRONTEND);
     assert(result.frontend.result == TG_GPU_FE_LTC && !m.runlist && !m.fb_flushes);
     tg_gpu_execute_stop(&io,&state);
     assert(!m.pb && !m.instance);
@@ -287,7 +287,7 @@ void test_execute_init(void)
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state));
     memset(&result.frontend,0,sizeof(result.frontend));
     m.runlist_map=1; m.allow_mmu=true; m.flush_timeout=true;
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_FRONTEND);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_FRONTEND);
     assert(result.frontend.result == TG_GPU_FE_FLUSH_TIMEOUT && !m.runlist && !m.put);
     tg_gpu_execute_stop(&io,&state);
     assert(!m.pb && !m.instance && !m.bar1);
@@ -295,7 +295,7 @@ void test_execute_init(void)
     /* BAR1 read-only visibility is insufficient for the GP_PUT doorbell. */
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state)); memset(&result.frontend,0,sizeof(result.frontend));
     m.runlist_map=1; m.allow_mmu=true; m.bad_bar1_write=true;
-    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_BAR1);
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_BAR1);
     assert(state.stage == 2 && !m.runlist && !m.put);
     tg_gpu_execute_stop(&io,&state);
 
@@ -306,7 +306,7 @@ void test_execute_init(void)
     for (unsigned j=0;j<sizeof(faults)/sizeof(faults[0]);++j) {
         memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state)); memset(&result.frontend,0,sizeof(result.frontend));
         m.runlist_map=1; m.allow_mmu=true; m.fifo_fault=faults[j];
-        assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) ==
+        assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) ==
                (j<3 ? TG_GPU_EXEC_FAULT : TG_GPU_EXEC_TIMEOUT));
         assert(result.fifo_interrupt == faults[j] && m.put == (j<3 ? 0u : 1u));
         assert(result.bind_error == (j==0 ? 5u : 0u));
@@ -325,7 +325,7 @@ void test_execute_init(void)
         m.runlist_map=1;m.allow_mmu=true;m.engine_event=true;
         m.stuck_event=j==1;m.pb_fault=j==2?0x8000:0;m.hce_fault=j==3;
         m.fifo_fault=j==4?1:0;m.mmu_fault=j==5?1:0;m.late_pb_fault=j==6;
-        assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result)==
+        assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result)==
                (j==0?TG_GPU_EXEC_TIMEOUT:TG_GPU_EXEC_FAULT));
         assert(m.put==(j==0?1u:0u));
         assert(m.event_acks==((j<2 || j==6)?1u:0u) && m.summary_acks==m.event_acks);

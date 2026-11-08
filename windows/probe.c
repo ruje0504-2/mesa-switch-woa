@@ -11,6 +11,7 @@
 #include "../platform/t214_resources.h"
 #include "../platform/t214_clock.h"
 #include "../core/execute.h"
+#include "gr_firmware_io.h"
 
 struct gpu_map { ULONG base, size; volatile UCHAR *va; };
 static const struct gpu_map map_profile[] = {
@@ -193,6 +194,7 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target)
     struct tg_gpu_power_io io = GpuIo(d);
     struct tg_gpu_pmic_request op = {0, TG_GPU_PMIC_QUERY_ADDRESS, 0, 0};
     PHYSICAL_ADDRESS low = {0}, high, boundary = {0};
+    TG_GPU_FIRMWARE firmware = {0};
     NTSTATUS status;
     uint8_t address;
     ULONG seed;
@@ -221,10 +223,16 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target)
     seed = 0x13579bdfu ^ (ULONG)KeQueryInterruptTime();
     if (seed == 0xdeadbeef || ~seed == 0xdeadbeef) seed ^= 0x1000;
     d->last.expected[0] = seed; d->last.expected[1] = ~seed;
+    d->last.firmware_status = TgGpuFirmwareLoad(&firmware);
+    if (!NT_SUCCESS((NTSTATUS)d->last.firmware_status)) {
+        d->last.execution_result = TG_GPU_EXEC_GR_BOOT;
+        d->last.stage = 90;
+        goto done;
+    }
     high.QuadPart = 0xffffffff;
     d->arena = MmAllocateContiguousMemorySpecifyCache(TG_GPU_ARENA_BYTES,
                                                       low, high, boundary, MmNonCached);
-    if (!d->arena) { status = STATUS_INSUFFICIENT_RESOURCES; goto early; }
+    if (!d->arena) { TgGpuFirmwareFree(&firmware); status = STATUS_INSUFFICIENT_RESOURCES; goto early; }
     d->arena_address = MmGetPhysicalAddress(d->arena);
     d->last.power_result = tg_gpu_power_up(&io, address, &d->power);
     d->last.stage = 100 + d->power.stage;
@@ -242,9 +250,10 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target)
     if (d->last.clock_result != TG_GPU_CLOCK_OK) goto done;
     KeMemoryBarrier();
     d->last.execution_result = tg_gpu_execute(&io, &d->power, d->arena,
-        (uint64_t)d->arena_address.QuadPart, &d->execution, &d->last);
+        (uint64_t)d->arena_address.QuadPart, &firmware.payload, &d->execution, &d->last);
     d->last.stage = 300 + d->execution.stage;
 done:
+    TgGpuFirmwareFree(&firmware); /* GPU DMA uses only its copied private arena. */
     if (d->power.ready) tg_gpu_frontend_snapshot(&io, &d->last.frontend);
     if (d->execution.fifo_ready && d->last.execution_result != TG_GPU_EXEC_OK)
         tg_gpu_execute_snapshot(&io, &d->execution, &d->last);

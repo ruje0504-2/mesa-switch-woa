@@ -79,7 +79,14 @@ core/gr_firmware.c follows the NETB region layout, byte padding, DMA surface
 layout and T21x Falcon bootstrap-header ABI in the same Switchroot revision,
 gk20a/gr_ctx_gk20a.{c,h} and gr_gk20a.{c,h} (Copyright 2014-2018 NVIDIA).
 The MIT license text above applies. Proprietary firmware files are not embedded
-in this source or redistributed by the backend build.
+in this source. An operator-supplied firmware directory is copied into the local
+probe package as separate files, subject to its NVIDIA firmware license.
+
+platform/t214_gr.c follows non-context initialization and DMA bootstrap in
+gk20a/gr_gk20a.c and gm20b/gr_gm20b.c from the same Switchroot revision.
+Copyright (c) 2014-2018 NVIDIA CORPORATION. The MIT license text above applies.
+Falcon DMA IDLE bit semantics were checked against Linux v6.12 drm/tegra/falcon.h
+and falcon.c; no Linux Tegra implementation is copied into this helper.
 
 core/channel.c follows the channel bind, disable, preempt and runlist removal
 ordering in the same Switchroot nvgpu gk20a/fifo_gk20a.c and common/fifo/channel.c,

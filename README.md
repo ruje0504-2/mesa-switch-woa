@@ -11,7 +11,9 @@ a display miniport or Vulkan ICD. They keep the working POST display driver.
 Build with LLVM and the official Windows WDK/SDK headers. `WDK_INCLUDE` and
 `SDK_INCLUDE` denote their versioned Include directories; the script targets
 ARM64 and the Windows 11 22H2 baseline, using WDDM 2.4 private-memory
-callbacks. From the repository root:
+callbacks. `GR_FIRMWARE` is a local directory containing NVIDIA's external
+`NETB_img.bin`, `fecs.bin` and `gpccs.bin` for `tegra21x`/`gm20b`. The files
+are supplied by the operator, not stored in this repository. From the repository root:
 
 ```sh
 git clone --depth 1 https://github.com/danfromtico/mesa-switch.git build/mesa-switch
@@ -19,7 +21,7 @@ git -C build/mesa-switch checkout 0ff52079ca9e9e837ed27eb95a8d239f439a1864
 python3 drivers/TegraGpu/tools/build.py \
   --mesa build/mesa-switch \
   --wdk-include "$WDK_INCLUDE" --sdk-include "$SDK_INCLUDE" \
-  --out build/tegra-gpu --probe
+  --out build/tegra-gpu --probe --gr-firmware "$GR_FIRMWARE"
 ```
 
 `TegraGpuCore.lib` contains WDDM resource/private-memory helpers, GM20B 4 KiB
@@ -28,9 +30,10 @@ T214 power/clock control. The default target is **729.6 MHz**, with an opt-in
 **1228.8 MHz** profile. C1 NA PLL calibration and the MAX77812 M1 voltage follow
 the conservative Switchroot B01 CVB table and are checked by a GPCCLK counter.
 OUT5 at 204 MHz is a separate power/reference clock. The KMDF probe uses a
-private uncached arena, four mapped GPU pages and one channel to release two
-FIFO semaphores with different values. It powers down afterward; it does not
-load graphics firmware or execute shaders. The future WDDM adapter uses the
+private uncached arena, bounded read-only firmware mappings and one channel
+to release two FIFO semaphores with different values. It loads the non-secure
+GR bootstrap before channel binding and powers down afterward. This does not
+create a graphics context or execute shaders. The future WDDM adapter uses the
 separate Dxgkrnl private-memory helpers; VidMm/scheduler integration is open.
 The diagnostic requires exclusive cold GPU ownership, resets/enables PFIFO
 before reading or initializing its channel slot, and preserves init-register
@@ -83,7 +86,7 @@ through execution and is restored on clock release. FIFO/FB/LTC use the
 upstream force-run clock-gating profiles until a PMU governor exists. LTC
 active counts feed both L2 and FBHUB; physical-security setup is restricted
 to the upstream non-secure branch. Two bounded FB flushes must finish before
-the channel becomes runnable. ABI 10 (252 bytes) records the initialization
+the channel becomes runnable. ABI 11 (292 bytes) records the initialization
 stage, LTC/flush counts, BUS/PRI faults, FIFO binding/engine state and the
 separate BAR1 step/expected/GPU/CPU values. Bounded L2 writeback and invalidation
 timeouts stop submission; a successful FB flush alone is not DRAM visibility.
@@ -97,9 +100,8 @@ FIFO and memory enables, apply the published GM20B GR force-run gate profiles,
 set both engine clocks to RUN with power AUTO, and enable GR FIFO/semaphore
 access. It records MC enable, GR access and both gate controls. Stage 307
 identifies failure in this preamble; frontend stage 11 means only this preamble
-completed. No Falcon firmware, non-context register pack or graphics context is
-loaded yet. The previous hardware stall is not proven to depend on this missing
-step, and the new source has no physical execution pass. Full GPU reset/power
+completed. Stage 308 separately identifies GR firmware bootstrap failure;
+a ready mailbox is not a GPU execution pass. Full GPU reset/power
 retirement still follows every probe. This helper is for exclusive cold ownership,
 never an adapter reset while another channel is active.
 
@@ -110,7 +112,7 @@ byte-sized Falcon code, validates typed register streams and builds the six
 padding. It selects the T21x DMEM-header format from the upstream bootloader
 checksum and encodes the mapped 40-bit GPU addresses. The checksum is an ABI
 selector, not a firmware signature. Inputs remain external and are not copied
-into the repository or probe. Host tests cover malformed ranges, unknown boot
+into the source repository. The probe package carries them as separate files. Host tests cover malformed ranges, unknown boot
 versions, unaligned payloads, padding and insufficient storage; the same test
 also accepts three local paths for validation against actual NVIDIA files:
 
@@ -118,10 +120,16 @@ also accepts three local paths for validation against actual NVIDIA files:
 build/tegra-gpu/test-gr-firmware NETB_img.bin fecs.bin gpccs.bin
 ```
 
-The preparation module builds in the ARM64 static library. It does not yet load
-firmware into the GPU, program non-context registers, handle secure ACR startup,
-wait for the FECS-ready handshake or generate the golden graphics context.
-Those remain required before a shader or Vulkan execution claim.
+`platform/t214_gr.c` follows Switchroot's non-context pack, scrub/GR-idle wait,
+instance binding, FECS/GPCCS DMA bootloader transfer and FECS-ready handshake.
+It waits for Falcon DMA IDLE to become set, retains failure-stage/register
+information, and refuses the non-secure route when PRIV security is enabled.
+Secure ACR/WPR bootstrap and golden graphics contexts remain unimplemented.
+`windows/gr_firmware_io.c` reads only fixed administrator-protected driver paths
+at PASSIVE_LEVEL before GPU power-up. The packed surface is copied into a
+64 KiB private arena region mapped read-only, with a separate firmware instance.
+Teardown resets GR/FIFO before MC drain; backing memory is retained until power
+retirement. No shader or Vulkan execution claim follows from these local checks.
 
 The diagnostic accepts only owned physical buffers below 4 GiB. Switchroot's
 GM20B path tags IOMMU addresses with bit 34 and leaves physical addresses

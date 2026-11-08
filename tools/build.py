@@ -22,11 +22,15 @@ parser.add_argument("--lib", default="llvm-lib")
 parser.add_argument("--link", default="lld-link")
 parser.add_argument("--dlltool", default="llvm-dlltool")
 parser.add_argument("--probe", action="store_true", help="also build the opt-in KMDF probe and its SwitchFan bridge")
+parser.add_argument("--gr-firmware", type=Path, help="external NVIDIA tegra21x NETB_img.bin/fecs.bin/gpccs.bin directory (required for --probe)")
 parser.add_argument("--keep-fan", action="store_true", help="with --probe, preserve the existing signed SwitchFan package")
 parser.add_argument("--windows-tests", action="store_true", help="build the real-WDK paging test executable for ARM64 Windows")
 args = parser.parse_args()
 if args.keep_fan and not args.probe:
     parser.error("--keep-fan requires --probe")
+if args.probe and (not args.gr_firmware or
+    any(not (args.gr_firmware / n).is_file() for n in ("NETB_img.bin", "fecs.bin", "gpccs.bin"))):
+    parser.error("--probe requires --gr-firmware with the three external NVIDIA GR files")
 revision = subprocess.check_output(
     ["git", "-C", str(args.mesa), "rev-parse", "HEAD"], text=True).strip()
 if revision != MESA_REVISION:
@@ -37,7 +41,8 @@ mesa_includes = [mesa_src, mesa_src / "nouveau/headers",
                  mesa_src / "nouveau/headers/nvidia/classes"]
 encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
 core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c", root / "core/fault.c",
-        root / "core/execute.c", root / "core/submission.c", root / "platform/t214_frontend.c", encoder]
+        root / "core/execute.c", root / "core/submission.c", root / "platform/t214_frontend.c",
+        root / "platform/t214_gr.c", root / "core/gr_firmware.c", encoder]
 host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 *[f"-I{p}" for p in mesa_includes], *map(str, core), str(root / "tests/test_core.c"),
@@ -70,6 +75,12 @@ subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(gr_firmware), str(root / "tests/test_gr_firmware.c"),
                 "-o", str(gr_firmware_test)], check=True)
 subprocess.run([str(gr_firmware_test.resolve())], check=True)
+gr = root / "platform/t214_gr.c"
+gr_test = args.out / "test-gr-boot"
+subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                str(gr), str(gr_firmware), str(root / "platform/t214_frontend.c"),
+                str(root / "tests/test_gr_boot.c"), "-o", str(gr_test)], check=True)
+subprocess.run([str(gr_test.resolve())], check=True)
 
 includes = [args.wdk_include / "km/crt", args.wdk_include / "km",
             args.wdk_include / "shared", args.sdk_include / "shared",
@@ -83,7 +94,7 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
          "/DDXGKDDI_INTERFACE_VERSION=DXGKDDI_INTERFACE_VERSION_WDDM2_4",
          *[f"/I{p}" for p in mesa_includes], *[f"/imsvc{p}" for p in includes]]
 objects = []
-for source in [*core, power, clock, tlb, gr_firmware, root / "core/channel.c", root / "windows/resources.c",
+for source in [*core, power, clock, tlb, root / "core/channel.c", root / "windows/resources.c",
                root / "windows/private_memory.c", root / "windows/paging.c",
                root / "windows/table_segment.c", root / "windows/root_table.c",
                root / "windows/paging_buffer.c", root / "windows/context.c",
@@ -138,6 +149,8 @@ if args.probe:
               f"/imsvc{wdf_inc}", f"/imsvc{args.wdk_include / 'km/spb/1.0'}"]
     support = args.out / "kmdf_support.obj"
     subprocess.run([args.clang_cl, *kflags, f"/Fo{support}", "--", str(repo / "tools/kmdf_support.c")], check=True)
+    firmware_io = args.out / "gr_firmware_io.obj"
+    subprocess.run([args.clang_cl, *kflags, f"/Fo{firmware_io}", "--", str(root / "windows/gr_firmware_io.c")], check=True)
     packages = [("tegragpuprobe", root / "windows/probe.c", root / "windows/tegragpuprobe.inf")]
     if not args.keep_fan:
         packages.append(("switchfan", repo / "drivers/SwitchFan/src/switchfan.c", repo / "drivers/SwitchFan/switchfan.inf"))
@@ -149,7 +162,10 @@ if args.probe:
         libs = [wdf_lib / "wdfdriverentry.lib", wdf_lib / "wdfldr.lib",
                 km_lib / "ntoskrnl.lib", km_lib / "hal.lib", km_lib / "ntstrsafe.lib",
                 km_lib / "bufferoverflowfastfailk.lib"]
-        if name == "tegragpuprobe": libs.append(library)
+        if name == "tegragpuprobe":
+            libs.extend([firmware_io, library])
+            for filename in ("NETB_img.bin", "fecs.bin", "gpccs.bin"):
+                shutil.copyfile(args.gr_firmware / filename, dest / filename)
         subprocess.run([args.link, "/nologo", "/driver", "/subsystem:native,10.0", "/machine:arm64",
                         "/entry:FxDriverEntry", "/nodefaultlib", "/release", "/opt:ref", "/opt:icf",
                         "/tsaware:no", "/section:.text,ERP", "/section:.rdata,RP",

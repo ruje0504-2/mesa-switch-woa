@@ -99,11 +99,35 @@ static void test_private_channel(void)
     /* Vendor runlist: one-channel TSG, default timeslice, then CHID zero. */
     assert(runlist[0] == 0x0600e000 && runlist[1] == 0);
     assert(runlist[2] == 0 && runlist[3] == 0);
-    assert(tg_gpu_prepare_arena(arena, 0xfffb0000, sizeof(arena), values));
+    assert(tg_gpu_prepare_arena(arena, 0xfffa0000, sizeof(arena), values));
     assert(runlist[0] == 0x0600e000 && runlist[1] == 0);
     assert(!tg_gpu_prepare_arena(arena, 0xc0000001, sizeof(arena), values));
     assert(!tg_gpu_prepare_arena(arena, 0xffff0000, sizeof(arena), values));
     assert(!tg_gpu_prepare_arena(arena, 0xc0000000, 4096, values));
+    {
+        uint8_t surface[0x1600];
+        struct tg_gpu_gr_payload fw = {0};
+        uint32_t *gr_inst=(uint32_t *)(arena+TG_GPU_GR_INSTANCE_OFFSET);
+        assert(tg_gpu_prepare_arena(arena,0xc0000000,sizeof(arena),values));
+        memset(surface,0x4b,sizeof(surface)); fw.surface=surface; fw.image.size=sizeof(surface);
+        for (unsigned i=0;i<2;++i) {
+            struct tg_gpu_gr_falcon_image *f=&fw.image.falcon[i];
+            f->boot=(struct tg_gpu_gr_segment){i*0x1000,4};
+            f->code=(struct tg_gpu_gr_segment){i*0x1000+0x100,4};
+            f->data=(struct tg_gpu_gr_segment){i*0x1000+0x200,4};
+            f->boot_signature=i ? 0x3d3d65e2 : 0x9121ab5c;
+        }
+        assert(tg_gpu_prepare_gr_arena(arena,0xc0000000,sizeof(arena),&fw));
+        assert(gr_inst[128]==0xc0000804 && gr_inst[129]==0 && gr_inst[130]==0xfff000);
+        assert(gr_inst[0]==0 && gr_inst[18]==0); /* no firmware GPFIFO/channel */
+        assert((pte[32]&5)==5 && (pte[33]&5)==5 && pte[34]==0);
+        assert(((pte[32]>>4)&0xffffff)==0xc0050);
+        assert(!memcmp(arena+TG_GPU_GR_SURFACE_OFFSET,surface,sizeof(surface)));
+        assert(arena[TG_GPU_GR_SURFACE_OFFSET+sizeof(surface)]==0);
+        assert(fence[0]==0xdeadbeef && fence[1]==0xdeadbeef);
+        fw.image.size=TG_GPU_GR_SURFACE_BYTES+1;
+        assert(!tg_gpu_prepare_gr_arena(arena,0xc0000000,sizeof(arena),&fw));
+    }
 }
 
 static void test_submission(void)
@@ -134,7 +158,7 @@ int main(void)
 {
     struct tg_gpu_gpfifo_entry entry;
     struct tg_gpu_identity identity;
-    _Static_assert(sizeof(struct tg_gpu_status) == 252, "control ABI 10 size");
+    _Static_assert(sizeof(struct tg_gpu_status) == 292, "control ABI 11 size");
     assert(tg_gpu_fifo_has_error(1) && tg_gpu_fifo_has_error(0x100) && tg_gpu_fifo_has_error(0x10000));
     assert(!tg_gpu_fifo_has_error(0xc0000000)); /* ordinary notification events */
     assert(tg_gpu_identify(0x12e000b1, &identity));
