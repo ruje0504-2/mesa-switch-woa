@@ -37,8 +37,13 @@ before reading or initializing its channel slot, and preserves init-register
 snapshots in the existing status response. Do not interpret a reset CCSR slot
 as a live channel. The probe separately enables PBDMA0 through `MC_ENABLE_PB`,
 checks its runlist-zero mapping, and disables it before the final FIFO reset.
-Status ABI 3 includes PBDMA enable and USERD GET/PUT observations; a queued
-command or enabled channel is not proof of execution. `--probe --keep-fan`
+Runlist zero is blocked during binding, explicitly allowed after submission,
+and blocked again before teardown, following Switchroot's scheduler control.
+The PBDMA notification stall mask follows nouveau's `gf100_runq_init`; both
+PBDMA interrupt words remain visible to polling. Status ABI 4 adds scheduler,
+committed-runlist and live PBDMA fetch observations to distinguish a pending
+channel from a loaded reader. A queued command or enabled channel is not
+proof of execution. `--probe --keep-fan`
 rebuilds only the GPU probe when the matching SwitchFan bridge is verified.
 
 The diagnostic accepts only owned physical buffers below 4 GiB. Switchroot's

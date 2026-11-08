@@ -118,8 +118,18 @@ void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io,
     s->mmu_fault = ex_read(io, 0x259c);
     s->pbdma_interrupt = ex_read(io, 0x40108);
     s->channel_status = ex_read(io, 0x800004);
-    if (s->pbdma_enable_after != UINT32_MAX && (s->pbdma_enable_after & 1))
+    s->scheduler_after = ex_read(io, 0x2630);
+    s->scheduler_error = ex_read(io, 0x262c);
+    s->runlist_base = ex_read(io, 0x2280);
+    s->runlist_status = ex_read(io, 0x2284);
+    if (s->pbdma_enable_after != UINT32_MAX && (s->pbdma_enable_after & 1)) {
         s->pbdma_status = ex_read(io, 0x3080);
+        s->pbdma_gp_base = ex_read(io, 0x40048);
+        s->pbdma_gp_fetch = ex_read(io, 0x40050);
+        s->pbdma_gp_get = ex_read(io, 0x40014);
+        s->pbdma_gp_put = ex_read(io, 0x40000);
+        s->pbdma_interrupt_1 = ex_read(io, 0x40148);
+    }
     if (state->stage >= 4) {
         s->userd_gp_get = io->read32(io->context, BAR1 + USERD_VA + 34 * 4);
         s->userd_gp_put = io->read32(io->context, BAR1 + USERD_VA + 35 * 4);
@@ -167,6 +177,16 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     s->channel_instance_after = ex_read(io, 0x800000);
     if (s->channel_instance_after & 0x80000000) return TG_GPU_EXEC_BUSY;
     state->fifo_ready = true;
+    /* Channel enable and runlist scheduling are separate controls. Own only
+     * runlist zero: keep it blocked while binding, then explicitly allow it
+     * after its list is committed (Switchroot fifo_sched_disable_rw).
+     */
+    s->scheduler_before = ex_read(io, 0x2630);
+    if (s->scheduler_before == UINT32_MAX) return TG_GPU_EXEC_SCHEDULER;
+    ex_write(io, 0x2630, s->scheduler_before | 1);
+    s->scheduler_after = ex_read(io, 0x2630);
+    if (s->scheduler_after == UINT32_MAX || !(s->scheduler_after & 1))
+        return TG_GPU_EXEC_SCHEDULER;
     /* PFIFO reset/enable does not enable its pushbuffer readers. Nouveau's
      * gk104_fifo_init_pbdmas explicitly programs MC_ENABLE_PB (0x204).
      * Own only PBDMA0, and require that it serves our single runlist (0).
@@ -190,6 +210,11 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
      */
     ex_write(io, 0x2140, 0); ex_write(io, 0x2528, 0);
     ex_write(io, 0x4010c, 0); ex_write(io, 0x4014c, 0);
+    /* nouveau gf100_runq_init, also used by gk104/gm20b: do not stall the
+     * pushbuffer reader on LB request or device-method notifications. Fault
+     * status remains visible to polling; no CPU interrupt line is enabled.
+     */
+    ex_write(io, 0x4013c, ex_read(io, 0x4013c) & ~0x10000100u);
     ex_write(io, 0x2100, UINT32_MAX);
     ex_write(io, 0x40108, UINT32_MAX); ex_write(io, 0x40148, UINT32_MAX);
     ex_write(io, 0x2a00, UINT32_MAX);
@@ -219,12 +244,16 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     ex_write(io, 0x2270, (uint32_t)((physical + RUNLIST) >> 12) | 0x30000000);
     ex_write(io, 0x2274, 1); /* runlist 0, one channel */
     if (!ex_wait(io, 0x2284, 0x100000, 0)) return TG_GPU_EXEC_RUNLIST;
+    ex_write(io, 0x2630, ex_read(io, 0x2630) & ~1u);
+    s->scheduler_after = ex_read(io, 0x2630);
+    if (s->scheduler_after == UINT32_MAX || (s->scheduler_after & 1))
+        return TG_GPU_EXEC_SCHEDULER;
 
     state->stage = 4;
     /* BAR1 writes notify FIFO; a CPU write to USERD alone does not. */
     io->write32(io->context, BAR1 + USERD_VA + 35 * 4, 1);
     for (i = 0; i < 10000 && fence[0] != s->expected[0]; ++i) {
-        if (ex_read(io, 0x259c) || ex_read(io, 0x40108)) break;
+        if (ex_read(io, 0x259c) || ex_read(io, 0x40108) || ex_read(io, 0x40148)) break;
         io->delay_us(io->context, 10);
     }
     s->observed[0] = fence[0];
@@ -232,13 +261,14 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         state->stage = 5;
         io->write32(io->context, BAR1 + USERD_VA + 35 * 4, 2);
         for (i = 0; i < 10000 && fence[1] != s->expected[1]; ++i) {
-            if (ex_read(io, 0x259c) || ex_read(io, 0x40108)) break;
+            if (ex_read(io, 0x259c) || ex_read(io, 0x40108) || ex_read(io, 0x40148)) break;
             io->delay_us(io->context, 10);
         }
     }
     s->observed[1] = fence[1];
     tg_gpu_execute_snapshot(io, state, s);
-    if (s->mmu_fault || s->pbdma_interrupt) return TG_GPU_EXEC_FAULT;
+    if (s->mmu_fault || s->pbdma_interrupt || s->pbdma_interrupt_1)
+        return TG_GPU_EXEC_FAULT;
     if (s->observed[0] != s->expected[0] || s->observed[1] != s->expected[1])
         return TG_GPU_EXEC_TIMEOUT;
     state->stage = 6;
@@ -249,6 +279,7 @@ void tg_gpu_execute_stop(const struct tg_gpu_power_io *io, struct tg_gpu_executi
 {
     if (!s->owned) return;
     if (s->fifo_ready) {
+        ex_write(io, 0x2630, ex_read(io, 0x2630) | 1);
         ex_write(io, 0x800004, ex_read(io, 0x800004) | 0x800);
         ex_write(io, 0x2274, 0);
         (void)ex_wait(io, 0x2284, 0x100000, 0);

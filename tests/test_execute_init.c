@@ -5,8 +5,10 @@
 
 struct fifo_model {
     uint32_t mc, instance, asid[2], pb, runlist_map, put;
+    uint32_t sched, runlist_base, stall;
     unsigned writes, channel_reads, channel_writes, asid_writes, ticks, enabled_at;
     bool fail_enable, unreadable_channel, fail_pb_enable, allow_mmu, runlist;
+    bool fail_sched_allow, hce_fault;
 };
 static uint32_t read32(void *context, uint32_t address)
 {
@@ -14,6 +16,11 @@ static uint32_t read32(void *context, uint32_t address)
     if (address == 0x57000200) return m->mc;
     if (address == 0x57000204) return m->pb;
     if (address == 0x57002390) return m->runlist_map;
+    if (address == 0x57002630) return m->sched;
+    if (address == 0x57002280) return m->runlist_base;
+    if (address == 0x57002284) return m->runlist ? 1 : 0;
+    if (address == 0x5704013c) return m->stall;
+    if (address == 0x57040148 && m->hce_fault && m->put) return 8;
     if (address == 0x57100c80 && m->allow_mmu) return 0x18000;
     if (address == 0x58013000 && m->allow_mmu) return 0x55aa3377;
     if (address == 0x5801308c) return m->put;
@@ -44,10 +51,20 @@ static void write32(void *context, uint32_t address, uint32_t value)
         if (!(value & 1) && (m->pb & 1)) assert(!m->runlist && !m->instance);
         m->pb = m->fail_pb_enable ? value & ~1u : value;
     } else if (address == 0x57002274) {
-        if (value) assert(m->pb & 1);
+        assert(m->sched & 1);
+        if (value) assert((m->pb & 1) && m->instance);
         m->runlist = value != 0;
+    } else if (address == 0x57002270) {
+        assert(m->sched & 1);
+        m->runlist_base = value;
+    } else if (address == 0x57002630) {
+        if (!(value & 1)) assert(m->runlist && m->instance);
+        m->sched = m->fail_sched_allow ? value | 1 : value;
+    } else if (address == 0x5704013c) {
+        m->stall = value;
     } else if (address == 0x5801308c) {
-        assert((m->pb & 1) && m->runlist);
+        assert((m->pb & 1) && m->runlist && !(m->sched & 1));
+        assert(!(m->stall & 0x10000100));
         m->put = value;
     } else if (address == 0x57800000 || address == 0x57800004) {
         assert((m->mc & 0x100) && m->ticks - m->enabled_at >= 20);
@@ -115,10 +132,28 @@ void test_execute_init(void)
     tg_gpu_execute_stop(&io,&state);
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state));
-    m.runlist_map=1; m.allow_mmu=true;
+    m.runlist_map=1; m.allow_mmu=true; m.sched=0xa5; m.stall=UINT32_MAX;
     assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_TIMEOUT);
     assert(state.stage == 4 && result.userd_gp_put == 1 && result.userd_gp_get == 0);
     assert(result.observed[0] == 0xdeadbeef && result.observed[1] == 0xdeadbeef);
+    assert(result.scheduler_before == 0xa5 && result.scheduler_after == 0xa4);
+    assert(result.runlist_status == 1 && result.runlist_base == 0x300c0045);
+    assert(m.stall == 0xeffffeff && result.pbdma_interrupt_1 == 0);
     tg_gpu_execute_stop(&io,&state);
     assert(!m.pb && !m.runlist && !m.instance && !state.pbdma_owned);
+    assert(m.sched == 0xa5);
+
+    memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state));
+    m.runlist_map=1; m.allow_mmu=true; m.fail_sched_allow=true;
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_SCHEDULER);
+    assert(state.stage == 3 && !m.put && (result.scheduler_after & 1));
+    tg_gpu_execute_stop(&io,&state);
+    assert(!m.pb && !m.runlist && !m.instance);
+
+    memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state));
+    m.runlist_map=1; m.allow_mmu=true; m.hce_fault=true;
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_FAULT);
+    assert(state.stage == 4 && result.pbdma_interrupt_1 == 8);
+    assert(result.observed[0] == 0xdeadbeef && result.observed[1] == 0xdeadbeef);
+    tg_gpu_execute_stop(&io,&state);
 }
