@@ -64,6 +64,12 @@ tlb_test = args.out / "test-tlb"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(tlb), str(root / "tests/test_tlb.c"), "-o", str(tlb_test)], check=True)
 subprocess.run([str(tlb_test.resolve())], check=True)
+gr_firmware = root / "core/gr_firmware.c"
+gr_firmware_test = args.out / "test-gr-firmware"
+subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                str(gr_firmware), str(root / "tests/test_gr_firmware.c"),
+                "-o", str(gr_firmware_test)], check=True)
+subprocess.run([str(gr_firmware_test.resolve())], check=True)
 
 includes = [args.wdk_include / "km/crt", args.wdk_include / "km",
             args.wdk_include / "shared", args.sdk_include / "shared",
@@ -77,7 +83,7 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
          "/DDXGKDDI_INTERFACE_VERSION=DXGKDDI_INTERFACE_VERSION_WDDM2_4",
          *[f"/I{p}" for p in mesa_includes], *[f"/imsvc{p}" for p in includes]]
 objects = []
-for source in [*core, power, clock, tlb, root / "core/channel.c", root / "windows/resources.c",
+for source in [*core, power, clock, tlb, gr_firmware, root / "core/channel.c", root / "windows/resources.c",
                root / "windows/private_memory.c", root / "windows/paging.c",
                root / "windows/table_segment.c", root / "windows/root_table.c",
                root / "windows/paging_buffer.c", root / "windows/context.c",

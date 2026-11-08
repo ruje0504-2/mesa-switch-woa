@@ -95,6 +95,26 @@ step, and the new source has no physical execution pass. Full GPU reset/power
 retirement still follows every probe. This helper is for exclusive cold ownership,
 never an adapter reset while another channel is active.
 
+`core/gr_firmware.c` prepares Switchroot's NETB/FECS/GPCCS data for the next GR
+initialization step. It reads unaligned little-endian region tables, accepts
+byte-sized Falcon code, validates typed register streams and builds the six
+256-byte-aligned boot/code/data segments with zero-filled word and segment
+padding. It selects the T21x DMEM-header format from the upstream bootloader
+checksum and encodes the mapped 40-bit GPU addresses. The checksum is an ABI
+selector, not a firmware signature. Inputs remain external and are not copied
+into the repository or probe. Host tests cover malformed ranges, unknown boot
+versions, unaligned payloads, padding and insufficient storage; the same test
+also accepts three local paths for validation against actual NVIDIA files:
+
+```sh
+build/tegra-gpu/test-gr-firmware NETB_img.bin fecs.bin gpccs.bin
+```
+
+The preparation module builds in the ARM64 static library. It does not yet load
+firmware into the GPU, program non-context registers, handle secure ACR startup,
+wait for the FECS-ready handshake or generate the golden graphics context.
+Those remain required before a shader or Vulkan execution claim.
+
 The diagnostic accepts only owned physical buffers below 4 GiB. Switchroot's
 GM20B path tags IOMMU addresses with bit 34 and leaves physical addresses
 untagged. The probe therefore leaves Tegra's global GPU/GPUB ASID registers
