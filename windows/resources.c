@@ -4,11 +4,18 @@
 #include "../platform/t214_resources.h"
 
 static const ULONG TgGpuBases[TgGpuApertureCount] = {
-    T214_GPU_REG_BASE, T214_GPU_BAR1_BASE, T214_GPU_AUX_BASE
+    T214_GPU_REG_BASE, T214_GPU_BAR1_BASE, T214_GPU_AUX_BASE,
+#define GPU_BASE(base, size) base,
+    T214_GPU_EXTRA_RESOURCES(GPU_BASE)
+#undef GPU_BASE
 };
 static const ULONG TgGpuSizes[TgGpuApertureCount] = {
-    T214_GPU_REG_SIZE, T214_GPU_BAR1_SIZE, T214_GPU_AUX_SIZE
+    T214_GPU_REG_SIZE, T214_GPU_BAR1_SIZE, T214_GPU_AUX_SIZE,
+#define GPU_SIZE(base, size) size,
+    T214_GPU_EXTRA_RESOURCES(GPU_SIZE)
+#undef GPU_SIZE
 };
+_Static_assert(TgGpuApertureCount == T214_GPU_RESOURCE_COUNT, "GPU resource count");
 
 NTSTATUS
 TgGpuReleaseResources(const DXGKRNL_INTERFACE *Dxgk,
@@ -48,8 +55,8 @@ TgGpuAcquireResources(const DXGKRNL_INTERFACE *Dxgk,
     status = Dxgk->DxgkCbGetDeviceInformation(Dxgk->DeviceHandle, &info);
     if (!NT_SUCCESS(status))
         return status;
-    /* The single ACPI render node supplies one resource list. Neither the
-     * POST framebuffer nor shared clock/PMC ranges belong to this node.
+    /* The single ACPI render node supplies GPU and narrow power resources.
+     * The POST framebuffer and CPU clock block belong to their own drivers.
      */
     if (!info.TranslatedResourceList || info.TranslatedResourceList->Count != 1)
         return STATUS_DEVICE_CONFIGURATION_ERROR;

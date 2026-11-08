@@ -19,6 +19,8 @@ parser.add_argument("--out", required=True, type=Path)
 parser.add_argument("--cc", default="clang")
 parser.add_argument("--clang-cl", default="clang-cl")
 parser.add_argument("--lib", default="llvm-lib")
+parser.add_argument("--link", default="lld-link")
+parser.add_argument("--probe", action="store_true", help="also build the opt-in KMDF probe and its SwitchFan bridge")
 args = parser.parse_args()
 revision = subprocess.check_output(
     ["git", "-C", str(args.mesa), "rev-parse", "HEAD"], text=True).strip()
@@ -29,7 +31,8 @@ mesa_src = args.mesa / "src"
 mesa_includes = [mesa_src, mesa_src / "nouveau/headers",
                  mesa_src / "nouveau/headers/nvidia/classes"]
 encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
-core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c", encoder]
+core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c",
+        root / "core/execute.c", encoder]
 host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 *[f"-I{p}" for p in mesa_includes], *map(str, core), str(root / "tests/test_core.c"),
@@ -66,3 +69,35 @@ library = args.out / "TegraGpuCore.lib"
 subprocess.run([args.lib, "/nologo", "/machine:arm64", f"/out:{library}",
                 *map(str, objects)], check=True)
 print(f"ARM64 kernel library: {library} (hardware execution not tested)")
+
+if args.probe:
+    import shutil
+    kit = args.out / "kit"
+    wdk_root = args.wdk_include.parent.parent
+    wdf_inc = args.wdk_include.parent / "wdf/kmdf/1.15"
+    wdf_lib = wdk_root / "Lib/wdf/kmdf/ARM64/1.15"
+    km_lib = wdk_root / "Lib" / args.wdk_include.name / "km/ARM64"
+    repo = root.parents[1]
+    kflags = [*flags, "/DKMDF_VERSION_MAJOR=1", "/DKMDF_VERSION_MINOR=15",
+              "/DPOOL_NX_OPTIN=1", "/DSWITCH_LITE_GPU=1", "-Wno-unused-parameter",
+              "-Wno-invalid-token-paste", "-Wno-unknown-pragmas", "-Wno-ignored-attributes",
+              f"/imsvc{wdf_inc}", f"/imsvc{args.wdk_include / 'km/spb/1.0'}"]
+    support = args.out / "kmdf_support.obj"
+    subprocess.run([args.clang_cl, *kflags, f"/Fo{support}", "--", str(repo / "tools/kmdf_support.c")], check=True)
+    for name, source, inf in [
+        ("tegragpuprobe", root / "windows/probe.c", root / "windows/tegragpuprobe.inf"),
+        ("switchfan", repo / "drivers/SwitchFan/src/switchfan.c", repo / "drivers/SwitchFan/switchfan.inf")]:
+        dest = kit / name
+        dest.mkdir(parents=True, exist_ok=True)
+        obj = args.out / (name + ".obj")
+        subprocess.run([args.clang_cl, *kflags, f"/Fo{obj}", "--", str(source)], check=True)
+        libs = [wdf_lib / "wdfdriverentry.lib", wdf_lib / "wdfldr.lib",
+                km_lib / "ntoskrnl.lib", km_lib / "hal.lib", km_lib / "ntstrsafe.lib",
+                km_lib / "bufferoverflowfastfailk.lib"]
+        if name == "tegragpuprobe": libs.append(library)
+        subprocess.run([args.link, "/nologo", "/driver", "/subsystem:native,10.0", "/machine:arm64",
+                        "/entry:FxDriverEntry", "/nodefaultlib", "/release", "/opt:ref", "/opt:icf",
+                        "/timestamp:0", f"/out:{dest / (name + '.sys')}",
+                        str(obj), str(support), *map(str, libs)], check=True)
+        shutil.copyfile(inf, dest / inf.name)
+    print(f"Unsigned experimental probe/bridge: {kit}; requires catalog generation and signing.")

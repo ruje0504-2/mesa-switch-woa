@@ -9,6 +9,14 @@ enum tg_gpu_aperture {
     TgGpuRegisters,
     TgGpuBar1,
     TgGpuAuxRegisters,
+    TgGpuCarX,
+    TgGpuOut5,
+    TgGpuClamp,
+    TgGpuMcFlush,
+    TgGpuMcAsid,
+    TgGpuHidrev,
+    TgGpuSpeedo,
+    TgGpuCalibration,
     TgGpuApertureCount
 };
 

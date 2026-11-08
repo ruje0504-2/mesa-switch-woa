@@ -3,6 +3,7 @@
 #include "../core/report.h"
 #include "../core/identity.h"
 #include "../core/gpfifo.h"
+#include "../core/execute.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -70,6 +71,31 @@ static void test_report(void)
     assert(words[4] == 0x2468ace0);
 }
 
+static void test_private_channel(void)
+{
+    static _Alignas(4096) uint8_t arena[TG_GPU_ARENA_BYTES];
+    const uint32_t values[2] = {0x13579bdf, 0x2468ace0};
+    uint64_t *pde = (uint64_t *)arena;
+    uint64_t *pte = (uint64_t *)(arena + 0x20000);
+    uint32_t *ramfc = (uint32_t *)(arena + 0x40000);
+    uint32_t *commands = (uint32_t *)(arena + 0x43000);
+    uint32_t *fence = (uint32_t *)(arena + 0x44000);
+    assert(tg_gpu_prepare_arena(arena, 0xc0000000, sizeof(arena), values));
+    assert(pde[0] == UINT64_C(0x00c0020300000000));
+    assert(pde[1] == 0 && pte[0] == 0 && pte[20] == 0);
+    assert((pte[16] & 5) == 5 && (pte[17] & 5) == 5); /* read-only commands */
+    assert((pte[18] & 5) == 1 && (pte[19] & 5) == 1); /* writable fence/userd */
+    assert(ramfc[128] == 0xc0000807 && ramfc[130] == 0x00fff000);
+    assert(ramfc[2] == 0xc0041003 && ramfc[18] == 0x10000);
+    assert(commands[0] == 0x20040004 && commands[4] == 0x01100002);
+    assert(commands[2] == 0x12000 && commands[3] == values[0]);
+    assert(commands[7] == 0x12004 && commands[8] == values[1]);
+    assert(fence[0] == 0xdeadbeef && fence[1] == 0xdeadbeef);
+    assert(!tg_gpu_prepare_arena(arena, 0xc0000001, sizeof(arena), values));
+    assert(!tg_gpu_prepare_arena(arena, 0xffff0000, sizeof(arena), values));
+    assert(!tg_gpu_prepare_arena(arena, 0xc0000000, 4096, values));
+}
+
 int main(void)
 {
     struct tg_gpu_gpfifo_entry entry;
@@ -92,6 +118,7 @@ int main(void)
     assert(entry.low == 0x34567000 && entry.high == 0x80001812);
     test_mmu();
     test_report();
+    test_private_channel();
     puts("GM20B format tests passed (host only; no GPU execution).");
     return 0;
 }

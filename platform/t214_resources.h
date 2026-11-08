@@ -14,4 +14,20 @@
 #define T214_GPU_STALL_GSI        189
 #define T214_GPU_NONSTALL_GSI     190
 
+/* Narrow GPU power/clock registers, excluding the fan owner's CPU CAR
+ * block. PLLP is read through that owner; PMIC access uses its SPB target.
+ */
+#define T214_GPU_POWER_RESOURCES(X) \
+    X(0x60006280, 0x18) \
+    X(0x6000667C, 0x04) \
+    X(0x7000E6D4, 0x04) \
+    X(0x70019970, 0x08) \
+    X(0x70019AA8, 0x08)
+#define T214_GPU_ID_RESOURCES(X) \
+    X(0x70000804, 0x04) \
+    X(0x7000F930, 0x04) \
+    X(0x7000FB04, 0x04)
+#define T214_GPU_EXTRA_RESOURCES(X) T214_GPU_POWER_RESOURCES(X) T214_GPU_ID_RESOURCES(X)
+#define T214_GPU_RESOURCE_COUNT 11
+
 #endif

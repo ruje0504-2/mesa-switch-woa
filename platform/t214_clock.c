@@ -63,19 +63,25 @@ static void clk_select(const struct tg_gpu_power_io *io, uint32_t vco)
 static int32_t div_nearest(int32_t n, int32_t d)
 { return n < 0 ? -((-n + d / 2) / d) : (n + d / 2) / d; }
 
-uint32_t tg_gpu_clock_required_uv(uint32_t speedo)
+uint32_t tg_gpu_clock_required_uv(uint32_t speedo, uint32_t target)
 {
-    int32_t base, peak = 0, t;
-    if (!speedo || speedo > 5000)
+    int32_t base, peak = 0, t, c0, c1, c2, c4, c5;
+    if (!speedo || speedo > 5000 ||
+        (target != TG_GPU_FIXED_KHZ && target != TG_GPU_OVERCLOCK_KHZ))
         return UINT32_MAX;
     /* GPUB01_NA_CVB_TABLE at 768000: c0=891575,c1=-4409,c2=-584,
      * c3=0,c4=-2849,c5=39, speedo_scale=100, thermal_scale=10.
      * 729.6 MHz uses the next higher characterized frequency envelope.
      */
-    base = div_nearest(-584 * (int32_t)speedo, 100) - 4409;
-    base = div_nearest(base * (int32_t)speedo, 100) + 891575;
+    if (target == TG_GPU_OVERCLOCK_KHZ) {
+        c0 = 1277303; c1 = -11675; c2 = -859; c4 = 3722; c5 = 313;
+    } else {
+        c0 = 891575; c1 = -4409; c2 = -584; c4 = -2849; c5 = 39;
+    }
+    base = div_nearest(c2 * (int32_t)speedo, 100) + c1;
+    base = div_nearest(base * (int32_t)speedo, 100) + c0;
     for (t = -40; t <= 105; ++t) {
-        int32_t uv = base + div_nearest((div_nearest(39 * t, 10) - 2849) * t, 10);
+        int32_t uv = base + div_nearest((div_nearest(c5 * t, 10) + c4) * t, 10);
         if (uv > peak) peak = uv;
     }
     if (peak < 800000) peak = 800000; /* Switchroot default VTS floor. */
@@ -83,27 +89,40 @@ uint32_t tg_gpu_clock_required_uv(uint32_t speedo)
 }
 
 enum tg_gpu_clock_result tg_gpu_clock_start(const struct tg_gpu_power_io *io,
-    const struct tg_gpu_power *power, struct tg_gpu_clock *c)
+    const struct tg_gpu_power *power, uint32_t target, struct tg_gpu_clock *c)
 {
-    uint32_t i, fuse, coeff, value, required_uv;
+    uint32_t i, fuse, coeff, value, required_uv, mv;
     uint8_t rail, enabled;
     struct tg_gpu_identity id;
     if (!io || !power || !c || !io->read32 || !io->write32 ||
-        !io->read_pmic || !io->delay_us || !power->ready || c->owned ||
+        !io->read_pmic || !io->write_pmic || !io->delay_us || !power->ready || c->owned ||
+        (target != TG_GPU_FIXED_KHZ && target != TG_GPU_OVERCLOCK_KHZ) ||
         !tg_gpu_identify(clk_read(io, 0), &id) || id.chipset != TG_GPU_CHIP_GM20B_B)
         return TG_GPU_CLOCK_BAD_STATE;
     c->stage = 0;
     /* Freshly reset GPU only. Existing clock owners are never displaced. */
     if ((clk_read(io, CFG) & ENABLE) || (clk_read(io, VCO) & 1))
         return TG_GPU_CLOCK_BAD_STATE;
-    required_uv = tg_gpu_clock_required_uv(io->read32(io->context, 0x7000f930u));
+    required_uv = tg_gpu_clock_required_uv(io->read32(io->context, 0x7000f930u), target);
+    /* Conservative B01 table limit. Do not overvolt a part whose calculated
+     * envelope would need more than 1050 mV. Only the GPU M1 rail changes.
+     */
+    if (required_uv > 1050000u) return TG_GPU_CLOCK_RAIL_ERROR;
     if (!io->read_pmic(io->context, power->pmic_address, 0x23, &rail) ||
         !io->read_pmic(io->context, power->pmic_address, 0x06, &enabled) ||
-        !(enabled & 1) || 250000u + (rail & 0xffu) * 5000u < required_uv)
+        !(enabled & 1))
         return TG_GPU_CLOCK_RAIL_ERROR;
-    /* Fixed rail must match the calibration/profile used below. */
-    if (rail != 110u)
+    /* PLL is still disabled; program voltage before frequency. power_down
+     * restores the pre-acquisition voltage after clocks/reset are stopped.
+     */
+    rail = (uint8_t)((required_uv - 250000u) / 5000u);
+    if (!io->write_pmic(io->context, power->pmic_address, 0x23, rail) ||
+        !io->read_pmic(io->context, power->pmic_address, 0x23, &enabled) || enabled != rail)
         return TG_GPU_CLOCK_RAIL_ERROR;
+    io->delay_us(io->context, 5000);
+    c->rail_uv = required_uv;
+    c->target_khz = target;
+    mv = required_uv / 1000u;
     for (i = 0; i < TG_GPU_CLOCK_SAVED_REGS; ++i)
         c->saved[i] = clk_read(io, clock_regs[i]);
     c->owned = true;
@@ -145,9 +164,9 @@ enum tg_gpu_clock_result tg_gpu_clock_start(const struct tg_gpu_power_io *io,
         clk_update(io, CFG, ENABLE, 0);
         if (i == 5) return TG_GPU_CLOCK_CALIBRATION_ERROR;
         c->adc_slope_uv = 10000;
-        c->adc_intercept_uv = 800000 - (int32_t)value * 10000;
+        c->adc_intercept_uv = (int32_t)required_uv - (int32_t)value * 10000;
     }
-    c->external_calibration = div_nearest(800000 - c->adc_intercept_uv, c->adc_slope_uv);
+    c->external_calibration = div_nearest((int32_t)required_uv - c->adc_intercept_uv, c->adc_slope_uv);
     if (c->external_calibration <= -64 || c->external_calibration >= 64)
         return TG_GPU_CLOCK_CALIBRATION_ERROR;
 
@@ -158,15 +177,17 @@ enum tg_gpu_clock_result tg_gpu_clock_start(const struct tg_gpu_power_io *io,
      * DET_MAX=0 preserves the upper frequency bound if the rail rises.
      */
     clk_update(io, DVFS2, 1u << 16, 1u << 16);
-    clk_update(io, DVFS0, 0x7f7f, 57);
+    value = (uint32_t)div_nearest(div_nearest(-172550 * (int32_t)mv, 1000) + 195374, 1000);
+    if (value > 127) return TG_GPU_CLOCK_CALIBRATION_ERROR;
+    clk_update(io, DVFS0, 0x7f7f, value);
     io->delay_us(io->context, 1);
     clk_update(io, DVFS2, 1u << 16, 0);
     clk_update(io, DVFS2, 0x7f, (uint32_t)c->external_calibration);
     io->delay_us(io->context, 1);
     clk_update(io, DVFS1, 0x0fff0000, 0x0e010000);
-    /* Effective N=38, SDM=-4096 (top byte f0), M=1, P=1. */
+    /* Effective N=38 or 64, SDM=-4096 (top byte f0), M=1, P=1. */
     clk_update(io, CFG2, 0xff, 0xf0);
-    coeff = 0x00012601;
+    coeff = 0x00010001 | ((target / 19200u) << 8);
     clk_update(io, COEFF, 0x3fffff, coeff);
     clk_update(io, CFG, ENABLE, ENABLE);
     io->delay_us(io->context, 40); /* NA mode has no usable LOCK bit. */
@@ -202,8 +223,8 @@ enum tg_gpu_clock_result tg_gpu_clock_measure(const struct tg_gpu_power_io *io,
     /* Counter's resolution is 48 kHz; tolerate 0.5% including oscillator
      * error. This is a live counter check, not a report of programmed N.
      */
-    if (!first || first != second || c->measured_khz < TG_GPU_FIXED_KHZ * 995u / 1000u ||
-        c->measured_khz > TG_GPU_FIXED_KHZ * 1005u / 1000u)
+    if (!first || first != second || c->measured_khz < c->target_khz * 995u / 1000u ||
+        c->measured_khz > c->target_khz * 1005u / 1000u)
         return TG_GPU_CLOCK_COUNTER_ERROR;
     c->stage = 5;
     return TG_GPU_CLOCK_OK;

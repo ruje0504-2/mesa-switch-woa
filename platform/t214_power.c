@@ -157,6 +157,13 @@ tg_gpu_power_up(const struct tg_gpu_power_io *io, uint8_t pmic_address,
 }
 
 enum tg_gpu_power_result
+tg_gpu_power_drain(const struct tg_gpu_power_io *io, const struct tg_gpu_power *state)
+{
+    if (!state->owned || !state->ready) return TG_GPU_POWER_BAD_ARGUMENT;
+    return drain_mc(io) ? TG_GPU_POWER_OK : TG_GPU_POWER_MC_TIMEOUT;
+}
+
+enum tg_gpu_power_result
 tg_gpu_power_down(const struct tg_gpu_power_io *io, struct tg_gpu_power *state)
 {
     bool ok;

@@ -59,5 +59,10 @@ enum tg_gpu_power_result tg_gpu_power_up(const struct tg_gpu_power_io *io,
                                         struct tg_gpu_power *state);
 enum tg_gpu_power_result tg_gpu_power_down(const struct tg_gpu_power_io *io,
                                           struct tg_gpu_power *state);
+/* Channel fetch must already be stopped. Successful drain holds the GPU
+ * MC client in reset while the caller stops its PLL before power_down.
+ */
+enum tg_gpu_power_result tg_gpu_power_drain(const struct tg_gpu_power_io *io,
+                                           const struct tg_gpu_power *state);
 
 #endif
