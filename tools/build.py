@@ -73,7 +73,8 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
          *[f"/I{p}" for p in mesa_includes], *[f"/imsvc{p}" for p in includes]]
 objects = []
 for source in [*core, power, clock, tlb, root / "windows/resources.c",
-               root / "windows/private_memory.c", root / "windows/paging.c"]:
+               root / "windows/private_memory.c", root / "windows/paging.c",
+               root / "windows/table_segment.c"]:
     obj = args.out / (source.stem + ".obj")
     subprocess.run([args.clang_cl, *flags, f"/Fo{obj}", "--", str(source)], check=True)
     objects.append(obj)
@@ -96,6 +97,7 @@ if args.windows_tests:
                     "/entry:start", "/include:_load_config_used", "/nodefaultlib", "/release", "/opt:ref", "/timestamp:0",
                     f"/out:{args.out / 'test-paging.exe'}", str(test_obj),
                     str(args.out / "paging.obj"), str(args.out / "gm20b_mmu.obj"),
+                    str(args.out / "table_segment.obj"), str(args.out / "private_memory.obj"),
                     str(sdk_lib)], check=True)
 
 if args.probe:

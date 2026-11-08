@@ -49,11 +49,21 @@ for an uncached, idle address space. It validates the entire update before
 publishing, supports repeat/invalid entries, and rejects unsupported flags.
 The resolver must pin and validate GPU mappings. GM20B's 128 KiB tables need
 a dedicated nonzero CPU-visible segment; WDDM limits segment-zero tables to
-4 KiB. The segment pool and WDDM callback wiring are not implemented yet.
+4 KiB. `windows/table_segment.c` provides the contiguous segment backing,
+descriptor, bounded byte-offset resolver and uncached CPU mapping. It uses
+WDDM 2.4 allocation callbacks with physical bounds of 2–4 GiB, leaves bit 34
+clear, and publishes no cache-coherence or sleep-retention capability.
+VidMm remains responsible for allocations within the segment; there is no
+second suballocator. The adapter must finish GPU work/drain/reset and stop
+paging before destroying the segment. Failed frees retain the tracking handle.
+Do not use the pool's own CPU VA to validate a different VidMm CPU mapping.
+WDDM callback wiring and physical use of this segment remain open.
 `platform/t214_mmu.c` performs the Switchroot TLB invalidate sequence and
 reports timeout/read failures. Add `--windows-tests` to build `test-paging.exe`
 against the real WDK types, then run it in ARM64 Windows/WinPE. This test uses
-owned test memory and does not access a GPU.
+owned test memory and does not access a GPU. The same executable covers segment
+bounds, real-WDK callback shapes, allocation failure and cleanup retry with
+controlled OS-call substitutes; it does not test real Dxgkrnl allocation.
 
 The existing `LitePerformanceCheck.exe` is the UI for both clock profiles and
 the combined readback check. The optional probe requires matching firmware
