@@ -22,8 +22,11 @@ parser.add_argument("--lib", default="llvm-lib")
 parser.add_argument("--link", default="lld-link")
 parser.add_argument("--dlltool", default="llvm-dlltool")
 parser.add_argument("--probe", action="store_true", help="also build the opt-in KMDF probe and its SwitchFan bridge")
+parser.add_argument("--keep-fan", action="store_true", help="with --probe, preserve the existing signed SwitchFan package")
 parser.add_argument("--windows-tests", action="store_true", help="build the real-WDK paging test executable for ARM64 Windows")
 args = parser.parse_args()
+if args.keep_fan and not args.probe:
+    parser.error("--keep-fan requires --probe")
 revision = subprocess.check_output(
     ["git", "-C", str(args.mesa), "rev-parse", "HEAD"], text=True).strip()
 if revision != MESA_REVISION:
@@ -38,6 +41,7 @@ core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c
 host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 *[f"-I{p}" for p in mesa_includes], *map(str, core), str(root / "tests/test_core.c"),
+                str(root / "tests/test_execute_init.c"),
                 "-o", str(host)], check=True)
 subprocess.run([str(host.resolve())], check=True)
 power = root / "platform/t214_power.c"
@@ -108,9 +112,10 @@ if args.probe:
               f"/imsvc{wdf_inc}", f"/imsvc{args.wdk_include / 'km/spb/1.0'}"]
     support = args.out / "kmdf_support.obj"
     subprocess.run([args.clang_cl, *kflags, f"/Fo{support}", "--", str(repo / "tools/kmdf_support.c")], check=True)
-    for name, source, inf in [
-        ("tegragpuprobe", root / "windows/probe.c", root / "windows/tegragpuprobe.inf"),
-        ("switchfan", repo / "drivers/SwitchFan/src/switchfan.c", repo / "drivers/SwitchFan/switchfan.inf")]:
+    packages = [("tegragpuprobe", root / "windows/probe.c", root / "windows/tegragpuprobe.inf")]
+    if not args.keep_fan:
+        packages.append(("switchfan", repo / "drivers/SwitchFan/src/switchfan.c", repo / "drivers/SwitchFan/switchfan.inf"))
+    for name, source, inf in packages:
         dest = kit / name
         dest.mkdir(parents=True, exist_ok=True)
         obj = args.out / (name + ".obj")
@@ -126,4 +131,5 @@ if args.probe:
                         "/timestamp:0", f"/out:{dest / (name + '.sys')}",
                         str(obj), str(support), *map(str, libs)], check=True)
         shutil.copyfile(inf, dest / inf.name)
-    print(f"Unsigned experimental probe/bridge: {kit}; requires catalog generation and signing.")
+    built = "probe (existing SwitchFan package preserved)" if args.keep_fan else "probe/bridge"
+    print(f"Unsigned experimental {built}: {kit}; requires catalog generation and signing.")

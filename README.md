@@ -32,6 +32,11 @@ private uncached arena, four mapped GPU pages and one channel to release two
 FIFO semaphores with different values. It powers down afterward; it does not
 load graphics firmware or execute shaders. The future WDDM adapter uses the
 separate Dxgkrnl private-memory helpers; VidMm/scheduler integration is open.
+The diagnostic requires exclusive cold GPU ownership, resets/enables PFIFO
+before reading or initializing its channel slot, and preserves init-register
+snapshots in the existing status response. Do not interpret a reset CCSR slot
+as a live channel. `--probe --keep-fan` rebuilds only the GPU probe when the
+matching SwitchFan bridge is already installed and verified.
 
 `windows/paging.c` translates real WDK `DXGK_PTE` entries into GM20B entries
 for an uncached, idle address space. It validates the entire update before

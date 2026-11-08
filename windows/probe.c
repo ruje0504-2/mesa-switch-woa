@@ -234,11 +234,11 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target)
     d->last.rail_uv = d->clock.rail_uv;
     if (d->last.clock_result != TG_GPU_CLOCK_OK) goto done;
     KeMemoryBarrier();
-    d->last.execution_result = tg_gpu_execute(&io, d->arena,
+    d->last.execution_result = tg_gpu_execute(&io, &d->power, d->arena,
         (uint64_t)d->arena_address.QuadPart, &d->execution, &d->last);
     d->last.stage = 300 + d->execution.stage;
 done:
-    if (d->execution.owned && d->last.execution_result != TG_GPU_EXEC_OK)
+    if (d->execution.fifo_ready && d->last.execution_result != TG_GPU_EXEC_OK)
         tg_gpu_execute_snapshot(&io, &d->last);
     GpuCleanup(d);
     if (!d->power.owned) GpuClosePlatform(d);

@@ -120,20 +120,48 @@ void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io, struct tg_gpu_sta
 }
 
 enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
-    void *cpu, uint64_t physical, struct tg_gpu_execution *state,
+    const struct tg_gpu_power *power, void *cpu, uint64_t physical,
+    struct tg_gpu_execution *state,
     struct tg_gpu_status *s)
 {
     volatile uint32_t *fence;
     uint32_t i;
-    if (!io || !cpu || !state || !s || state->owned ||
+    if (!io || !io->read32 || !io->write32 || !io->delay_us || !power ||
+        !power->owned || !power->ready || !cpu || !state || !s || state->owned ||
         !tg_gpu_prepare_arena(cpu, physical, TG_GPU_ARENA_BYTES, s->expected))
         return TG_GPU_EXEC_ARGUMENT;
     fence = (volatile uint32_t *)((uint8_t *)cpu + FENCE);
+    s->observed[0] = fence[0]; s->observed[1] = fence[1];
     state->stage = 1;
-    if (ex_read(io, 0x800000) & 0x80000000) return TG_GPU_EXEC_BUSY;
+    state->fifo_ready = false;
+    s->mc_enable_before = ex_read(io, 0x200);
+    s->channel_instance_before = UINT32_MAX; /* not readable while held reset */
+    if (s->mc_enable_before == UINT32_MAX) return TG_GPU_EXEC_FIFO_INIT;
+    if (s->mc_enable_before & 0x100)
+        s->channel_instance_before = ex_read(io, 0x800000);
     state->old_asid[0] = io->read32(io->context, 0x70019aa8);
     state->old_asid[1] = io->read32(io->context, 0x70019aac);
     state->owned = true;
+    /* power_up proved exclusive ownership by requiring reset + clamp before
+     * releasing the GPU. A cold CCSR slot is not an ownership test. Follow
+     * Switchroot: reset/enable PFIFO, then initialize our unbound slot.
+     */
+    ex_write(io, 0x140, 0); ex_write(io, 0x144, 0);
+    ex_write(io, 0x20c, ex_read(io, 0x20c) | 0x20100004); /* FB/XBAR/HUB */
+    ex_write(io, 0x200, s->mc_enable_before & ~0x100u);
+    io->delay_us(io->context, 20);
+    ex_write(io, 0x200, s->mc_enable_before | 0x100);
+    io->delay_us(io->context, 20);
+    s->mc_enable_after = ex_read(io, 0x200);
+    if (s->mc_enable_after == UINT32_MAX || !(s->mc_enable_after & 0x100))
+        return TG_GPU_EXEC_FIFO_INIT;
+    s->channel_instance_after = ex_read(io, 0x800000);
+    if (s->channel_instance_after == UINT32_MAX) return TG_GPU_EXEC_FIFO_INIT;
+    ex_write(io, 0x800004, 0x800); /* disable our channel before unbinding */
+    ex_write(io, 0x800000, 0);
+    s->channel_instance_after = ex_read(io, 0x800000);
+    if (s->channel_instance_after & 0x80000000) return TG_GPU_EXEC_BUSY;
+    state->fifo_ready = true;
     /* The probe owns this reset GPU. Its GPU MMU maps only the private
      * arena; use direct bus addresses on the two GPU SMMU groups only.
      * This is not a general Windows IOMMU implementation.
@@ -142,11 +170,6 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     io->write32(io->context, 0x70019aac, 0);
     if (io->read32(io->context, 0x70019aa8) || io->read32(io->context, 0x70019aac))
         return TG_GPU_EXEC_ARGUMENT;
-    ex_write(io, 0x140, 0); ex_write(io, 0x144, 0); /* polled probe, no IRQs */
-    ex_write(io, 0x20c, ex_read(io, 0x20c) | 0x20100004); /* FB/XBAR/HUB */
-    ex_write(io, 0x200, ex_read(io, 0x200) & ~0x100u);
-    io->delay_us(io->context, 10);
-    ex_write(io, 0x200, ex_read(io, 0x200) | 0x100);
     ex_write(io, 0x2140, 0); ex_write(io, 0x2528, 0);
     ex_write(io, 0x4010c, 0); ex_write(io, 0x4014c, 0);
     ex_write(io, 0x2100, UINT32_MAX);
@@ -207,16 +230,19 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
 void tg_gpu_execute_stop(const struct tg_gpu_power_io *io, struct tg_gpu_execution *s)
 {
     if (!s->owned) return;
-    ex_write(io, 0x800004, ex_read(io, 0x800004) | 0x800);
-    ex_write(io, 0x2274, 0);
-    (void)ex_wait(io, 0x2284, 0x100000, 0);
+    if (s->fifo_ready) {
+        ex_write(io, 0x800004, ex_read(io, 0x800004) | 0x800);
+        ex_write(io, 0x2274, 0);
+        (void)ex_wait(io, 0x2284, 0x100000, 0);
+        ex_write(io, 0x800000, 0);
+        ex_write(io, 0x1704, 0);
+    }
     /* Reset the test FIFO even if runlist removal times out; MC drain and
      * full GPU reset still must succeed before the arena is freed.
      */
     ex_write(io, 0x200, ex_read(io, 0x200) & ~0x100u);
-    io->delay_us(io->context, 10);
-    ex_write(io, 0x800000, 0);
-    ex_write(io, 0x1704, 0);
+    io->delay_us(io->context, 20);
+    s->fifo_ready = false;
 }
 
 bool tg_gpu_execute_release_domain(const struct tg_gpu_power_io *io, struct tg_gpu_execution *s)

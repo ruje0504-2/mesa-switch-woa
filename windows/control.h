@@ -7,7 +7,7 @@
  * METHOD_BUFFERED, FILE_DEVICE_UNKNOWN. RUN requires write access; the
  * device grants write access only to administrators and SYSTEM.
  */
-#define TG_GPU_CONTROL_VERSION 1u
+#define TG_GPU_CONTROL_VERSION 2u
 #define TG_GPU_IOCTL_STATUS 0x00226400u
 #define TG_GPU_IOCTL_RUN    0x0022a404u
 #define TG_GPU_CONTROL_DEFAULT_KHZ 729600u
@@ -37,5 +37,9 @@ struct tg_gpu_status {
     uint32_t mmu_fault;
     uint32_t pbdma_interrupt;
     uint32_t channel_status;
+    uint32_t mc_enable_before;
+    uint32_t channel_instance_before;
+    uint32_t mc_enable_after;
+    uint32_t channel_instance_after;
 };
 #endif

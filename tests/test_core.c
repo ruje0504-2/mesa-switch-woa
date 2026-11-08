@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+void test_execute_init(void);
 
 static void test_mmu(void)
 {
@@ -119,6 +120,7 @@ int main(void)
     test_mmu();
     test_report();
     test_private_channel();
+    test_execute_init();
     puts("GM20B format tests passed (host only; no GPU execution).");
     return 0;
 }
