@@ -209,6 +209,8 @@ void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io,
         s->userd_gp_get = io->read32(io->context, BAR1 + USERD_VA + 34 * 4);
         s->userd_gp_put = io->read32(io->context, BAR1 + USERD_VA + 35 * 4);
     }
+    if (state->gr_owned && s->gr.stage >= 8)
+        tg_gpu_gr_snapshot(io, &s->gr);
     tg_gpu_frontend_snapshot(io, &s->frontend);
 }
 

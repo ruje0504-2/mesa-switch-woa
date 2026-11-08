@@ -17,6 +17,16 @@ static void write_reg(const struct tg_gpu_power_io *io, uint32_t reg, uint32_t v
 /* Streaming ports advance on access; never add the normal posted-write readback. */
 static void stream_word(const struct tg_gpu_power_io *io, uint32_t reg, uint32_t value)
 { io->write32(io->context, GPU + reg, value); }
+void tg_gpu_gr_snapshot(const struct tg_gpu_power_io *io, struct tg_gpu_gr_status *s)
+{
+    s->fecs_mailbox = read_reg(io, FECS + 0x800);
+    s->gr_interrupt = read_reg(io, 0x400100);
+    s->current_context = read_reg(io, FECS + 0xb00);
+    s->new_context = read_reg(io, FECS + 0xb04);
+    s->fecs_host_interrupt = read_reg(io, FECS + 0xc18);
+    s->fecs_ctxsw_status = read_reg(io, FECS + 0x400);
+    s->fecs_error_mailbox = read_reg(io, FECS + 0x818);
+}
 static uint32_t le32(const uint8_t *p)
 { return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
 static bool wait_reg(const struct tg_gpu_power_io *io, struct tg_gpu_gr_status *s,
@@ -36,8 +46,7 @@ static enum tg_gpu_gr_result finish(const struct tg_gpu_power_io *io,
     enum tg_gpu_gr_result result)
 {
     s->result = result;
-    s->fecs_mailbox = read_reg(io, FECS + 0x800);
-    s->gr_interrupt = read_reg(io, 0x400100);
+    tg_gpu_gr_snapshot(io, s);
     tg_gpu_frontend_snapshot(io, frontend);
     if (result == TG_GPU_GR_OK && frontend->result != TG_GPU_FE_OK)
         s->result = TG_GPU_GR_PRI_FAULT;

@@ -17,11 +17,18 @@ struct fifo_model {
     bool secure, valid_pbdma;
     unsigned event_acks, summary_acks;
     uint32_t pb_fault, mmu_fault;
+    bool live_gr_snapshot;
+    unsigned gr_reads;
 };
 static uint32_t *arena_userd, *arena_runlist;
 static uint32_t read32(void *context, uint32_t address)
 {
     struct fifo_model *m = context;
+    if (address==0x57409800 || address==0x57400100 || address==0x57409b00 ||
+        address==0x57409b04 || address==0x57409c18 || address==0x57409400 || address==0x57409818) {
+        if (m->live_gr_snapshot) { ++m->gr_reads; return address^0x53570000; }
+        return 0;
+    }
     if (address == 0x57000200) return m->mc;
     if (address == 0x57000204) return m->pb;
     if (address == 0x57021434) return m->secure;
@@ -262,6 +269,20 @@ void test_execute_init(void)
     assert(result.pbdma_context.target==(0x570400ac^0x5a5a0000));
     assert(result.pbdma_context.signature==(0x57040010^0x5a5a0000));
     m.valid_pbdma=false;
+    /* Capture GR state after the failing channel operation, not the earlier
+     * FECS-ready reply. Reading it requires owned, booted GR. */
+    m.live_gr_snapshot=true;result.gr.stage=15;state.gr_owned=false;
+    tg_gpu_execute_snapshot(&io,&state,&result);
+    assert(m.gr_reads==0);
+    state.gr_owned=true;
+    tg_gpu_execute_snapshot(&io,&state,&result);
+    assert(m.gr_reads==7 && result.gr.current_context==(0x57409b00^0x53570000));
+    assert(result.gr.fecs_mailbox==(0x57409800^0x53570000));
+    assert(result.gr.gr_interrupt==(0x57400100^0x53570000));
+    assert(result.gr.fecs_host_interrupt==(0x57409c18^0x53570000));
+    assert(result.gr.fecs_error_mailbox==(0x57409818^0x53570000));
+    assert(result.gr.fecs_ctxsw_status==(0x57409400^0x53570000));
+    assert(result.gr.new_context==(0x57409b04^0x53570000));
     tg_gpu_execute_stop(&io,&state);
     assert(!m.pb && !m.runlist && !m.instance && !state.pbdma_owned);
     assert(m.sched == 0xa5);
