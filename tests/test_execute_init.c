@@ -14,7 +14,7 @@ struct fifo_model {
     uint32_t gr_access, gr_gate[2];
     bool fail_gr_enable;
     bool engine_event, stuck_event, late_pb_fault;
-    bool secure;
+    bool secure, valid_pbdma;
     unsigned event_acks, summary_acks;
     uint32_t pb_fault, mmu_fault;
 };
@@ -34,6 +34,14 @@ static uint32_t read32(void *context, uint32_t address)
     if (address == 0x5704013c) return m->stall;
     if (address == 0x57040140) return 0xf;
     if (address == 0x5704010c) return m->intr0;
+    if (address == 0x57003080) return m->valid_pbdma?0x10003000:0;
+    if (address == 0x570025a0) return 1;
+    if (address == 0x570400ac || address == 0x57040010 || address == 0x570400c0 ||
+        address == 0x570400c4 || address == 0x57040084 || address == 0x57040118 ||
+        address == 0x57040094) {
+        assert(m->valid_pbdma);
+        return address^0x5a5a0000;
+    }
     if (address == 0x5704014c) return m->intr1;
     if (address == 0x57002100 && m->runlist && !(m->sched & 1)) return m->fifo_fault |
         ((m->pb_fault || (m->engine_event && (!m->summary_acks || m->stuck_event))) ? 0x20000000 : 0);
@@ -56,7 +64,7 @@ static uint32_t read32(void *context, uint32_t address)
     if (address == 0x5801308c) return arena_userd[35];
     if (address == 0x57040048 || address == 0x57040050 ||
         address == 0x57040014 || address == 0x57040000)
-        assert(!"idle PBDMA registers must not be sampled as channel state");
+        { assert(m->valid_pbdma); return 0; }
     if (address == 0x57800000 || address == 0x57800004) {
         /* Reading a reset FIFO cannot establish channel ownership. */
         assert((m->mc & 0x100) && m->ticks - m->enabled_at >= 20);
@@ -245,6 +253,15 @@ void test_execute_init(void)
     assert(result.bar1_phase == 5 && !result.bar1_read && !result.bar1_cpu);
     assert(result.frontend.l2_flushes == 2 && result.frontend.l2_invalidations == 2);
     assert(result.engine_status[0] == 0x80008000 && result.engine_status[1] == 0x2000);
+    assert(result.pbdma_context.intr_enable==m.intr0 && result.pbdma_context.fifo_pending==1);
+    assert(!result.pbdma_context.method0 && !result.pbdma_context.target);
+    m.valid_pbdma=true;
+    tg_gpu_execute_snapshot(&io,&state,&result);
+    assert(result.pbdma_context.method0==(0x570400c0^0x5a5a0000));
+    assert(result.pbdma_context.data0==(0x570400c4^0x5a5a0000));
+    assert(result.pbdma_context.target==(0x570400ac^0x5a5a0000));
+    assert(result.pbdma_context.signature==(0x57040010^0x5a5a0000));
+    m.valid_pbdma=false;
     tg_gpu_execute_stop(&io,&state);
     assert(!m.pb && !m.runlist && !m.instance && !state.pbdma_owned);
     assert(m.sched == 0xa5);

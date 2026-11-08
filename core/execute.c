@@ -183,6 +183,10 @@ void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io,
     s->runlist_base = ex_read(io, 0x2280);
     s->runlist_status = ex_read(io, 0x2284);
     if (s->pbdma_enable_after != UINT32_MAX && (s->pbdma_enable_after & 1)) {
+        s->pbdma_context=(struct tg_gpu_pbdma_context){0};
+        s->pbdma_context.intr_enable=ex_read(io,0x4010c);
+        s->pbdma_context.intr_stall=ex_read(io,0x4013c);
+        s->pbdma_context.fifo_pending=ex_read(io,0x25a0);
         s->pbdma_status = ex_read(io, 0x3080);
         s->pbdma_gp_base = s->pbdma_gp_fetch =
             s->pbdma_gp_get = s->pbdma_gp_put = UINT32_MAX;
@@ -191,6 +195,13 @@ void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io,
             s->pbdma_gp_fetch = ex_read(io, 0x40050);
             s->pbdma_gp_get = ex_read(io, 0x40014);
             s->pbdma_gp_put = ex_read(io, 0x40000);
+            s->pbdma_context.target=ex_read(io,0x400ac);
+            s->pbdma_context.signature=ex_read(io,0x40010);
+            s->pbdma_context.method0=ex_read(io,0x400c0);
+            s->pbdma_context.data0=ex_read(io,0x400c4);
+            s->pbdma_context.pb_header=ex_read(io,0x40084);
+            s->pbdma_context.header_shadow=ex_read(io,0x40118);
+            s->pbdma_context.subdevice=ex_read(io,0x40094);
         }
         s->pbdma_interrupt_1 = ex_read(io, 0x40148);
     }

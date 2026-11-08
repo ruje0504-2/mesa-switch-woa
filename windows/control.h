@@ -10,7 +10,7 @@
  * METHOD_BUFFERED, FILE_DEVICE_UNKNOWN. RUN requires write access; the
  * device grants write access only to administrators and SYSTEM.
  */
-#define TG_GPU_CONTROL_VERSION 13u
+#define TG_GPU_CONTROL_VERSION 14u
 #define TG_GPU_IOCTL_STATUS 0x00226400u
 #define TG_GPU_IOCTL_RUN    0x0022a404u
 #define TG_GPU_CONTROL_DEFAULT_KHZ 729600u
@@ -45,6 +45,14 @@ static inline int tg_gpu_pbdma_owns_slot(uint32_t status)
 struct tg_gpu_request {
     uint32_t version;
     uint32_t target_khz;
+};
+
+/* Fault-time PBDMA0 context. Context words are sampled only while our single
+ * channel/TSG owns the slot; they do not authorize exception suppression.
+ */
+struct tg_gpu_pbdma_context {
+    uint32_t intr_enable, intr_stall, fifo_pending;
+    uint32_t target, signature, method0, data0, pb_header, header_shadow, subdevice;
 };
 
 struct tg_gpu_status {
@@ -99,5 +107,6 @@ struct tg_gpu_status {
     uint32_t acr_firmware_result; /* tg_gpu_acr_result; not hardware authentication */
     struct tg_gpu_acr_hw_status acr;
     struct tg_gpu_pmu_status pmu;
+    struct tg_gpu_pbdma_context pbdma_context;
 };
 #endif
