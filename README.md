@@ -55,12 +55,26 @@ a dedicated nonzero CPU-visible segment; WDDM limits segment-zero tables to
 4 KiB. `windows/table_segment.c` provides the contiguous segment backing,
 descriptor, bounded byte-offset resolver and uncached CPU mapping. It uses
 WDDM 2.4 allocation callbacks with physical bounds of 2–4 GiB, leaves bit 34
-clear, and publishes no cache-coherence or sleep-retention capability.
+clear, reports `PopulatedFromSystemMemory` for correct accounting, and
+publishes no cache-coherence or sleep-retention capability.
 VidMm remains responsible for allocations within the segment; there is no
 second suballocator. The adapter must finish GPU work/drain/reset and stop
 paging before destroying the segment. Failed frees retain the tracking handle.
 Do not use the pool's own CPU VA to validate a different VidMm CPU mapping.
 WDDM callback wiring and physical use of this segment remain open.
+The CPU-update helper is valid for initialization/test-owned mappings; do not
+advertise `CPU_VIRTUAL` updates for the dedicated memory segment without
+resolving the documented local-segment restriction. Ordered GPU-physical
+paging submission and initial CPU mapping handling still need adapter wiring.
+
+`windows/root_table.c` consumes real WDK root-table arguments. It rounds root
+sizes to whole CPU pages, resolves the complete segment span, writes the RAMIN
+PDB and address limit only for an idle context, and propagates real TLB errors.
+A failed root move clears the software binding's valid flag, so the adapter
+must not reschedule it with the old root. Flushes belong at the ordered paging
+submission point, with old pages retained through completion/reset; they must
+not run early from `BuildPagingBuffer`. Context registration, instance rebind
+and scheduler fence notification remain unfinished.
 `platform/t214_mmu.c` performs the Switchroot TLB invalidate sequence and
 reports timeout/read failures. Add `--windows-tests` to build `test-paging.exe`
 against the real WDK types, then run it in ARM64 Windows/WinPE. This test uses

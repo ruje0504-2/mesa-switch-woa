@@ -55,6 +55,7 @@ NTSTATUS TgGpuDescribeTableSegment(const TG_GPU_TABLE_SEGMENT *Segment,
     Description->CpuTranslatedAddress = Segment->Memory.SystemPhysicalAddress;
     Description->Size = Description->CommitLimit = Segment->Memory.Bytes;
     Description->Flags.CpuVisible = 1;
+    Description->Flags.PopulatedFromSystemMemory = 1;
     Description->Flags.LocalBudgetGroup = 1;
     /* A real memory segment, not an aperture. CPU mapping is uncached;
      * neither cache coherence, direct scanout nor sleep retention is claimed.

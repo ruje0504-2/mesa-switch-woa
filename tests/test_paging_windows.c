@@ -2,6 +2,7 @@
 /* Run against the real WDK types in ARM64 Windows/WinPE. No GPU is touched. */
 #include "../windows/paging.h"
 #include "../windows/table_segment.h"
+#include "../windows/root_table.h"
 #include <ntimage.h>
 
 /* Same ARM64 loader metadata as the existing performance tool. */
@@ -95,7 +96,7 @@ static void TestSegment(void)
     CHECK(NT_SUCCESS(TgGpuDescribeTableSegment(&segment,&desc)));
     CHECK(desc.BaseAddress.QuadPart == 0x90000000 && desc.CpuTranslatedAddress.QuadPart == 0x90000000);
     CHECK(desc.Size == sizeof(segment_bytes) && desc.CommitLimit == sizeof(segment_bytes));
-    CHECK(desc.Flags.CpuVisible && desc.Flags.LocalBudgetGroup && !desc.Flags.Aperture &&
+    CHECK(desc.Flags.CpuVisible && desc.Flags.LocalBudgetGroup && desc.Flags.PopulatedFromSystemMemory && !desc.Flags.Aperture &&
           !desc.Flags.CacheCoherent && !desc.Flags.PreservedDuringStandby && !desc.Flags.PreservedDuringHibernate);
     CHECK(NT_SUCCESS(TgGpuResolveTableSegment(&segment,1,TG_GPU_TABLE_BYTES,TG_GPU_TABLE_BYTES,&device)));
     CHECK(device == 0x90020000);
@@ -136,6 +137,79 @@ static void TestSegment(void)
     CHECK(NT_SUCCESS(TgGpuDestroyTableSegment(&dxgk,&segment)) && free_calls == 2);
 }
 
+struct tlb_model { UINT32 Control, Root, Trigger; UINT Writes; };
+static uint32_t TlbRead(void *Context, uint32_t Address)
+{
+    struct tlb_model *m = Context;
+    CHECK(Address == 0x57100c80);
+    return m->Control;
+}
+static void TlbWrite(void *Context, uint32_t Address, uint32_t Value)
+{
+    struct tlb_model *m = Context;
+    ++m->Writes;
+    if (Address == 0x57100cb8) m->Root = Value;
+    else { CHECK(Address == 0x57100cbc); m->Trigger = Value; }
+}
+static void TlbDelay(void *Context, uint32_t Us)
+{ UNREFERENCED_PARAMETER(Context); CHECK(Us == 2); }
+
+static void TestRoot(void)
+{
+    static _Alignas(PAGE_SIZE) UINT32 instance[PAGE_SIZE/sizeof(UINT32)];
+    TG_GPU_TABLE_SEGMENT segment = {
+        .Memory = {(HANDLE)2, segment_bytes, {.QuadPart=0x90000000}, sizeof(segment_bytes)},
+        .SegmentId = 1
+    };
+    TG_GPU_PRIVATE_MEMORY inst = {(HANDLE)3,instance,{.QuadPart=0x91000000},sizeof(instance)};
+    DXGKARG_GETROOTPAGETABLESIZE size = {0};
+    DXGKARG_SETROOTPAGETABLE set = {.hContext=(HANDLE)4, .Address={1,0,TG_GPU_TABLE_BYTES}, .NumEntries=3};
+    TG_GPU_ROOT_TABLE root = {0};
+    DXGK_BUILDPAGINGBUFFER_FLUSHTLB flush = {.RootPageTableAddress={1,0,TG_GPU_TABLE_BYTES}};
+    struct tlb_model model = {.Control=0x18000};
+    struct tg_gpu_power_io io = {&model,TlbRead,TlbWrite,NULL,NULL,TlbDelay};
+    struct tg_gpu_power power = {.owned=true,.ready=true};
+    CHECK(TgGpuRootTableSize(&size)==PAGE_SIZE && size.NumberOfPte==512);
+    size.NumberOfPte=513;
+    CHECK(TgGpuRootTableSize(&size)==2*PAGE_SIZE && size.NumberOfPte==1024);
+    size.NumberOfPte=TG_GPU_TABLE_ENTRIES;
+    CHECK(TgGpuRootTableSize(&size)==TG_GPU_TABLE_BYTES);
+    size.NumberOfPte=TG_GPU_TABLE_ENTRIES+1;
+    CHECK(TgGpuRootTableSize(&size)==0 && size.NumberOfPte==TG_GPU_TABLE_ENTRIES+1);
+    size.NumberOfPte=1;size.PhysicalAdapterIndex=1;
+    CHECK(TgGpuRootTableSize(&size)==0 && size.NumberOfPte==1);
+    CHECK(NT_SUCCESS(TgGpuResolveRootTable(&segment,&set,&root)));
+    CHECK(root.Valid && root.DeviceAddress==0x90020000 && root.Bytes==PAGE_SIZE && root.VaLimit==0xc000000);
+    memset(instance,0xa5,sizeof(instance));
+    CHECK(TgGpuWriteRootInstance(&root,&inst,FALSE)==STATUS_GRAPHICS_ALLOCATION_BUSY);
+    CHECK(instance[128]==0xa5a5a5a5);
+    CHECK(NT_SUCCESS(TgGpuWriteRootInstance(&root,&inst,TRUE)));
+    CHECK(instance[128]==0x90020807 && instance[129]==0 && instance[130]==0x0bfff000 && instance[131]==0);
+    CHECK(instance[127]==0xa5a5a5a5 && instance[132]==0xa5a5a5a5);
+    CHECK(NT_SUCCESS(TgGpuFlushRootTable(&root,&flush,&io,&power)));
+    CHECK(model.Root==0x900202 && model.Trigger==0x80000001 && model.Writes==2);
+    flush.RootPageTableAddress.SegmentOffset=0;
+    CHECK(TgGpuFlushRootTable(&root,&flush,&io,&power)==STATUS_INVALID_PARAMETER && model.Writes==2);
+    flush.RootPageTableAddress=set.Address;
+    flush.StartVirtualAddress=root.VaLimit;
+    CHECK(TgGpuFlushRootTable(&root,&flush,&io,&power)==STATUS_INVALID_PARAMETER && model.Writes==2);
+    flush.StartVirtualAddress=0; power.ready=false;
+    CHECK(TgGpuFlushRootTable(&root,&flush,&io,&power)==STATUS_DEVICE_NOT_READY && model.Writes==2);
+    power.ready=true;model.Control=0x10000;
+    CHECK(TgGpuFlushRootTable(&root,&flush,&io,&power)==STATUS_IO_TIMEOUT);
+    model.Control=UINT32_MAX;
+    CHECK(TgGpuFlushRootTable(&root,&flush,&io,&power)==STATUS_DEVICE_DATA_ERROR);
+    set.NumEntries=TG_GPU_TABLE_ENTRIES;
+    CHECK(NT_SUCCESS(TgGpuResolveRootTable(&segment,&set,&root)));
+    CHECK(root.Bytes==TG_GPU_TABLE_BYTES && root.VaLimit==TG_GPU_VA_LIMIT);
+    CHECK(NT_SUCCESS(TgGpuWriteRootInstance(&root,&inst,TRUE)));
+    CHECK(instance[130]==0xfffff000 && instance[131]==0xff);
+    set.Address.SegmentOffset=sizeof(segment_bytes)-PAGE_SIZE;
+    CHECK(TgGpuResolveRootTable(&segment,&set,&root)==STATUS_INVALID_ADDRESS && !root.Valid);
+    CHECK(TgGpuWriteRootInstance(&root,&inst,TRUE)==STATUS_INVALID_PARAMETER);
+    CHECK(instance[130]==0xfffff000 && instance[131]==0xff); /* no partial RAMIN write */
+}
+
 static NTSTATUS Resolve(PVOID Context, UINT Segment, UINT64 Offset, SIZE_T Bytes, UINT64 *Address)
 {
     UNREFERENCED_PARAMETER(Context);
@@ -155,8 +229,9 @@ void start(void)
     DXGK_PAGE_TABLE_LEVEL_DESC desc;
     UINT64 before;
     ULONG i, written;
-    static const char message[] = "PASS: real WDK PTE conversion and table-segment allocation, bounds, offsets and cleanup\r\n";
+    static const char message[] = "PASS: real WDK paging, segment lifetime, root bounds/RAMIN and TLB error propagation\r\n";
     TestSegment();
+    TestRoot();
     for (i = 0; i < TG_GPU_TABLE_ENTRIES; ++i) table[i] = UINT64_C(0xa5a5a5a5a5a5a5a5);
     u.PageTableAddress.CpuVirtual = table;
     u.UpdateMode = DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;
