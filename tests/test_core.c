@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "../core/gm20b_mmu.h"
 #include "../core/report.h"
+#include "../core/identity.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -70,6 +71,14 @@ static void test_report(void)
 
 int main(void)
 {
+    struct tg_gpu_identity identity;
+    assert(tg_gpu_identify(0x12e000b1, &identity));
+    assert(identity.chipset == TG_GPU_CHIP_GM20B_B);
+    assert(identity.major_revision == 0xb && identity.minor_revision == 1);
+    assert(tg_gpu_identify(0x12b000a1, &identity));
+    assert(identity.chipset == TG_GPU_CHIP_GM20B);
+    assert(!tg_gpu_identify(0xffffffff, &identity));
+    assert(!tg_gpu_identify(0, &identity));
     test_mmu();
     test_report();
     puts("GM20B format tests passed (host only; no GPU execution).");
