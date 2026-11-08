@@ -97,6 +97,15 @@ that the existing WPR carveout is read and used, not allocated from OS RAM.
 The NVIDIA signatures and firmware remain external licensed files; no
 firmware binary is embedded in this repository. Packing is not authentication.
 
+platform/t214_acr.c follows PMU reset, memory scrub, PIO bootloader upload,
+the PMU-specific instance/aperture setup and HS completion in the same
+Switchroot revision: gm20b/pmu_gm20b.c, gk20a/flcn_gk20a.c,
+common/pmu/pmu.c, common/fb/fb_gm20b.c and the GM20B gating/register tables.
+Copyright (c) 2014-2018 NVIDIA CORPORATION. The MIT license above applies.
+Nouveau v6.12 subdev/instmem/gk20a.c was also consulted for the noncoherent
+system-memory backing of the PMU instance. Hardware authentication and the
+subsequent PMU RTOS/FECS bootstrap are distinct from local ordering tests.
+
 core/channel.c follows the channel bind, disable, preempt and runlist removal
 ordering in the same Switchroot nvgpu gk20a/fifo_gk20a.c and common/fifo/channel.c,
 with Linux nouveau v6.12 engine/fifo/gk104.c and gf100.c as references.

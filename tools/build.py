@@ -43,7 +43,8 @@ mesa_includes = [mesa_src, mesa_src / "nouveau/headers",
 encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
 core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c", root / "core/fault.c",
         root / "core/execute.c", root / "core/submission.c", root / "platform/t214_frontend.c",
-        root / "platform/t214_gr.c", root / "core/gr_firmware.c", root / "core/acr_firmware.c", encoder]
+        root / "platform/t214_gr.c", root / "platform/t214_acr.c",
+        root / "core/gr_firmware.c", root / "core/acr_firmware.c", encoder]
 host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 *[f"-I{p}" for p in mesa_includes], *map(str, core), str(root / "tests/test_core.c"),
@@ -81,6 +82,11 @@ subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(root / "core/acr_firmware.c"), str(gr_firmware),
                 str(root / "tests/test_acr_firmware.c"), "-o", str(acr_test)], check=True)
 subprocess.run([str(acr_test.resolve()), *([str(args.acr_firmware.resolve())] if args.acr_firmware else [])], check=True)
+acr_boot_test = args.out / "test-acr-boot"
+subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                str(root / "platform/t214_acr.c"), str(root / "tests/test_acr_boot.c"),
+                "-o", str(acr_boot_test)], check=True)
+subprocess.run([str(acr_boot_test.resolve())], check=True)
 gr = root / "platform/t214_gr.c"
 gr_test = args.out / "test-gr-boot"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
