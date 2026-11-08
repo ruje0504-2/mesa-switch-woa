@@ -132,18 +132,41 @@ dynamically allocated, while hardware work uses one serialized execution slot.
 Root changes cannot rewrite an active instance, and failed changes prevent
 future submission with a stale binding.
 
-The submission-worker helpers capture a bounded context/root snapshot and
-initialize only the complement of a private fence marker. Notification occurs
-through `DxgkCbSynchronizeExecution`, `DxgkCbNotifyInterrupt` and the DPC path
-only after the uncached marker equals the expected GPU result. Completion does
-not release RAMIN: the hardware backend must also unbind/drain the channel or
-complete reset before releasing the work reference. Aborted work never advances
-the completed fence. The virtual submission DDI, command validation, VidMm
-residency and fault/TDR integration remain to be connected.
+The submission-worker helpers capture a bounded context/root snapshot separately
+from activation. Only activation writes the complement of the private fence
+marker, so admitting later work cannot overwrite the active marker. Before
+notification, the GPU marker must match and the channel must be quiescent; the
+context reference is then released. `DxgkCbSynchronizeExecution` delivers
+`DxgkCbNotifyInterrupt` and the DPC notification using an engine-only snapshot,
+so context destruction after completion cannot race a remaining context access.
+A synchronization failure keeps that notification record for retry/reset and
+prevents later fences overtaking it. Aborted work never advances the completed
+fence. The virtual submission DDI, command validation, VidMm residency and
+fault/TDR integration remain to be connected.
 `--windows-tests` also builds `test-context.exe`; it calls the registered WDK
 function pointers using explicit allocation, interrupt and GPU-write substitutes.
 It checks lifetime, failed root changes, pending/duplicate notification, retained
 references and failed-free retry, not live Dxgkrnl or GPU execution.
+
+`windows/work_queue.c` admits multiple contexts in order using the nonpaged
+private buffer supplied by Dxgkrnl for each DMA buffer. Context creation reports
+the required private-data size; this initial queue accepts no UMD-private payload
+or specialized submission flags. Admission allocates nothing and holds each
+context/root reference. The single worker copies the head record into its own
+storage, activates and submits it, polls its GPU marker, quiesces the channel,
+then notifies completion. It never accesses the borrowed record afterward, even
+if Windows immediately reuses it. Pending work does not touch shared RAMIN or
+command/fence memory. A failed operation stops the queue; reset retains affected
+references until isolation succeeds, then cancels pending work without reporting
+its fences complete. Admission resumes only explicitly after recovery. Wake is
+a synchronization event for the future adapter worker, which must wait on an IRQ
+or timer while the active result is pending rather than busy-looping.
+The queue and channel helpers are compiled backend components, not an exposed
+`SubmitCommandVirtual` DDI: adapter dispatch, malformed-buffer fence handling,
+command/residency validation and preemption/TDR notification still need wiring.
+Native tests cover multiple roots, ordering, immediate private-buffer reuse,
+partial submission/reset failure, restart admission and canceled notifications.
+[Dxgkrnl private-buffer contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgkarg_submitcommandvirtual)
 
 `windows/submit_worker.c` connects prepared work to `core/channel.c` after
 exclusive cold initialization. The worker blocks scheduling, invalidates the

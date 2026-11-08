@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "../windows/context.h"
+#include "../windows/work_queue.h"
 #include <ntimage.h>
 
 static ULONG_PTR image_cookie=0x00002b992ddfa232ULL;
@@ -23,9 +24,18 @@ static BOOLEAN pool_used[64], memory_used[64], fail_pool, fail_allocate, fail_fr
 static BOOLEAN fail_sync, in_sync;
 static BOOLEAN fail_reserve;
 static UINT interrupts, dpcs, queues, frees, expected_fence;
+static TG_GPU_QUEUE_ENTRY *reuse_private;
+static TG_GPU_CONTEXT *notify_context;
+static UINT notify_references;
 static KIRQL level;
 static VOID NTAPI InitializeLock(PKSPIN_LOCK lock) { *lock=0; }
 VOID (NTAPI * const __imp_KeInitializeSpinLock)(PKSPIN_LOCK)=InitializeLock;
+static VOID NTAPI InitializeEvent(PRKEVENT event,EVENT_TYPE type,BOOLEAN state)
+{ CHECK(event && type==SynchronizationEvent);event->Header.SignalState=state; }
+static LONG NTAPI SetEvent(PRKEVENT event,KPRIORITY priority,BOOLEAN wait)
+{ CHECK(event && !priority && !wait);event->Header.SignalState=1;return 0; }
+VOID (NTAPI * const __imp_KeInitializeEvent)(PRKEVENT,EVENT_TYPE,BOOLEAN)=InitializeEvent;
+LONG (NTAPI * const __imp_KeSetEvent)(PRKEVENT,KPRIORITY,BOOLEAN)=SetEvent;
 static PVOID NTAPI Pool(POOL_FLAGS flags,SIZE_T bytes,ULONG tag)
 {
     UINT i;
@@ -90,6 +100,13 @@ static VOID NTAPI Interrupt(HANDLE device,DXGKARGCB_NOTIFY_INTERRUPT_DATA *data)
     CHECK(device==(HANDLE)1 && in_sync && data->InterruptType==DXGK_INTERRUPT_DMA_COMPLETED);
     CHECK(data->DmaCompleted.NodeOrdinal==0 && data->DmaCompleted.EngineOrdinal==0);
     CHECK(data->DmaCompleted.SubmissionFenceId==expected_fence);++interrupts;
+    if(notify_context) CHECK(notify_context->References==notify_references);
+    if(reuse_private) {
+        /* Model immediate OS reuse after fence notification. The worker must
+         * not retain or dereference anything inside this buffer afterward.
+         */
+        memset(reuse_private,0xa5,sizeof(*reuse_private));reuse_private=NULL;
+    }
 }
 static BOOLEAN NTAPI Queue(HANDLE device)
 { CHECK(device==(HANDLE)1 && in_sync);++queues;return FALSE; /* DPC already queued */ }
@@ -109,12 +126,12 @@ static NTSTATUS NTAPI Reserve(HANDLE device,DXGKARGCB_RESERVEGPUVIRTUALADDRESSRA
  * and can withhold preemption or reset acknowledgement to exercise lifetime.
  */
 static struct {
-    UINT32 mc,pb,map,sched,inst,ctrl,preempt,pbdma,runlist,runbase,root;
+    UINT32 mc,pb,map,sched,inst,ctrl,preempt,pbdma,runlist,runbase,root,expected_root;
     UINT32 clamp,reset,clocks,out5,mc_flush;
     UINT tlbs,flushes,reads,writes;
     UCHAR enable,voltage;
     BOOLEAN fail_preempt,fail_reset,fail_tlb;
-} hw={.mc=0x100,.pb=1,.map=1,.sched=1,.enable=0x41,.voltage=110};
+} hw={.mc=0x100,.pb=1,.map=1,.sched=1,.enable=0x41,.voltage=110,.expected_root=0x900002};
 static UINT32 Read(void *context,UINT32 address)
 {
     CHECK(context==&hw && level==PASSIVE_LEVEL);++hw.reads;
@@ -152,7 +169,7 @@ static void Write(void *context,UINT32 address,UINT32 value)
     case 0x57002630:hw.sched=value;break;
     case 0x57800000:
         CHECK(hw.sched&1);
-        if(value) CHECK(hw.tlbs && hw.root==0x900002);
+        if(value) CHECK(hw.tlbs && hw.root==hw.expected_root);
         else CHECK(!hw.runlist && !hw.pbdma && !hw.preempt);
         hw.inst=value;break;
     case 0x57800004:
@@ -200,6 +217,8 @@ static bool WritePmic(void *context,UINT8 address,UINT8 reg,UINT8 value)
 void start(void)
 {
     static TG_GPU_CONTEXT_ENGINE e,other;
+    static TG_GPU_WORK_QUEUE queue;
+    static TG_GPU_QUEUE_ENTRY entries[4];
     static _Alignas(PAGE_SIZE) UCHAR table[TG_GPU_TABLE_BYTES];
     TG_GPU_TABLE_SEGMENT tables={.Memory={(HANDLE)4,table,{.QuadPart=0x90000000},sizeof(table)},.SegmentId=1};
     DXGKRNL_INTERFACE dxgk={0};DRIVER_INITIALIZATION_DATA ddi={0};
@@ -216,7 +235,7 @@ void start(void)
     struct tg_gpu_power_io io={.context=&hw,.read32=Read,.write32=Write,.delay_us=Delay,
         .read_pmic=ReadPmic,.write_pmic=WritePmic};
     UINT32 *instance,*fence;UINT i,before;ULONG written;UINT64 pde;
-    static const char pass[]="PASS: WDK context submission, GPU-fence notification, preemption timeout and verified reset lifetime (controlled substitutes)\r\n";
+    static const char pass[]="PASS: WDK ordered work queue, root/fence lifetime, immediate private-buffer reuse and failed preempt/reset retention (controlled substitutes)\r\n";
     dxgk.Version=DXGKDDI_INTERFACE_VERSION_WDDM2_4;dxgk.DeviceHandle=(HANDLE)1;
     dxgk.DxgkCbAllocateContiguousMemory=Allocate;dxgk.DxgkCbFreeContiguousMemory=Free;
     dxgk.DxgkCbSynchronizeExecution=Synchronize;dxgk.DxgkCbNotifyInterrupt=Interrupt;
@@ -244,6 +263,7 @@ void start(void)
     CHECK(((TG_GPU_DEVICE *)device.hDevice)->Contexts==0);fail_allocate=FALSE;
     CHECK(NT_SUCCESS(ddi.DxgkDdiCreateContext(device.hDevice,&create)));c=create.hContext;
     CHECK(create.ContextInfo.Caps.NoPatchingRequired && !create.ContextInfo.Caps.DriverManagesResidency);
+    CHECK(create.ContextInfo.DmaBufferPrivateDataSize==sizeof(TG_GPU_QUEUE_ENTRY));
     create.hContext=(HANDLE)103;CHECK(NT_SUCCESS(ddi.DxgkDdiCreateContext(device.hDevice,&create)));c2=create.hContext;
     CHECK(c!=c2 && ((TG_GPU_DEVICE *)device.hDevice)->Contexts==2);
     CHECK(ddi.DxgkDdiDestroyDevice(device.hDevice)==STATUS_DEVICE_BUSY);
@@ -269,7 +289,7 @@ void start(void)
     CHECK(hw.inst==((UINT32)((UINT64)c->Instance.SystemPhysicalAddress.QuadPart>>12)|0xb0000000));
     before=hw.writes;
     CHECK(TgGpuSubmitContextWork(&e,&work,&io,&power)==STATUS_INVALID_DEVICE_STATE && hw.writes==before);
-    CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_PENDING && interrupts==0);
+    CHECK(TgGpuContextWorkFinished(&e,&work)==STATUS_PENDING && interrupts==0);
     /* A busy root change invalidates future admission but does not rewrite
      * the queued snapshot or RAMIN while the hardware may still reference it.
      */
@@ -277,18 +297,25 @@ void start(void)
     CHECK(!c->Root.Valid && c->RootStatus==STATUS_GRAPHICS_ALLOCATION_BUSY);
     CHECK(work.Root.Entries==2 && instance[130]==0x07fff000);
     *fence=work.Expected; /* explicit simulated GPU write */
+    CHECK(TgGpuContextWorkFinished(&e,&work)==STATUS_SUCCESS);
+    CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY);
+    hw.fail_preempt=TRUE;
+    CHECK(TgGpuQuiesceContextWork(&e,&work,&io,&power)==STATUS_IO_TIMEOUT);
+    CHECK(e.Channel.referenced && hw.inst && hw.runlist && c->References==1 && !interrupts);
+    CHECK(ddi.DxgkDdiDestroyContext(c)==STATUS_DEVICE_BUSY);
+    hw.fail_preempt=FALSE;
+    CHECK(NT_SUCCESS(TgGpuQuiesceContextWork(&e,&work,&io,&power)) && work.Retired && c->References==1);
+    CHECK(!e.Channel.referenced && !hw.inst && !hw.runlist && hw.flushes==2 && hw.tlbs==2);
     fail_sync=TRUE;CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_UNSUCCESSFUL && !work.Notified);
-    CHECK(!interrupts && c->References==1);fail_sync=FALSE;expected_fence=7;
+    CHECK(!interrupts && !c->References && !work.Context && e.Notification==&work);
+    CHECK(TgGpuInitializeWorkQueue(&queue,&e)==STATUS_DEVICE_BUSY && !e.QueueOwner);
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&work)==STATUS_DEVICE_BUSY);
+    fail_sync=FALSE;expected_fence=7;notify_context=c;notify_references=0;
     CHECK(NT_SUCCESS(TgGpuSignalContextWork(&e,&work)) && work.Notified);
-    CHECK(interrupts==1 && queues==1 && c->References==1);
+    CHECK(interrupts==1 && queues==1 && !c->References && !e.Notification);
     CHECK(NT_SUCCESS(TgGpuSignalContextWork(&e,&work)) && interrupts==1);
     ddi.DxgkDdiDpcRoutine(&e);CHECK(dpcs==1);
     CHECK(NT_SUCCESS(ddi.DxgkDdiQueryCurrentFence(&e,&query)) && query.CurrentFence==7);
-    hw.fail_preempt=TRUE;
-    CHECK(TgGpuRetireContextWork(&e,&work,&io,&power)==STATUS_IO_TIMEOUT);
-    CHECK(e.Channel.referenced && hw.inst && hw.runlist && c->References==1);
-    CHECK(ddi.DxgkDdiDestroyContext(c)==STATUS_DEVICE_BUSY);
-    hw.fail_preempt=FALSE;
     CHECK(NT_SUCCESS(TgGpuRetireContextWork(&e,&work,&io,&power)) && !work.Context && !c->References);
     CHECK(!e.Channel.referenced && !hw.inst && !hw.runlist && hw.flushes==2 && hw.tlbs==2);
     CHECK(TgGpuAcquireContextWork(&e,&submit,&work)==STATUS_INVALID_PARAMETER);
@@ -305,7 +332,7 @@ void start(void)
     CHECK(NT_SUCCESS(TgGpuAcquireContextWork(&e,&submit,&work)));
     CHECK(NT_SUCCESS(TgGpuPrepareContextWork(&e,&work)));
     CHECK(NT_SUCCESS(TgGpuSubmitContextWork(&e,&work,&io,&power)));
-    CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_PENDING);
+    CHECK(TgGpuContextWorkFinished(&e,&work)==STATUS_PENDING);
     hw.fail_reset=TRUE;
     CHECK(TgGpuResetContextWork(&e,&work,&io,&power,&clock)==STATUS_DEVICE_DATA_ERROR);
     CHECK(e.Channel.referenced && c->References==1 && power.owned && !power.ready);
@@ -322,6 +349,72 @@ void start(void)
     CHECK(NT_SUCCESS(TgGpuAcquireContextWork(&e,&submit,&work)));
     CHECK(NT_SUCCESS(TgGpuRetireContextWork(&e,&work,NULL,NULL)));
     CHECK(hw.reads+hw.writes==before && e.LastCompletedFence==7);
+    /* Start a fresh controlled cold GPU and submit multiple contexts before
+     * any fence completes. Admission must not overwrite the active marker.
+     */
+    power.owned=power.ready=true;hw.mc=0x100;hw.pb=hw.map=hw.sched=1;
+    hw.clamp=hw.reset=hw.inst=hw.ctrl=hw.preempt=hw.pbdma=hw.runlist=0;
+    hw.enable=0x41;hw.voltage=110;
+    root.hContext=c2;root.Address.SegmentOffset=PAGE_SIZE;
+    ddi.DxgkDdiSetRootPageTable(&e,&root);CHECK(c2->Root.Valid);
+    CHECK(NT_SUCCESS(TgGpuInitializeWorkQueue(&queue,&e)));
+    submit.DmaBufferPrivateDataSize=sizeof(entries[0]);submit.pDmaBufferPrivateData=&entries[0];
+    submit.DmaBufferUmdPrivateDataSize=4;
+    CHECK(TgGpuQueueSubmit(&queue,&submit)==STATUS_INVALID_PARAMETER && !c->References);
+    submit.DmaBufferUmdPrivateDataSize=0;
+    for(i=0;i<4;++i) {
+        submit.hContext=(i&1) ? c2 : c;
+        submit.pDmaBufferPrivateData=&entries[i];submit.SubmissionFenceId=10+i;
+        memset(&entries[i],0xcc,sizeof(entries[i]));
+        CHECK(NT_SUCCESS(TgGpuQueueSubmit(&queue,&submit)));
+    }
+    CHECK(c->References==2 && c2->References==2 && !e.Active);
+    CHECK(TgGpuQueueSubmit(&queue,&submit)==STATUS_DEVICE_BUSY);
+    CHECK(TgGpuAcquireContextWork(&e,&submit,&blocked)==STATUS_DEVICE_BUSY);
+    CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_PENDING);
+    CHECK(queue.Current.Context==c && queue.Current.SubmissionFence==10 && *fence==~queue.Current.Expected);
+    CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_PENDING && interrupts==1);
+    *fence=queue.Current.Expected;expected_fence=10;notify_context=c;notify_references=1;
+    reuse_private=&entries[0];
+    CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_SUCCESS && !reuse_private);
+    CHECK(c->References==1 && c2->References==2 && e.LastCompletedFence==10 && !e.Active);
+    CHECK(((UCHAR *)&entries[0])[sizeof(entries[0])-1]==0xa5);
+    hw.expected_root=0x900012;
+    CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_PENDING && queue.Current.Context==c2);
+    *fence=queue.Current.Expected;expected_fence=11;notify_context=c2;notify_references=1;
+    reuse_private=&entries[1];
+    CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_SUCCESS && !reuse_private);
+    CHECK(c->References==1 && c2->References==1 && e.LastCompletedFence==11);
+    hw.expected_root=0x900002;hw.fail_tlb=TRUE;
+    CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_IO_TIMEOUT);
+    CHECK(queue.Failure==STATUS_IO_TIMEOUT && e.Channel.referenced && queue.Current.Context==c);
+    CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_IO_TIMEOUT && c2->References==1);
+    hw.fail_tlb=FALSE;hw.fail_reset=TRUE;
+    CHECK(TgGpuResetWorkQueue(&queue,&io,&power,&clock)==STATUS_DEVICE_DATA_ERROR);
+    CHECK(queue.Paused && c->References==1 && c2->References==1);
+    hw.fail_reset=FALSE;
+    CHECK(NT_SUCCESS(TgGpuResetWorkQueue(&queue,&io,&power,&clock)));
+    CHECK(!c->References && !c2->References && !queue.Current.Context && IsListEmpty(&queue.Pending));
+    CHECK(e.LastCompletedFence==11 && interrupts==3 && !e.Active && !e.Notification);
+    CHECK(TgGpuResumeWorkQueue(&queue,&power)==STATUS_DEVICE_NOT_READY);
+    /* Model the adapter's cold reinitialization, then fail only synchronized
+     * notification. Hardware/context ownership is already retired: reset
+     * cancels the engine-only notice without another register access.
+     */
+    power.owned=power.ready=true;hw.mc=0x100;hw.pb=hw.map=hw.sched=1;
+    hw.clamp=hw.reset=hw.inst=hw.ctrl=hw.preempt=hw.pbdma=hw.runlist=0;
+    CHECK(NT_SUCCESS(TgGpuResumeWorkQueue(&queue,&power)));
+    submit.hContext=c;submit.SubmissionFenceId=14;submit.pDmaBufferPrivateData=&entries[0];
+    CHECK(NT_SUCCESS(TgGpuQueueSubmit(&queue,&submit)));
+    CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_PENDING);
+    *fence=queue.Current.Expected;fail_sync=TRUE;
+    CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_UNSUCCESSFUL);
+    CHECK(!c->References && !queue.Current.Context && e.Notification==&queue.Current);
+    fail_sync=FALSE;before=hw.reads+hw.writes;
+    CHECK(NT_SUCCESS(TgGpuResetWorkQueue(&queue,&io,&power,&clock)));
+    CHECK(hw.reads+hw.writes==before && !e.Notification && e.LastCompletedFence==11 && interrupts==3);
+    CHECK(NT_SUCCESS(TgGpuStopWorkQueue(&queue)) && !e.QueueOwner);
+    notify_context=NULL;
     before=frees;fail_free=TRUE;CHECK(ddi.DxgkDdiDestroyContext(c)==STATUS_UNSUCCESSFUL);
     CHECK(c->Instance.Handle && frees==before && !c->Closing);fail_free=FALSE;
     CHECK(NT_SUCCESS(ddi.DxgkDdiDestroyContext(c)));

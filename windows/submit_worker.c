@@ -39,20 +39,32 @@ NTSTATUS TgGpuSubmitContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
     w->Submitted=result==TG_GPU_CHANNEL_OK;w->HardwareBusy=FALSE;
     KeReleaseSpinLock(&e->Lock,irql);return channel_status(result);
 }
-NTSTATUS TgGpuRetireContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
-    const struct tg_gpu_power_io *io,const struct tg_gpu_power *power)
+static NTSTATUS retire(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
+    const struct tg_gpu_power_io *io,const struct tg_gpu_power *power,BOOLEAN release)
 {
     KIRQL irql;enum tg_gpu_channel_result result;
     if(!e || !w) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);
+    if(release && w->Engine==e && w->Notified && !w->Context) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_SUCCESS;
+    }
     if(e->Active!=w || !w->Context) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER; }
     if(w->HardwareBusy || w->Signaling) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_BUSY; }
     w->HardwareBusy=TRUE;KeReleaseSpinLock(&e->Lock,irql);
     result=tg_gpu_channel_retire(io,power,w,&e->Channel);
     KeAcquireSpinLock(&e->Lock,&irql);w->HardwareBusy=FALSE;
-    if(result==TG_GPU_CHANNEL_OK) drop_work(e,w);
+    if(result==TG_GPU_CHANNEL_OK) {
+        w->Retired=TRUE;
+        if(release) drop_work(e,w);
+    }
     KeReleaseSpinLock(&e->Lock,irql);return channel_status(result);
 }
+NTSTATUS TgGpuQuiesceContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
+    const struct tg_gpu_power_io *io,const struct tg_gpu_power *power)
+{ return retire(e,w,io,power,FALSE); }
+NTSTATUS TgGpuRetireContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
+    const struct tg_gpu_power_io *io,const struct tg_gpu_power *power)
+{ return retire(e,w,io,power,TRUE); }
 NTSTATUS TgGpuResetContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
     const struct tg_gpu_power_io *io,struct tg_gpu_power *power,struct tg_gpu_clock *clock)
 {

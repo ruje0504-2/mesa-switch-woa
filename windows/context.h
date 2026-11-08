@@ -45,6 +45,8 @@ struct _TG_GPU_CONTEXT_ENGINE {
     KSPIN_LOCK Lock;
     LIST_ENTRY Processes, Devices, Contexts;
     TG_GPU_CONTEXT_WORK *Active;
+    TG_GPU_CONTEXT_WORK *Notification;
+    PVOID QueueOwner;
     TG_GPU_PRIVATE_MEMORY Commands;
     struct tg_gpu_channel Channel;
     volatile UINT LastCompletedFence;
@@ -57,11 +59,12 @@ struct _TG_GPU_CONTEXT_ENGINE {
  * Keep this record alive until retirement or verified reset succeeds.
  */
 struct _TG_GPU_CONTEXT_WORK {
+    TG_GPU_CONTEXT_ENGINE *Engine;
     TG_GPU_CONTEXT *Context;
     TG_GPU_ROOT_TABLE Root;
     UINT64 DmaAddress, FencePhysicalAddress, InternalVa;
     UINT DmaBytes, SubmissionFence, Expected;
-    BOOLEAN Signaling, Notified, Prepared, HardwareBusy, Submitted, Attempted;
+    BOOLEAN Signaling, Notified, Prepared, HardwareBusy, Submitted, Attempted, Retired, CompletionReady;
 };
 
 NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *, const DXGKRNL_INTERFACE *,
@@ -92,6 +95,14 @@ DXGKDDI_DPC_ROUTINE TgGpuDdiDpcRoutine;
  */
 NTSTATUS TgGpuAcquireContextWork(TG_GPU_CONTEXT_ENGINE *,
     const DXGKARG_SUBMITCOMMANDVIRTUAL *, TG_GPU_CONTEXT_WORK *);
+/* Queue admission retains the context/root without touching shared commands,
+ * RAMIN or the fence. Activation occurs only when this record reaches the head.
+ * A successful capture must be activated/retired or canceled exactly once.
+ */
+NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *,
+    const DXGKARG_SUBMITCOMMANDVIRTUAL *, TG_GPU_CONTEXT_WORK *);
+NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
+NTSTATUS TgGpuCancelCapturedWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
 /* After acquisition and before hardware binding, repair the reserved PDE and
  * encode the USER workload plus a driver-generated KERNEL completion packet.
  * This performs no MMIO. The hardware backend still binds RAMIN, invalidates
@@ -105,12 +116,21 @@ NTSTATUS TgGpuPrepareContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *)
  */
 NTSTATUS TgGpuSubmitContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *,
     const struct tg_gpu_power_io *, const struct tg_gpu_power *);
-/* Poll the GPU-owned fence in private uncached memory. Only the expected
- * hardware value can notify VidSch. Still retain RAMIN/root ownership after
- * notification: completion alone does not evict a channel's loaded context.
+/* Check the GPU-owned fence without notification. STATUS_PENDING is not a pass. */
+NTSTATUS TgGpuContextWorkFinished(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
+/* Quiesce before notifying VidSch, which may immediately recycle allocations
+ * and private submission buffers. Keep the work reference until notification.
+ */
+NTSTATUS TgGpuQuiesceContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *,
+    const struct tg_gpu_power_io *, const struct tg_gpu_power *);
+/* Only a matching GPU fence plus successful retirement can notify VidSch.
+ * Drop context ownership before notification; it may immediately cause object
+ * destruction. A failed synchronization retains an engine-only notification
+ * record for retry/reset and prevents the next work from overtaking its fence.
  * STATUS_PENDING is not completion, even though NT_SUCCESS accepts it.
  */
 NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
+NTSTATUS TgGpuCancelContextNotification(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
 /* Releases only after the actual channel-retirement sequence succeeds.
  * Timeout keeps the context/RAMIN/commands pinned. Aborts do not notify a
  * completed fence. An unsubmitted work item can be canceled without MMIO.
