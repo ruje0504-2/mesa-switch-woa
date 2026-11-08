@@ -8,7 +8,7 @@ struct model {
     uint32_t hidrev, clocks, reset, out5, clamp, flush;
     uint8_t enable, voltage;
     unsigned int writes;
-    bool fail_voltage_once, fail_mc, fail_reset;
+    bool fail_voltage_once, fail_mc, fail_reset, fail_out5;
 };
 
 static uint32_t read32(void *opaque, uint32_t address)
@@ -39,7 +39,7 @@ static void write32(void *opaque, uint32_t address, uint32_t value)
         assert(!(m->clocks & (1u << 24))); /* upstream gate/reset ordering */
         if (!m->fail_reset) m->reset &= ~value;
         break;
-    case 0x6000667c: m->out5 = value; break;
+    case 0x6000667c: if (!m->fail_out5) m->out5 = value; break;
     case 0x7000e6d4:
         if (!(value & 1)) {
             assert(m->enable & 1);
@@ -82,7 +82,7 @@ static bool write_pmic(void *opaque, uint8_t address, uint8_t reg, uint8_t value
 static void delay_us(void *opaque, uint32_t us)
 {
     (void)opaque;
-    assert(us == 10 || us == 5000);
+    assert(us == 2 || us == 10 || us == 5000);
 }
 
 int main(void)
@@ -106,6 +106,24 @@ int main(void)
     assert(model.clamp == initial.clamp && model.reset == initial.reset);
     assert(model.flush == initial.flush);
 
+    /* Observed HDH-001 cold-boot snapshot: the enabled OUT5 still has the
+     * reset divider. The GPU owner must set its rate, as Switchroot does.
+     */
+    model = initial;
+    model.out5 = 0x00030000;
+    model.reset = 0x41e12019;
+    model.clamp = 1;
+    model.enable = 0x40;
+    model.voltage = 0x50;
+    if (tg_gpu_power_up(&io, 0x33, &state) != TG_GPU_POWER_OK) {
+        fputs("Observed OUT5 0x00030000 was incorrectly rejected.\n", stderr);
+        return 1;
+    }
+    assert((model.out5 & 0xff070000u) == 0x02070000u);
+    assert(tg_gpu_power_down(&io, &state) == TG_GPU_POWER_OK);
+    assert(model.out5 == 0x00030000 && model.reset == 0x41e12019);
+    assert(model.clamp == 1 && model.enable == 0x40 && model.voltage == 0x50);
+
     model = initial;
     memset(&state, 0, sizeof(state));
     model.reset = 0; /* an already owned GPU must not be reset */
@@ -116,6 +134,14 @@ int main(void)
     model.fail_voltage_once = true;
     assert(tg_gpu_power_up(&io, 0x33, &state) == TG_GPU_POWER_PMIC_ERROR);
     assert(state.owned && !state.ready);
+    assert(tg_gpu_power_down(&io, &state) == TG_GPU_POWER_OK);
+    assert(model.enable == initial.enable && model.voltage == initial.voltage);
+
+    model = initial;
+    model.fail_out5 = true;
+    assert(tg_gpu_power_up(&io, 0x33, &state) == TG_GPU_POWER_CLOCK_ERROR);
+    assert(state.stage == TG_GPU_STAGE_CLOCKS && !state.ready);
+    assert(model.clamp == initial.clamp && model.reset == initial.reset);
     assert(tg_gpu_power_down(&io, &state) == TG_GPU_POWER_OK);
     assert(model.enable == initial.enable && model.voltage == initial.voltage);
 

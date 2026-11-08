@@ -39,3 +39,5 @@ MC drain ordering from Switchroot drivers/platform/tegra/mc/mc.c
 (Copyright 2010 Google and 2011-2021 NVIDIA). The repository LICENSE contains
 the GPL version 2 text. B01 rail assignments and register definitions follow
 Switchroot's tegra210b01-nx-pmic.dtsi and CTCaer's Hekate max77812.h.
+OUT5 divider/override programming follows Switchroot clk-tegra-periph.c and
+clk-divider.c (Copyright 2012-2017 NVIDIA, GPL-2.0-only).

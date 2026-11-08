@@ -22,8 +22,12 @@
 #define GPU_GATE        (1u << 24) /* Tegra clock/reset 184 */
 #define GPU_REF         (1u << 29) /* Tegra clock 189 */
 #define GPU_CLOCKS      (GPU_GATE | GPU_REF)
-#define OUT5_MASK       0xff030000u
-#define OUT5_204MHZ     0x02030000u /* PLLP 408 MHz / 2; out5 reset and enable */
+#define OUT5_MASK       0xff070000u
+/* Switchroot clk-tegra-periph.c uses TEGRA_DIVIDER_FIXED for OUT5.
+ * clk-divider.c sets its override at (divider shift 24 - 6) = bit 18.
+ * Ratio 2 gives 408 MHz * 2 / (2 + 2) = 204 MHz; retain enable/reset.
+ */
+#define OUT5_204MHZ     0x02070000u
 #define PMC_GPU_CLAMP   0x7000e6d4u
 #define MC_FLUSH        0x70019970u
 #define MC_FLUSH_STATUS 0x70019974u
@@ -105,10 +109,11 @@ tg_gpu_power_up(const struct tg_gpu_power_io *io, uint8_t pmic_address,
     state->original_clocks = io->read32(io->context, CAR_CLOCK_X);
     state->original_pllp_out5 = io->read32(io->context, CAR_PLLP_OUT5);
     state->original_mc_flush = io->read32(io->context, MC_FLUSH);
-    /* An enabled shared output with another rate needs a clock-owner handoff. */
-    if ((state->original_pllp_out5 & (1u << 17)) &&
-        (state->original_pllp_out5 & OUT5_MASK) != OUT5_204MHZ)
-        return TG_GPU_POWER_CLOCK_ERROR;
+    /* Hekate can leave OUT5 enabled at its reset divider (0x00030000).
+     * Switchroot's gk20a_tegra_get_clocks() calls clk_set_rate(204 MHz)
+     * before using this GPU power clock. Set our output below while the
+     * GPU is still reset/clamped, rather than requiring Linux to have run.
+     */
     state->owned = true;
     state->ready = false;
     state->stage = TG_GPU_STAGE_RAIL;
@@ -119,6 +124,9 @@ tg_gpu_power_up(const struct tg_gpu_power_io *io, uint8_t pmic_address,
 
     state->stage = TG_GPU_STAGE_CLOCKS;
     update32(io, CAR_PLLP_OUT5, OUT5_MASK, OUT5_204MHZ);
+    io->delay_us(io->context, 2); /* clk_frac_div_set_rate() fence_udelay */
+    if ((io->read32(io->context, CAR_PLLP_OUT5) & OUT5_MASK) != OUT5_204MHZ)
+        return TG_GPU_POWER_CLOCK_ERROR;
     io->write32(io->context, CAR_CLOCK_SET, GPU_CLOCKS);
     io->delay_us(io->context, 10);
     if ((io->read32(io->context, CAR_CLOCK_X) & GPU_CLOCKS) != GPU_CLOCKS)
