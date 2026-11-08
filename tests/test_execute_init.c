@@ -11,6 +11,8 @@ struct fifo_model {
     bool fail_sched_allow, hce_fault;
     bool bad_ltc, flush_timeout, niso, bar1, bad_bar1_write, bar1_dirty, l2_timeout;
     unsigned fb_flushes, l2_flushes, l2_invalidations;
+    uint32_t gr_access, gr_gate[2];
+    bool fail_gr_enable;
 };
 static uint32_t *arena_userd, *arena_runlist;
 static uint32_t read32(void *context, uint32_t address)
@@ -18,6 +20,8 @@ static uint32_t read32(void *context, uint32_t address)
     struct fifo_model *m = context;
     if (address == 0x57000200) return m->mc;
     if (address == 0x57000204) return m->pb;
+    if (address == 0x57400500) return m->gr_access;
+    if (address == 0x57020200 || address == 0x57020204) return m->gr_gate[(address-0x57020200)/4];
     if (address == 0x57002390) return m->runlist_map;
     if (address == 0x57002630) return m->sched;
     if (address == 0x57002280) return m->runlist_base;
@@ -66,6 +70,7 @@ static void write32(void *context, uint32_t address, uint32_t value)
             m->enabled_at = m->ticks;
         }
         m->mc = m->fail_enable ? value & ~0x100u : value;
+        if (m->fail_gr_enable) m->mc &= ~0x1000u;
     } else if (address == 0x57000204) {
         assert(m->mc & 0x100);
         if (!(value & 1) && (m->pb & 1)) assert(!m->runlist && !m->instance);
@@ -75,6 +80,8 @@ static void write32(void *context, uint32_t address, uint32_t value)
     } else if (address == 0x57002274) {
         assert(m->sched & 1);
         if (value) {
+            assert((m->mc&0x18001000)==0x18001000 && m->gr_access==0x10001);
+            assert((m->gr_gate[0]&0x33)==0x10 && (m->gr_gate[1]&0x33)==0x10);
             assert((m->pb & 1) && m->instance && m->fb_flushes == 6 && m->l2_invalidations == 2);
             /* Decode independently: TSG zero, one member, timeout 128 at
              * scale 3; the following entry is CHID zero, not an instance.
@@ -94,6 +101,11 @@ static void write32(void *context, uint32_t address, uint32_t value)
     } else if (address == 0x57002630) {
         if (!(value & 1)) assert(m->runlist && m->instance);
         m->sched = m->fail_sched_allow ? value | 1 : value;
+    } else if (address == 0x57020200 || address == 0x57020204) {
+        assert(!m->runlist && !m->instance);m->gr_gate[(address-0x57020200)/4]=value;
+    } else if (address == 0x57400500) {
+        assert(!m->runlist && !m->instance && (m->mc&0x18001000)==0x18001000);
+        m->gr_access=value;
     } else if (address == 0x5704013c) {
         m->stall = value;
     } else if (address == 0x5704010c) {
@@ -221,6 +233,13 @@ void test_execute_init(void)
     tg_gpu_execute_stop(&io,&state);
     assert(!m.pb && !m.runlist && !m.instance && !state.pbdma_owned);
     assert(m.sched == 0xa5);
+
+    memset(&m,0,sizeof(m));memset(&state,0,sizeof(state));memset(&result.frontend,0,sizeof(result.frontend));
+    m.runlist_map=1;m.allow_mmu=true;m.fail_gr_enable=true;
+    assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result)==TG_GPU_EXEC_FRONTEND);
+    assert(state.stage==7 && result.frontend.stage==10 && !m.runlist && !m.put && !m.instance);
+    tg_gpu_execute_stop(&io,&state);
+    assert(!m.pb && !m.runlist && !m.instance);
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state)); memset(&result.frontend,0,sizeof(result.frontend));
     m.runlist_map=1; m.allow_mmu=true; m.l2_timeout=true;

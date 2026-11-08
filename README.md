@@ -75,13 +75,25 @@ through execution and is restored on clock release. FIFO/FB/LTC use the
 upstream force-run clock-gating profiles until a PMU governor exists. LTC
 active counts feed both L2 and FBHUB; physical-security setup is restricted
 to the upstream non-secure branch. Two bounded FB flushes must finish before
-the channel becomes runnable. ABI 9 (236 bytes) records the initialization
+the channel becomes runnable. ABI 10 (252 bytes) records the initialization
 stage, LTC/flush counts, BUS/PRI faults, FIFO binding/engine state and the
 separate BAR1 step/expected/GPU/CPU values. Bounded L2 writeback and invalidation
 timeouts stop submission; a successful FB flush alone is not DRAM visibility.
 This is
 a local cold-start candidate, not a hardware execution pass. Source reference:
 [Switchroot NVIDIA driver](https://github.com/CTCaer/switch-l4t-kernel-nvgpu/tree/1ae0167d360287ca78f5a2572f0de42594140312/drivers/gpu/nvgpu).
+
+Before channel binding, the cold probe now also performs the GR reset/access
+preamble from `gk20a_init_gr_prepare`: release PGRAPH/BLG/PERFMON while preserving
+FIFO and memory enables, apply the published GM20B GR force-run gate profiles,
+set both engine clocks to RUN with power AUTO, and enable GR FIFO/semaphore
+access. It records MC enable, GR access and both gate controls. Stage 307
+identifies failure in this preamble; frontend stage 11 means only this preamble
+completed. No Falcon firmware, non-context register pack or graphics context is
+loaded yet. The previous hardware stall is not proven to depend on this missing
+step, and the new source has no physical execution pass. Full GPU reset/power
+retirement still follows every probe. This helper is for exclusive cold ownership,
+never an adapter reset while another channel is active.
 
 The diagnostic accepts only owned physical buffers below 4 GiB. Switchroot's
 GM20B path tags IOMMU addresses with bit 34 and leaves physical addresses

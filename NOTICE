@@ -58,8 +58,9 @@ common/mm/nvgpu_mem.c in that revision (Copyright 2017-2020 NVIDIA).
 PBDMA enable ordering follows Linux nouveau v6.12 engine/fifo/gk104.c,
 gk104_fifo_init_pbdmas (Copyright 2012 Red Hat Inc.; MIT notice above).
 PBDMA stall setup follows engine/fifo/gf100.c (Copyright 2012 Red Hat Inc.).
-The Maxwell runlist instance pointer follows engine/fifo/gm107.c through
-gm200.c (Copyright 2015-2016 Red Hat Inc.). The MIT notice above applies.
+The Maxwell runlist code in engine/fifo/gm107.c through gm200.c was also
+consulted (Copyright 2015-2016 Red Hat Inc.); the T214 channel-only entry uses
+Switchroot's gk20a_get_ch_runlist_entry. The MIT notice above applies.
 Copyright (c) 2014-2018 NVIDIA CORPORATION. All rights reserved.
 The MIT license text above applies. The Windows probe links this code with
 the GPL-2.0-only power sequence and is distributed under GPL-2.0-only.
@@ -67,6 +68,12 @@ the GPL-2.0-only power sequence and is distributed under GPL-2.0-only.
 platform/t214_mmu.c follows the TLB invalidate sequence in the same
 Switchroot nvgpu common/fb/fb_gm20b.c (Copyright 2014-2018 NVIDIA).
 The MIT license text above applies.
+
+platform/t214_frontend.c and platform/t214_gr_gating.h adapt the cold reset,
+GR access and force-run gating values from the same Switchroot revision:
+gk20a/gr_gk20a.c, common/mc/mc_gm20b.c, common/therm/therm_gm20b.c and
+common/clock_gating/gm20b_gating_reglist.c (Copyright 2014-2018 NVIDIA).
+The MIT license text above applies; the extracted table also retains it.
 
 core/channel.c follows the channel bind, disable, preempt and runlist removal
 ordering in the same Switchroot nvgpu gk20a/fifo_gk20a.c and common/fifo/channel.c,

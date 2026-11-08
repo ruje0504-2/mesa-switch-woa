@@ -3,7 +3,7 @@
  *
  * GM20B register sequences and force-run gating values adapted from
  * switch-l4t-kernel-nvgpu 1ae0167: common/{bus,priv_ring,ltc,fb,clock_gating},
- * gk20a/fifo_gk20a.c and gk20a/mm_gk20a.c.
+ * gk20a/{fifo,mm,gr}_gk20a.c and common/therm/therm_gm20b.c.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -23,6 +23,7 @@
  */
 #include "t214_frontend.h"
 #include "t214_power.h"
+#include "t214_gr_gating.h"
 #include <stddef.h>
 
 #define GPU 0x57000000u
@@ -159,6 +160,53 @@ enum tg_gpu_frontend_result tg_gpu_frontend_flush(const struct tg_gpu_power_io *
         ++s->fb_flushes;
     }
     s->stage = 6;
+    return finish(io, s, TG_GPU_FE_OK);
+}
+
+enum tg_gpu_frontend_result tg_gpu_frontend_gr_prepare(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power, struct tg_gpu_frontend_status *s)
+{
+    const uint32_t reset_mask = 0x18001000; /* PGRAPH, BLG, PERFMON */
+    uint32_t enable, gate;
+    size_t i;
+    if (!owned(io, power, s)) return TG_GPU_FE_ARGUMENT;
+    s->stage = 10;
+    enable = get(io, 0x200);
+    if (enable == UINT32_MAX || !(enable & 0x100))
+        return finish(io, s, TG_GPU_FE_REGISTER);
+    /* Switchroot gk20a_init_gr_prepare: FIFO/MMU are already initialized,
+     * but no channel is bound. Preserve their enables across the GR reset.
+     * This is only GR's reset/access preamble, not firmware or shader setup.
+     */
+    put(io, 0x200, enable & ~reset_mask);
+    io->delay_us(io->context, 20);
+    put(io, 0x200, enable | reset_mask);
+    io->delay_us(io->context, 20);
+    s->gr_enable = get(io, 0x200);
+    if (s->gr_enable == UINT32_MAX ||
+        (s->gr_enable & reset_mask) != reset_mask ||
+        (s->gr_enable & ~reset_mask) != (enable & ~reset_mask))
+        return finish(io, s, TG_GPU_FE_REGISTER);
+    for (i = 0; i < sizeof(t214_gr_force_run) / sizeof(t214_gr_force_run[0]); ++i)
+        put(io, t214_gr_force_run[i][0], t214_gr_force_run[i][1]);
+    if (finish(io, s, TG_GPU_FE_OK) != TG_GPU_FE_OK)
+        return (enum tg_gpu_frontend_result)s->result;
+    /* Both T214 engine slots use gm20b_therm_init_elcg_mode(ELCG_RUN):
+     * clock RUN plus power AUTO (required by hardware), preserving filters.
+     */
+    for (i = 0; i < 2; ++i) {
+        gate = get(io, 0x20200 + (uint32_t)i * 4);
+        if (gate == UINT32_MAX) return finish(io, s, TG_GPU_FE_REGISTER);
+        put(io, 0x20200 + (uint32_t)i * 4, (gate & ~0x33u) | 0x10);
+        s->gr_gate_ctrl[i] = get(io, 0x20200 + (uint32_t)i * 4);
+        if (s->gr_gate_ctrl[i] == UINT32_MAX || (s->gr_gate_ctrl[i] & 0x33) != 0x10)
+            return finish(io, s, TG_GPU_FE_REGISTER);
+    }
+    put(io, 0x400500, 0x10001); /* GR FIFO + semaphore access */
+    s->gr_fifo_access = get(io, 0x400500);
+    if (s->gr_fifo_access == UINT32_MAX || (s->gr_fifo_access & 0x10001) != 0x10001)
+        return finish(io, s, TG_GPU_FE_REGISTER);
+    s->stage = 11;
     return finish(io, s, TG_GPU_FE_OK);
 }
 

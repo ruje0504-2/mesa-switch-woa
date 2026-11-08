@@ -290,6 +290,9 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     s->bar1_phase = 5;
     ex_write(io, 0x2254, (USERD_VA >> 12) | 0x10000000); /* USERD BAR1 snoop */
 
+    state->stage = 7; /* distinguish GR preamble failure from BAR1 failure */
+    if (tg_gpu_frontend_gr_prepare(io, power, &s->frontend) != TG_GPU_FE_OK)
+        return TG_GPU_EXEC_FRONTEND;
     state->stage = 3;
     ex_write(io, 0x800000, (uint32_t)((physical + INST) >> 12) | 0x80000000);
     s->channel_instance_after = ex_read(io, 0x800000);

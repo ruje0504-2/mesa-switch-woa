@@ -5,11 +5,12 @@
 #include <stdio.h>
 #include <string.h>
 
-static uint32_t regs[0x180000 / 4];
+static uint32_t regs[0x420000 / 4];
 static unsigned writes, flushes, busy_reads, fail_flush, secure_writes, irq_masked;
 static uint32_t fault_on;
 static unsigned l2_flushes, l2_invalidations;
 static uint32_t fail_l2;
+static uint32_t ignore_write;
 static uint32_t read32(void *ctx, uint32_t address)
 {
     uint32_t reg = address - 0x57000000;
@@ -30,6 +31,9 @@ static void write32(void *ctx, uint32_t address, uint32_t value)
     assert(address >= 0x57000000 && reg < sizeof(regs));
     assert(reg != 0x100d1c && reg != 0x21434);
     ++writes;
+    if (reg == ignore_write) return;
+    if (reg >= 0x400000)
+        assert((regs[0x200 / 4] & 0x18001000) == 0x18001000);
     if (reg == 0x140 || reg == 0x144) { assert(value == 0); ++irq_masked; }
     if (reg == 0x1140) assert(irq_masked == 2 && value == 0xe);
     if (reg == 0x1100) { regs[reg / 4] &= ~value; return; }
@@ -53,6 +57,7 @@ static void reset(void)
     memset(regs, 0, sizeof(regs));
     writes = flushes = busy_reads = fail_flush = secure_writes = irq_masked = 0;
     fault_on = UINT32_MAX;
+    ignore_write = UINT32_MAX;
     fail_l2 = l2_flushes = l2_invalidations = 0;
     regs[0x22454 / 4] = regs[0x12006c / 4] = 1;
     regs[0x21434 / 4] = 1;
@@ -101,6 +106,25 @@ int main(void)
     regs[0x100c10 / 4] = 0xc000046; regs[0x1704 / 4] = 0xb00c0040; fail_flush=2;
     assert(tg_gpu_frontend_flush(&io, &power, &s) == TG_GPU_FE_FLUSH_TIMEOUT);
     assert(s.stage == 5 && s.fb_flushes == 1 && flushes == 2);
-    puts("PASS: cold frontend routing, secure policy, bounded FB flush and PRI faults (model only)");
+    reset();memset(&s,0,sizeof(s));
+    assert(tg_gpu_frontend_gr_prepare(&io,&power,&s)==TG_GPU_FE_REGISTER && !writes);
+    regs[0x200/4]=0xc0012120;regs[0x20200/4]=0xa5a50126;regs[0x20204/4]=0x5a5a0215;
+    assert(tg_gpu_frontend_gr_prepare(&io,&power,&s)==TG_GPU_FE_OK);
+    assert(s.stage==11 && s.gr_enable==0xd8013120 && s.gr_fifo_access==0x10001);
+    assert(s.gr_gate_ctrl[0]==0xa5a50114 && s.gr_gate_ctrl[1]==0x5a5a0214);
+    assert(regs[0x4041f4/4]==0x03fffffe && regs[0x419ffc/4]==0x1fffe);
+    assert(regs[0x4041f0/4]==0 && regs[0x4089b8/4]==0);
+    assert(!irq_masked && !secure_writes); /* no IRQ, fuse or PMU/Falcon start */
+    reset();memset(&s,0,sizeof(s));regs[0x200/4]=0x100;ignore_write=0x200;
+    assert(tg_gpu_frontend_gr_prepare(&io,&power,&s)==TG_GPU_FE_REGISTER);
+    assert(s.stage==10 && !regs[0x4041f4/4] && !s.gr_fifo_access);
+    reset();memset(&s,0,sizeof(s));regs[0x200/4]=0x100;fault_on=0x4041f4;
+    assert(tg_gpu_frontend_gr_prepare(&io,&power,&s)==TG_GPU_FE_PRI_FAULT);
+    assert(s.stage==10 && s.pri_error_address==0x574041f4 && !s.gr_fifo_access);
+    reset();memset(&s,0,sizeof(s));regs[0x200/4]=0x100;ignore_write=0x20200;
+    assert(tg_gpu_frontend_gr_prepare(&io,&power,&s)==TG_GPU_FE_REGISTER && !s.gr_fifo_access);
+    reset();memset(&s,0,sizeof(s));regs[0x200/4]=0x100;ignore_write=0x400500;
+    assert(tg_gpu_frontend_gr_prepare(&io,&power,&s)==TG_GPU_FE_REGISTER && s.stage==10);
+    puts("PASS: cold frontend/GR access ordering, secure policy, bounded cache flush and PRI faults (model only)");
     return 0;
 }
