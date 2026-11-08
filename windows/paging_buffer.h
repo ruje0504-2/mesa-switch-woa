@@ -7,8 +7,6 @@ typedef struct _TG_GPU_PAGING_BUILD {
     const TG_GPU_TABLE_SEGMENT *Tables;
     SIZE_T TableBytes;
     const TG_GPU_ROOT_TABLE *Root;
-    TG_GPU_RESOLVE_PAGE Resolve;
-    PVOID ResolveContext;
     UINT64 *Scratch;
     SIZE_T ScratchEntries;
     BOOLEAN GpuPagesUncached;
@@ -21,6 +19,8 @@ typedef struct _TG_GPU_PAGING_BUILD {
  * through a validated alias of the owned, uncached table segment.
  * TableBytes is the actual target allocation size, including resized roots.
  * The adapter validates hProcess/hAllocation before calling this helper.
+ * PTE addresses use the T214 physical VidMm resolver: segment zero is RAM;
+ * the sole nonzero segment is table backing. No UMD address resolver is used.
  */
 NTSTATUS TgGpuBuildPagingBuffer(DXGKARG_BUILDPAGINGBUFFER *Args,
                                const TG_GPU_PAGING_BUILD *Build);

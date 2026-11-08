@@ -38,6 +38,17 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS TgGpuResolveTableSegment(PVOID Context, UINT SegmentId,
     UINT64 ByteOffset, SIZE_T Bytes, UINT64 *DeviceAddress);
 
+/* WDDM 2.4 physical-address paging path. VidMm PTE segment zero contains a
+ * resident system-memory BYTE address, not the implicit allocation segment
+ * number or a PFN. Nonzero entries use the dedicated table segment above.
+ * Caller holds VidMm residency through execution/fence completion. This
+ * resolver neither pins pages nor accepts application-supplied addresses.
+ * A future logical-DMA/IOMMU path requires a different advertised contract.
+ */
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS TgGpuResolveVidMmPage(PVOID Context, UINT SegmentId,
+    UINT64 ByteAddress, SIZE_T Bytes, UINT64 *DeviceAddress);
+
 /* Access through the pool's own uncached mapping. A VidMm CPU_VIRTUAL update
  * can carry a different alias; do not compare that VA to this VA as proof
  * of allocation ownership. The adapter must validate its physical span.

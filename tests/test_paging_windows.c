@@ -113,6 +113,14 @@ static void TestSegment(void)
     CHECK(TgGpuResolveTableSegment(&segment,1,1,PAGE_SIZE,&device) == STATUS_INVALID_ADDRESS);
     CHECK(TgGpuResolveTableSegment(&segment,1,0,0,&device) == STATUS_INVALID_ADDRESS);
     CHECK(device == 0x90020000); /* failed resolves publish no address */
+    CHECK(NT_SUCCESS(TgGpuResolveVidMmPage(&segment,0,UINT64_C(0x170001000),PAGE_SIZE,&device)));
+    CHECK(device == UINT64_C(0x170001000)); /* byte address above 4 GiB, not a PFN */
+    CHECK(TgGpuResolveVidMmPage(&segment,2,0,PAGE_SIZE,&device) == STATUS_INVALID_ADDRESS);
+    CHECK(TgGpuResolveVidMmPage(&segment,0,0x170001,PAGE_SIZE,&device) == STATUS_INVALID_ADDRESS);
+    CHECK(TgGpuResolveVidMmPage(&segment,0,UINT64_C(1)<<34,PAGE_SIZE,&device) == STATUS_INVALID_ADDRESS);
+    CHECK(TgGpuResolveVidMmPage(&segment,0,UINT64_MAX & ~UINT64_C(0xfff),PAGE_SIZE,&device) == STATUS_INVALID_ADDRESS);
+    CHECK(TgGpuResolveVidMmPage(&segment,0,0x80000000,TG_GPU_TABLE_BYTES,&device) == STATUS_INVALID_ADDRESS);
+    CHECK(device == UINT64_C(0x170001000)); /* rejection cannot publish a new address */
     CHECK(NT_SUCCESS(TgGpuMapTableSegment(&segment,0,TG_GPU_TABLE_BYTES,&cpu,&device)));
     CHECK(cpu == segment_bytes && device == 0x90000000);
     target.Entries = cpu; target.Size = TG_GPU_TABLE_BYTES;
@@ -241,11 +249,11 @@ static void TestPagingBuffer(void)
     TG_GPU_ROOT_TABLE root = {0};
     DXGKARG_SETROOTPAGETABLE set = {.Address={1,0,TG_GPU_TABLE_BYTES},.NumEntries=1};
     TG_GPU_PAGING_BUILD build = {&segment,TG_GPU_TABLE_BYTES,&root,
-        TgGpuResolveTableSegment,&segment,scratch,TG_GPU_TABLE_ENTRIES,TRUE,TRUE};
+        scratch,TG_GPU_TABLE_ENTRIES,TRUE,TRUE};
     DXGK_PTE ptes[3] = {0};
     DXGKARG_BUILDPAGINGBUFFER args = {0}, flush = {0};
     UINT64 *entries = (UINT64 *)segment_bytes;
-    struct tlb_model model = {.Control=0x18000,.ExpectedEntry=&entries[7],.Expected=UINT64_C(0x100900011)};
+    struct tlb_model model = {.Control=0x18000,.ExpectedEntry=&entries[7],.Expected=UINT64_C(0x101700011)};
     struct tg_gpu_power_io io = {&model,TlbRead,TlbWrite,NULL,NULL,TlbDelay};
     struct tg_gpu_power power = {.owned=true,.ready=true};
     SIZE_T prefix, bytes, completed = 99;
@@ -254,6 +262,8 @@ static void TestPagingBuffer(void)
     memset(segment_bytes,0xa5,sizeof(segment_bytes));
     memset(commands,0xcc,sizeof(commands));
     for (i=0;i<3;++i) { ptes[i].Valid=1;ptes[i].Segment=1;ptes[i].PageAddress=(i+1)*PAGE_SIZE; }
+    ptes[0].Segment=0;ptes[0].PageAddress=UINT64_C(0x170001000);
+    ptes[2].Segment=0;ptes[2].PageAddress=0x80003000;ptes[2].ReadOnly=1;
     args.Operation=DXGK_OPERATION_UPDATE_PAGE_TABLE;
     args.UpdatePageTable.UpdateMode=DXGK_PAGETABLEUPDATE_GPU_PHYSICAL;
     args.UpdatePageTable.PageTableAddress.GpuPhysical=(D3DGPU_PHYSICAL_ADDRESS){1,0,0};
@@ -267,6 +277,10 @@ static void TestPagingBuffer(void)
     CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_NOT_SUPPORTED);
     CHECK(args.pDmaBuffer==commands && args.MultipassOffset==0 && commands[0]==0xcc);
     ptes[2].NoExecute=0;
+    ptes[2].PageAddress=UINT64_C(1)<<34;
+    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_INVALID_ADDRESS);
+    CHECK(args.pDmaBuffer==commands && args.MultipassOffset==0 && commands[0]==0xcc);
+    ptes[2].PageAddress=0x80003000;
     CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER);
     CHECK(args.MultipassOffset==1 && args.pDmaBuffer==commands+72);
     args.DmaSize=sizeof(commands)-72;
@@ -292,7 +306,7 @@ static void TestPagingBuffer(void)
     *(UINT *)(commands+prefix)=saved;
     CHECK(NT_SUCCESS(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed)));
     CHECK(completed==bytes && model.Writes==2 && model.Root==0x900202);
-    CHECK(entries[7]==UINT64_C(0x100900011) && entries[8]==UINT64_C(0x100900021) && entries[9]==UINT64_C(0x100900031));
+    CHECK(entries[7]==UINT64_C(0x101700011) && entries[8]==UINT64_C(0x100900021) && entries[9]==UINT64_C(0x100800035));
     model.Control=0x10000;
     CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed)==STATUS_IO_TIMEOUT);
     CHECK(completed==prefix && completed!=bytes); /* do not complete the paging fence */
@@ -324,7 +338,7 @@ void start(void)
     DXGK_PAGE_TABLE_LEVEL_DESC desc;
     UINT64 before;
     ULONG i, written;
-    static const char message[] = "PASS: WDK paging buffers, multipass ordering, alias bounds, root/RAMIN and TLB failures\r\n";
+    static const char message[] = "PASS: WDK physical system/table PTEs, multipass ordering, alias bounds and TLB failures\r\n";
     TestSegment();
     TestRoot();
     TestPagingBuffer();

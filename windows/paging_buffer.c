@@ -101,8 +101,8 @@ NTSTATUS TgGpuBuildPagingBuffer(DXGKARG_BUILDPAGINGBUFFER *Args,
         target.ScratchEntries = Build->ScratchEntries;
         target.CpuMappingUncached = TRUE; /* owned segment alias */
         target.GpuPagesUncached = Build->GpuPagesUncached;
-        target.Resolve = Build->Resolve;
-        target.ResolveContext = Build->ResolveContext;
+        target.Resolve = TgGpuResolveVidMmPage;
+        target.ResolveContext = (PVOID)Build->Tables;
         if (!target.Size || target.Size > TG_GPU_TABLE_BYTES ||
             (target.Size & (PAGE_SIZE - 1))) return STATUS_INVALID_PARAMETER;
         if (update->UpdateMode == DXGK_PAGETABLEUPDATE_CPU_VIRTUAL) {
