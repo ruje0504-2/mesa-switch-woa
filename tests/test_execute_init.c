@@ -5,7 +5,7 @@
 
 struct fifo_model {
     uint32_t mc, instance, asid[2];
-    unsigned writes, channel_reads, channel_writes, ticks, enabled_at;
+    unsigned writes, channel_reads, channel_writes, asid_writes, ticks, enabled_at;
     bool fail_enable, unreadable_channel;
 };
 static uint32_t read32(void *context, uint32_t address)
@@ -38,8 +38,12 @@ static void write32(void *context, uint32_t address, uint32_t value)
         assert((m->mc & 0x100) && m->ticks - m->enabled_at >= 20);
         ++m->channel_writes;
         if (address == 0x57800000) m->instance = value;
-    } else if (address == 0x70019aa8) m->asid[0] = value;
-    else if (address == 0x70019aac) m->asid[1] = value;
+    } else if (address == 0x70019aa8 || address == 0x70019aac) {
+        /* Reproduce the failed assumption: an ASID read need not become zero.
+         * Direct physical GPU DMA must leave this global state untouched.
+         */
+        ++m->asid_writes;
+    }
 }
 static void delay(void *context, uint32_t us)
 { ((struct fifo_model *)context)->ticks += us; }
@@ -62,8 +66,12 @@ void test_execute_init(void)
     assert(result.observed[0] == 0xdeadbeef && result.observed[1] == 0xdeadbeef);
     tg_gpu_execute_stop(&io,&state);
     assert(!(m.mc & 0x100) && !state.fifo_ready);
-    assert(tg_gpu_execute_release_domain(&io,&state));
-    assert(m.asid[0] == 0x80000011 && m.asid[1] == 0x80000012 && !state.owned);
+    assert(m.asid_writes == 0 && m.asid[0] == 0x80000011 && m.asid[1] == 0x80000012);
+
+    memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state));
+    /* Never admit an address carrying GM20B's SMMU translation tag. */
+    assert(tg_gpu_execute(&io,&power,arena,UINT64_C(1)<<34,&state,&result) == TG_GPU_EXEC_ARGUMENT);
+    assert(m.writes == 0 && m.channel_reads == 0 && !state.owned);
 
     memset(&m,0,sizeof(m)); memset(&state,0,sizeof(state)); m.fail_enable=true;
     assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_FIFO_INIT);

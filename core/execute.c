@@ -139,8 +139,6 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     if (s->mc_enable_before == UINT32_MAX) return TG_GPU_EXEC_FIFO_INIT;
     if (s->mc_enable_before & 0x100)
         s->channel_instance_before = ex_read(io, 0x800000);
-    state->old_asid[0] = io->read32(io->context, 0x70019aa8);
-    state->old_asid[1] = io->read32(io->context, 0x70019aac);
     state->owned = true;
     /* power_up proved exclusive ownership by requiring reset + clamp before
      * releasing the GPU. A cold CCSR slot is not an ownership test. Follow
@@ -162,14 +160,13 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     s->channel_instance_after = ex_read(io, 0x800000);
     if (s->channel_instance_after & 0x80000000) return TG_GPU_EXEC_BUSY;
     state->fifo_ready = true;
-    /* The probe owns this reset GPU. Its GPU MMU maps only the private
-     * arena; use direct bus addresses on the two GPU SMMU groups only.
-     * This is not a general Windows IOMMU implementation.
+    /* GM20B selects Tegra SMMU translation with GPU address bit 34:
+     * Switchroot gk20a_mm_get_iommu_bit + nvgpu_mem_iommu_translate.
+     * prepare_arena accepts only physical backing below 4 GiB, so every
+     * address programmed here leaves that tag clear. Do not rewrite global
+     * MC_SMMU_GPU/GPUB_ASID or require those registers to read as zero.
+     * The GPU's own MMU still limits this channel to the private arena.
      */
-    io->write32(io->context, 0x70019aa8, 0);
-    io->write32(io->context, 0x70019aac, 0);
-    if (io->read32(io->context, 0x70019aa8) || io->read32(io->context, 0x70019aac))
-        return TG_GPU_EXEC_ARGUMENT;
     ex_write(io, 0x2140, 0); ex_write(io, 0x2528, 0);
     ex_write(io, 0x4010c, 0); ex_write(io, 0x4014c, 0);
     ex_write(io, 0x2100, UINT32_MAX);
@@ -243,15 +240,4 @@ void tg_gpu_execute_stop(const struct tg_gpu_power_io *io, struct tg_gpu_executi
     ex_write(io, 0x200, ex_read(io, 0x200) & ~0x100u);
     io->delay_us(io->context, 20);
     s->fifo_ready = false;
-}
-
-bool tg_gpu_execute_release_domain(const struct tg_gpu_power_io *io, struct tg_gpu_execution *s)
-{
-    if (!s->owned) return true;
-    io->write32(io->context, 0x70019aa8, s->old_asid[0]);
-    io->write32(io->context, 0x70019aac, s->old_asid[1]);
-    if (io->read32(io->context, 0x70019aa8) != s->old_asid[0] ||
-        io->read32(io->context, 0x70019aac) != s->old_asid[1]) return false;
-    s->owned = false;
-    return true;
 }

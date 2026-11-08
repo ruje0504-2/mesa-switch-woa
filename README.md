@@ -38,6 +38,12 @@ snapshots in the existing status response. Do not interpret a reset CCSR slot
 as a live channel. `--probe --keep-fan` rebuilds only the GPU probe when the
 matching SwitchFan bridge is already installed and verified.
 
+The diagnostic accepts only owned physical buffers below 4 GiB. Switchroot's
+GM20B path tags IOMMU addresses with bit 34 and leaves physical addresses
+untagged. The probe therefore leaves Tegra's global GPU/GPUB ASID registers
+unchanged; a nonzero ASID readback is not a failure for this physical path.
+This does not provide a Windows IOMMU domain or authorize arbitrary DMA.
+
 `windows/paging.c` translates real WDK `DXGK_PTE` entries into GM20B entries
 for an uncached, idle address space. It validates the entire update before
 publishing, supports repeat/invalid entries, and rejects unsupported flags.

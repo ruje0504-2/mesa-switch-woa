@@ -20,7 +20,6 @@ enum tg_gpu_execute_result {
 struct tg_gpu_execution {
     bool owned;
     bool fifo_ready;
-    uint32_t old_asid[2];
     uint32_t stage;
 };
 
@@ -31,10 +30,9 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     uint64_t device_address, struct tg_gpu_execution *state,
     struct tg_gpu_status *result);
 /* Stop channel fetch before the caller drains MC, stops the PLL and powers
- * down. Release the DMA domain only AFTER power_down confirms no ownership.
+ * down. Clear execution ownership/free the arena only AFTER power_down
+ * confirms no ownership. The probe does not change any Tegra SMMU domain.
  */
 void tg_gpu_execute_stop(const struct tg_gpu_power_io *io, struct tg_gpu_execution *state);
 void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io, struct tg_gpu_status *result);
-bool tg_gpu_execute_release_domain(const struct tg_gpu_power_io *io,
-                                   struct tg_gpu_execution *state);
 #endif

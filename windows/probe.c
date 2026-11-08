@@ -96,6 +96,13 @@ static void GpuWrite(void *context, uint32_t address, uint32_t value)
 {
     GPU_DEVICE *d = context;
     ULONG i;
+    /* Retain the old ACPI resource layout, but never write global SMMU ASIDs.
+     * Direct physical probe buffers do not use the bit-34 translation tag.
+     */
+    if (address == 0x70019aa8 || address == 0x70019aac) {
+        d->io_status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        return;
+    }
     /* The last three resources are read-only identity/calibration fuses. */
     for (i = 0; i < T214_GPU_RESOURCE_COUNT - 3; ++i) {
         const struct gpu_map *m = &d->maps[i];
@@ -172,8 +179,7 @@ static VOID GpuCleanup(GPU_DEVICE *d)
     if (!d->power.owned) {
         /* Full reset/power-down retired the GPU's register ownership too. */
         d->clock.owned = d->clock.running = false;
-        if (!tg_gpu_execute_release_domain(&io, &d->execution))
-            d->last.restore_result |= 1u << 24;
+        d->execution.owned = d->execution.fifo_ready = false;
         if (d->arena) {
             MmFreeContiguousMemorySpecifyCache(d->arena, TG_GPU_ARENA_BYTES, MmNonCached);
             d->arena = NULL;
