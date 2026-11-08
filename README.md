@@ -111,8 +111,8 @@ A failed root move clears the software binding's valid flag, so the adapter
 must not reschedule it with the old root. Flushes belong at the ordered paging
 submission point, with old pages retained through completion/reset; they must
 not run early from `BuildPagingBuffer`. The context DDIs below now consume
-these helpers; hardware channel rebind and complete miniport registration
-remain unfinished.
+these helpers. The channel worker below implements hardware binding; complete
+miniport registration and physical validation remain unfinished.
 `platform/t214_mmu.c` performs the Switchroot TLB invalidate sequence and
 reports timeout/read failures. Add `--windows-tests` to build `test-paging.exe`
 against the real WDK types, then run it in ARM64 Windows/WinPE. This test uses
@@ -139,11 +139,30 @@ only after the uncached marker equals the expected GPU result. Completion does
 not release RAMIN: the hardware backend must also unbind/drain the channel or
 complete reset before releasing the work reference. Aborted work never advances
 the completed fence. The virtual submission DDI, command validation, VidMm
-residency, actual GPU binding and fault/TDR integration remain to be connected.
+residency and fault/TDR integration remain to be connected.
 `--windows-tests` also builds `test-context.exe`; it calls the registered WDK
 function pointers using explicit allocation, interrupt and GPU-write substitutes.
 It checks lifetime, failed root changes, pending/duplicate notification, retained
 references and failed-free retry, not live Dxgkrnl or GPU execution.
+
+`windows/submit_worker.c` connects prepared work to `core/channel.c` after
+exclusive cold initialization. The worker blocks scheduling, invalidates the
+root TLB, binds RAMIN, enables the channel and submits the physical runlist
+before allowing execution. Both ring entries are preloaded; this hot path
+does not use the diagnostic probe's second BAR1 doorbell. Queuing alone never
+notifies a completed fence. The work reference is released only after bounded
+disable/preempt/runlist removal, unbind, FB flush and TLB invalidation succeed.
+A timeout retains RAMIN, roots and commands. Recovery disables fetch, drains
+MC, restores clocks and powers down; clamp/reset readback must confirm isolation
+before releasing failed work. No caller-supplied "hardware retired" boolean
+can bypass these conditions. Cold reinitialization is required after recovery.
+MMIO/waits run outside the object spin lock, with an active reference held.
+Native ARM64 tests exercise submission order, duplicate rejection, preempt
+timeout/retry, failed reset acknowledgement and cancellation without MMIO using
+controlled hardware substitutes. Physical execution and privilege enforcement
+remain unverified. These are worker helpers, not a registered
+[`SubmitCommandVirtual` DDI](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_submitcommandvirtual):
+its allowed return values differ from the worker's internal failure statuses.
 
 `windows/internal_va.c` reserves one leaf-table coverage range (64 MiB) through
 `DxgkCbReserveGpuVirtualAddressRange` inside process creation, with user-mode
@@ -161,9 +180,9 @@ command buffer is serialized across contexts; it is not a general VA allocator.
 Preparation preserves RAMIN's PDB/VA limit and initializes only the complement
 of the fence value. The context helper rejects application command ranges that
 overlap the reservation. Native tests check the callback contract, PTE/packet
-encoding, restored reserved PDE and separate fence backing. This does not yet
-bind a real hardware channel or prove hardware privilege enforcement; actual
-submission, workload barriers, IRQ and recovery remain required.
+encoding, restored reserved PDE and separate fence backing. The channel worker
+consumes this layout, but no physical submission or privilege-enforcement pass
+is claimed. Workload barriers, IRQ/TDR and adapter dispatch remain required.
 
 The existing `LitePerformanceCheck.exe` is the UI for both clock profiles and
 the combined readback check. The optional probe requires matching firmware

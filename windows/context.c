@@ -45,7 +45,7 @@ NTSTATUS TgGpuStopContextEngine(TG_GPU_CONTEXT_ENGINE *e)
     if (!e) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);
     e->Stopping=TRUE;
-    status=e->Active || e->Creating || !IsListEmpty(&e->Contexts) || !IsListEmpty(&e->Devices) ||
+    status=e->Active || e->Channel.referenced || e->Creating || !IsListEmpty(&e->Contexts) || !IsListEmpty(&e->Devices) ||
         !IsListEmpty(&e->Processes) ? STATUS_DEVICE_BUSY : STATUS_SUCCESS;
     KeReleaseSpinLock(&e->Lock,irql);
     if (!NT_SUCCESS(status)) return status;
@@ -234,7 +234,7 @@ NTSTATUS TgGpuPrepareContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w
     KIRQL irql;NTSTATUS status;TG_GPU_CONTEXT *c;
     if (!e || !w) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);c=w->Context;
-    if (e->Active!=w || !c || w->Prepared || w->Signaling || w->Notified) {
+    if (e->Active!=w || !c || w->Prepared || w->Signaling || w->Notified || w->HardwareBusy || w->Attempted) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_DEVICE_STATE;
     }
     status=TgGpuInstallInternalRoot(e->Tables,&w->Root,&c->Device->Process->Internal);
@@ -264,7 +264,8 @@ NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w
     if (!e || !w) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);
     if (e->Active!=w || !w->Context) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER; }
-    if (!w->Prepared) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_NOT_READY; }
+    if (!w->Submitted) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_NOT_READY; }
+    if (w->HardwareBusy) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_BUSY; }
     if (w->Signaling) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_BUSY; }
     if (w->Notified) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_SUCCESS; }
     if (*(volatile UINT32 *)((UCHAR *)e->Commands.CpuAddress+TG_GPU_COMMAND_FENCE)!=w->Expected) {
@@ -276,15 +277,4 @@ NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w
     if (w->Notified) status=STATUS_SUCCESS;
     else if (NT_SUCCESS(status)) status=STATUS_UNSUCCESSFUL;
     KeReleaseSpinLock(&e->Lock,irql); return status;
-}
-NTSTATUS TgGpuReleaseContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w,
-                               BOOLEAN hardware_retired)
-{
-    KIRQL irql;
-    if (!e || !w) return STATUS_INVALID_PARAMETER;
-    KeAcquireSpinLock(&e->Lock,&irql);
-    if (e->Active!=w || !w->Context) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER; }
-    if (!hardware_retired || w->Signaling) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_BUSY; }
-    --w->Context->References; e->Active=NULL; w->Context=NULL;
-    KeReleaseSpinLock(&e->Lock,irql); return STATUS_SUCCESS;
 }

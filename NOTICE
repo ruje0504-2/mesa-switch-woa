@@ -67,3 +67,9 @@ the GPL-2.0-only power sequence and is distributed under GPL-2.0-only.
 platform/t214_mmu.c follows the TLB invalidate sequence in the same
 Switchroot nvgpu common/fb/fb_gm20b.c (Copyright 2014-2018 NVIDIA).
 The MIT license text above applies.
+
+core/channel.c follows the channel bind, disable, preempt and runlist removal
+ordering in the same Switchroot nvgpu gk20a/fifo_gk20a.c and common/fifo/channel.c,
+with Linux nouveau v6.12 engine/fifo/gk104.c and gf100.c as references.
+Copyright (c) 2014-2018 NVIDIA CORPORATION. All rights reserved.
+Copyright 2012 Red Hat Inc. The MIT license text above applies.

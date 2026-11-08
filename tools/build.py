@@ -77,11 +77,11 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
          "/DDXGKDDI_INTERFACE_VERSION=DXGKDDI_INTERFACE_VERSION_WDDM2_4",
          *[f"/I{p}" for p in mesa_includes], *[f"/imsvc{p}" for p in includes]]
 objects = []
-for source in [*core, power, clock, tlb, root / "windows/resources.c",
+for source in [*core, power, clock, tlb, root / "core/channel.c", root / "windows/resources.c",
                root / "windows/private_memory.c", root / "windows/paging.c",
                root / "windows/table_segment.c", root / "windows/root_table.c",
                root / "windows/paging_buffer.c", root / "windows/context.c",
-               root / "windows/internal_va.c"]:
+               root / "windows/internal_va.c", root / "windows/submit_worker.c"]:
     obj = args.out / (source.stem + ".obj")
     subprocess.run([args.clang_cl, *flags, f"/Fo{obj}", "--", str(source)], check=True)
     objects.append(obj)
