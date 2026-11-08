@@ -10,6 +10,7 @@ struct fifo_model {
     bool fail_enable, unreadable_channel, fail_pb_enable, allow_mmu, runlist;
     bool fail_sched_allow, hce_fault;
 };
+static uint32_t *arena_userd;
 static uint32_t read32(void *context, uint32_t address)
 {
     struct fifo_model *m = context;
@@ -20,10 +21,13 @@ static uint32_t read32(void *context, uint32_t address)
     if (address == 0x57002280) return m->runlist_base;
     if (address == 0x57002284) return m->runlist ? 1 : 0;
     if (address == 0x5704013c) return m->stall;
-    if (address == 0x57040148 && m->hce_fault && m->put) return 8;
+    if (address == 0x57040148 && m->hce_fault && m->runlist && !(m->sched & 1)) return 8;
     if (address == 0x57100c80 && m->allow_mmu) return 0x18000;
     if (address == 0x58013000 && m->allow_mmu) return 0x55aa3377;
-    if (address == 0x5801308c) return m->put;
+    if (address == 0x5801308c) return arena_userd[35];
+    if (address == 0x57040048 || address == 0x57040050 ||
+        address == 0x57040014 || address == 0x57040000)
+        assert(!"idle PBDMA registers must not be sampled as channel state");
     if (address == 0x57800000 || address == 0x57800004) {
         /* Reading a reset FIFO cannot establish channel ownership. */
         assert((m->mc & 0x100) && m->ticks - m->enabled_at >= 20);
@@ -65,7 +69,8 @@ static void write32(void *context, uint32_t address, uint32_t value)
     } else if (address == 0x5801308c) {
         assert((m->pb & 1) && m->runlist && !(m->sched & 1));
         assert(!(m->stall & 0x10000100));
-        m->put = value;
+        assert(value == 2); /* first release needs no notification */
+        m->put = value; arena_userd[35] = value;
     } else if (address == 0x57800000 || address == 0x57800004) {
         assert((m->mc & 0x100) && m->ticks - m->enabled_at >= 20);
         ++m->channel_writes;
@@ -88,6 +93,7 @@ void test_execute_init(void)
     struct tg_gpu_power power = {0};
     struct tg_gpu_execution state = {0};
     struct tg_gpu_status result = {.expected={0x13579bdf,0x2468ace0}};
+    arena_userd = (uint32_t *)(arena + 0x41000);
     assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_ARGUMENT);
     assert(m.writes == 0 && m.channel_reads == 0);
     power.owned = power.ready = true;
@@ -135,6 +141,7 @@ void test_execute_init(void)
     m.runlist_map=1; m.allow_mmu=true; m.sched=0xa5; m.stall=UINT32_MAX;
     assert(tg_gpu_execute(&io,&power,arena,0xc0000000,&state,&result) == TG_GPU_EXEC_TIMEOUT);
     assert(state.stage == 4 && result.userd_gp_put == 1 && result.userd_gp_get == 0);
+    assert(m.put == 0 && result.pbdma_gp_base == UINT32_MAX);
     assert(result.observed[0] == 0xdeadbeef && result.observed[1] == 0xdeadbeef);
     assert(result.scheduler_before == 0xa5 && result.scheduler_after == 0xa4);
     assert(result.runlist_status == 1 && result.runlist_base == 0x300c0045);

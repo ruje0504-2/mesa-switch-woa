@@ -5,7 +5,7 @@ Class=System
 ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
 Provider=%Mfg%
 CatalogFile=tegragpuprobe.cat
-DriverVer=11/07/2026,0.1.0.8
+DriverVer=11/07/2026,0.1.0.9
 PnpLockdown=1
 
 [DestinationDirs]

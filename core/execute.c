@@ -72,6 +72,11 @@ bool tg_gpu_prepare_arena(void *cpu, uint64_t physical, size_t bytes,
         !tg_gpu_pte_4k(physical + FENCE, false, true, &pt[FENCE_VA >> 12]) ||
         !tg_gpu_pte_4k(physical + USERD, false, true, &pt[USERD_VA >> 12])) return false;
 
+    /* Bootstrap the first entry through saved RAMFC/USERD state. This tests
+     * context loading independently of the later BAR1 notification. Entry
+     * two is still published through the normal USERD GP_PUT doorbell.
+     */
+    instance[0] = 1; /* RAMFC GP_PUT */
     instance[2] = (uint32_t)(physical + USERD) | 3; /* USERD, sysmem NCOH */
     instance[3] = 0;
     instance[4] = 0xface; /* hardware signature */
@@ -85,6 +90,7 @@ bool tg_gpu_prepare_arena(void *cpu, uint64_t physical, size_t bytes,
     instance[62] = 0x10003080; /* runlist timeslice */
     instance[63] = 0x10000010; /* pushbuffer timeslice */
     userd[0] = 0x55aa3377; /* BAR1 visibility check only */
+    userd[35] = 1; /* USERD GP_PUT agrees with saved RAMFC */
     fence[0] = fence[1] = 0xdeadbeef;
     release_packet(push, FENCE_VA, expected[0]);
     release_packet(push + 5, FENCE_VA + 4, expected[1]);
@@ -129,10 +135,14 @@ void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io,
     s->runlist_status = ex_read(io, 0x2284);
     if (s->pbdma_enable_after != UINT32_MAX && (s->pbdma_enable_after & 1)) {
         s->pbdma_status = ex_read(io, 0x3080);
-        s->pbdma_gp_base = ex_read(io, 0x40048);
-        s->pbdma_gp_fetch = ex_read(io, 0x40050);
-        s->pbdma_gp_get = ex_read(io, 0x40014);
-        s->pbdma_gp_put = ex_read(io, 0x40000);
+        s->pbdma_gp_base = s->pbdma_gp_fetch =
+            s->pbdma_gp_get = s->pbdma_gp_put = UINT32_MAX;
+        if (tg_gpu_pbdma_owns_channel(s->pbdma_status, 0)) {
+            s->pbdma_gp_base = ex_read(io, 0x40048);
+            s->pbdma_gp_fetch = ex_read(io, 0x40050);
+            s->pbdma_gp_get = ex_read(io, 0x40014);
+            s->pbdma_gp_put = ex_read(io, 0x40000);
+        }
         s->pbdma_interrupt_1 = ex_read(io, 0x40148);
     }
     if (state->stage >= 4) {
@@ -255,8 +265,10 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         return TG_GPU_EXEC_SCHEDULER;
 
     state->stage = 4;
-    /* BAR1 writes notify FIFO; a CPU write to USERD alone does not. */
-    io->write32(io->context, BAR1 + USERD_VA + 35 * 4, 1);
+    /* The initial GP_PUT was already one when the context became runnable.
+     * Do not issue its BAR1 doorbell here: distinguish context bootstrap from
+     * notification. The second release below exercises the BAR1 path.
+     */
     for (i = 0; i < 10000 && fence[0] != s->expected[0]; ++i) {
         if (ex_read(io, 0x259c) || ex_read(io, 0x40108) || ex_read(io, 0x40148)) break;
         io->delay_us(io->context, 10);

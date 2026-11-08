@@ -49,6 +49,13 @@ channel from a loaded reader. A queued command or enabled channel is not
 proof of execution. `--probe --keep-fan`
 rebuilds only the GPU probe when the matching SwitchFan bridge is verified.
 
+The first ring entry is preloaded in saved RAMFC and USERD `GP_PUT` before
+binding. The second entry is published by a BAR1 USERD write after the first
+GPU-written fence completes. This separates context bootstrap from doorbell
+delivery without replacing either GPU write with a CPU result. Live PBDMA
+GP registers are sampled only when its status identifies valid channel zero;
+idle/context-switch SRAM readouts are not interpreted as execution progress.
+
 The diagnostic accepts only owned physical buffers below 4 GiB. Switchroot's
 GM20B path tags IOMMU addresses with bit 34 and leaves physical addresses
 untagged. The probe therefore leaves Tegra's global GPU/GPUB ASID registers

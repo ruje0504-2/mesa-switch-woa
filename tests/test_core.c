@@ -82,6 +82,7 @@ static void test_private_channel(void)
     uint32_t *commands = (uint32_t *)(arena + 0x43000);
     uint32_t *fence = (uint32_t *)(arena + 0x44000);
     uint32_t *runlist = (uint32_t *)(arena + 0x45000);
+    uint32_t *userd = (uint32_t *)(arena + 0x41000);
     assert(tg_gpu_prepare_arena(arena, 0xc0000000, sizeof(arena), values));
     assert(pde[0] == UINT64_C(0x00c0020300000000));
     assert(pde[1] == 0 && pte[0] == 0 && pte[20] == 0);
@@ -89,6 +90,7 @@ static void test_private_channel(void)
     assert((pte[18] & 5) == 1 && (pte[19] & 5) == 1); /* writable fence/userd */
     assert(ramfc[128] == 0xc0000807 && ramfc[130] == 0x00fff000);
     assert(ramfc[2] == 0xc0041003 && ramfc[18] == 0x10000);
+    assert(ramfc[0] == 1 && ramfc[5] == 0 && userd[35] == 1 && userd[34] == 0);
     assert(commands[0] == 0x20040004 && commands[4] == 0x01100002);
     assert(commands[2] == 0x12000 && commands[3] == values[0]);
     assert(commands[7] == 0x12004 && commands[8] == values[1]);
@@ -116,6 +118,11 @@ int main(void)
     assert(identity.chipset == TG_GPU_CHIP_GM20B);
     assert(!tg_gpu_identify(0xffffffff, &identity));
     assert(!tg_gpu_identify(0, &identity));
+    assert(tg_gpu_pbdma_owns_channel(0x2000, 0));
+    assert(!tg_gpu_pbdma_owns_channel(0x2001, 0));
+    assert(!tg_gpu_pbdma_owns_channel(0x3000, 0)); /* TSG, not our bare channel */
+    assert(!tg_gpu_pbdma_owns_channel(0x10000004, 0)); /* idle/stale SRAM */
+    assert(!tg_gpu_pbdma_owns_channel(0xa000, 0)); /* context load in progress */
     assert(tg_gpu_build_gpfifo(UINT64_C(0x1234567000), 6, false, &entry));
     assert(entry.low == 0x34567000 && entry.high == 0x00001812);
     assert(tg_gpu_build_gpfifo(UINT64_C(0x1234567000), 6, true, &entry));
