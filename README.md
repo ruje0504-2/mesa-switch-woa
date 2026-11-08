@@ -75,7 +75,7 @@ through execution and is restored on clock release. FIFO/FB/LTC use the
 upstream force-run clock-gating profiles until a PMU governor exists. LTC
 active counts feed both L2 and FBHUB; physical-security setup is restricted
 to the upstream non-secure branch. Two bounded FB flushes must finish before
-the channel becomes runnable. ABI 8 (236 bytes) records the initialization
+the channel becomes runnable. ABI 9 (236 bytes) records the initialization
 stage, LTC/flush counts, BUS/PRI faults, FIFO binding/engine state and the
 separate BAR1 step/expected/GPU/CPU values. Bounded L2 writeback and invalidation
 timeouts stop submission; a successful FB flush alone is not DRAM visibility.
@@ -88,6 +88,14 @@ GM20B path tags IOMMU addresses with bit 34 and leaves physical addresses
 untagged. The probe therefore leaves Tegra's global GPU/GPUB ASID registers
 unchanged; a nonzero ASID readback is not a failure for this physical path.
 This does not provide a Windows IOMMU domain or authorize arbitrary DMA.
+
+The GM20B platform leaves `honors_aperture` false, so Switchroot resolves
+`nvgpu_aperture_mask` to VIDMEM even for SoC DRAM. Version 0.1.0.14 applies
+that policy to the full chain: PTE target 0, small PDE target 1 plus VOL,
+volatile PDB target 0, USERD, CCSR, runlist, BAR1 binding, MMU debug buffers
+and TLB invalidation. Copying only the helper’s SYS_NCOH argument was
+incorrect. This source correction does not establish why ABI 8 stalled or
+prove a GPU execution pass. [Platform policy](https://github.com/CTCaer/switch-l4t-kernel-nvgpu/blob/1ae0167d360287ca78f5a2572f0de42594140312/drivers/gpu/nvgpu/common/mm/nvgpu_mem.c)
 
 `windows/allocation.c` implements the real-WDK create/destroy/open/close
 allocation callbacks. ABI 1 describes opaque GPU storage with a byte count and

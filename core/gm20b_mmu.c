@@ -44,10 +44,12 @@ tg_gpu_pde_small(uint64_t table_gpu_address, uint64_t *pde)
     if (!pde || !page_address_valid(table_gpu_address))
         return false;
 
-    /* gf100_vmm_pgd_pde uses NCOH=3 in the upper (small-page) half.
+    /* Switchroot GM20B has honors_aperture=false: SoC DRAM uses the
+     * VIDMEM selector (1 for a PDE), plus VOL (4). NCOH=3 is the discrete
+     * GPU encoding, not the result of nvgpu_aperture_mask on this SoC.
      * The lower half remains absent so the SPT is selected.
      */
-    *pde = (table_gpu_address << 24) | (UINT64_C(3) << 32);
+    *pde = (table_gpu_address << 24) | (UINT64_C(5) << 32);
     return true;
 }
 
@@ -57,9 +59,10 @@ tg_gpu_instance_pdb(uint64_t directory_gpu_address, uint64_t *pdb)
     if (!pdb || !page_address_valid(directory_gpu_address))
         return false;
 
-    /* RAMIN +0x200; gm200_vmm_join_ selects 64 KiB big pages with bit 11.
+    /* RAMIN +0x200: VIDMEM target 0, volatile PDB (4), 64 KiB big pages
+     * (bit 11). Match Switchroot's resolved GM20B aperture policy.
      * RAMIN +0x208 must separately contain the inclusive VA limit.
      */
-    *pdb = directory_gpu_address | UINT64_C(0x803);
+    *pdb = directory_gpu_address | UINT64_C(0x804);
     return true;
 }

@@ -132,7 +132,7 @@ static void TestSegment(void)
     update.NumPageTableEntries = 1; update.pPageTableEntries = ptes;
     ptes[0].Valid = 1; ptes[0].Segment = 1; ptes[0].PageAddress = TG_GPU_TABLE_BYTES;
     CHECK(NT_SUCCESS(TgGpuUpdatePageTable(&update,&target)));
-    CHECK(target.Entries[0] == UINT64_C(0x0090020300000000));
+    CHECK(target.Entries[0] == UINT64_C(0x0090020500000000));
     /* Reject the whole batch when a later child table crosses the pool end. */
     update.StartIndex = 1; update.NumPageTableEntries = 2; ptes[1] = ptes[0];
     ptes[1].PageAddress = sizeof(segment_bytes)-PAGE_SIZE;
@@ -203,10 +203,10 @@ static void TestRoot(void)
     CHECK(TgGpuWriteRootInstance(&root,&inst,FALSE)==STATUS_GRAPHICS_ALLOCATION_BUSY);
     CHECK(instance[128]==0xa5a5a5a5);
     CHECK(NT_SUCCESS(TgGpuWriteRootInstance(&root,&inst,TRUE)));
-    CHECK(instance[128]==0x90020807 && instance[129]==0 && instance[130]==0x0bfff000 && instance[131]==0);
+    CHECK(instance[128]==0x90020804 && instance[129]==0 && instance[130]==0x0bfff000 && instance[131]==0);
     CHECK(instance[127]==0xa5a5a5a5 && instance[132]==0xa5a5a5a5);
     CHECK(NT_SUCCESS(TgGpuFlushRootTable(&root,&flush,&io,&power)));
-    CHECK(model.Root==0x900202 && model.Trigger==0x80000001 && model.Writes==2);
+    CHECK(model.Root==0x900200 && model.Trigger==0x80000001 && model.Writes==2);
     flush.RootPageTableAddress.SegmentOffset=0;
     CHECK(TgGpuFlushRootTable(&root,&flush,&io,&power)==STATUS_INVALID_PARAMETER && model.Writes==2);
     flush.RootPageTableAddress=set.Address;
@@ -305,7 +305,7 @@ static void TestPagingBuffer(void)
     CHECK(completed==0 && entries[7]==UINT64_C(0xa5a5a5a5a5a5a5a5) && !model.Writes);
     *(UINT *)(commands+prefix)=saved;
     CHECK(NT_SUCCESS(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed)));
-    CHECK(completed==bytes && model.Writes==2 && model.Root==0x900202);
+    CHECK(completed==bytes && model.Writes==2 && model.Root==0x900200);
     CHECK(entries[7]==UINT64_C(0x101700011) && entries[8]==UINT64_C(0x100900021) && entries[9]==UINT64_C(0x100800035));
     model.Control=0x10000;
     CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed)==STATUS_IO_TIMEOUT);
@@ -384,10 +384,10 @@ void start(void)
     CHECK(TgGpuUpdatePageTable(&u, &target) == STATUS_NOT_SUPPORTED); /* system-segment table too big */
     ptes[0].Segment = 1; ptes[0].PageAddress = 0x20000;
     CHECK(NT_SUCCESS(TgGpuUpdatePageTable(&u, &target)));
-    CHECK(table[7] == UINT64_C(0x0170020300000000));
+    CHECK(table[7] == UINT64_C(0x0170020500000000));
     ptes[0].PageAddress = 0x1f0000;
     CHECK(TgGpuUpdatePageTable(&u, &target) == STATUS_INVALID_ADDRESS); /* whole child must fit */
-    CHECK(table[7] == UINT64_C(0x0170020300000000));
+    CHECK(table[7] == UINT64_C(0x0170020500000000));
     ptes[0].PageAddress = 0x20000; ptes[0].PageTablePageSize = DXGK_PTE_PAGE_TABLE_PAGE_64KB;
     CHECK(TgGpuUpdatePageTable(&u, &target) == STATUS_NOT_SUPPORTED);
     CHECK(TgGpuDescribePageTable(0, 0, &desc) == STATUS_INVALID_PARAMETER);

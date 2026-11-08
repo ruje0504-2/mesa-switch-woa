@@ -26,17 +26,17 @@ static void test_mmu(void)
     assert(!tg_gpu_va_indices(TG_GPU_VA_LIMIT, &indices));
     assert(!tg_gpu_va_indices(1, &indices));
 
-    /* Physical addresses above 4 GiB must survive encoding. NCOH has a
-     * different aperture selector in leaf PTEs and in directory entries.
+    /* Physical addresses above 4 GiB must survive encoding. GM20B SoC DRAM uses
+     * VIDMEM: PTE target 0, small PDE target 1 plus VOL, and PDB target 0.
      */
     assert(tg_gpu_pte_4k(UINT64_C(0x170001000), false, false, &entry));
     assert(entry == UINT64_C(0x0000000001700011));
     assert(tg_gpu_pte_4k(UINT64_C(0x170001000), true, true, &entry));
     assert(entry == UINT64_C(0x0000000101700015));
     assert(tg_gpu_pde_small(UINT64_C(0x170020000), &entry));
-    assert(entry == UINT64_C(0x0170020300000000));
+    assert(entry == UINT64_C(0x0170020500000000));
     assert(tg_gpu_instance_pdb(UINT64_C(0x170040000), &entry));
-    assert(entry == UINT64_C(0x170040803));
+    assert(entry == UINT64_C(0x170040804));
 
     entry = UINT64_C(0xdeadbeef);
     assert(!tg_gpu_pte_4k(TG_GPU_VA_LIMIT, false, false, &entry));
@@ -85,12 +85,12 @@ static void test_private_channel(void)
     uint32_t *runlist = (uint32_t *)(arena + 0x45000);
     uint32_t *userd = (uint32_t *)(arena + 0x41000);
     assert(tg_gpu_prepare_arena(arena, 0xc0000000, sizeof(arena), values));
-    assert(pde[0] == UINT64_C(0x00c0020300000000));
+    assert(pde[0] == UINT64_C(0x00c0020500000000));
     assert(pde[1] == 0 && pte[0] == 0 && pte[20] == 0);
     assert((pte[16] & 5) == 5 && (pte[17] & 5) == 5); /* read-only commands */
     assert((pte[18] & 5) == 1 && (pte[19] & 5) == 1); /* writable fence/userd */
-    assert(ramfc[128] == 0xc0000807 && ramfc[130] == 0x00fff000);
-    assert(ramfc[2] == 0xc0041003 && ramfc[18] == 0x10000);
+    assert(ramfc[128] == 0xc0000804 && ramfc[130] == 0x00fff000);
+    assert(ramfc[2] == 0xc0041000 && ramfc[18] == 0x10000);
     assert(ramfc[0] == 0 && ramfc[5] == 0 && userd[35] == 0 && userd[34] == 0);
     assert(commands[0] == 0x20040004 && commands[4] == 0x01100002);
     assert(commands[2] == 0x12000 && commands[3] == values[0]);
@@ -119,7 +119,7 @@ static void test_submission(void)
     assert(push[0]==0x20040004 && push[1]==0 && push[2]==0x4002800 && push[3]==0x13579bdf);
     assert(push[4]==0x01000002); /* WFI enabled, not a FIFO-consumption-only fence */
     assert(command[TG_GPU_COMMAND_FENCE/4]==0xeca86420 && userd[35]==2);
-    assert(instance[0]==2 && instance[2]==0xc0002003 && instance[18]==0x4000000 && instance[57]==0x20);
+    assert(instance[0]==2 && instance[2]==0xc0002000 && instance[18]==0x4000000 && instance[57]==0x20);
     assert(instance[128]==0xa5a5a5a5 && instance[131]==0xa5a5a5a5);
     assert(runlist[0]==0x0600e000 && runlist[1]==0);
     assert(runlist[2]==0 && runlist[3]==0);
@@ -134,7 +134,7 @@ int main(void)
 {
     struct tg_gpu_gpfifo_entry entry;
     struct tg_gpu_identity identity;
-    _Static_assert(sizeof(struct tg_gpu_status) == 236, "control ABI 8 size");
+    _Static_assert(sizeof(struct tg_gpu_status) == 236, "control ABI 9 size");
     assert(tg_gpu_fifo_has_error(1) && tg_gpu_fifo_has_error(0x100) && tg_gpu_fifo_has_error(0x10000));
     assert(!tg_gpu_fifo_has_error(0xc0000000)); /* ordinary notification events */
     assert(tg_gpu_identify(0x12e000b1, &identity));

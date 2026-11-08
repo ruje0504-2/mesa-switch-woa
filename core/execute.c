@@ -65,7 +65,7 @@ bool tg_gpu_prepare_arena(void *cpu, uint64_t physical, size_t bytes,
     runlist = (uint32_t *)((uint8_t *)cpu + RUNLIST);
     if (!tg_gpu_pde_small(physical + 0x20000, &pd[0]) ||
         !tg_gpu_instance_pdb(physical, &entry)) return false;
-    instance[128] = (uint32_t)entry | 4; /* volatile PDB */
+    instance[128] = (uint32_t)entry; /* volatile PDB, SoC DRAM target */
     instance[129] = (uint32_t)(entry >> 32);
     instance[130] = 0x00fff000; /* BAR1 and channel VA limited to 16 MiB */
     if (!tg_gpu_pte_4k(physical + RING, true, true, &pt[RING_VA >> 12]) ||
@@ -76,7 +76,7 @@ bool tg_gpu_prepare_arena(void *cpu, uint64_t physical, size_t bytes,
     /* Start empty, then publish both entries through BAR1 after binding, as
      * gk20a_fifo_userd_gp_put does. Saved GP_PUT alone is not a notification.
      */
-    instance[2] = (uint32_t)(physical + USERD) | 3; /* USERD, sysmem NCOH */
+    instance[2] = (uint32_t)(physical + USERD); /* VIDMEM denotes SoC DRAM */
     instance[3] = 0;
     instance[4] = 0xface; /* hardware signature */
     instance[12] = 0x102; /* acquire retry mantissa/exp 2; no acquire emitted */
@@ -248,15 +248,18 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         return TG_GPU_EXEC_FRONTEND;
     ex_write(io, 0x100c80, ex_read(io, 0x100c80) | 0x800);
     ex_write(io, 0x100c10, (uint32_t)((physical + FLUSH) >> 8));
-    ex_write(io, 0x100cc8, (uint32_t)((physical + DEBUG_WR) >> 8) | 3);
-    ex_write(io, 0x100ccc, (uint32_t)((physical + DEBUG_RD) >> 8) | 3);
+    /* nvgpu_aperture_mask resolves to VIDMEM (0) throughout GM20B, not
+     * only in leaf PTEs: debug buffers, TLB, BAR1, RAMFC and runlist too.
+     */
+    ex_write(io, 0x100cc8, (uint32_t)((physical + DEBUG_WR) >> 8));
+    ex_write(io, 0x100ccc, (uint32_t)((physical + DEBUG_RD) >> 8));
     for (i = 0; i < 1000 && !(ex_read(io, 0x100c80) & 0x00ff0000); ++i)
         io->delay_us(io->context, 2);
     if (i == 1000) return TG_GPU_EXEC_MMU_TIMEOUT;
-    ex_write(io, 0x100cb8, (uint32_t)(physical >> 8) | 2);
+    ex_write(io, 0x100cb8, (uint32_t)(physical >> 8));
     ex_write(io, 0x100cbc, 0x80000001);
     if (!ex_wait(io, 0x100c80, 0x8000, 0x8000)) return TG_GPU_EXEC_MMU_TIMEOUT;
-    ex_write(io, 0x1704, (uint32_t)((physical + INST) >> 12) | 0xb0000000);
+    ex_write(io, 0x1704, (uint32_t)((physical + INST) >> 12) | 0x80000000);
     if (!ex_wait(io, 0x1710, 3, 0)) return TG_GPU_EXEC_BAR1;
     if (tg_gpu_frontend_flush(io, power, &s->frontend) != TG_GPU_FE_OK)
         return TG_GPU_EXEC_FRONTEND;
@@ -288,12 +291,12 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     ex_write(io, 0x2254, (USERD_VA >> 12) | 0x10000000); /* USERD BAR1 snoop */
 
     state->stage = 3;
-    ex_write(io, 0x800000, (uint32_t)((physical + INST) >> 12) | 0xb0000000);
+    ex_write(io, 0x800000, (uint32_t)((physical + INST) >> 12) | 0x80000000);
     s->channel_instance_after = ex_read(io, 0x800000);
-    if (s->channel_instance_after != ((uint32_t)((physical + INST) >> 12) | 0xb0000000))
+    if (s->channel_instance_after != ((uint32_t)((physical + INST) >> 12) | 0x80000000))
         return TG_GPU_EXEC_FIFO_INIT;
     ex_write(io, 0x800004, (ex_read(io, 0x800004) & ~0x400u) | 0x400);
-    ex_write(io, 0x2270, (uint32_t)((physical + RUNLIST) >> 12) | 0x30000000);
+    ex_write(io, 0x2270, (uint32_t)((physical + RUNLIST) >> 12));
     ex_write(io, 0x2274, TG_GPU_RUNLIST_ENTRIES); /* TSG zero + its one channel */
     if (!ex_wait(io, 0x2284, 0x100000, 0)) return TG_GPU_EXEC_RUNLIST;
     ex_write(io, 0x2630, ex_read(io, 0x2630) & ~1u);

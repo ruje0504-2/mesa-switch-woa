@@ -23,7 +23,7 @@ int main(void)
     struct tg_gpu_power power = {.owned=true, .ready=true};
     struct tg_gpu_power_io io = {NULL, read32, write32, NULL, NULL, delay};
     assert(tg_gpu_tlb_invalidate(&io, &power, UINT64_C(0x170020000)) == TG_GPU_TLB_OK);
-    assert(observed_root == 0x01700202 && writes == 2);
+    assert(observed_root == 0x01700200 && writes == 2);
     writes = delays = 0; mode = 1;
     assert(tg_gpu_tlb_invalidate(&io, &power, 0xc0000000) == TG_GPU_TLB_NO_SPACE);
     assert(writes == 0 && delays == 1000);

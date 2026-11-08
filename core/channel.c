@@ -68,13 +68,14 @@ enum tg_gpu_channel_result tg_gpu_channel_submit(const struct tg_gpu_power_io *i
     if(!wait_bits(io,c,0x2630,1,1)) return TG_GPU_CHANNEL_IO;
     if(tg_gpu_tlb_invalidate(io,power,root)!=TG_GPU_TLB_OK) return TG_GPU_CHANNEL_TLB;
     c->stage=3;
-    inst=(uint32_t)(instance>>12)|0xb0000000;
+    /* GM20B maps SoC DRAM through VIDMEM (0), including CCSR/runlists. */
+    inst=(uint32_t)(instance>>12)|0x80000000;
     put(io,0x800000,inst);
     if(!wait_bits(io,c,0x800000,0xbfffffff,inst)) return TG_GPU_CHANNEL_IO;
     value=get(io,0x800004);
     if(value==UINT32_MAX) return TG_GPU_CHANNEL_IO;
     put(io,0x800004,(value&~0xc00u)|0x400);
-    put(io,0x2270,(uint32_t)(runlist>>12)|0x30000000);
+    put(io,0x2270,(uint32_t)(runlist>>12));
     put(io,0x2274,TG_GPU_RUNLIST_ENTRIES);
     if(!wait_bits(io,c,0x2284,0x100000,0)) return TG_GPU_CHANNEL_TIMEOUT;
     value=get(io,0x2630);

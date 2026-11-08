@@ -275,7 +275,7 @@ static struct {
     UINT32 fifo_fault;
     UCHAR enable,voltage;
     BOOLEAN fail_preempt,fail_reset,fail_tlb;
-} hw={.mc=0x100,.pb=1,.map=1,.sched=1,.enable=0x41,.voltage=110,.expected_root=0x900002};
+} hw={.mc=0x100,.pb=1,.map=1,.sched=1,.enable=0x41,.voltage=110,.expected_root=0x900000};
 static UINT32 Read(void *context,UINT32 address)
 {
     CHECK(context==&hw && level==PASSIVE_LEVEL);++hw.reads;
@@ -325,7 +325,7 @@ static void Write(void *context,UINT32 address,UINT32 value)
     case 0x57002274:
         CHECK(hw.sched&1);
         if(value) {
-            CHECK(value==2 && hw.ctrl && hw.inst && hw.runbase==0x30091003);
+            CHECK(value==2 && hw.ctrl && hw.inst && hw.runbase==0x00091003);
             hw.pbdma=0x3000; /* valid TSG zero */
         } else CHECK(!hw.ctrl && !hw.preempt);
         hw.runlist=value;break;
@@ -422,7 +422,7 @@ void start(void)
     root.hContext=c;ddi.DxgkDdiSetRootPageTable(&e,&root);
     instance=c->Instance.CpuAddress;
     fence=(UINT32 *)((UCHAR *)e.Commands.CpuAddress+TG_GPU_COMMAND_FENCE);
-    CHECK(c->Root.Valid && instance[128]==0x90000807 && instance[130]==0x07fff000);
+    CHECK(c->Root.Valid && instance[128]==0x90000804 && instance[130]==0x07fff000);
     submit.hContext=c;CHECK(NT_SUCCESS(TgGpuAcquireContextWork(&e,&submit,&work)));
     CHECK(work.Root.Valid && c->References==1 && work.FencePhysicalAddress==0x91002800);
     CHECK(*fence==~work.Expected && instance[0x800/4]==0);
@@ -431,7 +431,7 @@ void start(void)
     CHECK(NT_SUCCESS(TgGpuPrepareContextWork(&e,&work)));
     CHECK(tg_gpu_pde_small((UINT64)((TG_GPU_PROCESS *)process.hKmdProcess)->Internal.Leaf.SystemPhysicalAddress.QuadPart,&pde));
     CHECK(((UINT64 *)table)[1]==pde && ((UINT64 *)table)[0]==0);
-    CHECK(work.Prepared && instance[128]==0x90000807 && instance[130]==0x07fff000);
+    CHECK(work.Prepared && instance[128]==0x90000804 && instance[130]==0x07fff000);
     CHECK(TgGpuPrepareContextWork(&e,&work)==STATUS_INVALID_DEVICE_STATE);
     CHECK(TgGpuAcquireContextWork(&e,&submit,&blocked)==STATUS_DEVICE_BUSY && !blocked.Context);
     CHECK(ddi.DxgkDdiDestroyContext(c)==STATUS_DEVICE_BUSY);
@@ -440,7 +440,7 @@ void start(void)
     CHECK(NT_SUCCESS(TgGpuSubmitContextWork(&e,&work,&io,&power)));
     hw.fifo_fault=0;
     CHECK(work.Submitted && e.Channel.referenced && !hw.sched && hw.runlist==2);
-    CHECK(hw.inst==((UINT32)((UINT64)c->Instance.SystemPhysicalAddress.QuadPart>>12)|0xb0000000));
+    CHECK(hw.inst==((UINT32)((UINT64)c->Instance.SystemPhysicalAddress.QuadPart>>12)|0x80000000));
     before=hw.writes;
     CHECK(TgGpuSubmitContextWork(&e,&work,&io,&power)==STATUS_INVALID_DEVICE_STATE && hw.writes==before);
     CHECK(TgGpuContextWorkFinished(&e,&work)==STATUS_PENDING && interrupts==0);
@@ -533,13 +533,13 @@ void start(void)
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_SUCCESS && !reuse_private);
     CHECK(c->References==1 && c2->References==2 && e.LastCompletedFence==10 && !e.Active);
     CHECK(((UCHAR *)&entries[0])[sizeof(entries[0])-1]==0xa5);
-    hw.expected_root=0x900012;
+    hw.expected_root=0x900010;
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_PENDING && queue.Current.Context==c2);
     *fence=queue.Current.Expected;expected_fence=11;notify_context=c2;notify_references=1;
     reuse_private=&entries[1];
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_SUCCESS && !reuse_private);
     CHECK(c->References==1 && c2->References==1 && e.LastCompletedFence==11);
-    hw.expected_root=0x900002;hw.fail_tlb=TRUE;
+    hw.expected_root=0x900000;hw.fail_tlb=TRUE;
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_IO_TIMEOUT);
     CHECK(queue.Failure==STATUS_IO_TIMEOUT && e.Channel.referenced && queue.Current.Context==c);
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_IO_TIMEOUT && c2->References==1);

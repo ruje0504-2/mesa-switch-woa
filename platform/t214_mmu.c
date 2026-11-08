@@ -20,10 +20,10 @@ enum tg_gpu_tlb_result tg_gpu_tlb_invalidate(const struct tg_gpu_power_io *io,
         io->delay_us(io->context, 2);
     }
     if (i == 1000) return TG_GPU_TLB_NO_SPACE;
-    /* GM20B's system aperture selector follows the Tegra-specific nvgpu
-     * implementation (2), not a discrete NVIDIA PCIe framebuffer aperture.
+    /* Resolve nvgpu_aperture_mask, not just its sysmem argument: the GM20B
+     * platform has honors_aperture=false, so SoC DRAM selects VIDMEM (0).
      */
-    io->write32(io->context, 0x57100cb8, (uint32_t)(root >> 8) | 2);
+    io->write32(io->context, 0x57100cb8, (uint32_t)(root >> 8));
     io->write32(io->context, 0x57100cbc, 0x80000001); /* ALL_VA + trigger */
     for (i = 0; i < 1000; ++i) {
         status = io->read32(io->context, 0x57100c80);

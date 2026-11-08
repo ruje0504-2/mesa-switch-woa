@@ -47,7 +47,7 @@ bool tg_gpu_prepare_submission(void *commands, size_t bytes, uint64_t physical,
     *(uint32_t *)((uint8_t *)commands+TG_GPU_COMMAND_FENCE)=~fence_value;
     userd[35]=2;
     ramfc[0]=2;
-    ramfc[2]=(uint32_t)(physical+TG_GPU_COMMAND_USERD)|3;
+    ramfc[2]=(uint32_t)(physical+TG_GPU_COMMAND_USERD); /* SoC DRAM: target 0 */
     ramfc[4]=0xface; ramfc[12]=0x102;
     ramfc[18]=(uint32_t)va; ramfc[19]=(uint32_t)(va>>32)|(9u<<16);
     ramfc[33]=0x20400000; ramfc[37]=0x30000001;

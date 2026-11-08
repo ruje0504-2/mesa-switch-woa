@@ -89,6 +89,7 @@ static void write32(void *context, uint32_t address, uint32_t value)
         m->runlist = value != 0;
     } else if (address == 0x57002270) {
         assert(m->sched & 1);
+        assert(value == 0x000c0045); /* physical runlist, VIDMEM target 0 */
         m->runlist_base = value;
     } else if (address == 0x57002630) {
         if (!(value & 1)) assert(m->runlist && m->instance);
@@ -101,7 +102,14 @@ static void write32(void *context, uint32_t address, uint32_t value)
         assert(value == 0xe); m->intr1=value;
     } else if (address == 0x57100c10) {
         m->niso = value != 0;
+    } else if (address == 0x57100cc8) {
+        assert(value == 0x00c00480); /* debug WR, target 0 */
+    } else if (address == 0x57100ccc) {
+        assert(value == 0x00c00470); /* debug RD, target 0 */
+    } else if (address == 0x57100cb8) {
+        assert(value == 0x00c00000); /* invalidate PDB, target 0 */
     } else if (address == 0x57001704) {
+        assert(value == 0 || value == 0x800c0040); /* BAR1 instance, target 0 */
         m->bar1 = (value & 0x80000000) != 0;
     } else if (address == 0x57070000) {
         assert(m->niso && m->bar1);
@@ -130,7 +138,10 @@ static void write32(void *context, uint32_t address, uint32_t value)
     } else if (address == 0x57800000 || address == 0x57800004) {
         assert((m->mc & 0x100) && m->ticks - m->enabled_at >= 20);
         ++m->channel_writes;
-        if (address == 0x57800000) m->instance = value;
+        if (address == 0x57800000) {
+            assert(value == 0 || value == 0x800c0040); /* same CCSR target */
+            m->instance = value;
+        }
     } else if (address == 0x70019aa8 || address == 0x70019aac) {
         /* Reproduce the failed assumption: an ASID read need not become zero.
          * Direct physical GPU DMA must leave this global state untouched.
@@ -201,7 +212,7 @@ void test_execute_init(void)
     assert(m.put == 1 && result.pbdma_gp_base == UINT32_MAX);
     assert(result.observed[0] == 0xdeadbeef && result.observed[1] == 0xdeadbeef);
     assert(result.scheduler_before == 0xa5 && result.scheduler_after == 0xa4);
-    assert(result.runlist_status == 2 && result.runlist_base == 0x300c0045);
+    assert(result.runlist_status == 2 && result.runlist_base == 0x000c0045);
     assert(m.stall == 0xfffffeff && result.pbdma_interrupt_1 == 0);
     assert(m.intr0 == 0xfffffeff && m.intr1 == 0xe);
     assert(result.bar1_phase == 5 && !result.bar1_read && !result.bar1_cpu);
