@@ -2,6 +2,7 @@
 #include "../windows/context.h"
 #include "../windows/work_queue.h"
 #include "../windows/allocation.h"
+#include "../windows/query.h"
 #include <ntimage.h>
 
 static ULONG_PTR image_cookie=0x00002b992ddfa232ULL;
@@ -359,6 +360,94 @@ static bool WritePmic(void *context,UINT8 address,UINT8 reg,UINT8 value)
     if(reg==6) hw.enable=value;else hw.voltage=value;return true;
 }
 
+static void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRIVER_INITIALIZATION_DATA *d)
+{
+    DXGKARG_QUERYADAPTERINFO a={0};
+    DXGK_QUERYSEGMENTIN4 input={0};
+    DXGK_QUERYSEGMENTOUT4 segment,before;
+    struct { DXGK_SEGMENTDESCRIPTOR4 desc;UCHAR extension[32]; } output;
+    DXGK_GPUMMUCAPS mmu;
+    DXGK_QUERYPAGETABLELEVELDESCIN level={0};
+    DXGK_PAGE_TABLE_LEVEL_DESC desc;
+    DXGK_PHYSICALADAPTERCAPS physical;
+    UINT i;UINT64 address;
+    CHECK(d->DxgkDdiQueryAdapterInfo==TgGpuDdiQueryAdapterInfo);
+    a.Type=DXGKQAITYPE_QUERYSEGMENT4;a.pInputData=&input;a.InputDataSize=sizeof(input);
+    a.pOutputData=&segment;a.OutputDataSize=sizeof(segment);
+    memset(&segment,0xa5,sizeof(segment));segment.NbSegment=0;
+    before=segment;
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)) && segment.NbSegment==1);
+    /* Count query must not consume its poison descriptor pointer/stride or
+     * write any other member (including padding).
+     */
+    for(i=sizeof(UINT);i<sizeof(segment);++i)
+        CHECK(((UCHAR *)&segment)[i]==((UCHAR *)&before)[i]);
+    memset(&output,0xa5,sizeof(output));segment.pSegmentDescriptor=(BYTE *)&output;
+    segment.SegmentDescriptorStride=sizeof(output);
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
+    CHECK(segment.NbSegment==1 && segment.SegmentDescriptorStride==sizeof(output));
+    CHECK(segment.PagingBufferSegmentId==0 && segment.PagingBufferSize==TG_GPU_DMA_BUFFER_BYTES);
+    CHECK(segment.PagingBufferPrivateDataSize==sizeof(TG_GPU_QUEUE_ENTRY));
+    CHECK(output.desc.BaseAddress.QuadPart==e->Tables->Memory.SystemPhysicalAddress.QuadPart);
+    CHECK(output.desc.Size==e->Tables->Memory.Bytes && output.desc.Flags.CpuVisible);
+    CHECK(output.desc.CpuTranslatedAddress.QuadPart==output.desc.BaseAddress.QuadPart);
+    CHECK(output.desc.Flags.PopulatedFromSystemMemory && !output.desc.Flags.Aperture &&
+          !output.desc.Flags.CacheCoherent && !output.desc.Flags.PreservedDuringStandby &&
+          !output.desc.Flags.PreservedDuringHibernate && !output.desc.Flags.DirectFlip);
+    for(i=0;i<sizeof(output.extension);++i) CHECK(output.extension[i]==0xa5);
+    CHECK(NT_SUCCESS(TgGpuResolveTableSegment((PVOID)e->Tables,1,0,TG_GPU_TABLE_BYTES,&address)));
+    CHECK(address==(UINT64)output.desc.BaseAddress.QuadPart);
+    segment.SegmentDescriptorStride=sizeof(output.desc)-1;
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_INVALID_PARAMETER);
+    segment.SegmentDescriptorStride=sizeof(output);input.PhysicalAdapterIndex=1;
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_INVALID_PARAMETER);
+    input.PhysicalAdapterIndex=0;a.OutputDataSize=sizeof(segment)-1;
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_BUFFER_TOO_SMALL);
+    a.OutputDataSize=sizeof(segment);a.pOutputData=NULL;
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_INVALID_PARAMETER);
+
+    a.Type=DXGKQAITYPE_GPUMMUCAPS;a.pOutputData=&mmu;a.OutputDataSize=sizeof(mmu);
+    memset(&mmu,0xa5,sizeof(mmu));
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
+    CHECK(mmu.Value==0x21 && mmu.VirtualAddressBitCount==40 && mmu.PageTableLevelCount==2);
+    CHECK(mmu.PageTableUpdateMode==DXGK_PAGETABLEUPDATE_GPU_PHYSICAL);
+    CHECK(!mmu.LeafPageTableSizeFor64KPagesInBytes && !mmu.LegacyBehaviors.SourcePageTableVaInTransfer);
+    a.InputDataSize=sizeof(input)-1;
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_BUFFER_TOO_SMALL);
+    a.InputDataSize=sizeof(input);input.PhysicalAdapterIndex=1;
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_INVALID_PARAMETER);
+    input.PhysicalAdapterIndex=0;
+    a.Type=DXGKQAITYPE_PAGETABLELEVELDESC;a.pInputData=&level;a.InputDataSize=sizeof(level);
+    a.pOutputData=&desc;a.OutputDataSize=sizeof(desc);
+    for(level.LevelIndex=0;level.LevelIndex<mmu.PageTableLevelCount;++level.LevelIndex) {
+        CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
+        CHECK(desc.PageTableIndexBitCount==14 && desc.PageTableSegmentId==1);
+        CHECK(desc.PagingProcessPageTableSegmentId==1 && desc.PageTableSizeInBytes==TG_GPU_TABLE_BYTES);
+        CHECK(desc.PageTableAlignmentInBytes==PAGE_SIZE);
+    }
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_INVALID_PARAMETER);
+    level.LevelIndex=0;level.PhysicalAdapterIndex=1;
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_INVALID_PARAMETER);
+    a.Type=DXGKQAITYPE_PHYSICALADAPTERCAPS;a.pInputData=&input;a.InputDataSize=sizeof(input);
+    a.pOutputData=&physical;a.OutputDataSize=sizeof(physical);
+    memset(&physical,0xa5,sizeof(physical));
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
+    CHECK(physical.NumExecutionNodes==1 && physical.PagingNodeIndex==0);
+    CHECK(physical.DxgkPhysicalAdapterHandle==e->Dxgk.DeviceHandle && physical.Flags.Value==2);
+    CHECK(!physical.VPRPagingNode);
+    input.PhysicalAdapterIndex=1;
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_INVALID_PARAMETER);
+    input.PhysicalAdapterIndex=0;e->Stopping=TRUE;
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_DEVICE_NOT_READY);e->Stopping=FALSE;
+    a.Flags.Value=1;CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_NOT_SUPPORTED);a.Flags.Value=0;
+    a.Type=DXGKQAITYPE_DRIVERCAPS;
+    memset(&physical,0xa5,sizeof(physical));
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_NOT_SUPPORTED);
+    for(i=0;i<sizeof(physical);++i) CHECK(((UCHAR *)&physical)[i]==0xa5);
+    CHECK(d->DxgkDdiQueryAdapterInfo(NULL,&a)==STATUS_INVALID_PARAMETER);
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,NULL)==STATUS_INVALID_PARAMETER);
+}
+
 void start(void)
 {
     static TG_GPU_CONTEXT_ENGINE e,other;
@@ -381,7 +470,7 @@ void start(void)
         .read_pmic=ReadPmic,.write_pmic=WritePmic};
     UINT32 *instance,*fence;UINT i,before;ULONG written;UINT64 pde;
     struct tg_gpu_channel rejected={0};
-    static const char pass[]="PASS: WDK allocation lifecycle/rollback, ordered work queue and verified retirement (controlled substitutes)\r\n";
+    static const char pass[]="PASS: WDK memory queries, allocation lifecycle/rollback, ordered work queue and verified retirement (controlled substitutes)\r\n";
     hw.fifo_fault=0x100;before=hw.writes;
     CHECK(tg_gpu_channel_submit(&io,&power,0x90000000,0x91004000,0x91003000,&e,&rejected)==TG_GPU_CHANNEL_FAULT);
     CHECK(!rejected.referenced && hw.writes==before && rejected.fifo_interrupt==0x100);
@@ -395,6 +484,7 @@ void start(void)
     CHECK(NT_SUCCESS(TgGpuInitializeContextEngine(&e,&dxgk,&tables)));
     CHECK(NT_SUCCESS(TgGpuInitializeContextEngine(&other,&dxgk,&tables)));
     TgGpuRegisterContextDdis(&ddi);
+    TestAdapterQueries(&e,&ddi);
     fail_pool=TRUE;CHECK(ddi.DxgkDdiCreateProcess(&e,&failed)==STATUS_NO_MEMORY && !failed.hKmdProcess);fail_pool=FALSE;
     fail_reserve=TRUE;CHECK(ddi.DxgkDdiCreateProcess(&e,&process)==STATUS_INSUFFICIENT_RESOURCES);fail_reserve=FALSE;
     CHECK(NT_SUCCESS(ddi.DxgkDdiCreateProcess(&e,&process)));

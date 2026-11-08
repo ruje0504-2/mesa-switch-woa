@@ -179,6 +179,18 @@ ordering and incomplete progress after TLB failure, as well as segment
 bounds, real-WDK callback shapes, allocation failure and cleanup retry with
 controlled OS-call substitutes; it does not test real Dxgkrnl allocation.
 
+`windows/query.c` supplies the memory-related `QueryAdapterInfo` requests:
+`QUERYSEGMENT4`, `GPUMMUCAPS`, `PAGETABLELEVELDESC` and `PHYSICALADAPTERCAPS`.
+It reports the existing table segment's actual backing, two 128 KiB table levels
+covering a 40-bit GPU VA, and physical-mode ordered paging. The first segment
+query changes only the count; the descriptor query preserves OS extension bytes.
+Paging and context buffers share one size/private-record contract. These queries
+claim no coherent memory, system IOMMU, large pages, standby retention or display
+capabilities. `DRIVERCAPS` and private UMD queries remain unsupported until the
+submission, recovery and UMD contracts are integrated; this component alone
+cannot start a WDDM adapter. Native ARM64 tests exercise the real WDK callback,
+including count-only queries, descriptor strides and invalid adapter/level inputs.
+
 `windows/context.c` supplies the process/device/context creation and destruction
 DDIs, root-table DDIs, completed-fence query and DPC callback. Its registration
 helper fills those entries in the caller's initialization table; it does not

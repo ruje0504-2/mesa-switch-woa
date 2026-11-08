@@ -2,6 +2,7 @@
 #include "context.h"
 #include "work_queue.h"
 #include "allocation.h"
+#include "query.h"
 
 #define TAG 0x43674754u
 
@@ -132,7 +133,7 @@ NTSTATUS APIENTRY TgGpuDdiCreateContext(HANDLE device, DXGKARG_CREATECONTEXT *a)
     }
     InsertTailList(&e->Contexts,&c->Link); KeReleaseSpinLock(&e->Lock,irql);
     RtlZeroMemory(&a->ContextInfo,sizeof(a->ContextInfo));
-    a->ContextInfo.DmaBufferSize=64*1024;
+    a->ContextInfo.DmaBufferSize=TG_GPU_DMA_BUFFER_BYTES;
     a->ContextInfo.DmaBufferPrivateDataSize=sizeof(TG_GPU_QUEUE_ENTRY);
     a->ContextInfo.Caps.NoPatchingRequired=a->Flags.VirtualAddressing;
     /* VidMm manages residency. No system-IOMMU capability or GDI acceleration
@@ -190,6 +191,7 @@ void TgGpuRegisterContextDdis(DRIVER_INITIALIZATION_DATA *d)
     d->DxgkDdiQueryCurrentFence=TgGpuDdiQueryCurrentFence;
     d->DxgkDdiDpcRoutine=TgGpuDdiDpcRoutine;
     TgGpuRegisterAllocationDdis(d);
+    TgGpuRegisterQueryDdi(d);
 }
 NTSTATUS APIENTRY TgGpuDdiQueryCurrentFence(HANDLE adapter, DXGKARG_QUERYCURRENTFENCE *a)
 {

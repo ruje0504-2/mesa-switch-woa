@@ -1,0 +1,114 @@
+/* SPDX-License-Identifier: MIT */
+#include "query.h"
+#include "work_queue.h"
+
+static NTSTATUS buffers(const DXGKARG_QUERYADAPTERINFO *a, UINT input, UINT output)
+{
+    if (a->InputDataSize < input || a->OutputDataSize < output)
+        return STATUS_BUFFER_TOO_SMALL;
+    if ((input && !a->pInputData) || (output && !a->pOutputData))
+        return STATUS_INVALID_PARAMETER;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYADAPTERINFO *a)
+{
+    TG_GPU_CONTEXT_ENGINE *e=adapter;
+    DXGK_SEGMENTDESCRIPTOR3 table;
+    NTSTATUS status;
+    if (!e || !a) return STATUS_INVALID_PARAMETER;
+    if (a->Flags.Value) return STATUS_NOT_SUPPORTED; /* no GPU virtualization */
+    switch (a->Type) {
+    case DXGKQAITYPE_QUERYSEGMENT4:
+    case DXGKQAITYPE_GPUMMUCAPS:
+    case DXGKQAITYPE_PAGETABLELEVELDESC:
+    case DXGKQAITYPE_PHYSICALADAPTERCAPS:
+        break;
+    default:
+        return STATUS_NOT_SUPPORTED;
+    }
+    /* Exactly one explicit table segment; VidMm appends system memory as
+     * allocation segment 2. Do not publish a fabricated/unbacked segment.
+     */
+    if (e->Stopping || !e->Dxgk.DeviceHandle || !e->Tables || e->Tables->SegmentId!=1)
+        return STATUS_DEVICE_NOT_READY;
+    status=TgGpuDescribeTableSegment(e->Tables,&table);
+    if (!NT_SUCCESS(status)) return status;
+
+    switch (a->Type) {
+    case DXGKQAITYPE_QUERYSEGMENT4: {
+        const DXGK_QUERYSEGMENTIN4 *in=a->pInputData;
+        DXGK_QUERYSEGMENTOUT4 *out=a->pOutputData;
+        DXGK_SEGMENTDESCRIPTOR4 desc={0};
+        status=buffers(a,sizeof(*in),sizeof(*out));
+        if (!NT_SUCCESS(status)) return status;
+        if (in->PhysicalAdapterIndex) return STATUS_INVALID_PARAMETER;
+        /* WDDM's first call permits accessing only NbSegment. The other
+         * members are not valid inputs until the second call.
+         */
+        if (!out->NbSegment) { out->NbSegment=1;return STATUS_SUCCESS; }
+        if (out->NbSegment!=1 || !out->pSegmentDescriptor ||
+            out->SegmentDescriptorStride<sizeof(desc)) return STATUS_INVALID_PARAMETER;
+        desc.Flags=table.Flags;
+        desc.BaseAddress=table.BaseAddress;
+        desc.Size=table.Size;
+        desc.CommitLimit=table.CommitLimit;
+        desc.SystemMemoryEndAddress=table.SystemMemoryEndAddress;
+        desc.CpuTranslatedAddress=table.CpuTranslatedAddress;
+        /* Only our known descriptor bytes belong to this WDDM 2.4 driver;
+         * preserve a larger OS stride and its extension bytes.
+         */
+        RtlCopyMemory(out->pSegmentDescriptor,&desc,sizeof(desc));
+        out->PagingBufferSegmentId=0; /* contiguous OS-owned system buffer */
+        out->PagingBufferSize=TG_GPU_DMA_BUFFER_BYTES;
+        out->PagingBufferPrivateDataSize=sizeof(TG_GPU_QUEUE_ENTRY);
+        return STATUS_SUCCESS;
+    }
+    case DXGKQAITYPE_GPUMMUCAPS: {
+        const DXGK_QUERYGPUMMUCAPSIN *in=a->pInputData;
+        DXGK_GPUMMUCAPS caps={0};
+        status=buffers(a,sizeof(*in),sizeof(caps));
+        if (!NT_SUCCESS(status)) return status;
+        if (in->PhysicalAdapterIndex) return STATUS_INVALID_PARAMETER;
+        caps.ReadOnlyMemorySupported=1;
+        caps.PageTableUpdateRequireAddressSpaceIdle=1;
+        caps.PageTableUpdateMode=DXGK_PAGETABLEUPDATE_GPU_PHYSICAL;
+        caps.VirtualAddressBitCount=TG_GPU_DIRECTORY_SHIFT+TG_GPU_TABLE_BITS;
+        caps.PageTableLevelCount=2;
+        /* No coherent, zero, NX, large or dual-PTE support. Initial CPU
+         * updates remain a separate validated path in BuildPagingBuffer.
+         */
+        RtlCopyMemory(a->pOutputData,&caps,sizeof(caps));
+        return STATUS_SUCCESS;
+    }
+    case DXGKQAITYPE_PAGETABLELEVELDESC: {
+        const DXGK_QUERYPAGETABLELEVELDESCIN *in=a->pInputData;
+        DXGK_PAGE_TABLE_LEVEL_DESC desc;
+        status=buffers(a,sizeof(*in),sizeof(desc));
+        if (!NT_SUCCESS(status)) return status;
+        if (in->PhysicalAdapterIndex) return STATUS_INVALID_PARAMETER;
+        status=TgGpuDescribePageTable(in->LevelIndex,e->Tables->SegmentId,&desc);
+        if (!NT_SUCCESS(status)) return status;
+        RtlCopyMemory(a->pOutputData,&desc,sizeof(desc));
+        return STATUS_SUCCESS;
+    }
+    case DXGKQAITYPE_PHYSICALADAPTERCAPS: {
+        const DXGK_QUERYPHYSICALADAPTERCAPSIN *in=a->pInputData;
+        DXGK_PHYSICALADAPTERCAPS caps={0};
+        status=buffers(a,sizeof(*in),sizeof(caps));
+        if (!NT_SUCCESS(status)) return status;
+        if (in->PhysicalAdapterIndex) return STATUS_INVALID_PARAMETER;
+        caps.NumExecutionNodes=1;
+        caps.PagingNodeIndex=0; /* paging shares the ordered execution node */
+        caps.DxgkPhysicalAdapterHandle=e->Dxgk.DeviceHandle;
+        caps.Flags.GpuMmuSupported=1;
+        RtlCopyMemory(a->pOutputData,&caps,sizeof(caps));
+        return STATUS_SUCCESS;
+    }
+    default:
+        return STATUS_NOT_SUPPORTED;
+    }
+}
+
+void TgGpuRegisterQueryDdi(DRIVER_INITIALIZATION_DATA *d)
+{ d->DxgkDdiQueryAdapterInfo=TgGpuDdiQueryAdapterInfo; }

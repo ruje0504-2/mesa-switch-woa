@@ -2,6 +2,7 @@
 #ifndef TEGRA_GPU_WORK_QUEUE_H
 #define TEGRA_GPU_WORK_QUEUE_H
 #include "context.h"
+#define TG_GPU_DMA_BUFFER_BYTES (64u*1024u)
 
 /* Dxgkrnl supplies nonpaged private storage for each submitted DMA buffer.
  * No user pointers or caller-initialized list links are trusted. This initial
