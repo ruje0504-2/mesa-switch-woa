@@ -41,3 +41,10 @@ the GPL version 2 text. B01 rail assignments and register definitions follow
 Switchroot's tegra210b01-nx-pmic.dtsi and CTCaer's Hekate max77812.h.
 OUT5 divider/override programming follows Switchroot clk-tegra-periph.c and
 clk-divider.c (Copyright 2012-2017 NVIDIA, GPL-2.0-only).
+
+platform/t214_clock.c uses the C1 NA PLL sequence and counter algorithm from
+Switchroot nvgpu gm20b/clk_gm20b.c, revision 1ae0167d360287ca78f5a2572f0de42594140312.
+Copyright (c) 2014-2018 NVIDIA CORPORATION. All rights reserved.
+The MIT license text above applies to this code. Voltage characterization
+data follows GPUB01_NA_CVB_TABLE in drivers/soc/tegra/tegra210-dvfs.c at
+CTCaer/switch-l4t-kernel-4.9 revision 2d0059fd3167a8df756de2aa0489d4aa70a9fc15.

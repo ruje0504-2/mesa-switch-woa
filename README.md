@@ -9,7 +9,8 @@ display driver or a Vulkan ICD. Do not replace the working display driver with i
 
 Build with LLVM and the official Windows WDK/SDK headers. `WDK_INCLUDE` and
 `SDK_INCLUDE` denote their versioned Include directories; the script targets
-ARM64 and the Windows 11 22H2 DDI baseline. From the repository root:
+ARM64 and the Windows 11 22H2 baseline, using WDDM 2.4 private-memory
+callbacks. From the repository root:
 
 ```sh
 git clone --depth 1 https://github.com/danfromtico/mesa-switch.git build/mesa-switch
@@ -20,12 +21,15 @@ python3 drivers/TegraGpu/tools/build.py \
   --out build/tegra-gpu
 ```
 
-`TegraGpuCore.lib` contains WDDM resource acquisition/release helpers, GM20B
-4 KiB page-entry encoders, the unchanged mesa-switch report encoder, and an
-explicit T214 idle-GPU power sequence. The host tests cover address formats,
-packet boundaries, power ordering and failure cleanup; they do not execute GPU
-commands. Power functions require a platform I/O owner to call them; there is no
-driver entry point, GPU MMU setup or channel submission yet.
+`TegraGpuCore.lib` contains WDDM resource/private-memory helpers, GM20B 4 KiB
+page-entry and GPFIFO encoders, the unchanged mesa-switch report encoder, and
+T214 power/clock control. The fixed core target is **729.6 MHz** using C1 NA PLL
+coefficients; the helper checks the rail and measures GPCCLK with the hardware
+counter. OUT5 at 204 MHz is a separate power/reference clock. Private memory
+handles track OS allocation lifetime; platform DMA address mapping is still
+required. Host tests cover formats, ordering, counters and failure cleanup;
+they do not execute GPU commands. There is no driver entry point, GPU MMU setup
+or channel submission yet.
 
 The firmware consumes `platform/t214_resources.h` through its WindowsDrivers
 submodule. Build it with `-D SWITCH_LITE_GPU=1` to expose the separate ACPI

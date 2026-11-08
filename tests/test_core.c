@@ -2,6 +2,7 @@
 #include "../core/gm20b_mmu.h"
 #include "../core/report.h"
 #include "../core/identity.h"
+#include "../core/gpfifo.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -71,6 +72,7 @@ static void test_report(void)
 
 int main(void)
 {
+    struct tg_gpu_gpfifo_entry entry;
     struct tg_gpu_identity identity;
     assert(tg_gpu_identify(0x12e000b1, &identity));
     assert(identity.chipset == TG_GPU_CHIP_GM20B_B);
@@ -79,6 +81,15 @@ int main(void)
     assert(identity.chipset == TG_GPU_CHIP_GM20B);
     assert(!tg_gpu_identify(0xffffffff, &identity));
     assert(!tg_gpu_identify(0, &identity));
+    assert(tg_gpu_build_gpfifo(UINT64_C(0x1234567000), 6, false, &entry));
+    assert(entry.low == 0x34567000 && entry.high == 0x00001812);
+    assert(tg_gpu_build_gpfifo(UINT64_C(0x1234567000), 6, true, &entry));
+    assert(entry.high == 0x80001812);
+    assert(!tg_gpu_build_gpfifo(UINT64_C(0xfffffffffc), 2, false, &entry));
+    assert(!tg_gpu_build_gpfifo(0x10001, 6, false, &entry));
+    assert(!tg_gpu_build_gpfifo(0x10000, 0x200000, false, &entry));
+    assert(!tg_gpu_build_gpfifo(0x10000, 0, false, &entry));
+    assert(entry.low == 0x34567000 && entry.high == 0x80001812);
     test_mmu();
     test_report();
     puts("GM20B format tests passed (host only; no GPU execution).");

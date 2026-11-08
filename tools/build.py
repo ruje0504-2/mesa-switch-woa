@@ -29,7 +29,7 @@ mesa_src = args.mesa / "src"
 mesa_includes = [mesa_src, mesa_src / "nouveau/headers",
                  mesa_src / "nouveau/headers/nvidia/classes"]
 encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
-core = [root / "core/gm20b_mmu.c", root / "core/report.c", encoder]
+core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c", encoder]
 host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 *[f"-I{p}" for p in mesa_includes], *map(str, core), str(root / "tests/test_core.c"),
@@ -40,6 +40,11 @@ power_test = args.out / "test-t214-power"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(power), str(root / "tests/test_power.c"), "-o", str(power_test)], check=True)
 subprocess.run([str(power_test.resolve())], check=True)
+clock = root / "platform/t214_clock.c"
+clock_test = args.out / "test-t214-clock"
+subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                str(clock), str(root / "tests/test_clock.c"), "-o", str(clock_test)], check=True)
+subprocess.run([str(clock_test.resolve())], check=True)
 
 includes = [args.wdk_include / "km/crt", args.wdk_include / "km",
             args.wdk_include / "shared", args.sdk_include / "shared",
@@ -50,10 +55,10 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
          "-Wno-ignored-pragma-intrinsic", "-Wno-nonportable-include-path",
          "/D_ARM64_", "/DARM64", "/D_WIN64", "/D_WIN32_WINNT=0x0A00",
          "/DNTDDI_VERSION=0x0A00000C", "/DNDEBUG",
-         "/DDXGKDDI_INTERFACE_VERSION=DXGKDDI_INTERFACE_VERSION_WDDM2_0",
+         "/DDXGKDDI_INTERFACE_VERSION=DXGKDDI_INTERFACE_VERSION_WDDM2_4",
          *[f"/I{p}" for p in mesa_includes], *[f"/imsvc{p}" for p in includes]]
 objects = []
-for source in [*core, power, root / "windows/resources.c"]:
+for source in [*core, power, clock, root / "windows/resources.c", root / "windows/private_memory.c"]:
     obj = args.out / (source.stem + ".obj")
     subprocess.run([args.clang_cl, *flags, f"/Fo{obj}", "--", str(source)], check=True)
     objects.append(obj)
