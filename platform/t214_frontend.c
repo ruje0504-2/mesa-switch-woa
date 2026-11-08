@@ -217,7 +217,9 @@ enum tg_gpu_frontend_result tg_gpu_frontend_sync_memory(const struct tg_gpu_powe
     static const unsigned limits[] = {2000, 200};
     unsigned pass, retry;
     uint32_t value;
+    bool gr_ready;
     if (!owned(io, power, s)) return TG_GPU_FE_ARGUMENT;
+    gr_ready=s->stage==11 && s->result==TG_GPU_FE_OK;
     if (tg_gpu_frontend_flush(io, power, s) != TG_GPU_FE_OK)
         return (enum tg_gpu_frontend_result)s->result;
     /* Switchroot gk20a_mm_l2_flush(true): dirty writeback precedes clean-line
@@ -236,5 +238,11 @@ enum tg_gpu_frontend_result tg_gpu_frontend_sync_memory(const struct tg_gpu_powe
         if (pass) ++s->l2_invalidations; else ++s->l2_flushes;
     }
     s->stage = 9;
-    return finish(io, s, TG_GPU_FE_OK);
+    if (finish(io,s,TG_GPU_FE_OK)!=TG_GPU_FE_OK)
+        return (enum tg_gpu_frontend_result)s->result;
+    /* ACR packing needs another sync after the GR preamble. Successful cache
+     * work does not undo that preamble; failures retain their own cache stage.
+     */
+    if (gr_ready) s->stage=11;
+    return TG_GPU_FE_OK;
 }

@@ -115,6 +115,12 @@ int main(void)
     assert(regs[0x4041f4/4]==0x03fffffe && regs[0x419ffc/4]==0x1fffe);
     assert(regs[0x4041f0/4]==0 && regs[0x4089b8/4]==0);
     assert(!irq_masked && !secure_writes); /* no IRQ, fuse or PMU/Falcon start */
+    regs[0x100c10/4]=0xc000046; regs[0x1704/4]=0xb00c0040;
+    assert(tg_gpu_frontend_sync_memory(&io,&power,&s)==TG_GPU_FE_OK);
+    assert(s.stage==11 && s.gr_fifo_access==0x10001 && s.l2_flushes==1);
+    fail_l2=0x70010;
+    assert(tg_gpu_frontend_sync_memory(&io,&power,&s)==TG_GPU_FE_L2_TIMEOUT);
+    assert(s.stage==7 && s.result==TG_GPU_FE_L2_TIMEOUT);
     reset();memset(&s,0,sizeof(s));regs[0x200/4]=0x100;ignore_write=0x200;
     assert(tg_gpu_frontend_gr_prepare(&io,&power,&s)==TG_GPU_FE_REGISTER);
     assert(s.stage==10 && !regs[0x4041f4/4] && !s.gr_fifo_access);
