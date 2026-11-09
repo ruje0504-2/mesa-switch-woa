@@ -172,7 +172,27 @@ int main(void)
 {
     struct tg_gpu_gpfifo_entry entry;
     struct tg_gpu_identity identity;
-    _Static_assert(sizeof(struct tg_gpu_status) == 616, "control ABI 20 size");
+    _Static_assert(sizeof(struct tg_gpu_status) == 640, "control ABI 21 size");
+    {
+        uint32_t packet[12];
+        memset(packet,0xa5,sizeof(packet));
+        assert(tg_gpu_build_gr_engine_packet(packet,10,UINT64_C(0x1234567000),0x12345678,true));
+        assert(packet[0]==0x20010000&&packet[1]==0xb197);
+        assert(packet[2]==0x80000040&&packet[3]==0x80000044);
+        assert(packet[4]==0x80000451&&packet[5]==0x200406c0);
+        assert(packet[6]==0x12&&packet[7]==0x34567000&&packet[8]==0x12345678);
+        assert(packet[9]==0x1000f010&&packet[10]==0xa5a5a5a5);
+        assert(tg_gpu_build_gr_engine_packet(packet,8,0x12004,0x87654321,false));
+        assert(packet[0]==0x80000040&&packet[1]==0x80000044);
+        assert(packet[2]==0x80000451&&packet[3]==0x200406c0);
+        assert(!packet[4]&&packet[5]==0x12004&&packet[6]==0x87654321&&packet[7]==0x1000f010);
+        memset(packet,0xa5,sizeof(packet));
+        assert(!tg_gpu_build_gr_engine_packet(packet,9,0x12000,1,true));
+        assert(!tg_gpu_build_gr_engine_packet(packet,7,0x12000,1,false));
+        assert(!tg_gpu_build_gr_engine_packet(packet,10,0x12001,1,true));
+        assert(!tg_gpu_build_gr_engine_packet(packet,10,TG_GPU_VA_LIMIT,1,true));
+        for(unsigned i=0;i<12;++i)assert(packet[i]==0xa5a5a5a5);
+    }
     assert(tg_gpu_fifo_has_error(1) && tg_gpu_fifo_has_error(0x100) && tg_gpu_fifo_has_error(0x10000));
     assert(!tg_gpu_fifo_has_error(0xc0000000)); /* ordinary notification events */
     assert(tg_gpu_identify(0x12e000b1, &identity));

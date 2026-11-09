@@ -7,16 +7,18 @@
 #include "../platform/t214_acr.h"
 #include "../platform/t214_gr_context.h"
 #include "../platform/t214_interrupt.h"
+#include "../core/gr_submit.h"
 
 /* Shared by the kernel backend and the existing LitePerformanceCheck UI.
  * METHOD_BUFFERED, FILE_DEVICE_UNKNOWN. RUN requires write access; the
  * device grants write access only to administrators and SYSTEM.
  */
-#define TG_GPU_CONTROL_VERSION 20u
+#define TG_GPU_CONTROL_VERSION 21u
 #define TG_GPU_IOCTL_STATUS 0x00226400u
 #define TG_GPU_IOCTL_RUN    0x0022a404u
 #define TG_GPU_IOCTL_GR_RUN 0x0022a408u
 #define TG_GPU_IOCTL_IRQ_RUN 0x0022a40cu
+#define TG_GPU_IOCTL_3D_RUN 0x0022a410u
 #define TG_GPU_CONTROL_DEFAULT_KHZ 729600u
 #define TG_GPU_CONTROL_OC_KHZ 1228800u
 
@@ -57,6 +59,10 @@ struct tg_gpu_request {
 struct tg_gpu_pbdma_context {
     uint32_t intr_enable, intr_stall, fifo_pending;
     uint32_t target, signature, method0, data0, pb_header, header_shadow, subdevice;
+};
+struct tg_gpu_gr_channel_status {
+    uint32_t image_result, image_ready, class_id;
+    uint32_t current_context, save_ops, restore_ops;
 };
 
 struct tg_gpu_status {
@@ -115,5 +121,6 @@ struct tg_gpu_status {
     struct tg_gpu_gr_context_status graphics;
     struct tg_gpu_irq_status interrupt;
     uint32_t irq_dpcs, irq_gsi, irq_expected;
+    struct tg_gpu_gr_channel_status gr_channel;
 };
 #endif

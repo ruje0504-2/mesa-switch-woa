@@ -20,7 +20,7 @@ enum tg_gpu_execute_result {
     TG_GPU_EXEC_TIMEOUT, TG_GPU_EXEC_FAULT, TG_GPU_EXEC_FIFO_INIT,
     TG_GPU_EXEC_PBDMA_INIT, TG_GPU_EXEC_SCHEDULER, TG_GPU_EXEC_FRONTEND,
     TG_GPU_EXEC_GR_BOOT, TG_GPU_EXEC_ACR_BOOT, TG_GPU_EXEC_PMU_BOOT,
-    TG_GPU_EXEC_GR_CONTEXT, TG_GPU_EXEC_IRQ
+    TG_GPU_EXEC_GR_CONTEXT, TG_GPU_EXEC_IRQ, TG_GPU_EXEC_GR_ENGINE
 };
 
 /* A single diagnostic channel using caller-owned contiguous, uncached
@@ -51,6 +51,8 @@ struct tg_gpu_execution_notify {
 
 bool tg_gpu_prepare_arena(void *cpu, uint64_t device_address, size_t bytes,
                           const uint32_t expected[2]);
+bool tg_gpu_prepare_3d_arena(void *cpu,uint64_t device_address,size_t bytes,
+                            const uint32_t expected[2]);
 /* Called only after prepare_arena, before any GPU mapping becomes live. */
 bool tg_gpu_prepare_gr_arena(void *cpu, uint64_t device_address, size_t bytes,
                             const struct tg_gpu_gr_payload *firmware);
@@ -70,6 +72,13 @@ enum tg_gpu_execute_result tg_gpu_execute_irq(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power,void *uncached_cpu,uint64_t device_address,
     const struct tg_gpu_gr_payload *firmware,const struct tg_gpu_execution_notify *,
     struct tg_gpu_execution *,struct tg_gpu_status *result);
+/* Separate 3D-engine report diagnostic, using the extended channel-image
+ * allocation. It neither accepts application commands nor runs shaders.
+ */
+enum tg_gpu_execute_result tg_gpu_execute_3d(const struct tg_gpu_power_io *,
+    const struct tg_gpu_power *,void *cpu,uint64_t device_address,
+    const struct tg_gpu_gr_payload *,const struct tg_gpu_gr_work *,
+    struct tg_gpu_execution *,struct tg_gpu_status *);
 /* Stop channel fetch before the caller drains MC, stops the PLL and powers
  * down. Clear execution ownership/free the arena only AFTER power_down
  * confirms no ownership. The probe does not change any Tegra SMMU domain.

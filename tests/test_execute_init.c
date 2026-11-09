@@ -454,4 +454,17 @@ void test_execute_init(void)
         }
         tg_gpu_execute_stop(&io,&state);
     }
+    {
+        memset(&m,0,sizeof(m));memset(&state,0,sizeof(state));
+        const uint32_t values[]={0x13579bdf,0x2468ace0};
+        assert(tg_gpu_prepare_3d_arena(arena,0xc0000000,TG_GPU_ARENA_BYTES,values));
+        assert(arena_push[0]==0x20010000&&arena_push[1]==0xb197);
+        assert(arena_push[8]==values[0]&&arena_push[16]==values[1]);
+        assert(arena_ring[0].low==0x11000&&arena_ring[0].high==(10u<<10));
+        assert(arena_ring[1].low==0x11028&&arena_ring[1].high==((8u<<10)|0x80000000u));
+        assert(arena_fence[0]==0xdeadbeef&&arena_fence[1]==0xdeadbeef);
+        struct tg_gpu_gr_work work={0};work.bytes=TG_GPU_GR_CHANNEL_WORK_BYTES;
+        assert(tg_gpu_execute_3d(&io,&power,arena,0xc0000000,NULL,&work,&state,&result)==TG_GPU_EXEC_ARGUMENT);
+        assert(!m.writes&&!state.owned); /* Never replace missing GR firmware with FIFO success. */
+    }
 }

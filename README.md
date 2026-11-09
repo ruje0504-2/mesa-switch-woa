@@ -432,7 +432,7 @@ substitutes; the earlier allocation/context/resource fixtures remain local
 contract evidence. The rolling status records package hashes, the unchanged
 GPU-only test table, rollback paths and hardware availability.
 
-Source candidate **0.1.0.35 / ABI 20 unchanged**, not installed, adds
+Version **0.1.0.35 / ABI 20 unchanged** introduced
 `core/gr_image.{c,h}` and the channel-image helpers in `t214_gr_context`.
 They clone the immutable golden image, initialize per-context header fields,
 disable unbacked PM/SMPC/trace/CTA features, encode all 40 GPU-VA bits and
@@ -446,9 +446,31 @@ FECS current context, builds the clone/map/patches, then synchronizes CPU
 writes. The accepted golden diagnostic retains its 1 MiB layout.
 Byte-format/bounds/immutable-source tests, preparation/visibility failure
 models, real NETB, sanitizers and the ARM64 build pass locally. This loader
-is not yet connected to a probe IOCTL or WDDM dispatch; it has **no physical
-context-restore or 3D-workload pass**. Next connect it to a distinct graphics
-submission and verify an engine-produced report before claiming GR execution.
+is connected to the distinct .36 probe operation described below. WDDM
+dispatch remains separate and unregistered.
+
+Version **0.1.0.36 / ABI 21 (640 bytes)** adds the separate write-access
+`TG_GPU_IOCTL_3D_RUN` and `--gpu-json --gpu-3d-729`. It loads the per-channel
+image, binds Maxwell B (`B197`) on subchannel zero and submits two ordered
+NO_OPERATION/WAIT_FOR_IDLE + unchanged Mesa 3D report packets. The second
+submission follows the first engine report, and CPU readback follows L2 sync.
+The original FIFO, golden and nonstall IRQ paths remain distinct.
+`gr_engine_pass` also requires successful golden initialization, image load,
+B197 class, zero GR/FECS fault status and complete cleanup. ABI 21 reports
+image readiness/result, hardware current context and save/restore counters.
+The existing tool shares its actual acceptance predicates with host failure
+fixtures; the native JSON fixture covers write access, new-mode conflicts,
+image/class/GR faults, sentinel readback and retained-resource rejection.
+
+**Physical Lite pass, 2026-11-09 00:43:26 Pacific:** one .36 run exited 0,
+Stage 306 at 729.6 MHz, `gr_engine_pass=true`. Both GPU reports matched
+`F59F3501/0A60CAFE`; FECS current context was `800FDE14`, restore count 1,
+image ready/result 1/0, and power/clock/execution/GR/PRI/FIFO/PBDMA/MMU/
+restoration/owned states were zero. Golden bind/save and image evidence passed.
+This proves graphics-engine reports from the loaded context, not shader or
+Vulkan drawing. Native SYS/CAT/11-member verification and all 47 ABI-21 JSON
+fixture cases pass; the latter substitute device I/O. The rolling status lists
+raw evidence, installed package and next work.
 
 The latest build runs `test-gr-context` with model MMIO/GPU-write substitutes
 and, when provided, the real external NETB file. It checks owned mapping bounds,

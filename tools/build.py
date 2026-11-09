@@ -50,6 +50,7 @@ core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c
         root / "core/execute.c", root / "core/submission.c", root / "platform/t214_frontend.c",
         root / "platform/t214_gr.c", root / "platform/t214_acr.c", root / "platform/t214_pmu.c",
         root / "core/gr_firmware.c", root / "core/acr_firmware.c", root / "core/gr_image.c",
+        root / "core/gr_submit.c",
         root / "platform/t214_gr_context.c", root / "platform/t214_interrupt.c", encoder]
 host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
