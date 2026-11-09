@@ -91,7 +91,7 @@ static enum tg_gpu_gr_context_result run(struct model *m,struct tg_gpu_gr_netlis
 int main(int argc,char **argv)
 {
     struct model m={.regs=calloc(1,0x600000),.inst=calloc(1,4096),
-        .work=aligned_alloc(4096,TG_GPU_GR_WORK_BYTES)};
+        .work=aligned_alloc(4096,TG_GPU_GR_CHANNEL_WORK_BYTES)};
     struct tg_gpu_gr_context_status s;
     uint32_t ctx[]={0x400080,0,0x1234},bundle[]={0xe100,0xabc},method[]={0x100,0x55};
     struct tg_gpu_gr_netlist net={0};
@@ -111,6 +111,50 @@ int main(int argc,char **argv)
     assert(m.regs[0x405b60/4]==0x100 && m.regs[0x405ba0/4]==0x100);
     assert(m.regs[0x400080/4]==0x1234 && m.regs[0x404488/4]==0x80000100);
     assert(!m.regs[0x400208/4] && m.regs[0x404154/4]==0x800);
+    {
+        struct tg_gpu_power_io io={&m,read32,write32,NULL,NULL,delay};
+        struct tg_gpu_power power={.owned=true,.ready=true};
+        struct tg_gpu_frontend_status fe={.stage=11,.ltc_count=2};
+        struct tg_gpu_gr_work work={m.work,0x90000000,TG_GPU_GR_CHANNEL_WORK_BYTES};
+        void *gold=malloc(s.context_bytes);assert(gold);
+        memcpy(gold,(uint8_t *)m.work+TG_GPU_GR_GOLD_OFFSET,s.context_bytes);
+        assert(tg_gpu_gr_context_load_image(&io,&power,&fe,m.inst,&work,&s,42)==TG_GPU_GR_CTX_OK);
+        assert(!memcmp(gold,(uint8_t *)m.work+TG_GPU_GR_GOLD_OFFSET,s.context_bytes));
+        assert(m.work[0xfc/4]==0x600dc0de && m.work[0xf0/4]==42);
+        assert(!m.work[0xf4/4]&&!m.work[0xf8/4]&&m.work[0x10/4]==21);
+        assert(m.work[0x14/4]==0x280000&&!m.work[0x18/4]);
+        assert(m.work[0xa0/4]==2&&m.work[0xa4/4]==0x200000&&!m.work[0xa8/4]);
+        assert(!memcmp((uint8_t *)m.work+256,(uint8_t *)gold+256,s.context_bytes-256));
+        uint32_t *patch=(uint32_t *)((uint8_t *)m.work+TG_GPU_GR_PATCH_OFFSET);
+        assert(patch[0]==0x40800c&&patch[1]==0x1420);
+        assert(m.binds==1&&m.saves==1); /* no second FECS bind or fabricated GPU write */
+        unsigned writes=m.writes;
+        m.regs[0x409b00/4]=0x80080040;
+        assert(tg_gpu_gr_context_load_image(&io,&power,&fe,m.inst,&work,&s,43)==TG_GPU_GR_CTX_ARGUMENT);
+        assert(m.writes==writes&&m.work[0xf0/4]==42);
+        m.regs[0x409b00/4]=0;work.bytes=TG_GPU_GR_WORK_BYTES;
+        assert(tg_gpu_gr_context_load_image(&io,&power,&fe,m.inst,&work,&s,43)==TG_GPU_GR_CTX_ARGUMENT);
+        assert(m.writes==writes);
+        work.bytes=TG_GPU_GR_CHANNEL_WORK_BYTES;m.busy_reg=0x70010;
+        assert(tg_gpu_gr_context_load_image(&io,&power,&fe,m.inst,&work,&s,43)==TG_GPU_GR_CTX_VISIBILITY);
+        free(gold);
+    }
+    {
+        struct tg_gpu_gr_patch patches[TG_GPU_GR_GLOBAL_PATCH_COUNT],before[TG_GPU_GR_GLOBAL_PATCH_COUNT];
+        const struct tg_gpu_gr_global_addresses high={0x123400000,0x123410000,0x123420000};
+        assert(tg_gpu_gr_context_global_patches(&high,patches,TG_GPU_GR_GLOBAL_PATCH_COUNT));
+        assert(patches[0].address==0x40800c&&patches[0].value==0x1234100);
+        assert(patches[6].address==0x408004&&patches[6].value==0x1234000);
+        assert(patches[11].address==0x418810&&patches[11].value==0x80123420);
+        assert(patches[12].value==0x10123420&&patches[13].value==0x10123420);
+        memcpy(before,patches,sizeof(before));
+        struct tg_gpu_gr_global_addresses bad=high;bad.attribute=TG_GPU_VA_LIMIT-0x1000;
+        assert(!tg_gpu_gr_context_global_patches(&bad,patches,TG_GPU_GR_GLOBAL_PATCH_COUNT));
+        assert(!memcmp(before,patches,sizeof(before)));
+        bad=high;bad.bundle++;
+        assert(!tg_gpu_gr_context_global_patches(&bad,patches,TG_GPU_GR_GLOBAL_PATCH_COUNT));
+        assert(!memcmp(before,patches,sizeof(before)));
+    }
     for(unsigned test=0;test<9;++test) {
         reset(&m);
         if(test==0)m.no_power=true;if(test==1)m.no_bind=true;
@@ -145,7 +189,18 @@ int main(int argc,char **argv)
         memset(arena,0,0x80000);work.physical=0x80040000;
         assert(!tg_gpu_gr_context_prepare(arena,0x80000000,0x80000,&work) && !pt[TG_GPU_GR_WORK_VA>>12]);
         work.physical=0xfffff000;
-        assert(!tg_gpu_gr_context_prepare(arena,0x80000000,0x80000,&work));free(arena);
+        assert(!tg_gpu_gr_context_prepare(arena,0x80000000,0x80000,&work));
+        work.physical=0x90000000;
+        assert(!tg_gpu_gr_context_prepare_channel(arena,0x80000000,0x80000,&work));
+        work.bytes=TG_GPU_GR_CHANNEL_WORK_BYTES;
+        assert(tg_gpu_gr_context_prepare_channel(arena,0x80000000,0x80000,&work));
+        assert(tg_gpu_pte_4k(0x90100000,true,true,&pte));
+        assert(pt[(TG_GPU_GR_WORK_VA+TG_GPU_GR_ACCESS_MAP_OFFSET)>>12]==pte);
+        assert(tg_gpu_pte_4k(0x90180000,true,true,&pte));
+        assert(pt[(TG_GPU_GR_WORK_VA+TG_GPU_GR_PATCH_OFFSET)>>12]==pte);
+        assert(tg_gpu_pte_4k(0x90000000,false,true,&pte)&&pt[TG_GPU_GR_WORK_VA>>12]==pte);
+        assert(!pt[(TG_GPU_GR_WORK_VA+TG_GPU_GR_CHANNEL_WORK_BYTES)>>12]);
+        free(arena);
     }
     if(argc==2) {
         FILE *f=fopen(argv[1],"rb");assert(f && !fseek(f,0,SEEK_END));long bytes=ftell(f);

@@ -18,33 +18,45 @@ static void stream(const struct tg_gpu_power_io *io, uint32_t r, uint32_t v)
 { io->write32(io->context,GPU+r,v); }
 static uint32_t le32(const uint8_t *p)
 { return p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24; }
-static bool valid_work(const struct tg_gpu_gr_work *w)
+static bool valid_work(const struct tg_gpu_gr_work *w,size_t bytes)
 {
     return w && w->cpu && !((uintptr_t)w->cpu&4095) && !(w->physical&4095) &&
-        w->bytes>=TG_GPU_GR_WORK_BYTES && w->physical>=0x80000000 &&
-        w->physical<=UINT64_C(0x100000000)-TG_GPU_GR_WORK_BYTES;
+        w->bytes>=bytes && w->physical>=0x80000000 &&
+        w->physical<=UINT64_C(0x100000000)-bytes;
 }
-bool tg_gpu_gr_context_prepare(void *arena, uint64_t physical, size_t bytes,
-    const struct tg_gpu_gr_work *w)
+static bool prepare_work(void *arena, uint64_t physical, size_t bytes,
+    const struct tg_gpu_gr_work *w,size_t work_bytes)
 {
     uint64_t *pt;
     uint32_t *image;
     if(!arena || ((uintptr_t)arena&4095) || (physical&4095) || bytes<0x80000 ||
        physical<0x80000000 || physical>UINT64_C(0x100000000)-0x80000 ||
-       !valid_work(w) || (physical<w->physical+TG_GPU_GR_WORK_BYTES &&
+       !valid_work(w,work_bytes) || (physical<w->physical+work_bytes &&
                          w->physical<physical+0x80000)) return false;
     pt=(uint64_t *)((uint8_t *)arena+0x20000);
     /* Validate first; publication cannot leave a partly initialized mapping. */
-    for(unsigned i=0;i<TG_GPU_GR_WORK_BYTES/4096;++i)
+    for(unsigned i=0;i<work_bytes/4096;++i)
         if(pt[(TG_GPU_GR_WORK_VA>>12)+i]) return false;
-    for(unsigned i=0;i<TG_GPU_GR_WORK_BYTES/4;++i) ((uint32_t *)w->cpu)[i]=0;
+    for(unsigned i=0;i<work_bytes/4;++i) ((uint32_t *)w->cpu)[i]=0;
     image=(uint32_t *)((uint8_t *)w->cpu+TG_GPU_GR_GOLD_OFFSET);
     for(unsigned i=0;i<TG_GPU_GR_CTX_CAPACITY/4;++i) image[i]=TG_GPU_GR_GOLD_SENTINEL;
-    for(unsigned i=0;i<TG_GPU_GR_WORK_BYTES/4096;++i)
-        if(!tg_gpu_pte_4k(w->physical+(uint64_t)i*4096,false,true,
+    for(unsigned i=0;i<work_bytes/4096;++i) {
+        unsigned offset=i*4096;
+        bool read_only=work_bytes==TG_GPU_GR_CHANNEL_WORK_BYTES &&
+            ((offset>=TG_GPU_GR_ACCESS_MAP_OFFSET &&
+              offset<TG_GPU_GR_ACCESS_MAP_OFFSET+TG_GPU_GR_ACCESS_MAP_BYTES) ||
+             (offset>=TG_GPU_GR_PATCH_OFFSET && offset<TG_GPU_GR_PATCH_OFFSET+TG_GPU_GR_PATCH_BYTES));
+        if(!tg_gpu_pte_4k(w->physical+(uint64_t)i*4096,read_only,true,
                          &pt[(TG_GPU_GR_WORK_VA>>12)+i])) return false;
+    }
     return true;
 }
+bool tg_gpu_gr_context_prepare(void *arena,uint64_t physical,size_t bytes,
+    const struct tg_gpu_gr_work *w)
+{ return prepare_work(arena,physical,bytes,w,TG_GPU_GR_WORK_BYTES); }
+bool tg_gpu_gr_context_prepare_channel(void *arena,uint64_t physical,size_t bytes,
+    const struct tg_gpu_gr_work *w)
+{ return prepare_work(arena,physical,bytes,w,TG_GPU_GR_CHANNEL_WORK_BYTES); }
 static bool wait_mask(const struct tg_gpu_power_io *io, struct tg_gpu_gr_context_status *s,
     uint32_t r, uint32_t mask, uint32_t value)
 {
@@ -120,35 +132,52 @@ static void method_stream(const struct tg_gpu_power_io *io, const struct tg_gpu_
         stream(io,gr_pri_mme_shadow_raw_index_r(),0x80000000|le32(b.data+j));
     }
 }
-static void globals(const struct tg_gpu_power_io *io)
+bool tg_gpu_gr_context_global_patches(const struct tg_gpu_gr_global_addresses *a,
+    struct tg_gpu_gr_patch *output,size_t capacity)
 {
-    uint32_t page=(TG_GPU_GR_WORK_VA+TG_GPU_GR_PAGEPOOL_OFFSET)>>8;
-    uint32_t bundle=(TG_GPU_GR_WORK_VA+TG_GPU_GR_BUNDLE_OFFSET)>>8;
-    uint32_t attrib=(TG_GPU_GR_WORK_VA+TG_GPU_GR_ATTRIB_OFFSET)>>12;
-    wr(io,gr_scc_pagepool_base_r(),page);
-    wr(io,gr_scc_pagepool_r(),gr_scc_pagepool_total_pages_hwmax_v()|0x80000000);
-    wr(io,gr_gpcs_gcc_pagepool_base_r(),page);
-    wr(io,gr_gpcs_gcc_pagepool_r(),gr_scc_pagepool_total_pages_hwmax_v());
-    wr(io,gr_pd_pagepool_r(),gr_scc_pagepool_total_pages_hwmax_v()|0x80000000);
-    wr(io,gr_gpcs_swdx_rm_pagepool_r(),gr_scc_pagepool_total_pages_hwmax_v()|0x80000000);
-    wr(io,gr_scc_bundle_cb_base_r(),bundle);wr(io,gr_scc_bundle_cb_size_r(),0x80000018);
-    wr(io,gr_gpcs_swdx_bundle_cb_base_r(),bundle);wr(io,gr_gpcs_swdx_bundle_cb_size_r(),0x80000018);
-    wr(io,gr_pd_ab_dist_cfg2_r(),gr_pd_ab_dist_cfg2_token_limit_f(0x1c0)|
-       gr_pd_ab_dist_cfg2_state_limit_f(0xc0));
-    wr(io,gr_gpcs_setup_attrib_cb_base_r(),attrib|0x80000000);
-    wr(io,gr_gpcs_tpcs_pe_pin_cb_global_base_addr_r(),attrib|0x10000000);
-    wr(io,gr_gpcs_tpcs_mpc_vtg_cb_global_base_addr_r(),attrib|0x10000000);
-    wr(io,gr_ds_tga_constraintlogic_r(),gr_ds_tga_constraintlogic_beta_cbsize_f(0x400)|
-       gr_ds_tga_constraintlogic_alpha_cbsize_f(0x800));
-    wr(io,gr_pd_ab_dist_cfg1_r(),gr_pd_ab_dist_cfg1_max_output_f(0x800*32/128)|
-       gr_pd_ab_dist_cfg1_max_batches_init_f());
+    if(!a || !output || capacity<TG_GPU_GR_GLOBAL_PATCH_COUNT ||
+       !a->bundle || (a->bundle&255) || a->bundle>TG_GPU_VA_LIMIT-0x1800 ||
+       !a->pagepool || (a->pagepool&255) || a->pagepool>TG_GPU_VA_LIMIT-0x8000 ||
+       !a->attribute || (a->attribute&4095) || a->attribute>TG_GPU_VA_LIMIT-0x48000)
+        return false;
+    uint32_t page=(uint32_t)(a->pagepool>>8),bundle=(uint32_t)(a->bundle>>8);
+    uint32_t attrib=(uint32_t)(a->attribute>>12);unsigned n=0;
+#define PATCH(reg,value) output[n++]=(struct tg_gpu_gr_patch){reg,value}
+    PATCH(gr_scc_pagepool_base_r(),page);
+    PATCH(gr_scc_pagepool_r(),gr_scc_pagepool_total_pages_hwmax_v()|0x80000000);
+    PATCH(gr_gpcs_gcc_pagepool_base_r(),page);
+    PATCH(gr_gpcs_gcc_pagepool_r(),gr_scc_pagepool_total_pages_hwmax_v());
+    PATCH(gr_pd_pagepool_r(),gr_scc_pagepool_total_pages_hwmax_v()|0x80000000);
+    PATCH(gr_gpcs_swdx_rm_pagepool_r(),gr_scc_pagepool_total_pages_hwmax_v()|0x80000000);
+    PATCH(gr_scc_bundle_cb_base_r(),bundle);PATCH(gr_scc_bundle_cb_size_r(),0x80000018);
+    PATCH(gr_gpcs_swdx_bundle_cb_base_r(),bundle);PATCH(gr_gpcs_swdx_bundle_cb_size_r(),0x80000018);
+    PATCH(gr_pd_ab_dist_cfg2_r(),gr_pd_ab_dist_cfg2_token_limit_f(0x1c0)|
+          gr_pd_ab_dist_cfg2_state_limit_f(0xc0));
+    PATCH(gr_gpcs_setup_attrib_cb_base_r(),attrib|0x80000000);
+    PATCH(gr_gpcs_tpcs_pe_pin_cb_global_base_addr_r(),attrib|0x10000000);
+    PATCH(gr_gpcs_tpcs_mpc_vtg_cb_global_base_addr_r(),attrib|0x10000000);
+    PATCH(gr_ds_tga_constraintlogic_r(),gr_ds_tga_constraintlogic_beta_cbsize_f(0x400)|
+          gr_ds_tga_constraintlogic_alpha_cbsize_f(0x800));
+    PATCH(gr_pd_ab_dist_cfg1_r(),gr_pd_ab_dist_cfg1_max_output_f(0x800*32/128)|
+          gr_pd_ab_dist_cfg1_max_batches_init_f());
     /* Two TPCs in one PES. Maximum backing includes 50% growth for each CB. */
-    wr(io,gr_gpc0_ppc0_cbm_beta_cb_size_r(),0x800);
-    wr(io,gr_gpc0_ppc0_cbm_beta_cb_offset_r(),0);
-    wr(io,gr_gpc0_ppc0_cbm_alpha_cb_size_r(),0x1000);
-    wr(io,gr_gpc0_ppc0_cbm_alpha_cb_offset_r(),0xc00);
-    wr(io,gr_gpcs_swdx_tc_beta_cb_size_r(0),gr_gpcs_swdx_tc_beta_cb_size_v_f(0x800)|
-       gr_gpcs_swdx_tc_beta_cb_size_div3_f(0x800/3));
+    PATCH(gr_gpc0_ppc0_cbm_beta_cb_size_r(),0x800);
+    PATCH(gr_gpc0_ppc0_cbm_beta_cb_offset_r(),0);
+    PATCH(gr_gpc0_ppc0_cbm_alpha_cb_size_r(),0x1000);
+    PATCH(gr_gpc0_ppc0_cbm_alpha_cb_offset_r(),0xc00);
+    PATCH(gr_gpcs_swdx_tc_beta_cb_size_r(0),gr_gpcs_swdx_tc_beta_cb_size_v_f(0x800)|
+          gr_gpcs_swdx_tc_beta_cb_size_div3_f(0x800/3));
+#undef PATCH
+    return n==TG_GPU_GR_GLOBAL_PATCH_COUNT;
+}
+static bool globals(const struct tg_gpu_power_io *io)
+{
+    const struct tg_gpu_gr_global_addresses a={TG_GPU_GR_WORK_VA+TG_GPU_GR_BUNDLE_OFFSET,
+        TG_GPU_GR_WORK_VA+TG_GPU_GR_PAGEPOOL_OFFSET,TG_GPU_GR_WORK_VA+TG_GPU_GR_ATTRIB_OFFSET};
+    struct tg_gpu_gr_patch p[TG_GPU_GR_GLOBAL_PATCH_COUNT];
+    if(!tg_gpu_gr_context_global_patches(&a,p,TG_GPU_GR_GLOBAL_PATCH_COUNT)) return false;
+    for(unsigned i=0;i<TG_GPU_GR_GLOBAL_PATCH_COUNT;++i) wr(io,p[i].address,p[i].value);
+    return true;
 }
 static void floorsweep(const struct tg_gpu_power_io *io, uint32_t ltcs)
 {
@@ -233,7 +262,7 @@ enum tg_gpu_gr_context_result tg_gpu_gr_context_init(
     *s=(struct tg_gpu_gr_context_status){0};
     if(!io || !io->read32 || !io->write32 || !io->delay_us || !power ||
        !power->owned || !power->ready || !fe || fe->result || !fe->ltc_count ||
-       !n || !gr || gr->result || gr->stage!=15 || !inst || !valid_work(w) ||
+       !n || !gr || gr->result || gr->stage!=15 || !inst || !valid_work(w,TG_GPU_GR_WORK_BYTES) ||
        (physical&4095) || physical<0x80000000 || physical>0xfffff000 ||
        gr->context_bytes<256 || gr->context_bytes>TG_GPU_GR_CTX_CAPACITY || (gr->context_bytes&3))
         return s->result=TG_GPU_GR_CTX_ARGUMENT;
@@ -292,7 +321,8 @@ enum tg_gpu_gr_context_result tg_gpu_gr_context_init(
     context_stream(io,n);
     if(!idle(io,s)) goto done;
     wr(io,gr_fe_go_idle_timeout_r(),0);
-    globals(io);timeslice(io);floorsweep(io,fe->ltc_count);
+    if(!globals(io)) {s->result=TG_GPU_GR_CTX_ARGUMENT;goto done;}
+    timeslice(io);floorsweep(io,fe->ltc_count);
     if(!idle(io,s) || !bundles(io,n,s)) goto done;
     wr(io,gr_fe_go_idle_timeout_r(),0x800);
     if(!idle(io,s)) goto done;
@@ -334,4 +364,36 @@ done:
     tg_gpu_gr_snapshot(io,gr);tg_gpu_frontend_snapshot(io,fe);
     if(!s->result && fe->result) s->result=TG_GPU_GR_CTX_PRI_FAULT;
     return (enum tg_gpu_gr_context_result)s->result;
+}
+enum tg_gpu_gr_context_result tg_gpu_gr_context_load_image(
+    const struct tg_gpu_power_io *io,const struct tg_gpu_power *power,
+    struct tg_gpu_frontend_status *fe,uint32_t *inst,const struct tg_gpu_gr_work *w,
+    const struct tg_gpu_gr_context_status *golden,uint32_t context_id)
+{
+    if(!io || !io->read32 || !io->write32 || !io->delay_us || !power ||
+       !power->owned || !power->ready || !fe || fe->result || !inst ||
+       !valid_work(w,TG_GPU_GR_CHANNEL_WORK_BYTES) || !golden || golden->result ||
+       golden->stage!=9 || !golden->image_changed_words ||
+       golden->context_bytes<TG_GPU_GR_IMAGE_HEADER_BYTES ||
+       golden->context_bytes>TG_GPU_GR_CTX_CAPACITY || (golden->context_bytes&3))
+        return TG_GPU_GR_CTX_ARGUMENT;
+    if(rd(io,gr_fecs_current_ctx_r())!=0) return TG_GPU_GR_CTX_ARGUMENT;
+    const struct tg_gpu_gr_global_addresses a={TG_GPU_GR_WORK_VA+TG_GPU_GR_BUNDLE_OFFSET,
+        TG_GPU_GR_WORK_VA+TG_GPU_GR_PAGEPOOL_OFFSET,TG_GPU_GR_WORK_VA+TG_GPU_GR_ATTRIB_OFFSET};
+    struct tg_gpu_gr_patch p[TG_GPU_GR_GLOBAL_PATCH_COUNT];
+    struct tg_gpu_gr_image_config config={TG_GPU_GR_WORK_VA+TG_GPU_GR_ACCESS_MAP_OFFSET,
+        TG_GPU_GR_WORK_VA+TG_GPU_GR_PATCH_OFFSET,TG_GPU_GR_PATCH_BYTES,
+        TG_GPU_GR_GLOBAL_PATCH_COUNT,context_id};
+    if(!tg_gpu_gr_context_global_patches(&a,p,TG_GPU_GR_GLOBAL_PATCH_COUNT))
+        return TG_GPU_GR_CTX_ARGUMENT;
+    uint8_t *cpu=w->cpu;
+    if(tg_gpu_gr_image_build(cpu,TG_GPU_GR_CTX_CAPACITY,cpu+TG_GPU_GR_GOLD_OFFSET,
+          golden->context_bytes,&config)!=TG_GPU_GR_IMAGE_OK ||
+       !tg_gpu_gr_access_map_build(cpu+TG_GPU_GR_ACCESS_MAP_OFFSET,TG_GPU_GR_ACCESS_MAP_BYTES) ||
+       !tg_gpu_gr_patch_build(cpu+TG_GPU_GR_PATCH_OFFSET,TG_GPU_GR_PATCH_BYTES,
+                             p,TG_GPU_GR_GLOBAL_PATCH_COUNT)) return TG_GPU_GR_CTX_IMAGE;
+    inst[132]=TG_GPU_GR_WORK_VA|4;inst[133]=0;
+    if(tg_gpu_frontend_sync_memory(io,power,fe)!=TG_GPU_FE_OK)
+        return TG_GPU_GR_CTX_VISIBILITY;
+    return TG_GPU_GR_CTX_OK;
 }

@@ -49,7 +49,7 @@ encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
 core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c", root / "core/fault.c",
         root / "core/execute.c", root / "core/submission.c", root / "platform/t214_frontend.c",
         root / "platform/t214_gr.c", root / "platform/t214_acr.c", root / "platform/t214_pmu.c",
-        root / "core/gr_firmware.c", root / "core/acr_firmware.c",
+        root / "core/gr_firmware.c", root / "core/acr_firmware.c", root / "core/gr_image.c",
         root / "platform/t214_gr_context.c", root / "platform/t214_interrupt.c", encoder]
 host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -109,9 +109,14 @@ subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(gr), str(gr_firmware), str(root / "platform/t214_frontend.c"),
                 str(root / "tests/test_gr_boot.c"), "-o", str(gr_test)], check=True)
 subprocess.run([str(gr_test.resolve())], check=True)
+gr_image_test = args.out / "test-gr-image"
+subprocess.run([args.cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
+                str(root / "core/gr_image.c"),str(root / "tests/test_gr_image.c"),
+                "-o",str(gr_image_test)],check=True)
+subprocess.run([str(gr_image_test.resolve())],check=True)
 gr_context_test = args.out / "test-gr-context"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
-                str(root / "platform/t214_gr_context.c"), str(gr), str(gr_firmware),
+                str(root / "platform/t214_gr_context.c"),str(root / "core/gr_image.c"), str(gr), str(gr_firmware),
                 str(root / "platform/t214_frontend.c"), str(root / "core/gm20b_mmu.c"),
                 str(root / "tests/test_gr_context.c"), "-o", str(gr_context_test)], check=True)
 subprocess.run([str(gr_context_test.resolve()),

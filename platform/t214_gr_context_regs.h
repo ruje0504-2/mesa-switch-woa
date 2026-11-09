@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * Copyright (c) 2014-2018 NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2014-2020 NVIDIA CORPORATION. All rights reserved.
  * Selected unchanged GM20B definitions from Switchroot nvgpu 1ae0167d
  * include/nvgpu/hw/gm20b/hw_{gr,ctxsw_prog,top,pri_ringmaster}_gm20b.h.
  * Type spelling/whitespace adjusted for this build. See ../NOTICE.
@@ -7,6 +7,29 @@
 #ifndef TG_GPU_T214_GR_CONTEXT_REGS_H
 #define TG_GPU_T214_GR_CONTEXT_REGS_H
 #include <stdint.h>
+static inline uint32_t ctxsw_prog_main_image_context_id_o(void) { return 0x000000f0U; }
+static inline uint32_t ctxsw_prog_main_image_num_save_ops_o(void) { return 0x000000f4U; }
+static inline uint32_t ctxsw_prog_main_image_num_restore_ops_o(void) { return 0x000000f8U; }
+static inline uint32_t ctxsw_prog_main_image_patch_count_o(void) { return 0x00000010U; }
+static inline uint32_t ctxsw_prog_main_image_patch_adr_lo_o(void) { return 0x00000014U; }
+static inline uint32_t ctxsw_prog_main_image_patch_adr_hi_o(void) { return 0x00000018U; }
+static inline uint32_t ctxsw_prog_main_image_priv_access_map_config_o(void) { return 0x000000a0U; }
+static inline uint32_t ctxsw_prog_main_image_priv_access_map_addr_lo_o(void) { return 0x000000a4U; }
+static inline uint32_t ctxsw_prog_main_image_priv_access_map_addr_hi_o(void) { return 0x000000a8U; }
+static inline uint32_t ctxsw_prog_main_image_misc_options_o(void) { return 0x0000003cU; }
+static inline uint32_t ctxsw_prog_main_image_ctl_o(void) { return 0x0000000cU; }
+static inline uint32_t ctxsw_prog_main_image_pm_o(void) { return 0x00000028U; }
+static inline uint32_t ctxsw_prog_main_image_pm_ptr_o(void) { return 0x0000002cU; }
+static inline uint32_t ctxsw_prog_main_image_context_timestamp_buffer_control_o(void) { return 0x000000acU; }
+static inline uint32_t ctxsw_prog_main_image_context_timestamp_buffer_ptr_hi_o(void) { return 0x000000b0U; }
+static inline uint32_t ctxsw_prog_main_image_context_timestamp_buffer_ptr_o(void) { return 0x000000b4U; }
+static inline uint32_t ctxsw_prog_main_image_preemption_options_o(void) { return 0x00000060U; }
+static inline uint32_t ctxsw_prog_main_image_priv_access_map_config_mode_use_map_f(void) { return 0x2U; }
+static inline uint32_t ctxsw_prog_main_image_misc_options_verif_features_m(void) { return 0x1U << 3U; }
+static inline uint32_t ctxsw_prog_main_image_ctl_cde_enabled_f(void) { return 0x400U; }
+static inline uint32_t ctxsw_prog_main_image_pm_mode_m(void) { return 0x7U << 0U; }
+static inline uint32_t ctxsw_prog_main_image_pm_smpc_mode_m(void) { return 0x7U << 3U; }
+static inline uint32_t ctxsw_prog_main_image_pm_pc_sampling_m(void) { return 0x1U << 6U; }
 static inline uint32_t ctxsw_prog_main_image_magic_value_o(void) { return 0x000000fcU; }
 static inline uint32_t ctxsw_prog_main_image_magic_value_v_value_v(void) { return 0x600dc0deU; }
 static inline uint32_t ctxsw_prog_main_image_zcull_mode_no_ctxsw_v(void) { return 0x00000001U; }

@@ -432,6 +432,24 @@ substitutes; the earlier allocation/context/resource fixtures remain local
 contract evidence. The rolling status records package hashes, the unchanged
 GPU-only test table, rollback paths and hardware availability.
 
+Source candidate **0.1.0.35 / ABI 20 unchanged**, not installed, adds
+`core/gr_image.{c,h}` and the channel-image helpers in `t214_gr_context`.
+They clone the immutable golden image, initialize per-context header fields,
+disable unbacked PM/SMPC/trace/CTA features, encode all 40 GPU-VA bits and
+apply the pinned 30-register GM20B access map using `USE_MAP`, never allow-all.
+The existing 21 global-state writes now share a register/value builder with
+the FECS patch list, so bundle/pagepool/attribute addresses can be rebased.
+`tg_gpu_gr_context_prepare_channel` installs a separate 2 MiB private layout,
+including a 512 KiB access map and a patch page, both GPU read-only.
+`tg_gpu_gr_context_load_image` requires a completed golden save and cleared
+FECS current context, builds the clone/map/patches, then synchronizes CPU
+writes. The accepted golden diagnostic retains its 1 MiB layout.
+Byte-format/bounds/immutable-source tests, preparation/visibility failure
+models, real NETB, sanitizers and the ARM64 build pass locally. This loader
+is not yet connected to a probe IOCTL or WDDM dispatch; it has **no physical
+context-restore or 3D-workload pass**. Next connect it to a distinct graphics
+submission and verify an engine-produced report before claiming GR execution.
+
 The latest build runs `test-gr-context` with model MMIO/GPU-write substitutes
 and, when provided, the real external NETB file. It checks owned mapping bounds,
 stream-port write ordering, buffer encodings, failed replies/timeouts and image
