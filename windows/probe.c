@@ -33,6 +33,7 @@ typedef struct _GPU_DEVICE {
     NTSTATUS io_status;
     PVOID arena;
     PHYSICAL_ADDRESS arena_address;
+    struct tg_gpu_gr_work graphics;
 } GPU_DEVICE;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(GPU_DEVICE, GpuContext)
 DRIVER_INITIALIZE DriverEntry;
@@ -185,10 +186,14 @@ static VOID GpuCleanup(GPU_DEVICE *d)
             MmFreeContiguousMemorySpecifyCache(d->arena, TG_GPU_ARENA_BYTES, MmNonCached);
             d->arena = NULL;
         }
+        if(d->graphics.cpu) {
+            MmFreeContiguousMemorySpecifyCache(d->graphics.cpu,TG_GPU_GR_WORK_BYTES,MmNonCached);
+            d->graphics=(struct tg_gpu_gr_work){0};
+        }
     }
     d->last.resources_owned = d->power.owned || d->execution.owned;
 }
-static NTSTATUS GpuRun(WDFDEVICE device, ULONG target)
+static NTSTATUS GpuRun(WDFDEVICE device, ULONG target, BOOLEAN graphics)
 {
     GPU_DEVICE *d = GpuContext(device);
     struct tg_gpu_power_io io = GpuIo(d);
@@ -234,6 +239,17 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target)
                                                       low, high, boundary, MmNonCached);
     if (!d->arena) { TgGpuFirmwareFree(&firmware); status = STATUS_INSUFFICIENT_RESOURCES; goto early; }
     d->arena_address = MmGetPhysicalAddress(d->arena);
+    if(graphics) {
+        d->graphics.cpu=MmAllocateContiguousMemorySpecifyCache(TG_GPU_GR_WORK_BYTES,
+            low,high,boundary,MmNonCached);
+        if(!d->graphics.cpu) {
+            d->last.execution_result=TG_GPU_EXEC_GR_CONTEXT;
+            d->last.graphics.result=TG_GPU_GR_CTX_ARGUMENT;
+            d->last.stage=91;goto done;
+        }
+        d->graphics.physical=(uint64_t)MmGetPhysicalAddress(d->graphics.cpu).QuadPart;
+        d->graphics.bytes=TG_GPU_GR_WORK_BYTES;
+    }
     d->last.power_result = tg_gpu_power_up(&io, address, &d->power);
     d->last.stage = 100 + d->power.stage;
     if (d->last.power_result != TG_GPU_POWER_OK) goto done;
@@ -249,8 +265,11 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target)
     d->last.rail_uv = d->clock.rail_uv;
     if (d->last.clock_result != TG_GPU_CLOCK_OK) goto done;
     KeMemoryBarrier();
-    d->last.execution_result = tg_gpu_execute(&io, &d->power, d->arena,
-        (uint64_t)d->arena_address.QuadPart, &firmware.payload, &d->execution, &d->last);
+    d->last.execution_result = graphics?
+        tg_gpu_execute_gr(&io,&d->power,d->arena,(uint64_t)d->arena_address.QuadPart,
+            &firmware.payload,&d->graphics,&d->execution,&d->last):
+        tg_gpu_execute(&io,&d->power,d->arena,(uint64_t)d->arena_address.QuadPart,
+            &firmware.payload,&d->execution,&d->last);
     d->last.stage = 300 + d->execution.stage;
 done:
     TgGpuFirmwareFree(&firmware); /* GPU DMA uses only its copied private arena. */
@@ -276,12 +295,12 @@ VOID GpuControl(WDFQUEUE queue, WDFREQUEST request, size_t out_size, size_t in_s
     UNREFERENCED_PARAMETER(out_size); UNREFERENCED_PARAMETER(in_size);
     status = WdfRequestRetrieveOutputBuffer(request, sizeof(*out), (PVOID *)&out, NULL);
     if (!NT_SUCCESS(status)) { WdfRequestComplete(request, status); return; }
-    if (code == TG_GPU_IOCTL_RUN) {
+    if (code == TG_GPU_IOCTL_RUN || code == TG_GPU_IOCTL_GR_RUN) {
         status = WdfRequestRetrieveInputBuffer(request, sizeof(op), (PVOID *)&in, NULL);
         if (NT_SUCCESS(status)) {
             op = *in;
             status = op.version == TG_GPU_CONTROL_VERSION ?
-                GpuRun(device, op.target_khz) : STATUS_REVISION_MISMATCH;
+                GpuRun(device, op.target_khz, code==TG_GPU_IOCTL_GR_RUN) : STATUS_REVISION_MISMATCH;
         }
     } else if (code == TG_GPU_IOCTL_STATUS) status = STATUS_SUCCESS;
     else status = STATUS_INVALID_DEVICE_REQUEST;

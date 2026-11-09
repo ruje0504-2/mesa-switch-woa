@@ -220,9 +220,9 @@ static bool ex_fault(const struct tg_gpu_power_io *io)
     return tg_gpu_fault_poll(io, &status);
 }
 
-enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
+static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *cpu, uint64_t physical,
-    const struct tg_gpu_gr_payload *firmware,
+    const struct tg_gpu_gr_payload *firmware, const struct tg_gpu_gr_work *work,
     struct tg_gpu_execution *state,
     struct tg_gpu_status *s)
 {
@@ -236,6 +236,8 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         return TG_GPU_EXEC_ARGUMENT;
     if (firmware && firmware->acr &&
         !tg_gpu_prepare_acr_arena(cpu,physical,TG_GPU_ARENA_BYTES))
+        return TG_GPU_EXEC_ARGUMENT;
+    if(work && (!firmware || !tg_gpu_gr_context_prepare(cpu,physical,TG_GPU_ARENA_BYTES,work)))
         return TG_GPU_EXEC_ARGUMENT;
     fence = (volatile uint32_t *)((uint8_t *)cpu + FENCE);
     userd = (volatile uint32_t *)((uint8_t *)cpu + USERD);
@@ -381,7 +383,9 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
             /* Switchroot APP_VERSION_GM20B uses the 32-byte cmdline_args_v3. */
             if (image.pmu_version!=20490253u || image.size>TG_GPU_ACR_SURFACE_BYTES ||
                 (physical<s->acr.wpr_base+s->acr.wpr_size &&
-                 physical+TG_GPU_ARENA_BYTES>s->acr.wpr_base)) {
+                 physical+TG_GPU_ARENA_BYTES>s->acr.wpr_base) ||
+                (work && work->physical<s->acr.wpr_base+s->acr.wpr_size &&
+                 work->physical+TG_GPU_GR_WORK_BYTES>s->acr.wpr_base)) {
                 s->acr_firmware_result=TG_GPU_ACR_ADDRESS;
                 return TG_GPU_EXEC_ACR_BOOT;
             }
@@ -414,6 +418,12 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         state->stage=11;
         if (tg_gpu_frontend_ce_prepare(io,power,&s->frontend,&state->ce_reset_mask)!=TG_GPU_FE_OK)
             return TG_GPU_EXEC_FRONTEND;
+        if(work) {
+            state->stage=12;
+            if(tg_gpu_gr_context_init(io,power,&s->frontend,&firmware->netlist,&s->gr,
+                (uint32_t *)((uint8_t *)cpu+INST),physical+INST,work,&s->graphics)!=TG_GPU_GR_CTX_OK)
+                return TG_GPU_EXEC_GR_CONTEXT;
+        }
     }
     state->stage = 3;
     ex_write(io, 0x800000, (uint32_t)((physical + INST) >> 12) | 0x80000000);
@@ -472,6 +482,21 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
         return TG_GPU_EXEC_TIMEOUT;
     state->stage = 6;
     return TG_GPU_EXEC_OK;
+}
+
+enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power, void *cpu, uint64_t physical,
+    const struct tg_gpu_gr_payload *firmware, struct tg_gpu_execution *state,
+    struct tg_gpu_status *s)
+{ return execute(io,power,cpu,physical,firmware,NULL,state,s); }
+
+enum tg_gpu_execute_result tg_gpu_execute_gr(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power, void *cpu, uint64_t physical,
+    const struct tg_gpu_gr_payload *firmware, const struct tg_gpu_gr_work *work,
+    struct tg_gpu_execution *state, struct tg_gpu_status *s)
+{
+    if(!work) return TG_GPU_EXEC_ARGUMENT;
+    return execute(io,power,cpu,physical,firmware,work,state,s);
 }
 
 void tg_gpu_execute_stop(const struct tg_gpu_power_io *io, struct tg_gpu_execution *s)

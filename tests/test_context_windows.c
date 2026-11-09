@@ -579,7 +579,9 @@ void start(void)
     CHECK(TgGpuContextWorkFinished(&e,&work)==STATUS_PENDING);
     hw.fail_reset=TRUE;
     CHECK(TgGpuResetContextWork(&e,&work,&io,&power,&clock)==STATUS_DEVICE_DATA_ERROR);
-    CHECK(e.Channel.referenced && c->References==1 && power.owned && !power.ready);
+    /* power_down now stops at the failed reset readback, before changing its
+     * ready/clock/rail state. All DMA backing must remain owned for retry. */
+    CHECK(e.Channel.referenced && c->References==1 && power.owned && power.ready);
     CHECK(!work.Submitted && hw.clamp==1 && !hw.reset);
     hw.fail_reset=FALSE;
     CHECK(NT_SUCCESS(TgGpuResetContextWork(&e,&work,&io,&power,&clock)));

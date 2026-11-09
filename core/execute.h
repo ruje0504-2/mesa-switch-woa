@@ -19,7 +19,8 @@ enum tg_gpu_execute_result {
     TG_GPU_EXEC_MMU_TIMEOUT, TG_GPU_EXEC_BAR1, TG_GPU_EXEC_RUNLIST,
     TG_GPU_EXEC_TIMEOUT, TG_GPU_EXEC_FAULT, TG_GPU_EXEC_FIFO_INIT,
     TG_GPU_EXEC_PBDMA_INIT, TG_GPU_EXEC_SCHEDULER, TG_GPU_EXEC_FRONTEND,
-    TG_GPU_EXEC_GR_BOOT, TG_GPU_EXEC_ACR_BOOT, TG_GPU_EXEC_PMU_BOOT
+    TG_GPU_EXEC_GR_BOOT, TG_GPU_EXEC_ACR_BOOT, TG_GPU_EXEC_PMU_BOOT,
+    TG_GPU_EXEC_GR_CONTEXT
 };
 
 /* A single diagnostic channel using caller-owned contiguous, uncached
@@ -48,6 +49,12 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *uncached_cpu,
     uint64_t device_address, const struct tg_gpu_gr_payload *firmware,
     struct tg_gpu_execution *state,
+    struct tg_gpu_status *result);
+/* Opt-in golden-image diagnostic; the original FIFO entry point is unchanged. */
+enum tg_gpu_execute_result tg_gpu_execute_gr(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power, void *uncached_cpu,
+    uint64_t device_address, const struct tg_gpu_gr_payload *firmware,
+    const struct tg_gpu_gr_work *work, struct tg_gpu_execution *state,
     struct tg_gpu_status *result);
 /* Stop channel fetch before the caller drains MC, stops the PLL and powers
  * down. Clear execution ownership/free the arena only AFTER power_down

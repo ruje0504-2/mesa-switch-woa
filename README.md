@@ -366,6 +366,22 @@ do not sign SYS/CAT files with the CA certificate itself. Before installation,
 verify the SYS signature and the INF/SYS catalog membership with Windows
 SignTool (`verify /pa /c package.cat file`). A successful PnPUtil import alone
 does not establish a valid Authenticode signature or an active device binding.
+
+Version 0.1.0.30 / ABI 18 adds an opt-in cold graphics-context diagnostic:
+`LitePerformanceCheck.exe --gpu-json --gpu-gr-729`. It uses a separate owned
+1 MiB allocation, the NETB context/method/bundle streams and the fixed GM20B
+one-GPC/two-TPC topology to initialize global buffers and save a golden context
+through FECS. The original `--gpu-729` FIFO entry point remains separate.
+`gr_context_pass` additionally requires successful bind/save replies, an image
+header and changed image payload after L2 synchronization, successful FIFO
+readback and full resource retirement. An unchanged golden-image sentinel or
+stale mailbox cannot pass. No shader, Vulkan ICD or drawing is supplied by this
+diagnostic. See the status page for the actual physical validation state.
+
+The latest build runs `test-gr-context` with model MMIO/GPU-write substitutes
+and, when provided, the real external NETB file. It checks owned mapping bounds,
+stream-port write ordering, buffer encodings, failed replies/timeouts and image
+visibility; it does not count as a physical golden-image save.
 The probe/bridge linker uses the working T214 kernel image profile: resident
 code/data/unwind sections, discardable INIT, and `/tsaware:no`. The default
 image profile compiled and signed but failed native driver loading with
