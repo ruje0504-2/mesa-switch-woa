@@ -10,13 +10,14 @@
 struct model {
     uint32_t enable,mask,fifo_enable,fifo_pending,lic_enable,lic_class,force,mc;
     unsigned writes,fail_write;
+    uint32_t bad_register;
     bool sticky,bad_read,gpu_off;
 };
 static uint32_t read_reg(void *ctx,uint32_t reg)
 {
     struct model *m=ctx;
     if(reg>=GPU && reg<GPU+T214_GPU_REG_SIZE) assert(!m->gpu_off);
-    if(m->bad_read) return UINT32_MAX;
+    if(m->bad_read || reg==m->bad_register) return UINT32_MAX;
     switch(reg) {
     case GPU+0x104:return m->mc;
     case GPU+0x144:return m->enable;
@@ -87,6 +88,34 @@ int main(void)
     assert(tg_gpu_irq_arm(&io,&power,&q,&s)==TG_GPU_IRQ_FOREIGN&&!m.writes);
     m=initial();m.bad_read=true;
     assert(tg_gpu_irq_arm(&io,&power,&q,&s)==TG_GPU_IRQ_REGISTER&&!m.writes);
+    assert(s.stage==TG_GPU_IRQ_SNAPSHOT&&s.last_register==GPU+0x144&&s.last_value==UINT32_MAX);
+    /* Record the actual failing snapshot, rather than the last of six reads.
+     * Cleanup must preserve that first failure even when restoration succeeds.
+     */
+    const uint32_t snapshots[]={GPU+0x144,GPU+0x2140,T214_GPU_LIC_BASE};
+    for(unsigned n=0;n<sizeof(snapshots)/sizeof(snapshots[0]);++n) {
+        m=initial();m.bad_register=snapshots[n];
+        assert(tg_gpu_irq_arm(&io,&power,&q,&s)==TG_GPU_IRQ_REGISTER&&!m.writes&&!q.saved);
+        assert(s.stage==TG_GPU_IRQ_SNAPSHOT&&s.last_register==snapshots[n]&&s.last_value==UINT32_MAX);
+        m.bad_register=0;
+        assert(tg_gpu_irq_disarm(&io,&q,&s)==TG_GPU_IRQ_OK);
+        assert(s.stage==TG_GPU_IRQ_SNAPSHOT&&s.last_register==snapshots[n]&&s.last_value==UINT32_MAX);
+    }
+    /* 0.1.0.33 physically read MC_MASK1=~0u. A full enabled-source bitmap
+     * must arm and restore exactly, including LIC's complete 32-bit masks.
+     */
+    m=initial();q=(struct tg_gpu_irq_state){0};
+    m.mask=m.lic_enable=m.lic_class=UINT32_MAX;
+    assert(tg_gpu_irq_arm(&io,&power,&q,&s)==TG_GPU_IRQ_OK&&q.armed);
+    assert(m.mask==0x100&&m.lic_enable==UINT32_MAX&&m.lic_class==(UINT32_MAX&~BIT));
+    assert(tg_gpu_irq_disarm(&io,&q,&s)==TG_GPU_IRQ_OK&&!q.saved);
+    assert(m.mask==UINT32_MAX&&m.lic_enable==UINT32_MAX&&m.lic_class==UINT32_MAX);
+    /* Even for a bitmap, all-ones is not a match for the requested 0x100. */
+    m=initial();q=(struct tg_gpu_irq_state){0};m.mask=UINT32_MAX;m.fail_write=6;
+    assert(tg_gpu_irq_arm(&io,&power,&q,&s)==TG_GPU_IRQ_REGISTER&&q.saved&&!q.armed);
+    assert(s.stage==TG_GPU_IRQ_MASK_MC&&s.last_register==GPU+0x644&&s.last_value==UINT32_MAX);
+    m.fail_write=0;
+    assert(tg_gpu_irq_disarm(&io,&q,&s)==TG_GPU_IRQ_OK&&!q.saved&&m.mask==UINT32_MAX);
     power.ready=false;m=initial();
     assert(tg_gpu_irq_arm(&io,&power,&q,&s)==TG_GPU_IRQ_ARGUMENT&&!m.writes);power.ready=true;
 
@@ -97,10 +126,17 @@ int main(void)
         assert(q.saved); /* Even failure after a write retains its snapshot. */
         if(r==TG_GPU_IRQ_OK)assert(q.armed);
         else assert(r==TG_GPU_IRQ_REGISTER&&!q.armed);
+        if(fail==6) {
+            assert(r==TG_GPU_IRQ_REGISTER&&s.stage==TG_GPU_IRQ_MASK_MC);
+            assert(s.last_register==GPU+0x644&&s.last_value==original.mask);
+        }
         m.fail_write=0;
         assert(tg_gpu_irq_disarm(&io,&q,&s)==TG_GPU_IRQ_OK&&!q.saved);
         assert(m.enable==original.enable&&m.mask==original.mask&&m.fifo_enable==original.fifo_enable);
         assert(m.lic_enable==original.lic_enable&&m.lic_class==original.lic_class);
+        if(fail==6) {
+            assert(s.stage==TG_GPU_IRQ_MASK_MC&&s.last_register==GPU+0x644&&s.last_value==original.mask);
+        }
     }
     /* An unrecognized/sticky pending source is masked, never acknowledged as
      * completed work, and true FIFO error bits survive handler invocation.

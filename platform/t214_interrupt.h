@@ -9,8 +9,16 @@ enum tg_gpu_irq_result {
     TG_GPU_IRQ_FOREIGN, TG_GPU_IRQ_UNEXPECTED, TG_GPU_IRQ_STICKY,
     TG_GPU_IRQ_TIMEOUT
 };
+enum tg_gpu_irq_stage {
+    TG_GPU_IRQ_IDLE, TG_GPU_IRQ_SNAPSHOT, TG_GPU_IRQ_DISABLE_MC,
+    TG_GPU_IRQ_ROUTE_LIC, TG_GPU_IRQ_ENABLE_LIC, TG_GPU_IRQ_ENABLE_FIFO,
+    TG_GPU_IRQ_MASK_MC, TG_GPU_IRQ_ENABLE_MC, TG_GPU_IRQ_ARMED,
+    TG_GPU_IRQ_HANDLE, TG_GPU_IRQ_RESTORE
+};
 struct tg_gpu_irq_status {
     uint32_t result, restore_result, mc_pending, fifo_pending, interrupts;
+    /* Freeze the first failure's phase/register/readback across cleanup. */
+    uint32_t stage, last_register, last_value;
 };
 struct tg_gpu_irq_state {
     uint32_t mc_enable, mc_mask, fifo_enable, lic_enable, lic_class;

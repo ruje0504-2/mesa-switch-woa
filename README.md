@@ -388,10 +388,10 @@ One physical Lite run on 2026-11-08 passed the golden-context diagnostic at
 words and hash C28E60AD. Subsequent FIFO values 551E4780/AAE1B87F both matched;
 faults, restore status and retained-resource count were zero. This establishes
 GR initialization/golden save and FIFO completion, not shader execution or a
-Vulkan drawing pass. The installed package is oem61.inf / ABI 18; the rolling
-status records signing, backup paths and the complete physical stdout.
+Vulkan drawing pass. That GR run used oem61.inf / ABI 18; the rolling status
+records the current package, signing, backup paths and physical stdout.
 
-The next source candidate, **0.1.0.32 / ABI 19 (608 bytes)**, adds the separate
+Version **0.1.0.32 / ABI 19 (608 bytes)** introduced the separate
 `--gpu-json --gpu-irq-729` diagnostic. It appends a FIFO nonstall notification
 after each of two independent reports and admits the second only after the
 first ISR/DPC has arrived. `irq_pass` requires both GPU readbacks, two genuine
@@ -408,10 +408,29 @@ PBDMA/MMU faults. Windows owns the GIC. Teardown masks/synchronizes the ISR,
 cancels/waits for its private DPC, and restores LIC bits; failed restoration
 retains ownership until retry or verified GPU reset/LIC retirement.
 
-The host models, real NETB checks, real-WDK ARM64 build and native Windows
-allocation/context/resource/JSON fixtures pass. Those fixtures use explicit
-OS/device/GPU substitutes; **0.1.0.32 has no physical IRQ pass yet**. The rolling
-status identifies the installed version and next hardware step.
+Version **0.1.0.34 / ABI 20 (616 bytes)** has one physical Lite IRQ pass at
+729.6 MHz on 2026-11-08: both independent GPU report values
+`1FAA904A/E0556FB5` matched, with two acknowledged ISRs, two DPCs, GSI 190,
+Stage 306, zero execution/restore/fault status and zero retained resources.
+It does not establish live WDDM dispatch or shader execution. The original
+GR/golden entry point's physical baseline remains 0.1.0.31.
+
+The first IRQ arm attempt stopped before submission. ABI 20 added
+`interrupt.stage/last_register/last_value`, frozen at the first failure across
+cleanup; .33 then identified `MC_MASK1 (0x57000644) = FFFFFFFF` as the rejected
+snapshot. Version .34 accepts full 32-bit MC/LIC bitmap values, including all
+ones, while still checking every written owned bit. Status/identity all-ones
+checks remain. The model checks full-bitmap save/restore, an ignored `0x100`
+mask write, failed-read diagnostics and restoration after partial arm.
+[MC mask programming](https://github.com/CTCaer/switch-l4t-kernel-nvgpu/blob/1ae0167d360287ca78f5a2572f0de42594140312/drivers/gpu/nvgpu/common/mc/mc_gm20b.c)
+and [LIC bitmap operations](https://github.com/torvalds/linux/blob/v6.12/drivers/irqchip/irq-tegra.c)
+define the reference register semantics.
+
+The host models, sanitizers, real NETB checks and real-WDK ARM64 build pass.
+The native ABI-20 JSON fixture passes 34 cases with explicit device-I/O
+substitutes; the earlier allocation/context/resource fixtures remain local
+contract evidence. The rolling status records package hashes, the unchanged
+GPU-only test table, rollback paths and hardware availability.
 
 The latest build runs `test-gr-context` with model MMIO/GPU-write substitutes
 and, when provided, the real external NETB file. It checks owned mapping bounds,
