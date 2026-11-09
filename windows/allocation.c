@@ -3,6 +3,7 @@
  * at de4a2161 and the documented Dxgkrnl contracts. See README for references.
  */
 #include "allocation.h"
+#include "adapter_abi.h"
 
 #define TAG 0x41674754u
 typedef struct _TG_GPU_RESOURCE {
@@ -33,11 +34,17 @@ static NTSTATUS request(const DXGK_ALLOCATIONINFO *info,struct tg_gpu_allocation
         return STATUS_INVALID_PARAMETER;
     return STATUS_SUCCESS;
 }
+static UINT64 allocation_size(UINT64 bytes)
+{
+    return (bytes+PAGE_SIZE-1)&~(UINT64)(PAGE_SIZE-1);
+}
+
 NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATION *a)
 {
     TG_GPU_CONTEXT_ENGINE *e=adapter;TG_GPU_RESOURCE *r=NULL;
     struct tg_gpu_allocation_request desc;TG_GPU_ALLOCATION *allocation;
     NTSTATUS status;KIRQL irql;UINT i,created=0;BOOLEAN new_resource=FALSE;
+    UINT64 bytes=0;
     if(!e || !a || !e->Tables || e->Tables->SegmentId!=TG_GPU_EXPLICIT_TABLE_SEGMENT ||
         a->PrivateDriverDataSize || a->Flags.Reserved || (!a->Flags.Resource && a->hResource) ||
         (a->NumAllocations && !a->pAllocationInfo) || (!a->NumAllocations && !a->Flags.Resource))
@@ -47,14 +54,23 @@ NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATI
     for(i=0;i<a->NumAllocations;++i) {
         status=request(&a->pAllocationInfo[i],&desc);
         if(!NT_SUCCESS(status)) return status;
+        UINT64 size=allocation_size(desc.bytes);
+        if(size>TG_GPU_MEMORY_BUDGET_BYTES-bytes) return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
+        bytes+=size;
     }
     KeAcquireSpinLock(&e->Lock,&irql);
     if(e->Stopping) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY; }
     if(a->Flags.Resource && a->hResource) {
         r=a->hResource;
         if(r->Engine!=e) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER; }
-        ++r->Builders;
     }
+    /* Charge the batch before releasing the lock so concurrent devices
+     * compete for the same UMA ceiling, including in-flight creates. */
+    if(bytes>TG_GPU_MEMORY_BUDGET_BYTES-e->AllocationBytes) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
+    }
+    e->AllocationBytes+=bytes;
+    if(r) ++r->Builders;
     ++e->Creating;KeReleaseSpinLock(&e->Lock,irql);
     status=STATUS_NO_MEMORY;
     if(a->Flags.Resource && !r) {
@@ -67,7 +83,7 @@ NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATI
         if(!allocation) { status=STATUS_NO_MEMORY;goto fail; }
         /* Dxgkrnl provides a stable kernel copy of the UMD data for this call. */
         RtlCopyMemory(&allocation->Request,a->pAllocationInfo[i].pPrivateDriverData,sizeof(desc));
-        allocation->Bytes=(SIZE_T)((allocation->Request.bytes+PAGE_SIZE-1)&~(UINT64)(PAGE_SIZE-1));
+        allocation->Bytes=(SIZE_T)allocation_size(allocation->Request.bytes);
         allocation->Engine=e;allocation->Resource=r;
         a->pAllocationInfo[i].hAllocation=allocation;++created;
     }
@@ -108,6 +124,7 @@ fail:
     if(new_resource) ExFreePoolWithTag(r,TAG);
     KeAcquireSpinLock(&e->Lock,&irql);
     if(r && !new_resource) --r->Builders;
+    e->AllocationBytes-=bytes;
     --e->Creating;KeReleaseSpinLock(&e->Lock,irql);return status;
 }
 NTSTATUS APIENTRY TgGpuDdiDestroyAllocation(HANDLE adapter,const DXGKARG_DESTROYALLOCATION *a)
@@ -137,6 +154,7 @@ NTSTATUS APIENTRY TgGpuDdiDestroyAllocation(HANDLE adapter,const DXGKARG_DESTROY
     for(i=0;i<a->NumAllocations;++i) {
         allocation=a->pAllocationList[i];
         if(allocation->Resource) --allocation->Resource->Allocations;
+        e->AllocationBytes-=allocation->Bytes;
         --e->AllocationCount;
     }
     if(resource) --e->ResourceCount;

@@ -266,13 +266,15 @@ static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *othe
         pool_fail_after=i;
         CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_NO_MEMORY);
         CHECK(!info[0].hAllocation && !info[1].hAllocation && !create.hResource);
-        CHECK(!e->AllocationCount && !e->ResourceCount && !e->Creating && PoolsInUse()==before);
+        CHECK(!e->AllocationCount && !e->AllocationBytes && !e->ResourceCount &&
+              !e->Creating && PoolsInUse()==before);
     }
     pool_fail_after=UINT32_MAX;
     CHECK(NT_SUCCESS(ddi->DxgkDdiCreateAllocation(e,&create)));
     resource=create.hResource;handles[0]=info[0].hAllocation;handles[1]=info[1].hAllocation;
     CHECK(resource && handles[0] && handles[1] && e->AllocationCount==2 && e->ResourceCount==1);
     CHECK(info[0].Size==8192 && info[1].Size==65536 && info[0].Alignment==PAGE_SIZE);
+    CHECK(e->AllocationBytes==8192+65536);
     CHECK(TgGpuValidatePagingAllocation(e,handles[0],PAGE_SIZE,PAGE_SIZE)==STATUS_SUCCESS);
     CHECK(TgGpuValidatePagingAllocation(e,handles[0],8192,1)==STATUS_INVALID_BUFFER_SIZE);
     CHECK(TgGpuValidatePagingAllocation(e,handles[0],UINT64_MAX,1)==STATUS_INVALID_BUFFER_SIZE);
@@ -285,6 +287,7 @@ static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *othe
     pool_fail_after=1;
     CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_NO_MEMORY);
     CHECK(create.hResource==resource && e->AllocationCount==2 && e->ResourceCount==1 && PoolsInUse()==before+3);
+    CHECK(e->AllocationBytes==8192+65536);
     pool_fail_after=UINT32_MAX;
     os_allocation[1]=handles[0];os_allocation[2]=handles[1];
     /* Each failure unwinds acquired OS references and all device-open objects. */
@@ -326,7 +329,7 @@ static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *othe
     CHECK(ddi->DxgkDdiDestroyAllocation(e,&destroy)==STATUS_DEVICE_BUSY && e->AllocationCount==2);
     destroy.NumAllocations=2;
     CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)));
-    CHECK(!e->AllocationCount && !e->ResourceCount && PoolsInUse()==before);
+    CHECK(!e->AllocationCount && !e->AllocationBytes && !e->ResourceCount && PoolsInUse()==before);
     os_allocation[1]=os_allocation[2]=NULL;
     /* Model the close-before-destroy ordering for a device-owned allocation. */
     create.NumAllocations=1;create.hResource=NULL;create.Flags.Value=0;
@@ -339,7 +342,20 @@ static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *othe
     CHECK(NT_SUCCESS(ddi->DxgkDdiCloseAllocation(second.hDevice,&close)));
     CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)));
     os_allocation[3]=NULL;
-    CHECK(!e->AllocationCount && !e->Creating);
+    CHECK(!e->AllocationCount && !e->AllocationBytes && !e->Creating);
+    /* The adapter charges rounded bytes across separate allocation calls. */
+    desc[0].bytes=TG_GPU_MEMORY_BUDGET_BYTES-PAGE_SIZE+1;
+    CHECK(NT_SUCCESS(ddi->DxgkDdiCreateAllocation(e,&create)));
+    handles[0]=info[0].hAllocation;
+    CHECK(e->AllocationBytes==TG_GPU_MEMORY_BUDGET_BYTES);
+    desc[0].bytes=PAGE_SIZE;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_GRAPHICS_NO_VIDEO_MEMORY);
+    CHECK(!info[0].hAllocation && e->AllocationCount==1 && e->AllocationBytes==TG_GPU_MEMORY_BUDGET_BYTES);
+    destroy.pAllocationList=handles;
+    CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)));
+    CHECK(!e->AllocationBytes && NT_SUCCESS(ddi->DxgkDdiCreateAllocation(e,&create)));
+    destroy.pAllocationList=&info[0].hAllocation;
+    CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)) && !e->AllocationBytes);
     CHECK(handle_acquires==handle_releases);
     CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyDevice(second.hDevice)));
     CHECK(PoolsInUse()==before-1);

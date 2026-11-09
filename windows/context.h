@@ -66,6 +66,7 @@ struct _TG_GPU_CONTEXT_ENGINE {
     UINT SnapshotUploads,SnapshotBytes;
     UINT Creating;
     UINT AllocationCount,ResourceCount;
+    UINT64 AllocationBytes;
     BOOLEAN Stopping;
     LUID AdapterLuid;
     BOOLEAN AdapterIdentityReady;
