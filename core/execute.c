@@ -253,7 +253,7 @@ void tg_gpu_execute_snapshot(const struct tg_gpu_power_io *io,
         }
         s->pbdma_interrupt_1 = ex_read(io, 0x40148);
     }
-    if (state->stage >= 4) {
+    if (state->channel_bound) {
         s->userd_gp_get = io->read32(io->context, BAR1 + USERD_VA + 34 * 4);
         s->userd_gp_put = io->read32(io->context, BAR1 + USERD_VA + 35 * 4);
     }
@@ -290,7 +290,7 @@ static bool gr_fault(const struct tg_gpu_power_io *io,struct tg_gpu_status *s)
     return fault;
 }
 
-static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
+static enum tg_gpu_execute_result boot(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *cpu, uint64_t physical,
     const struct tg_gpu_gr_payload *firmware, const struct tg_gpu_gr_work *work,
     const struct tg_gpu_execution_notify *notify,bool three_d,bool clear,bool draw,
@@ -298,7 +298,7 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
     struct tg_gpu_status *s)
 {
     volatile uint32_t *fence, *userd;
-    uint32_t i, intr_stall, gpu_first, gpu_second = 0xdeadbeef;
+    uint32_t i, intr_stall;
     if (!io || !io->read32 || !io->write32 || !io->delay_us || !power ||
         !power->owned || !power->ready || !cpu || !state || !s || state->owned ||
         (notify && (!notify->arm || !notify->wait)) ||
@@ -519,7 +519,32 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
         state->stage=13;
         if(!notify->arm(notify->context)) return TG_GPU_EXEC_IRQ;
     }
+    state->boot_ready=true;
+    return TG_GPU_EXEC_OK;
+}
+
+enum tg_gpu_execute_result tg_gpu_boot_graphics(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power,void *cpu,uint64_t physical,
+    const struct tg_gpu_gr_payload *firmware,const struct tg_gpu_gr_work *work,
+    struct tg_gpu_execution *state,struct tg_gpu_status *s)
+{
+    if(!firmware || !work || !s)return TG_GPU_EXEC_ARGUMENT;
+    return boot(io,power,cpu,physical,firmware,work,NULL,true,false,false,state,s);
+}
+
+static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power, void *cpu, uint64_t physical,
+    const struct tg_gpu_gr_payload *firmware, const struct tg_gpu_gr_work *work,
+    const struct tg_gpu_execution_notify *notify,bool three_d,bool clear,bool draw,
+    struct tg_gpu_execution *state,struct tg_gpu_status *s)
+{
+    enum tg_gpu_execute_result result=boot(io,power,cpu,physical,firmware,work,
+                                           notify,three_d,clear,draw,state,s);
+    if(result!=TG_GPU_EXEC_OK)return result;
+    volatile uint32_t *fence=(volatile uint32_t *)((uint8_t *)cpu+FENCE);
+    uint32_t i,gpu_first,gpu_second=0xdeadbeef;
     state->stage = 3;
+    state->channel_bound=true;
     ex_write(io, 0x800000, (uint32_t)((physical + INST) >> 12) | 0x80000000);
     s->channel_instance_after = ex_read(io, 0x800000);
     if (s->channel_instance_after != ((uint32_t)((physical + INST) >> 12) | 0x80000000))
@@ -648,6 +673,7 @@ enum tg_gpu_execute_result tg_gpu_execute_draw(const struct tg_gpu_power_io *io,
 void tg_gpu_execute_stop(const struct tg_gpu_power_io *io, struct tg_gpu_execution *s)
 {
     if (!s->owned) return;
+    s->boot_ready=false;
     if (s->fifo_ready) {
         ex_write(io, 0x2630, ex_read(io, 0x2630) | 1);
         ex_write(io, 0x800004, ex_read(io, 0x800004) | 0x800);
@@ -673,4 +699,5 @@ void tg_gpu_execute_stop(const struct tg_gpu_power_io *io, struct tg_gpu_executi
     s->acr_owned = false;
     s->ce_reset_mask = 0;
     s->fifo_ready = false;
+    s->channel_bound = false;
 }

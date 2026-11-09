@@ -6,6 +6,8 @@ Requires Meson, Ninja, Rust >=1.90, bindgen, cbindgen, glslangValidator,
 spirv-val and Mesa's Python dependencies in PATH. No device access or ICD is
 built. The external Mesa checkout is read only; builds use a private archive.
 On macOS set BINDGEN_EXTRA_CLANG_ARGS to the compiler's SDK/resource paths.
+For a Windows ARM64 compiler, pass --windows-cross-file (LLVM-MinGW/gnullvm)
+and --build-only. Set bindgen's target/sysroot/includes to that same toolchain.
 """
 import argparse
 import hashlib
@@ -58,7 +60,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--mesa", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--windows-cross-file", type=Path,
+                    help="Meson ARM64 Windows LLVM-MinGW/Rust-gnullvm cross file")
+    ap.add_argument("--build-only", action="store_true", help="build compiler without running it")
     a = ap.parse_args()
+    if a.windows_cross_file and not a.build_only:
+        ap.error("--windows-cross-file requires --build-only; execute the compiler in Windows")
     out = a.out.resolve()
     rev = subprocess.check_output(["git", "-C", str(a.mesa), "rev-parse", "HEAD"], text=True).strip()
     if rev != REV:
@@ -93,14 +100,24 @@ executable('t214-shader-compiler', files('t214_shader_compile.c'),
     (src / "src/nouveau/compiler/nak_bindings.h").write_text('#include "nak_private.h"\n')
     shutil.copyfile(HERE / "nak_shader_compile.c", src / "src/nouveau/t214_shader_compile.c")
     constants(src)
+    if a.windows_cross_file:
+        run("git", "-C", src, "apply", HERE / "mesa-windows-nak.patch")
     build = out / "build"
+    cross_args = []
+    if a.windows_cross_file:
+        cross_args = ["--cross-file", a.windows_cross_file.resolve(),
+                      "-Dshader-cache=disabled", "-Dzlib=disabled", "-Dzstd=disabled", "-Dexpat=disabled"]
     run("meson", "setup", build, src, "-Dplatforms=[]", "-Dvulkan-drivers=nouveau",
         "-Dgallium-drivers=[]", "-Dglx=disabled", "-Degl=disabled", "-Dgbm=disabled",
         "-Dllvm=disabled", "-Dbuild-tests=false", "-Dvideo-codecs=[]", "-Dvalgrind=disabled",
         "-Dlibunwind=disabled", "-Dgles1=disabled", "-Dgles2=disabled", "-Dopengl=false",
-        "-Dbuildtype=release")
-    run("ninja", "-C", build, "src/nouveau/t214-shader-compiler")
-    compiler = build / "src/nouveau/t214-shader-compiler"
+        "-Dbuildtype=release", *cross_args)
+    compiler_name = "t214-shader-compiler.exe" if a.windows_cross_file else "t214-shader-compiler"
+    run("ninja", "-C", build, "src/nouveau/" + compiler_name)
+    compiler = build / "src/nouveau" / compiler_name
+    if a.build_only:
+        print(f"Built {compiler}; shader generation/execution has not been verified by this command")
+        return
     manifest = {"mesa": REV, "scope": "fixed diagnostic shaders; no ICD or Vulkan API pass", "files": {}}
     blobs = []
     infos = []

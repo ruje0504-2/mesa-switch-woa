@@ -242,16 +242,21 @@ void test_execute_init(void)
     arena_ring=(void *)(arena+0x42000);
     assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_ARGUMENT);
     assert(m.writes == 0 && m.channel_reads == 0);
+    {
+        struct tg_gpu_gr_work missing={.bytes=TG_GPU_GR_CHANNEL_WORK_BYTES};
+        assert(tg_gpu_boot_graphics(&io,&power,arena,0xc0000000,NULL,&missing,&state,&result)==TG_GPU_EXEC_ARGUMENT);
+        assert(!state.boot_ready && !state.channel_bound && !m.writes);
+    }
     power.owned = power.ready = true;
     assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_MMU_TIMEOUT);
-    assert(state.stage == 2 && state.owned && state.fifo_ready);
+    assert(state.stage == 2 && state.owned && state.fifo_ready && !state.boot_ready && !state.channel_bound);
     assert(result.mc_enable_before == 0 && result.channel_instance_before == UINT32_MAX);
     assert(result.mc_enable_after == 0x100 && result.channel_instance_after == 0);
     assert(result.pbdma_enable_before == 2 && result.pbdma_enable_after == 3);
     assert(result.pbdma_runlist_map == 1 && state.pbdma_owned);
     assert(result.observed[0] == 0xdeadbeef && result.observed[1] == 0xdeadbeef);
     tg_gpu_execute_stop(&io,&state);
-    assert(!(m.mc & 0x100) && !state.fifo_ready);
+    assert(!(m.mc & 0x100) && !state.fifo_ready && !state.boot_ready && !state.channel_bound);
     assert(m.pb == 2 && !state.pbdma_owned);
     assert(m.asid_writes == 0 && m.asid[0] == 0x80000011 && m.asid[1] == 0x80000012);
 
@@ -448,11 +453,13 @@ void test_execute_init(void)
                (fail?TG_GPU_EXEC_IRQ:TG_GPU_EXEC_OK));
         assert(m.put==(fail==3?0u:fail==1?1u:2u));
         assert(result.irq_expected==2 && m.notify_waited==(fail==3?0u:fail==1?1u:2u));
+        assert(state.boot_ready==(fail!=3) && state.channel_bound==(fail!=3));
         if(!fail) {
             assert(result.observed[0]==result.expected[0]&&result.observed[1]==result.expected[1]);
             assert(state.stage==6);
         }
         tg_gpu_execute_stop(&io,&state);
+        assert(!state.boot_ready && !state.channel_bound);
     }
     {
         memset(&m,0,sizeof(m));memset(&state,0,sizeof(state));

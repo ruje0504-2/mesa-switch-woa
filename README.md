@@ -294,7 +294,8 @@ live-device stop, cleanup retry and stop/start cycles; the new lifecycle test
 asserts that it performs **zero GPU MMIO**. This is library integration only:
 there is still no miniport DriverEntry/INF registration, live DRIVERCAPS,
 SubmitCommandVirtual/paging dispatch, IRQ completion or TDR adapter hookup.
-The installed .41 probe and its accepted hardware draw remain unchanged.
+The installed .43 probe uses the shared cold-bootstrap prefix described below;
+this lifecycle module still has no live adapter or submission hookup.
 
 `windows/context.c` supplies the process/device/context creation and destruction
 DDIs, root-table DDIs, completed-fence query and DPC callback. Its registration
@@ -547,6 +548,24 @@ modifies the external checkout nor builds an ICD. Host prerequisites are in
 the helper's docstring; Rust 1.90 is sufficient. Source/SPIR-V/header/code
 SHA256 values are recorded in `tools/shaders/manifest.json`.
 
+The same helper accepts `--windows-cross-file <meson-cross.ini> --build-only`
+to build a **Windows ARM64 compiler executable**, without running it on the
+build host. The cross file selects LLVM-MinGW's AArch64 C/C++ tools and Rust's
+`aarch64-pc-windows-gnullvm` target, sets `needs_exe_wrapper=true`, isolates
+pkg-config from host libraries, and statically links the C++ runtime. Bindgen
+must use the matching Windows target, MinGW sysroot/includes and libclang.
+`tools/mesa-windows-nak.patch` preserves the seven four-byte NIR flag words'
+GNU bitfield layout under MinGW, uses `ENUM_PACKED` for the mesh enum, and
+removes the Linux ioctl-header dependency from Windows format definitions.
+NAK/NIR algorithms and NVK descriptor constants remain unchanged.
+
+The clean helper cross-build and native Windows execution both pass. On this
+Lite, the VS/FS compiler returns exit 0, SM53, 24 GPRs and 160/64 code bytes;
+both stages' code, 80-byte headers, metadata and disassembly match the accepted
+host output **byte-for-byte**. This is native CPU shader compilation, not GPU
+submission, a Vulkan API pass or an ICD DLL. The build-host Mesa CLC and
+`vtn_bindgen2` tools are also available for the later full NVK runtime build.
+
 The generated VS/FS use 160/64 bytes of code, 24 GPRs each, no descriptors,
 constant data, scratch, call stack or shared memory. Each occupies one GPU
 read-only page at work offset `0x1a0000` / `0x1a1000`. Following NVK's
@@ -573,6 +592,27 @@ This establishes fixed NAK shader execution/readback, not live VidMm/WDDM
 dispatch, a Vulkan API draw or a Windows NVK ICD. The matching ABI-24 tool's
 74 native JSON fixtures pass with substituted device I/O. Native SYS/CAT and
 all 11 catalogue memberships pass, and no reboot was needed.
+
+### Shared cold graphics bootstrap
+
+Version **0.1.0.43 / ABI 24** extracts the existing initialization prefix into
+`tg_gpu_boot_graphics`: FIFO/MMU/BAR1, authenticated firmware, GR/golden save
+and prototype graphics-image loading retain their original hardware order.
+The entry does **not** bind a runnable channel, publish a runlist or write
+GP_PUT. `boot_ready` distinguishes successful initialization from a partially
+owned failure; `channel_bound` gates USERD snapshots independently of stages.
+Success retains the power state and both private arenas, so stop, MC drain and
+verified power retirement remain mandatory before freeing them. Firmware
+source buffers may be released after their copies have been consumed.
+
+The normal diagnostic now calls that same prefix. **Physical Lite regression,
+2026-11-09 02:35:59 Pacific:** .43/oem72 returns `shader_pass=true`, Stage 306,
+729.6 MHz, reports `8CEBD4EC/73142B13`, restore count 1, **256 pixels and 768
+guards matching**, image/code hashes `F20AF985/FB041DD2`, and zero faults,
+restore error or retained ownership. Build/model/real NETB checks and native
+SYS/CAT/all 11 memberships pass; installation needed no reboot. This validates
+the shared prefix through the diagnostic, not the standalone held-ready entry,
+per-context WDDM graphics images or a live submission backend.
 
 The owner-selected WDDM/NVK UMA budget is a **512 MiB maximum GPU working
 set**, allocated dynamically within VidMm's actual budget. The earlier 1 GiB

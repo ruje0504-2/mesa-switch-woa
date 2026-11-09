@@ -30,6 +30,8 @@ enum tg_gpu_execute_result {
  */
 struct tg_gpu_execution {
     bool owned;
+    bool boot_ready;
+    bool channel_bound;
     bool fifo_ready;
     bool pbdma_owned;
     bool gr_owned;
@@ -57,6 +59,20 @@ bool tg_gpu_prepare_3d_arena(void *cpu,uint64_t device_address,size_t bytes,
 bool tg_gpu_prepare_gr_arena(void *cpu, uint64_t device_address, size_t bytes,
                             const struct tg_gpu_gr_payload *firmware);
 bool tg_gpu_prepare_acr_arena(void *cpu, uint64_t device_address, size_t bytes);
+/* Exclusive cold startup, shared by the diagnostic and future WDDM worker.
+ * Copies/authenticates firmware, initializes FIFO/MMU/GR and saves the golden
+ * image, but never schedules a runlist or publishes GP_PUT. Two distinct
+ * expected values must be supplied as for execute; GPU report locations
+ * retain their sentinels, never matching these expected values.
+ * On success the GPU and both allocations stay owned; stop/drain/reset and
+ * power retirement are still required before any backing can be freed.
+ * Firmware source files may be released once this function returns. Success
+ * means bootstrap readiness, not a submitted/completed application workload.
+ */
+enum tg_gpu_execute_result tg_gpu_boot_graphics(const struct tg_gpu_power_io *,
+    const struct tg_gpu_power *,void *cpu,uint64_t device_address,
+    const struct tg_gpu_gr_payload *,const struct tg_gpu_gr_work *,
+    struct tg_gpu_execution *,struct tg_gpu_status *);
 enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *uncached_cpu,
     uint64_t device_address, const struct tg_gpu_gr_payload *firmware,
