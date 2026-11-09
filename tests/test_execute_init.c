@@ -283,7 +283,9 @@ void test_execute_init(void)
     assert(result.gr.fecs_error_mailbox==(0x57409818^0x53570000));
     assert(result.gr.fecs_ctxsw_status==(0x57409400^0x53570000));
     assert(result.gr.new_context==(0x57409b04^0x53570000));
+    state.ce_reset_mask=0x200000;m.mc|=state.ce_reset_mask;
     tg_gpu_execute_stop(&io,&state);
+    assert(!(m.mc&0x200000) && !state.ce_reset_mask);
     assert(!m.pb && !m.runlist && !m.instance && !state.pbdma_owned);
     assert(m.sched == 0xa5);
 

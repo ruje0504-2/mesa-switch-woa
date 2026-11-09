@@ -8,7 +8,7 @@ struct tg_gpu_power;
 enum tg_gpu_frontend_result {
     TG_GPU_FE_OK, TG_GPU_FE_ARGUMENT, TG_GPU_FE_REGISTER,
     TG_GPU_FE_LTC, TG_GPU_FE_FLUSH_TIMEOUT, TG_GPU_FE_PRI_FAULT,
-    TG_GPU_FE_L2_TIMEOUT
+    TG_GPU_FE_L2_TIMEOUT, TG_GPU_FE_TOPOLOGY
 };
 /* Fixed-size diagnostic appended to the control ABI; overwritten per run. */
 struct tg_gpu_frontend_status {
@@ -37,6 +37,11 @@ enum tg_gpu_frontend_result tg_gpu_frontend_flush(const struct tg_gpu_power_io *
  */
 enum tg_gpu_frontend_result tg_gpu_frontend_gr_prepare(const struct tg_gpu_power_io *,
     const struct tg_gpu_power *, struct tg_gpu_frontend_status *);
+/* Release the T214 copy engine sharing runlist zero before channel admission.
+ * TOP must identify CE2/reset 21 on that runlist. Caller resets owned_mask
+ * before draining/freeing any backing, including on a partial failure. */
+enum tg_gpu_frontend_result tg_gpu_frontend_ce_prepare(const struct tg_gpu_power_io *,
+    const struct tg_gpu_power *, struct tg_gpu_frontend_status *, uint32_t *owned_mask);
 /* FB flush only orders writes into L2. Drain dirty lines to DRAM, then
  * invalidate clean lines before comparing CPU and BAR1 aliases. The caller
  * serializes these operations and owns the entire GPU during this probe.

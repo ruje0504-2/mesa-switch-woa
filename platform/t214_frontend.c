@@ -210,6 +210,54 @@ enum tg_gpu_frontend_result tg_gpu_frontend_gr_prepare(const struct tg_gpu_power
     return finish(io, s, TG_GPU_FE_OK);
 }
 
+enum tg_gpu_frontend_result tg_gpu_frontend_ce_prepare(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power, struct tg_gpu_frontend_status *s, uint32_t *owned_mask)
+{
+    uint32_t engine=UINT32_MAX, runlist=UINT32_MAX, reset=UINT32_MAX, type=UINT32_MAX;
+    uint32_t before, after, mask=0;
+    if (!owned(io,power,s) || s->stage!=11 || s->result || !owned_mask || *owned_mask)
+        return TG_GPU_FE_ARGUMENT;
+    s->stage=12;
+    /* Switchroot gk20a_fifo_init_engine_info + gk20a_init_ce_support. The
+     * PBDMA serves every engine on its runlist, even for FIFO-only methods.
+     * Do not substitute a guessed MC bit when the hardware table disagrees.
+     */
+    for (unsigned i=0;i<64;++i) {
+        uint32_t word=get(io,0x22700+i*4);
+        if (word==UINT32_MAX) return finish(io,s,TG_GPU_FE_REGISTER);
+        if ((word&3)==2) {
+            if (word&0x20) engine=(word>>26)&15;
+            if (word&0x10) runlist=(word>>21)&15;
+            if (word&4) reset=(word>>9)&31;
+        } else if ((word&3)==3) type=(word>>2)&0x1fffffff;
+        if (!(word&0x80000000)) {
+            if (type>=1 && type<=3 && runlist==0) {
+                if (type!=3 || reset!=21 || engine==UINT32_MAX)
+                    return finish(io,s,TG_GPU_FE_TOPOLOGY);
+                mask|=1u<<reset;
+            }
+            engine=runlist=reset=type=UINT32_MAX;
+        } else if (i==63) return finish(io,s,TG_GPU_FE_TOPOLOGY);
+    }
+    if (!mask) return finish(io,s,TG_GPU_FE_TOPOLOGY);
+    before=get(io,0x200);
+    if (before==UINT32_MAX || (before&0x18001100)!=0x18001100)
+        return finish(io,s,TG_GPU_FE_REGISTER);
+    *owned_mask=mask;
+    s->stage=13;
+    put(io,0x200,before&~mask);
+    if (get(io,0x200)!=(before&~mask)) return finish(io,s,TG_GPU_FE_REGISTER);
+    io->delay_us(io->context,500); /* gm20b_mc_reset requires 500 us for CE. */
+    put(io,0x200,before|mask);
+    io->delay_us(io->context,20);
+    after=s->gr_enable=get(io,0x200);
+    if (after!=(before|mask)) return finish(io,s,TG_GPU_FE_REGISTER);
+    put(io,0x106f28,0x7fe); /* GM20B SLCG CE2 disable profile; no PMU governor. */
+    if (finish(io,s,TG_GPU_FE_OK)!=TG_GPU_FE_OK) return (enum tg_gpu_frontend_result)s->result;
+    s->stage=11;
+    return TG_GPU_FE_OK;
+}
+
 enum tg_gpu_frontend_result tg_gpu_frontend_sync_memory(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, struct tg_gpu_frontend_status *s)
 {

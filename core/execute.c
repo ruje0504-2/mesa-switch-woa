@@ -411,6 +411,9 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
             != TG_GPU_GR_OK) return TG_GPU_EXEC_GR_BOOT;
         if (tg_gpu_gr_gpc_mmu(io,power,&s->frontend,&s->gr)!=TG_GPU_GR_OK)
             return TG_GPU_EXEC_GR_BOOT;
+        state->stage=11;
+        if (tg_gpu_frontend_ce_prepare(io,power,&s->frontend,&state->ce_reset_mask)!=TG_GPU_FE_OK)
+            return TG_GPU_EXEC_FRONTEND;
     }
     state->stage = 3;
     ex_write(io, 0x800000, (uint32_t)((physical + INST) >> 12) | 0x80000000);
@@ -492,10 +495,11 @@ void tg_gpu_execute_stop(const struct tg_gpu_power_io *io, struct tg_gpu_executi
     /* Stop FECS/GPCCS DMA too before the caller drains MC or frees the arena.
      * Their boot surface remains mapped until full GPU power retirement.
      */
-    uint32_t reset=(s->gr_owned ? 0x18001100u : 0x100u) | (s->acr_owned ? 0x2000u : 0);
+    uint32_t reset=(s->gr_owned ? 0x18001100u : 0x100u) | (s->acr_owned ? 0x2000u : 0) | s->ce_reset_mask;
     ex_write(io, 0x200, ex_read(io, 0x200) & ~reset);
     io->delay_us(io->context, 20);
     s->gr_owned = false;
     s->acr_owned = false;
+    s->ce_reset_mask = 0;
     s->fifo_ready = false;
 }

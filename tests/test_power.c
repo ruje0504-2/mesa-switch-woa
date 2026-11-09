@@ -9,6 +9,7 @@ struct model {
     uint8_t enable, voltage;
     unsigned int writes;
     bool fail_voltage_once, fail_mc, fail_reset, fail_out5;
+    bool fail_clamp_set, fail_reset_set, unreadable_mc_status;
 };
 
 static uint32_t read32(void *opaque, uint32_t address)
@@ -22,7 +23,7 @@ static uint32_t read32(void *opaque, uint32_t address)
     case 0x6000667c: return m->out5;
     case 0x7000e6d4: return m->clamp;
     case 0x70019970: return m->flush;
-    case 0x70019974: return m->fail_mc ? 0 : m->flush;
+    case 0x70019974: return m->unreadable_mc_status ? UINT32_MAX : m->fail_mc ? 0 : m->flush;
     default: assert(!"unexpected register read"); return 0;
     }
 }
@@ -34,13 +35,14 @@ static void write32(void *opaque, uint32_t address, uint32_t value)
     switch (address) {
     case 0x60006284: m->clocks |= value; break;
     case 0x60006288: m->clocks &= ~value; break;
-    case 0x60006290: m->reset |= value; break;
+    case 0x60006290: if (!m->fail_reset_set) m->reset |= value; break;
     case 0x60006294:
         assert(!(m->clocks & (1u << 24))); /* upstream gate/reset ordering */
         if (!m->fail_reset) m->reset &= ~value;
         break;
     case 0x6000667c: if (!m->fail_out5) m->out5 = value; break;
     case 0x7000e6d4:
+        if ((value & 1) && m->fail_clamp_set) break;
         if (!(value & 1)) {
             assert(m->enable & 1);
             assert(m->voltage == 110);
@@ -159,6 +161,21 @@ int main(void)
     assert(state.owned); /* no claim that potentially live memory can be freed */
     model.fail_mc = false;
     assert(tg_gpu_power_down(&io, &state) == TG_GPU_POWER_OK);
+    /* Failed hardware isolation must not release the arena or unblock MC.
+     * Exercise faults after a successful power-up, not just startup failures. */
+    for (unsigned failure=0;failure<3;++failure) {
+        model=initial;memset(&state,0,sizeof(state));
+        assert(tg_gpu_power_up(&io,0x33,&state)==TG_GPU_POWER_OK);
+        model.fail_clamp_set=failure==0;
+        model.fail_reset_set=failure==1;
+        model.unreadable_mc_status=failure==2;
+        assert(tg_gpu_power_down(&io,&state)==
+            (failure==2?TG_GPU_POWER_MC_TIMEOUT:TG_GPU_POWER_RESET_ERROR));
+        assert(state.owned && (model.flush&4) && model.enable==0x51 && model.voltage==110);
+        model.fail_clamp_set=model.fail_reset_set=model.unreadable_mc_status=false;
+        assert(tg_gpu_power_down(&io,&state)==TG_GPU_POWER_OK && !state.owned);
+        assert(model.enable==initial.enable && model.flush==initial.flush);
+    }
     puts("T214 power ordering and unwind tests passed (model, not hardware).");
     return 0;
 }

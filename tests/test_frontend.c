@@ -11,6 +11,7 @@ static uint32_t fault_on;
 static unsigned l2_flushes, l2_invalidations;
 static uint32_t fail_l2;
 static uint32_t ignore_write;
+static unsigned ce_delays;
 static uint32_t read32(void *ctx, uint32_t address)
 {
     uint32_t reg = address - 0x57000000;
@@ -32,6 +33,7 @@ static void write32(void *ctx, uint32_t address, uint32_t value)
     assert(reg != 0x100d1c && reg != 0x21434);
     ++writes;
     if (reg == ignore_write) return;
+    if (reg == 0x106f28) assert((regs[0x200/4]&0x200000) && ce_delays==1 && value==0x7fe);
     if (reg >= 0x400000)
         assert((regs[0x200 / 4] & 0x18001000) == 0x18001000);
     if (reg == 0x140 || reg == 0x144) { assert(value == 0); ++irq_masked; }
@@ -51,7 +53,11 @@ static void write32(void *ctx, uint32_t address, uint32_t value)
         regs[0x12212c / 4] = 0xbad;
     }
 }
-static void delay(void *ctx, uint32_t us) { (void)ctx; assert(us <= 20); }
+static void delay(void *ctx, uint32_t us) {
+    (void)ctx;
+    if (us==500) { assert(!(regs[0x200/4]&0x200000)); ++ce_delays; }
+    else assert(us<=20);
+}
 static void reset(void)
 {
     memset(regs, 0, sizeof(regs));
@@ -59,6 +65,7 @@ static void reset(void)
     fault_on = UINT32_MAX;
     ignore_write = UINT32_MAX;
     fail_l2 = l2_flushes = l2_invalidations = 0;
+    ce_delays=0;
     regs[0x22454 / 4] = regs[0x12006c / 4] = 1;
     regs[0x21434 / 4] = 1;
     regs[0x140518 / 4] = 0xa0;
@@ -131,6 +138,27 @@ int main(void)
     assert(tg_gpu_frontend_gr_prepare(&io,&power,&s)==TG_GPU_FE_REGISTER && !s.gr_fifo_access);
     reset();memset(&s,0,sizeof(s));regs[0x200/4]=0x100;ignore_write=0x400500;
     assert(tg_gpu_frontend_gr_prepare(&io,&power,&s)==TG_GPU_FE_REGISTER && s.stage==10);
-    puts("PASS: cold frontend/GR access ordering, secure policy, bounded cache flush and PRI faults (model only)");
+    /* Discover CE2 from a chained TOP record before releasing its reset.
+     * An unsupported/missing topology must not toggle unrelated MC units. */
+    for (unsigned test=0;test<6;++test) {
+        uint32_t ce_mask=0;
+        reset();s=(struct tg_gpu_frontend_status){.stage=11};regs[0x200/4]=0xd8013120;
+        regs[0x22700/4]=0x80001836;regs[0x22704/4]=3; /* graphics/reset 12 */
+        regs[0x22708/4]=0x84002a36;regs[0x2270c/4]=0xf; /* CE2/reset 21, runlist 0 */
+        if (test==1) regs[0x2270c/4]=0; /* no recognized copy engine */
+        if (test==2) regs[0x22708/4]=0x84001836; /* wrong reset selector */
+        if (test==3) regs[0x22700/4]=UINT32_MAX;
+        if (test==4) ignore_write=0x200;
+        if (test==5) fault_on=0x106f28;
+        enum tg_gpu_frontend_result wanted=test==0?TG_GPU_FE_OK:
+            test<3?TG_GPU_FE_TOPOLOGY:test<5?TG_GPU_FE_REGISTER:TG_GPU_FE_PRI_FAULT;
+        assert(tg_gpu_frontend_ce_prepare(&io,&power,&s,&ce_mask)==wanted);
+        if (test==0) {
+            assert(ce_mask==0x200000 && s.gr_enable==0xd8213120 && s.stage==11);
+            assert(ce_delays==1 && regs[0x106f28/4]==0x7fe && !irq_masked && !secure_writes);
+        } else if (test<4) assert(!writes && !ce_mask && !ce_delays);
+        else assert(ce_mask==0x200000 && ce_delays==1 && s.stage==13);
+    }
+    puts("PASS: cold frontend/GR/CE ordering, topology, secure policy, bounded cache flush and PRI faults (model only)");
     return 0;
 }

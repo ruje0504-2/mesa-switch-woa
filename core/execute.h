@@ -34,6 +34,7 @@ struct tg_gpu_execution {
     bool gr_owned;
     bool acr_owned;
     uint32_t old_pbdma_enable;
+    uint32_t ce_reset_mask;
     uint32_t stage;
 };
 

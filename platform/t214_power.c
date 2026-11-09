@@ -66,11 +66,15 @@ static bool set_m1_enable(const struct tg_gpu_power_io *io,
 static bool drain_mc(const struct tg_gpu_power_io *io)
 {
     unsigned int attempt, sample;
+    uint32_t request;
     update32(io, MC_FLUSH, MC_GPU_BIT, MC_GPU_BIT);
+    request = io->read32(io->context, MC_FLUSH);
+    if (request == UINT32_MAX || !(request & MC_GPU_BIT)) return false;
     for (attempt = 0; attempt < 100000; ++attempt) {
         uint32_t value;
         io->delay_us(io->context, 10);
         value = io->read32(io->context, MC_FLUSH_STATUS);
+        if (value == UINT32_MAX) return false;
         if (!(value & MC_GPU_BIT))
             continue;
         for (sample = 0; sample < 5; ++sample)
@@ -167,14 +171,21 @@ enum tg_gpu_power_result
 tg_gpu_power_down(const struct tg_gpu_power_io *io, struct tg_gpu_power *state)
 {
     bool ok;
+    uint32_t clamp, reset;
     if (!state->owned)
         return TG_GPU_POWER_OK;
     if (state->stage >= TG_GPU_STAGE_MC && !drain_mc(io))
         return TG_GPU_POWER_MC_TIMEOUT;
     update32(io, PMC_GPU_CLAMP, 1u, 1u);
     io->delay_us(io->context, 10);
+    clamp = io->read32(io->context, PMC_GPU_CLAMP);
+    if (clamp == UINT32_MAX || !(clamp & 1u)) return TG_GPU_POWER_RESET_ERROR;
     io->write32(io->context, CAR_RESET_SET, GPU_GATE);
     io->delay_us(io->context, 10);
+    reset = io->read32(io->context, CAR_RESET_X);
+    if (reset == UINT32_MAX || !(reset & GPU_GATE)) return TG_GPU_POWER_RESET_ERROR;
+    /* Keep MC blocked and backing owned until clamp + reset are observed.
+     * A posted write alone cannot justify freeing memory used by GPU DMA. */
     io->write32(io->context, CAR_CLOCK_CLR, GPU_CLOCKS & ~state->original_clocks);
     io->write32(io->context, CAR_CLOCK_SET, GPU_CLOCKS & state->original_clocks);
     update32(io, CAR_PLLP_OUT5, OUT5_MASK, state->original_pllp_out5);
