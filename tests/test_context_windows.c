@@ -725,7 +725,7 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     DXGKARG_BUILDPAGINGBUFFER a={.Operation=DXGK_OPERATION_UPDATE_PAGE_TABLE};
     DXGKARG_SUBMITCOMMANDVIRTUAL submit={.DmaBufferVirtualAddress=0x10000,.DmaBufferSize=40,
         .SubmissionFenceId=100,.pDmaBufferPrivateData=&priv[2],.DmaBufferPrivateDataSize=sizeof(priv[2])};
-    DXGK_PTE ptes[3]={{.Valid=1,.Segment=1,.PageAddress=TG_GPU_TABLE_BYTES}};
+    DXGK_PTE ptes[3]={{.Valid=1,.Segment=1,.PageAddress=TG_GPU_TABLE_BYTES>>PAGE_SHIFT}};
     struct tg_gpu_power power={.owned=true,.ready=true,.pmic_address=0x33,.original_enable=0x40,.original_voltage=50};
     struct tg_gpu_clock clock={0};
     struct tg_gpu_power_io io={&hw,Read,Write,ReadPmic,WritePmic,Delay};
@@ -748,7 +748,7 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     ((TG_GPU_PROCESS *)process.hKmdProcess)->Flags.SystemProcess=1;
     CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS);
     CHECK(((UINT64 *)paging_tables)[0]!=0 && !e.Creating && !((TG_GPU_PROCESS *)process.hKmdProcess)->PagingReferences);
-    for(UINT i=0;i<3;++i)ptes[i]=(DXGK_PTE){.Valid=1,.PageAddress=0x80010000+(UINT64)i*PAGE_SIZE};
+    for(UINT i=0;i<3;++i)ptes[i]=(DXGK_PTE){.Valid=1,.PageAddress=(0x80010000u>>PAGE_SHIFT)+i};
     a.UpdatePageTable.PageTableLevel=0;a.UpdatePageTable.UpdateMode=DXGK_PAGETABLEUPDATE_GPU_PHYSICAL;
     a.UpdatePageTable.PageTableAddress.GpuPhysical=(D3DGPU_PHYSICAL_ADDRESS){1,0,TG_GPU_TABLE_BYTES};
     a.UpdatePageTable.StartIndex=7;a.UpdatePageTable.NumPageTableEntries=3;

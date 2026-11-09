@@ -160,12 +160,12 @@ static void TestSegment(void)
     update.PageTableLevel = 1; update.PageTableAddress.CpuVirtual = cpu;
     update.UpdateMode = DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;
     update.NumPageTableEntries = 1; update.pPageTableEntries = ptes;
-    ptes[0].Valid = 1; ptes[0].Segment = 1; ptes[0].PageAddress = TG_GPU_TABLE_BYTES;
+    ptes[0].Valid = 1; ptes[0].Segment = 1; ptes[0].PageAddress = TG_GPU_TABLE_BYTES >> PAGE_SHIFT;
     CHECK(NT_SUCCESS(TgGpuUpdatePageTable(&update,&target)));
     CHECK(target.Entries[0] == UINT64_C(0x0090020500000000));
     /* Reject the whole batch when a later child table crosses the pool end. */
     update.StartIndex = 1; update.NumPageTableEntries = 2; ptes[1] = ptes[0];
-    ptes[1].PageAddress = sizeof(segment_bytes)-PAGE_SIZE;
+    ptes[1].PageAddress = (sizeof(segment_bytes)-PAGE_SIZE) >> PAGE_SHIFT;
     CHECK(TgGpuUpdatePageTable(&update,&target) == STATUS_INVALID_ADDRESS);
     CHECK(target.Entries[1] == 0 && target.Entries[2] == 0);
     segment.Memory.SystemPhysicalAddress.QuadPart = 0x100000000;
@@ -291,9 +291,9 @@ static void TestPagingBuffer(void)
     CHECK(NT_SUCCESS(TgGpuResolveRootTable(&segment,&set,&root)));
     memset(segment_bytes,0xa5,sizeof(segment_bytes));
     memset(commands,0xcc,sizeof(commands));
-    for (i=0;i<3;++i) { ptes[i].Valid=1;ptes[i].Segment=1;ptes[i].PageAddress=(i+1)*PAGE_SIZE; }
-    ptes[0].Segment=0;ptes[0].PageAddress=UINT64_C(0x170001000);
-    ptes[2].Segment=0;ptes[2].PageAddress=0x80003000;ptes[2].ReadOnly=1;
+    for (i=0;i<3;++i) { ptes[i].Valid=1;ptes[i].Segment=1;ptes[i].PageAddress=i+1; }
+    ptes[0].Segment=0;ptes[0].PageAddress=UINT64_C(0x170001000)>>PAGE_SHIFT;
+    ptes[2].Segment=0;ptes[2].PageAddress=0x80003000u>>PAGE_SHIFT;ptes[2].ReadOnly=1;
     args.Operation=DXGK_OPERATION_UPDATE_PAGE_TABLE;
     args.UpdatePageTable.UpdateMode=DXGK_PAGETABLEUPDATE_GPU_PHYSICAL;
     args.UpdatePageTable.PageTableAddress.GpuPhysical=(D3DGPU_PHYSICAL_ADDRESS){1,0,0};
@@ -307,10 +307,10 @@ static void TestPagingBuffer(void)
     CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_NOT_SUPPORTED);
     CHECK(args.pDmaBuffer==commands && args.MultipassOffset==0 && commands[0]==0xcc);
     ptes[2].NoExecute=0;
-    ptes[2].PageAddress=UINT64_C(1)<<34;
+    ptes[2].PageAddress=UINT64_C(1)<<(34-PAGE_SHIFT);
     CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_INVALID_ADDRESS);
     CHECK(args.pDmaBuffer==commands && args.MultipassOffset==0 && commands[0]==0xcc);
-    ptes[2].PageAddress=0x80003000;
+    ptes[2].PageAddress=0x80003000u>>PAGE_SHIFT;
     CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER);
     CHECK(args.MultipassOffset==1 && args.pDmaBuffer==commands+72);
     args.DmaSize=sizeof(commands)-72;
@@ -377,7 +377,7 @@ static void TestPagingBuffer(void)
     args.UpdatePageTable.UpdateMode=DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;
     args.UpdatePageTable.PageTableAddress.CpuVirtual=alias_bytes;
     args.UpdatePageTable.StartIndex=12;args.UpdatePageTable.NumPageTableEntries=1;
-    ptes[0].Valid=1;ptes[0].Segment=1;ptes[0].PageAddress=PAGE_SIZE;
+    ptes[0].Valid=1;ptes[0].Segment=1;ptes[0].PageAddress=1;
     CHECK(NT_SUCCESS(TgGpuBuildPagingBuffer(&args,&build)));
     CHECK(entries[12]==UINT64_C(0x100900011));
     entries[12]=0;bad_alias_page=TRUE;
@@ -422,8 +422,8 @@ void start(void)
     u.pPageTableEntries = ptes;
     u.StartIndex = 7;
     u.NumPageTableEntries = 2;
-    ptes[0].Valid = 1; ptes[0].PageAddress = 0x1000; ptes[0].ReadOnly = 1;
-    ptes[1].Valid = 1; ptes[1].PageAddress = 0x2000;
+    ptes[0].Valid = 1; ptes[0].PageAddress = 1; ptes[0].ReadOnly = 1;
+    ptes[1].Valid = 1; ptes[1].PageAddress = 2;
     CHECK(NT_SUCCESS(TgGpuUpdatePageTable(&u, &target)));
     CHECK(table[7] == UINT64_C(0x101600015));
     CHECK(table[8] == UINT64_C(0x101600021));
@@ -438,17 +438,17 @@ void start(void)
     CHECK(table[7] == 0 && table[8] == 0 && table[9] == 0);
     CHECK(calls == 3); /* invalid entries never resolve stale addresses */
     u.Flags.Repeat = 0; u.NumPageTableEntries = 2;
-    ptes[0].Valid = 1; ptes[0].PageAddress = 0x3000;
+    ptes[0].Valid = 1; ptes[0].PageAddress = 3;
     ptes[1].NoExecute = 1;
     before = table[7];
     CHECK(TgGpuUpdatePageTable(&u, &target) == STATUS_NOT_SUPPORTED);
     CHECK(table[7] == before && table[8] == 0);
     ptes[1].NoExecute = 0; ptes[1].CacheCoherent = 1;
     CHECK(TgGpuUpdatePageTable(&u, &target) == STATUS_NOT_SUPPORTED);
-    ptes[1].CacheCoherent = 0; ptes[1].PageAddress = 0x201000;
+    ptes[1].CacheCoherent = 0; ptes[1].PageAddress = 0x201000u >> PAGE_SHIFT;
     CHECK(TgGpuUpdatePageTable(&u, &target) == STATUS_INVALID_ADDRESS);
     CHECK(table[7] == before && table[8] == 0);
-    ptes[1].PageAddress = 1;
+    ptes[1].PageAddress = (UINT64_MAX >> PAGE_SHIFT) + 1;
     CHECK(TgGpuUpdatePageTable(&u, &target) == STATUS_INVALID_PARAMETER);
     CHECK(table[7] == before && table[8] == 0);
     u.StartIndex = TG_GPU_TABLE_ENTRIES - 1;
@@ -456,13 +456,13 @@ void start(void)
     u.StartIndex = 7; u.NumPageTableEntries = 1; u.PageTableLevel = 1;
     ptes[0].ReadOnly = 0;
     CHECK(TgGpuUpdatePageTable(&u, &target) == STATUS_NOT_SUPPORTED); /* system-segment table too big */
-    ptes[0].Segment = 1; ptes[0].PageAddress = 0x20000;
+    ptes[0].Segment = 1; ptes[0].PageAddress = 0x20000u >> PAGE_SHIFT;
     CHECK(NT_SUCCESS(TgGpuUpdatePageTable(&u, &target)));
     CHECK(table[7] == UINT64_C(0x0170020500000000));
-    ptes[0].PageAddress = 0x1f0000;
+    ptes[0].PageAddress = 0x1f0000u >> PAGE_SHIFT;
     CHECK(TgGpuUpdatePageTable(&u, &target) == STATUS_INVALID_ADDRESS); /* whole child must fit */
     CHECK(table[7] == UINT64_C(0x0170020500000000));
-    ptes[0].PageAddress = 0x20000; ptes[0].PageTablePageSize = DXGK_PTE_PAGE_TABLE_PAGE_64KB;
+    ptes[0].PageAddress = 0x20000u >> PAGE_SHIFT; ptes[0].PageTablePageSize = DXGK_PTE_PAGE_TABLE_PAGE_64KB;
     CHECK(TgGpuUpdatePageTable(&u, &target) == STATUS_NOT_SUPPORTED);
     CHECK(TgGpuDescribePageTable(0, 0, &desc) == STATUS_INVALID_PARAMETER);
     CHECK(NT_SUCCESS(TgGpuDescribePageTable(0, 1, &desc)));

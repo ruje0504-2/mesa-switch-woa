@@ -32,7 +32,7 @@ NTSTATUS TgGpuDescribeTableSegment(const TG_GPU_TABLE_SEGMENT *Segment,
 
 /* TG_GPU_RESOLVE_PAGE callback for this segment only. System-memory pages
  * and other segments require their own pinned/resident mapping resolver.
- * DXGK_PTE::PageAddress is a byte OFFSET, not a PFN or GPU virtual address.
+ * ByteOffset is the segment-relative offset after decoding the PTE page number.
  */
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS TgGpuResolveTableSegment(PVOID Context, UINT SegmentId,

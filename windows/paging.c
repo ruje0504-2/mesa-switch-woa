@@ -14,17 +14,16 @@ static NTSTATUS EncodePage(UINT Level, const DXGK_PTE *Pte,
         Pte->PhysicalAdapterIndex || Pte->Reserved ||
         (Level == 1 && (Pte->ReadOnly || Pte->PageTablePageSize != DXGK_PTE_PAGE_TABLE_PAGE_4KB)))
         return STATUS_NOT_SUPPORTED;
-    /* DXGK_PTE carries an aligned byte address (low 12 bits zero), not a
-     * shifted PFN. System addresses still go through the DMA resolver.
-     */
-    if (Pte->PageAddress & (PAGE_SIZE - 1))
+    /* VidMm supplies the upper address bits as a 4 KiB page number.
+     * Both segment offsets and system addresses reach the resolver in bytes. */
+    if (Pte->PageAddress > (UINT64_MAX >> PAGE_SHIFT))
         return STATUS_INVALID_PARAMETER;
     /* A level-1 entry points to a contiguous table in the dedicated table
      * segment. Segment zero cannot promise this for a 128 KiB allocation.
      */
     if (Level == 1 && !Pte->Segment) return STATUS_NOT_SUPPORTED;
     status = Target->Resolve(Target->ResolveContext, (UINT)Pte->Segment,
-        Pte->PageAddress,
+        Pte->PageAddress << PAGE_SHIFT,
         Level ? TG_GPU_TABLE_BYTES : PAGE_SIZE, &address);
     if (!NT_SUCCESS(status)) return status;
     if (address >= TG_GPU_VA_LIMIT ||

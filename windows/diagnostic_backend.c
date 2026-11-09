@@ -244,8 +244,8 @@ static NTSTATUS test_virtual_paging(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT pattern)
 
     DXGK_PTE entries[2]={0};
     entries[0].Valid=entries[1].Valid=1;
-    entries[0].PageAddress=physical+PAGING_SRC_OFFSET;
-    entries[1].PageAddress=physical+PAGING_DST_OFFSET;
+    entries[0].PageAddress=(physical+PAGING_SRC_OFFSET)>>PAGE_SHIFT;
+    entries[1].PageAddress=(physical+PAGING_DST_OFFSET)>>PAGE_SHIFT;
     DXGKARG_BUILDPAGINGBUFFER build={.pDmaBuffer=b->PagingBuffer,.DmaSize=sizeof(b->PagingBuffer),
         .pDmaBufferPrivateData=&b->PagingPrivate,.DmaBufferPrivateDataSize=sizeof(b->PagingPrivate),
         .hSystemContext=b->PagingContext,.DmaBufferGpuVirtualAddress=0x200000,
