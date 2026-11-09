@@ -81,8 +81,11 @@ NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATI
         RtlZeroMemory(info,sizeof(*info));
         info->pPrivateDriverData=private_data;info->PrivateDriverDataSize=private_bytes;
         info->hAllocation=allocation;info->Size=allocation->Bytes;info->Alignment=PAGE_SIZE;
-        info->PreferredSegment.SegmentId0=TG_GPU_IMPLICIT_SYSTEM_SEGMENT;
-        info->SupportedReadSegmentSet=info->SupportedWriteSegmentSet=1u<<(TG_GPU_IMPLICIT_SYSTEM_SEGMENT-1);
+        /* VidMm redirects GpuMmu allocations from the aperture to implicit
+         * system memory when AccessedPhysically is clear. */
+        info->PreferredSegment.SegmentId0=TG_GPU_PAGING_APERTURE_SEGMENT;
+        info->SupportedReadSegmentSet=info->SupportedWriteSegmentSet=
+            1u<<(TG_GPU_PAGING_APERTURE_SEGMENT-1);
         info->FlagsWddm2.Value=os_flags;
         info->FlagsWddm2.CpuVisible=(allocation->Request.flags&TG_GPU_ALLOCATION_CPU_VISIBLE)!=0;
         info->FlagsWddm2.DisableLargePageMapping=1;

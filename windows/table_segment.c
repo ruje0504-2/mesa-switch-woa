@@ -3,6 +3,7 @@
 
 #define T214_TABLE_LOW  UINT64_C(0x80000000)
 #define T214_TABLE_HIGH UINT64_C(0xffffffff)
+#define T214_SYSTEM_LIMIT (UINT64_C(1) << 34)
 
 static BOOLEAN ValidSegment(const TG_GPU_TABLE_SEGMENT *Segment)
 {
@@ -32,6 +33,7 @@ NTSTATUS TgGpuCreateTableSegment(const DXGKRNL_INTERFACE *Dxgk,
         T214_TABLE_HIGH, &Segment->Memory);
     if (!NT_SUCCESS(status)) return status;
     Segment->SegmentId = SegmentId;
+    RtlZeroMemory((PVOID)Segment->AperturePfns, sizeof(Segment->AperturePfns));
     return STATUS_SUCCESS;
 }
 
@@ -42,7 +44,7 @@ NTSTATUS TgGpuDestroyTableSegment(const DXGKRNL_INTERFACE *Dxgk,
     PAGED_CODE();
     if (!Segment) return STATUS_INVALID_PARAMETER;
     status = TgGpuFreePrivateMemory(Dxgk, &Segment->Memory);
-    if (NT_SUCCESS(status)) Segment->SegmentId = 0;
+    if (NT_SUCCESS(status)) RtlZeroMemory(Segment, sizeof(*Segment));
     return status;
 }
 
@@ -75,6 +77,55 @@ NTSTATUS TgGpuResolveTableSegment(PVOID Context, UINT SegmentId,
     return STATUS_SUCCESS;
 }
 
+NTSTATUS TgGpuUpdatePagingAperture(TG_GPU_TABLE_SEGMENT *Segment,
+    const DXGKARG_BUILDPAGINGBUFFER *Args)
+{
+    const SIZE_T capacity = TG_GPU_PAGING_APERTURE_BYTES / PAGE_SIZE;
+    const PFN_NUMBER *pages = NULL;
+    SIZE_T offset, count;
+    UINT id;
+
+    if (!ValidSegment(Segment) || !Args || Args->MultipassOffset)
+        return STATUS_INVALID_PARAMETER;
+    if (Args->Operation == DXGK_OPERATION_MAP_APERTURE_SEGMENT) {
+        PMDL mdl = Args->MapApertureSegment.pMdl;
+        SIZE_T start = Args->MapApertureSegment.MdlOffset;
+        SIZE_T available;
+
+        id = Args->MapApertureSegment.SegmentId;
+        offset = Args->MapApertureSegment.OffsetInPages;
+        count = Args->MapApertureSegment.NumberOfPages;
+        if (Args->MapApertureSegment.Flags.Value)
+            return STATUS_NOT_SUPPORTED;
+        if (!mdl || !MmGetMdlByteCount(mdl))
+            return STATUS_INVALID_PARAMETER;
+        available = ((SIZE_T)MmGetMdlByteOffset(mdl) + MmGetMdlByteCount(mdl) +
+            PAGE_SIZE - 1) >> PAGE_SHIFT;
+        if (start > available || count > available - start)
+            return STATUS_INVALID_PARAMETER;
+        pages = MmGetMdlPfnArray(mdl) + start;
+    } else if (Args->Operation == DXGK_OPERATION_UNMAP_APERTURE_SEGMENT) {
+        id = Args->UnmapApertureSegment.SegmentId;
+        offset = Args->UnmapApertureSegment.OffsetInPages;
+        count = Args->UnmapApertureSegment.NumberOfPages;
+    } else return STATUS_NOT_SUPPORTED;
+
+    if (id != TG_GPU_PAGING_APERTURE_SEGMENT || id == Segment->SegmentId ||
+        !count || offset >= capacity || count > capacity - offset)
+        return STATUS_INVALID_PARAMETER;
+    if (pages) {
+        for (SIZE_T i = 0; i < count; ++i)
+            if (pages[i] < (T214_TABLE_LOW >> PAGE_SHIFT) ||
+                pages[i] >= (T214_SYSTEM_LIMIT >> PAGE_SHIFT))
+                return STATUS_INVALID_ADDRESS;
+    }
+    for (SIZE_T i = 0; i < count; ++i) {
+        LONG pfn = pages ? (LONG)pages[i] : 0;
+        WriteRelease(&Segment->AperturePfns[offset + i], pfn);
+    }
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS TgGpuResolveVidMmPage(PVOID Context, UINT SegmentId,
     UINT64 ByteAddress, SIZE_T Bytes, UINT64 *DeviceAddress)
 {
@@ -83,12 +134,18 @@ NTSTATUS TgGpuResolveVidMmPage(PVOID Context, UINT SegmentId,
      * physical path must leave it clear and must not truncate >4 GiB pages.
      * VidMm, not this resolver, establishes that the address is resident RAM.
      */
-    const UINT64 limit = UINT64_C(1) << 34;
-    if (SegmentId)
+    if (SegmentId && segment && SegmentId == segment->SegmentId)
         return TgGpuResolveTableSegment(Context, SegmentId, ByteAddress, Bytes, DeviceAddress);
     if (!DeviceAddress || !ValidSegment(segment) || Bytes != PAGE_SIZE ||
-        (ByteAddress & (PAGE_SIZE - 1)) || ByteAddress < T214_TABLE_LOW ||
-        ByteAddress >= limit || Bytes > limit - ByteAddress)
+        (ByteAddress & (PAGE_SIZE - 1)) ||
+        (SegmentId && SegmentId != TG_GPU_PAGING_APERTURE_SEGMENT))
+        return STATUS_INVALID_ADDRESS;
+    if (SegmentId) {
+        if (ByteAddress >= TG_GPU_PAGING_APERTURE_BYTES)
+            return STATUS_INVALID_ADDRESS;
+        ByteAddress = (UINT64)ReadAcquire(&segment->AperturePfns[ByteAddress >> PAGE_SHIFT]) << PAGE_SHIFT;
+    }
+    if (ByteAddress < T214_TABLE_LOW || ByteAddress >= T214_SYSTEM_LIMIT)
         return STATUS_INVALID_ADDRESS;
     *DeviceAddress = ByteAddress;
     return STATUS_SUCCESS;

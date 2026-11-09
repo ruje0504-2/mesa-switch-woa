@@ -29,6 +29,15 @@ NTSTATUS APIENTRY TgGpuDdiBuildPagingBuffer(HANDLE adapter,DXGKARG_BUILDPAGINGBU
     UINT64 *scratch=NULL;BOOLEAN immediate=FALSE,virtual_dma=FALSE;
     PAGED_CODE();
     if(!e || !a || !e->Tables)return STATUS_INVALID_PARAMETER;
+    if(a->Operation==DXGK_OPERATION_MAP_APERTURE_SEGMENT ||
+       a->Operation==DXGK_OPERATION_UNMAP_APERTURE_SEGMENT) {
+        /* The aperture is an offset space resolved into GM20B PTEs. Its
+         * CPU-side translation does not consume a paging DMA record. */
+        KeAcquireSpinLock(&e->Lock,&irql);
+        status=e->Stopping?STATUS_DEVICE_NOT_READY:TgGpuUpdatePagingAperture(e->Tables,a);
+        KeReleaseSpinLock(&e->Lock,irql);
+        return status;
+    }
     if(a->Operation==DXGK_OPERATION_UPDATE_PAGE_TABLE) {
         const DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *u=&a->UpdatePageTable;
         if(u->PageTableLevel>1 || u->NumPageTableEntries>TG_GPU_TABLE_ENTRIES)return STATUS_INVALID_PARAMETER;

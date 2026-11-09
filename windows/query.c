@@ -28,9 +28,8 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
     default:
         return STATUS_NOT_SUPPORTED;
     }
-    /* Exactly one explicit table segment; VidMm appends system memory as
-     * allocation segment 2. Do not publish a fabricated/unbacked segment.
-     */
+    /* Segment 1 backs page tables. Segment 2 gives VidMm a pageable window
+     * into system memory for its DMA pool. */
     if (e->Stopping || !e->Dxgk.DeviceHandle || !e->Tables || e->Tables->SegmentId!=1)
         return STATUS_DEVICE_NOT_READY;
     status=TgGpuDescribeTableSegment(e->Tables,&table);
@@ -59,15 +58,15 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
     case DXGKQAITYPE_QUERYSEGMENT4: {
         const DXGK_QUERYSEGMENTIN4 *in=a->pInputData;
         DXGK_QUERYSEGMENTOUT4 *out=a->pOutputData;
-        DXGK_SEGMENTDESCRIPTOR4 desc={0};
+        DXGK_SEGMENTDESCRIPTOR4 desc={0},aperture={0};
         status=buffers(a,sizeof(*in),sizeof(*out));
         if (!NT_SUCCESS(status)) return status;
         if (in->PhysicalAdapterIndex) return STATUS_INVALID_PARAMETER;
         /* WDDM's first call permits accessing only NbSegment. The other
          * members are not valid inputs until the second call.
          */
-        if (!out->NbSegment) { out->NbSegment=1;return STATUS_SUCCESS; }
-        if (out->NbSegment!=1 || !out->pSegmentDescriptor ||
+        if (!out->NbSegment) { out->NbSegment=2;return STATUS_SUCCESS; }
+        if (out->NbSegment!=2 || !out->pSegmentDescriptor ||
             out->SegmentDescriptorStride<sizeof(desc)) return STATUS_INVALID_PARAMETER;
         desc.Flags=table.Flags;
         desc.BaseAddress=table.BaseAddress;
@@ -79,7 +78,11 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
          * preserve a larger OS stride and its extension bytes.
          */
         RtlCopyMemory(out->pSegmentDescriptor,&desc,sizeof(desc));
-        out->PagingBufferSegmentId=0; /* contiguous OS-owned system buffer */
+        aperture.Flags.Aperture=1;
+        aperture.Size=aperture.CommitLimit=TG_GPU_PAGING_APERTURE_BYTES;
+        RtlCopyMemory(out->pSegmentDescriptor+out->SegmentDescriptorStride,
+                      &aperture,sizeof(aperture));
+        out->PagingBufferSegmentId=TG_GPU_PAGING_APERTURE_SEGMENT;
         out->PagingBufferSize=TG_GPU_DMA_BUFFER_BYTES;
         out->PagingBufferPrivateDataSize=sizeof(TG_GPU_QUEUE_ENTRY);
         return STATUS_SUCCESS;

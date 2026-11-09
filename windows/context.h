@@ -46,7 +46,7 @@ struct _TG_GPU_CONTEXT {
 };
 struct _TG_GPU_CONTEXT_ENGINE {
     DXGKRNL_INTERFACE Dxgk;
-    const TG_GPU_TABLE_SEGMENT *Tables;
+    TG_GPU_TABLE_SEGMENT *Tables;
     KSPIN_LOCK Lock;
     LIST_ENTRY Processes, Devices, Contexts;
     TG_GPU_CONTEXT_WORK *Active;
@@ -90,7 +90,7 @@ struct _TG_GPU_CONTEXT_WORK {
 };
 
 NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *, const DXGKRNL_INTERFACE *,
-                                     const TG_GPU_TABLE_SEGMENT *);
+                                     TG_GPU_TABLE_SEGMENT *);
 /* Install the trusted cold backend's immutable golden copy once. Submission
  * remains unavailable until both this template and the BAR1 mapping exist.
  */

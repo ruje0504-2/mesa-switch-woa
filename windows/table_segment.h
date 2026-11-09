@@ -4,6 +4,9 @@
 #include "private_memory.h"
 #include "paging.h"
 
+#define TG_GPU_PAGING_APERTURE_SEGMENT 2u
+#define TG_GPU_PAGING_APERTURE_BYTES (1024u * 1024u)
+
 /* VidMm owns allocation/residency within this CPU-visible memory segment.
  * The adapter owns its contiguous, uncached backing until StopDevice. This
  * is not a second page allocator and never changes global Tegra SMMU ASIDs.
@@ -12,6 +15,7 @@
 typedef struct _TG_GPU_TABLE_SEGMENT {
     TG_GPU_PRIVATE_MEMORY Memory;
     UINT SegmentId;
+    volatile LONG AperturePfns[TG_GPU_PAGING_APERTURE_BYTES / PAGE_SIZE];
 } TG_GPU_TABLE_SEGMENT;
 
 /* StartDevice, before publishing any segment/page-table description. */
@@ -30,6 +34,12 @@ NTSTATUS TgGpuDestroyTableSegment(const DXGKRNL_INTERFACE *Dxgk,
 NTSTATUS TgGpuDescribeTableSegment(const TG_GPU_TABLE_SEGMENT *Segment,
     DXGK_SEGMENTDESCRIPTOR3 *Description);
 
+/* BuildPagingBuffer serializes changes with the adapter lock. VidMm owns
+ * the MDL and retains residency while a mapping is used to build GPU PTEs.
+ */
+NTSTATUS TgGpuUpdatePagingAperture(TG_GPU_TABLE_SEGMENT *Segment,
+    const DXGKARG_BUILDPAGINGBUFFER *Args);
+
 /* TG_GPU_RESOLVE_PAGE callback for this segment only. System-memory pages
  * and other segments require their own pinned/resident mapping resolver.
  * ByteOffset is the segment-relative offset after decoding the PTE page number.
@@ -38,9 +48,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS TgGpuResolveTableSegment(PVOID Context, UINT SegmentId,
     UINT64 ByteOffset, SIZE_T Bytes, UINT64 *DeviceAddress);
 
-/* WDDM 2.4 physical-address paging path. ByteAddress is the decoded address
- * of a resident system page for segment zero. The nonzero table segment uses
- * a decoded byte offset within the dedicated backing above.
+/* ByteAddress is a resident physical page for segment zero, or a byte offset
+ * into the table segment or paging aperture. Aperture offsets resolve through
+ * the current VidMm mapping before the GM20B PTE is encoded.
  * Caller holds VidMm residency through execution/fence completion. This
  * resolver neither pins pages nor accepts application-supplied addresses.
  * A future logical-DMA/IOMMU path requires a different advertised contract.

@@ -29,7 +29,7 @@ static TG_GPU_CONTEXT *find_context(TG_GPU_CONTEXT_ENGINE *e, HANDLE h)
     return NULL;
 }
 NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *e,
-    const DXGKRNL_INTERFACE *dxgk, const TG_GPU_TABLE_SEGMENT *tables)
+    const DXGKRNL_INTERFACE *dxgk, TG_GPU_TABLE_SEGMENT *tables)
 {
     if (!e || !dxgk || !tables || !tables->Memory.Handle || !tables->SegmentId ||
         dxgk->Version<DXGKDDI_INTERFACE_VERSION_WDDM2_4 ||
@@ -169,7 +169,9 @@ NTSTATUS APIENTRY TgGpuDdiCreateContext(HANDLE device, DXGKARG_CREATECONTEXT *a)
     /* The system paging context must match QUERYSEGMENT4's private data size.
      * Application contexts also reserve room for UMD submission data. */
     a->ContextInfo.DmaBufferPrivateDataSize=sizeof(TG_GPU_QUEUE_ENTRY);
-    if (!a->Flags.SystemContext)
+    if (a->Flags.SystemContext)
+        a->ContextInfo.DmaBufferSegmentSet=1u<<(TG_GPU_PAGING_APERTURE_SEGMENT-1);
+    else
         a->ContextInfo.DmaBufferPrivateDataSize+=sizeof(struct tg_gpu_submit_request)+TG_GPU_SUBMIT_MAX_BYTES;
     a->ContextInfo.Caps.NoPatchingRequired=a->Flags.VirtualAddressing;
     /* VidMm manages residency. No system-IOMMU capability or GDI acceleration

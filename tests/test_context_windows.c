@@ -470,7 +470,7 @@ static __declspec(noinline) void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRI
     DXGKARG_QUERYADAPTERINFO a={0};
     DXGK_QUERYSEGMENTIN4 input={0};
     DXGK_QUERYSEGMENTOUT4 segment,before;
-    struct { DXGK_SEGMENTDESCRIPTOR4 desc;UCHAR extension[32]; } output;
+    struct { DXGK_SEGMENTDESCRIPTOR4 desc;UCHAR extension[32]; } output[2];
     DXGK_GPUMMUCAPS mmu;
     DXGK_QUERYPAGETABLELEVELDESCIN level={0};
     DXGK_PAGE_TABLE_LEVEL_DESC desc;
@@ -481,30 +481,34 @@ static __declspec(noinline) void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRI
     a.pOutputData=&segment;a.OutputDataSize=sizeof(segment);
     memset(&segment,0xa5,sizeof(segment));segment.NbSegment=0;
     before=segment;
-    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)) && segment.NbSegment==1);
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)) && segment.NbSegment==2);
     /* Count query must not consume its poison descriptor pointer/stride or
      * write any other member (including padding).
      */
     for(i=sizeof(UINT);i<sizeof(segment);++i)
         CHECK(((UCHAR *)&segment)[i]==((UCHAR *)&before)[i]);
     memset(&output,0xa5,sizeof(output));segment.pSegmentDescriptor=(BYTE *)&output;
-    segment.SegmentDescriptorStride=sizeof(output);
+    segment.SegmentDescriptorStride=sizeof(output[0]);
     CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
-    CHECK(segment.NbSegment==1 && segment.SegmentDescriptorStride==sizeof(output));
-    CHECK(segment.PagingBufferSegmentId==0 && segment.PagingBufferSize==TG_GPU_DMA_BUFFER_BYTES);
+    CHECK(segment.NbSegment==2 && segment.SegmentDescriptorStride==sizeof(output[0]));
+    CHECK(segment.PagingBufferSegmentId==TG_GPU_PAGING_APERTURE_SEGMENT &&
+          segment.PagingBufferSize==TG_GPU_DMA_BUFFER_BYTES);
     CHECK(segment.PagingBufferPrivateDataSize==sizeof(TG_GPU_QUEUE_ENTRY));
-    CHECK(output.desc.BaseAddress.QuadPart==e->Tables->Memory.SystemPhysicalAddress.QuadPart);
-    CHECK(output.desc.Size==e->Tables->Memory.Bytes && output.desc.Flags.CpuVisible);
-    CHECK(output.desc.CpuTranslatedAddress.QuadPart==output.desc.BaseAddress.QuadPart);
-    CHECK(output.desc.Flags.PopulatedFromSystemMemory && !output.desc.Flags.Aperture &&
-          !output.desc.Flags.CacheCoherent && !output.desc.Flags.PreservedDuringStandby &&
-          !output.desc.Flags.PreservedDuringHibernate && !output.desc.Flags.DirectFlip);
-    for(i=0;i<sizeof(output.extension);++i) CHECK(output.extension[i]==0xa5);
+    CHECK(output[0].desc.BaseAddress.QuadPart==e->Tables->Memory.SystemPhysicalAddress.QuadPart);
+    CHECK(output[0].desc.Size==e->Tables->Memory.Bytes && output[0].desc.Flags.CpuVisible);
+    CHECK(output[0].desc.CpuTranslatedAddress.QuadPart==output[0].desc.BaseAddress.QuadPart);
+    CHECK(output[0].desc.Flags.PopulatedFromSystemMemory && !output[0].desc.Flags.Aperture &&
+          !output[0].desc.Flags.CacheCoherent && !output[0].desc.Flags.PreservedDuringStandby &&
+          !output[0].desc.Flags.PreservedDuringHibernate && !output[0].desc.Flags.DirectFlip);
+    CHECK(output[1].desc.Flags.Value==1 && output[1].desc.Size==TG_GPU_PAGING_APERTURE_BYTES &&
+          output[1].desc.CommitLimit==output[1].desc.Size);
+    for(i=0;i<sizeof(output[0].extension);++i)
+        CHECK(output[0].extension[i]==0xa5 && output[1].extension[i]==0xa5);
     CHECK(NT_SUCCESS(TgGpuResolveTableSegment((PVOID)e->Tables,1,0,TG_GPU_TABLE_BYTES,&address)));
-    CHECK(address==(UINT64)output.desc.BaseAddress.QuadPart);
-    segment.SegmentDescriptorStride=sizeof(output.desc)-1;
+    CHECK(address==(UINT64)output[0].desc.BaseAddress.QuadPart);
+    segment.SegmentDescriptorStride=sizeof(output[0].desc)-1;
     CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_INVALID_PARAMETER);
-    segment.SegmentDescriptorStride=sizeof(output);input.PhysicalAdapterIndex=1;
+    segment.SegmentDescriptorStride=sizeof(output[0]);input.PhysicalAdapterIndex=1;
     CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_INVALID_PARAMETER);
     input.PhysicalAdapterIndex=0;a.OutputDataSize=sizeof(segment)-1;
     CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_BUFFER_TOO_SMALL);
@@ -716,7 +720,7 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
 {
     static TG_GPU_CONTEXT_ENGINE e;static TG_GPU_WORK_QUEUE q;static TG_GPU_HARDWARE hardware;
     static TG_GPU_QUEUE_ENTRY priv[3];static _Alignas(PAGE_SIZE) UCHAR commands[2][512];
-    TG_GPU_TABLE_SEGMENT tables={.Memory={(HANDLE)99,paging_tables,{.QuadPart=0x94000000},sizeof(paging_tables)},.SegmentId=1};
+    static TG_GPU_TABLE_SEGMENT tables={.Memory={(HANDLE)99,paging_tables,{.QuadPart=0x94000000},sizeof(paging_tables)},.SegmentId=1};
     DRIVER_INITIALIZATION_DATA ddi={0};DXGKARG_GETROOTPAGETABLESIZE size={.NumberOfPte=1};
     DXGKARG_CREATEPROCESS process={.hDxgkProcess=(HANDLE)100,.Flags.SystemProcess=1};
     DXGKARG_CREATEDEVICE device={.hDevice=(HANDLE)101};
@@ -740,7 +744,8 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
         .Flags={.SystemContext=1,.VirtualAddressing=1}};
     CHECK(ddi.DxgkDdiCreateContext(device.hDevice,&paging_context)==STATUS_SUCCESS);
     CHECK(paging_context.ContextInfo.DmaBufferSize==TG_GPU_DMA_BUFFER_BYTES &&
-          paging_context.ContextInfo.DmaBufferPrivateDataSize==sizeof(TG_GPU_QUEUE_ENTRY));
+          paging_context.ContextInfo.DmaBufferPrivateDataSize==sizeof(TG_GPU_QUEUE_ENTRY) &&
+          paging_context.ContextInfo.DmaBufferSegmentSet==(1u<<(TG_GPU_PAGING_APERTURE_SEGMENT-1)));
     CHECK(ddi.DxgkDdiDestroyContext(paging_context.hContext)==STATUS_SUCCESS);
     CHECK(ddi.DxgkDdiCreateContext(device.hDevice,&context)==STATUS_SUCCESS);
     set.hContext=context.hContext;ddi.DxgkDdiSetRootPageTable(&e,&set);
@@ -762,6 +767,32 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS);
     CHECK(leaf[0]==UINT64_C(0x100940201) && a.pDmaBuffer==commands[0] &&
           a.DmaSize==sizeof(commands[0]) && !priv[0].Paging.Magic);
+    /* VidMm's aperture offsets must become the two distinct system PFNs. */
+    struct { MDL Mdl; PFN_NUMBER Pages[3]; } backing={0};
+    DXGKARG_BUILDPAGINGBUFFER aperture={.Operation=DXGK_OPERATION_MAP_APERTURE_SEGMENT};
+    UINT64 expected;
+    backing.Mdl.ByteCount=3*PAGE_SIZE;
+    backing.Pages[1]=0x140005;backing.Pages[2]=0x80234;
+    aperture.MapApertureSegment.SegmentId=TG_GPU_PAGING_APERTURE_SEGMENT;
+    aperture.MapApertureSegment.OffsetInPages=3;
+    aperture.MapApertureSegment.NumberOfPages=2;
+    aperture.MapApertureSegment.pMdl=&backing.Mdl;
+    aperture.MapApertureSegment.MdlOffset=1;
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&aperture)==STATUS_SUCCESS);
+    backing.Pages[1]=0x88234;backing.Pages[2]=1;
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&aperture)==STATUS_INVALID_ADDRESS);
+    for(UINT i=0;i<2;++i)ptes[i]=(DXGK_PTE){.Valid=1,.Segment=TG_GPU_PAGING_APERTURE_SEGMENT,.PageAddress=3+i};
+    a.UpdatePageTable.NumPageTableEntries=2;a.UpdatePageTable.StartIndex=2;
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS);
+    CHECK(tg_gpu_pte_4k(UINT64_C(0x140005000),false,true,&expected) && leaf[2]==expected);
+    CHECK(tg_gpu_pte_4k(UINT64_C(0x80234000),false,true,&expected) && leaf[3]==expected);
+    aperture=(DXGKARG_BUILDPAGINGBUFFER){.Operation=DXGK_OPERATION_UNMAP_APERTURE_SEGMENT};
+    aperture.UnmapApertureSegment.SegmentId=TG_GPU_PAGING_APERTURE_SEGMENT;
+    aperture.UnmapApertureSegment.OffsetInPages=3;
+    aperture.UnmapApertureSegment.NumberOfPages=2;
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&aperture)==STATUS_SUCCESS);
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_INVALID_ADDRESS);
+    leaf[2]=leaf[3]=0;
     for(UINT i=0;i<3;++i)ptes[i]=(DXGK_PTE){.Valid=1,.PageAddress=(0x80010000u>>PAGE_SHIFT)+i};
     a.UpdatePageTable.PageTableLevel=0;a.UpdatePageTable.UpdateMode=DXGK_PAGETABLEUPDATE_GPU_PHYSICAL;
     a.UpdatePageTable.PageTableAddress.GpuPhysical=(D3DGPU_PHYSICAL_ADDRESS){1,0,TG_GPU_TABLE_BYTES};
@@ -910,7 +941,7 @@ static __declspec(noinline) VOID TestPreemption(const DXGKRNL_INTERFACE *dxgk)
 {
     static TG_GPU_CONTEXT_ENGINE e;static TG_GPU_WORK_QUEUE q;static TG_GPU_HARDWARE owner;
     static TG_GPU_QUEUE_ENTRY entries[3];static _Alignas(PAGE_SIZE) UCHAR table[TG_GPU_TABLE_BYTES];
-    TG_GPU_TABLE_SEGMENT tables={.Memory={(HANDLE)4,table,{.QuadPart=0x90000000},sizeof(table)},.SegmentId=1};
+    static TG_GPU_TABLE_SEGMENT tables={.Memory={(HANDLE)4,table,{.QuadPart=0x90000000},sizeof(table)},.SegmentId=1};
     DXGKARG_CREATEPROCESS process={.hDxgkProcess=(HANDLE)100};DXGKARG_CREATEDEVICE device={0};
     DXGKARG_CREATECONTEXT create={.EngineAffinity=1,.Flags.VirtualAddressing=1};
     DXGKARG_SETROOTPAGETABLE root={.Address={1,0,0},.NumEntries=2};
@@ -1050,7 +1081,7 @@ void start(void)
     static TG_GPU_WORK_QUEUE queue;
     static TG_GPU_QUEUE_ENTRY entries[4];
     static _Alignas(PAGE_SIZE) UCHAR table[TG_GPU_TABLE_BYTES];
-    TG_GPU_TABLE_SEGMENT tables={.Memory={(HANDLE)4,table,{.QuadPart=0x90000000},sizeof(table)},.SegmentId=1};
+    static TG_GPU_TABLE_SEGMENT tables={.Memory={(HANDLE)4,table,{.QuadPart=0x90000000},sizeof(table)},.SegmentId=1};
     DXGKRNL_INTERFACE dxgk={0};DRIVER_INITIALIZATION_DATA ddi={0};
     DXGKARG_CREATEPROCESS process={.hDxgkProcess=(HANDLE)100},failed={0};
     DXGKARG_CREATEDEVICE device={.hDevice=(HANDLE)101};

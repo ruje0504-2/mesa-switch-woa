@@ -9,7 +9,6 @@
  * These callbacks allocate metadata only; VidMm owns pages and GPU VA.
  */
 #define TG_GPU_EXPLICIT_TABLE_SEGMENT 1u
-#define TG_GPU_IMPLICIT_SYSTEM_SEGMENT 2u
 
 void TgGpuRegisterAllocationDdis(DRIVER_INITIALIZATION_DATA *);
 /* OS-supplied KMD handle, held alive by VidMm for this paging call. */

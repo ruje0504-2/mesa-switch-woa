@@ -51,13 +51,21 @@ static void TestResources(void)
     CHECK(TgGpuReleaseResources(&dxgk,&resources)==STATUS_SUCCESS&&!resource_live);
 }
 
-/* The kernel normally supplies this CRT primitive. Keep the test executable
+/* The kernel normally supplies these CRT primitives. Keep the test executable
  * freestanding so it can run in the stock ARM64 PE image without a UCRT.
  */
 void *memset(void *destination, int value, size_t bytes)
 {
     unsigned char *p = destination;
     while (bytes--) *p++ = (unsigned char)value;
+    return destination;
+}
+
+void *memcpy(void *destination, const void *source, size_t bytes)
+{
+    unsigned char *out = destination;
+    const unsigned char *in = source;
+    while (bytes--) *out++ = *in++;
     return destination;
 }
 
