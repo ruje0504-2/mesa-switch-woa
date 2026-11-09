@@ -88,7 +88,7 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
                       &aperture,sizeof(aperture));
         out->PagingBufferSegmentId=TG_GPU_PAGING_APERTURE_SEGMENT;
         out->PagingBufferSize=TG_GPU_DMA_BUFFER_BYTES;
-        out->PagingBufferPrivateDataSize=sizeof(TG_GPU_QUEUE_ENTRY);
+        out->PagingBufferPrivateDataSize=TG_GPU_PAGING_PRIVATE_BYTES;
         return STATUS_SUCCESS;
     }
     case DXGKQAITYPE_GPUMMUCAPS: {

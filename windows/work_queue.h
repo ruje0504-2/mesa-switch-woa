@@ -5,13 +5,14 @@
 #include "paging_buffer.h"
 #include "command_snapshot.h"
 #define TG_GPU_DMA_BUFFER_BYTES (64u*1024u)
+#define TG_GPU_PAGING_PRIVATE_ENTRIES 8u
 #define TG_GPU_PAGING_BUFFER_MAGIC 0x50474754u
 #define TG_GPU_QUEUE_TAG 0x51674754u
 typedef struct _TG_GPU_PAGING_BUFFER {
     TG_GPU_CONTEXT_ENGINE *Engine;
     PVOID CpuAddress;
     UINT64 GpuAddress;
-    UINT BuiltBytes,Capacity,Magic;
+    UINT WriteOffset,BuiltBytes,Capacity,Magic;
     HANDLE SystemContext; /* identity only, acquired at submit for CE records */
 } TG_GPU_PAGING_BUFFER;
 
@@ -30,6 +31,7 @@ typedef struct _TG_GPU_QUEUE_ENTRY {
     TG_GPU_COMMAND_SNAPSHOT *Snapshot;
     BOOLEAN Owned;
 } TG_GPU_QUEUE_ENTRY;
+#define TG_GPU_PAGING_PRIVATE_BYTES (TG_GPU_PAGING_PRIVATE_ENTRIES*sizeof(TG_GPU_QUEUE_ENTRY))
 
 typedef struct _TG_GPU_WORK_QUEUE {
     TG_GPU_CONTEXT_ENGINE *Engine;

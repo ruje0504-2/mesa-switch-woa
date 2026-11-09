@@ -21,6 +21,40 @@ NTSTATUS TgGpuInitializeWorkQueue(TG_GPU_WORK_QUEUE *q,TG_GPU_CONTEXT_ENGINE *e)
     KeInitializeEvent(&q->Wake,SynchronizationEvent,FALSE);e->QueueOwner=q;
     KeReleaseSpinLock(&e->Lock,irql);return STATUS_SUCCESS;
 }
+static NTSTATUS paging_range(TG_GPU_CONTEXT_ENGINE *engine,const DXGKARG_SUBMITCOMMANDVIRTUAL *a,
+    UINT *offset,HANDLE *system_context)
+{
+    const TG_GPU_QUEUE_ENTRY *entries=a->pDmaBufferPrivateData;
+    const TG_GPU_PAGING_BUFFER *first=&entries->Paging;
+    UINT count=a->DmaBufferPrivateDataSize/sizeof(*entries);
+    UINT end=first->WriteOffset;
+
+    if(a->NodeOrdinal || a->EngineOrdinal || !count || count>TG_GPU_PAGING_PRIVATE_ENTRIES ||
+       a->DmaBufferPrivateDataSize!=count*sizeof(*entries) || !first->CpuAddress ||
+       ((ULONG_PTR)first->CpuAddress&7) || first->Capacity>TG_GPU_DMA_BUFFER_BYTES ||
+       a->DmaBufferVirtualAddress<first->GpuAddress ||
+       a->DmaBufferVirtualAddress-first->GpuAddress!=end)
+        return STATUS_INVALID_PARAMETER;
+
+    *offset=end;
+    *system_context=NULL;
+    for(UINT i=0;i<count;++i) {
+        const TG_GPU_PAGING_BUFFER *p=&entries[i].Paging;
+        if(p->Magic!=TG_GPU_PAGING_BUFFER_MAGIC || p->Engine!=engine ||
+           p->CpuAddress!=first->CpuAddress || p->GpuAddress!=first->GpuAddress ||
+           p->Capacity!=first->Capacity || p->WriteOffset!=end ||
+           p->BuiltBytes<=end || p->BuiltBytes>p->Capacity || ((end|p->BuiltBytes)&7))
+            return STATUS_INVALID_PARAMETER;
+        if(p->SystemContext) {
+            if(*system_context && *system_context!=p->SystemContext)
+                return STATUS_INVALID_PARAMETER;
+            *system_context=p->SystemContext;
+        }
+        end=p->BuiltBytes;
+    }
+    return end-*offset==a->DmaBufferSize?STATUS_SUCCESS:STATUS_INVALID_PARAMETER;
+}
+
 static NTSTATUS queue_submit(TG_GPU_WORK_QUEUE *q,const DXGKARG_SUBMITCOMMANDVIRTUAL *a,
     TG_GPU_QUEUE_ENTRY *reserved,TG_GPU_COMMAND_SNAPSHOT *snapshot,BOOLEAN *used)
 {
@@ -57,21 +91,11 @@ static NTSTATUS queue_submit(TG_GPU_WORK_QUEUE *q,const DXGKARG_SUBMITCOMMANDVIR
         RtlZeroMemory(entry,sizeof(*entry));
         status=TgGpuCaptureSoftwareWork(q->Engine,a,&entry->Work);
     } else if(a->Flags.Paging) {
-        const TG_GPU_PAGING_BUFFER *p=&entry->Paging;UINT64 offset;
-        BOOLEAN requires_context;
-        if(a->NodeOrdinal || a->EngineOrdinal || p->Magic!=TG_GPU_PAGING_BUFFER_MAGIC ||
-           p->Engine!=q->Engine || !p->CpuAddress || ((ULONG_PTR)p->CpuAddress&7) ||
-           p->Capacity>TG_GPU_DMA_BUFFER_BYTES || p->BuiltBytes>p->Capacity ||
-           a->DmaBufferVirtualAddress<p->GpuAddress) {
-            status=STATUS_INVALID_PARAMETER;goto rejected;
-        }
-        offset=a->DmaBufferVirtualAddress-p->GpuAddress;
-        if(offset>p->BuiltBytes || a->DmaBufferSize>p->BuiltBytes-offset ||
-           (offset&7) || (a->DmaBufferSize&7)) {
-            status=STATUS_INVALID_PARAMETER;goto rejected;
-        }
+        UINT offset;HANDLE system_context;BOOLEAN requires_context;
+        status=paging_range(q->Engine,a,&offset,&system_context);
+        if(!NT_SUCCESS(status))goto rejected;
         status=TgGpuValidatePagingBuffer(q->Engine->Tables,
-            (UCHAR *)p->CpuAddress+(SIZE_T)offset,a->DmaBufferSize,&requires_context);
+            (UCHAR *)entry->Paging.CpuAddress+offset,a->DmaBufferSize,&requires_context);
         if(NT_SUCCESS(status)) {
             KeAcquireSpinLock(&q->Engine->Lock,&engine_irql);
             status=q->Engine->Stopping?STATUS_DEVICE_NOT_READY:STATUS_SUCCESS;
@@ -79,14 +103,14 @@ static NTSTATUS queue_submit(TG_GPU_WORK_QUEUE *q,const DXGKARG_SUBMITCOMMANDVIR
                 RtlZeroMemory(&entry->Work,sizeof(entry->Work));
                 entry->Work.Engine=q->Engine;entry->Work.Paging=TRUE;
                 entry->Work.SubmissionFence=entry->Work.CompletionFence=a->SubmissionFenceId;
-                entry->Work.PagingOffset=(UINT)offset;entry->Work.PagingBytes=a->DmaBufferSize;
+                entry->Work.PagingOffset=offset;entry->Work.PagingBytes=a->DmaBufferSize;
             }
             KeReleaseSpinLock(&q->Engine->Lock,engine_irql);
             if (NT_SUCCESS(status) && requires_context) {
-                if (!p->SystemContext || (a->hContext && a->hContext!=p->SystemContext))
+                if (!system_context || (a->hContext && a->hContext!=system_context))
                     status=STATUS_INVALID_PARAMETER;
                 else
-                    status=TgGpuCapturePagingContext(q->Engine,p->SystemContext,&entry->Work);
+                    status=TgGpuCapturePagingContext(q->Engine,system_context,&entry->Work);
             }
         }
     } else {

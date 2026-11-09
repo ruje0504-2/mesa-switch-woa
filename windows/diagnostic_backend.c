@@ -39,7 +39,7 @@ struct _TG_GPU_DIAGNOSTIC_BACKEND {
     TG_GPU_DEVICE *Device;
     TG_GPU_CONTEXT *Context;
     TG_GPU_CONTEXT *PagingContext;
-    TG_GPU_QUEUE_ENTRY PagingPrivate;
+    TG_GPU_QUEUE_ENTRY PagingPrivate[4];
     UINT64 PagingBuffer[64];
     struct {struct tg_gpu_submit_request Header;UINT Words[PAGE_SIZE/4];} Private;
     KEVENT Completed;
@@ -247,7 +247,7 @@ static NTSTATUS test_virtual_paging(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT pattern)
     entries[0].PageAddress=(physical+PAGING_SRC_OFFSET)>>PAGE_SHIFT;
     entries[1].PageAddress=(physical+PAGING_DST_OFFSET)>>PAGE_SHIFT;
     DXGKARG_BUILDPAGINGBUFFER build={.pDmaBuffer=b->PagingBuffer,.DmaSize=sizeof(b->PagingBuffer),
-        .pDmaBufferPrivateData=&b->PagingPrivate,.DmaBufferPrivateDataSize=sizeof(b->PagingPrivate),
+        .pDmaBufferPrivateData=b->PagingPrivate,.DmaBufferPrivateDataSize=sizeof(b->PagingPrivate),
         .hSystemContext=b->PagingContext,.DmaBufferGpuVirtualAddress=0x200000,
         .Operation=DXGK_OPERATION_UPDATE_PAGE_TABLE};
     build.UpdatePageTable=(DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE){
@@ -257,21 +257,21 @@ static NTSTATUS test_virtual_paging(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT pattern)
     status=TgGpuDdiBuildPagingBuffer(&b->Engine,&build);
     if (status!=STATUS_SUCCESS) return status;
 
-    build.DmaBufferWriteOffset=b->PagingPrivate.Paging.BuiltBytes;
+    build.DmaBufferWriteOffset=sizeof(b->PagingBuffer)-build.DmaSize;
     build.Operation=DXGK_OPERATION_FLUSH_TLB;
     build.FlushTlb=(DXGK_BUILDPAGINGBUFFER_FLUSHTLB){
         .RootPageTableAddress={.SegmentId=b->Tables.SegmentId},.hProcess=b->Process};
     status=TgGpuDdiBuildPagingBuffer(&b->Engine,&build);
     if (status!=STATUS_SUCCESS) return status;
 
-    build.DmaBufferWriteOffset=b->PagingPrivate.Paging.BuiltBytes;
+    build.DmaBufferWriteOffset=sizeof(b->PagingBuffer)-build.DmaSize;
     build.Operation=DXGK_OPERATION_VIRTUAL_FILL;
     build.FillVirtual=(DXGK_BUILDPAGINGBUFFER_FILLVIRTUAL){.FillSizeInBytes=PAGING_TEST_BYTES,
         .FillPattern=pattern,.DestinationVirtualAddress=USER_VA+PAGING_SRC_OFFSET+PAGING_SRC_GUARD};
     status=TgGpuDdiBuildPagingBuffer(&b->Engine,&build);
     if (status!=STATUS_SUCCESS) return status;
 
-    build.DmaBufferWriteOffset=b->PagingPrivate.Paging.BuiltBytes;
+    build.DmaBufferWriteOffset=sizeof(b->PagingBuffer)-build.DmaSize;
     build.Operation=DXGK_OPERATION_VIRTUAL_TRANSFER;
     build.TransferVirtual=(DXGK_BUILDPAGINGBUFFER_TRANSFERVIRTUAL){.TransferSizeInBytes=PAGING_TEST_BYTES,
         .SourceVirtualAddress=USER_VA+PAGING_SRC_OFFSET+PAGING_SRC_GUARD,
@@ -282,8 +282,8 @@ static NTSTATUS test_virtual_paging(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT pattern)
 
     DXGKARG_SUBMITCOMMANDVIRTUAL submit={.hContext=b->PagingContext,.Flags.Paging=1,
         .DmaBufferVirtualAddress=build.DmaBufferGpuVirtualAddress,
-        .DmaBufferSize=b->PagingPrivate.Paging.BuiltBytes,
-        .pDmaBufferPrivateData=&b->PagingPrivate,
+        .DmaBufferSize=sizeof(b->PagingBuffer)-build.DmaSize,
+        .pDmaBufferPrivateData=b->PagingPrivate,
         .DmaBufferPrivateDataSize=sizeof(b->PagingPrivate)-build.DmaBufferPrivateDataSize,
         .SubmissionFenceId=PAGING_FENCE};
     status=TgGpuDdiSubmitCommandVirtual(&b->Engine,&submit);

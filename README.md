@@ -245,8 +245,10 @@ this library is not yet an advertised WDDM paging mode.
 two operations. It validates KMD process/allocation handles, allocation-relative
 ranges and the optional system context, keeps the process/engine alive through
 scratch allocation, and snapshots a kernel-only CPU/GPU buffer descriptor.
-Continued builds check the exact write offset/capacity and never retain VidMm's
-PTE array. Mandatory NULL-DMA CPU initialization requires an initial update of
+Each build that emits commands advances the private cursor by one descriptor.
+VidMm can submit independent packet slices from the same DMA buffer. The
+submit path validates the contiguous descriptors and DMA range for each slice.
+Builds never retain VidMm's PTE array. Mandatory NULL-DMA CPU initialization requires an initial update of
 the system paging process with no active GPU slot. Microsoft documents that
 [paging-process bootstrap](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/system-paging-process)
 separately from ordinary queued updates.
