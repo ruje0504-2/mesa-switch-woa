@@ -68,6 +68,8 @@ struct _TG_GPU_CONTEXT_ENGINE {
     BOOLEAN Stopping;
     LUID AdapterLuid;
     BOOLEAN AdapterIdentityReady;
+    NTSTATUS RecoveryStatus;
+    BOOLEAN RecoveryPending,RecoverySending,RecoveryNotified;
 };
 /* The single physical execution slot is serialized; the number of software
  * contexts is limited only by allocation failures, not a fixed slot array.
@@ -78,8 +80,9 @@ struct _TG_GPU_CONTEXT_WORK {
     TG_GPU_CONTEXT *Context;
     TG_GPU_ROOT_TABLE Root;
     UINT64 DmaAddress, FencePhysicalAddress, InternalVa;
-    UINT DmaBytes, SubmissionFence, Expected;
+    UINT DmaBytes, SubmissionFence, CompletionFence, Expected;
     BOOLEAN Signaling, Notified, Prepared, HardwareBusy, Submitted, Attempted, Retired, CompletionReady, Paging;
+    BOOLEAN Software,Rejected;
 };
 
 NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *, const DXGKRNL_INTERFACE *,
@@ -123,6 +126,10 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *,
     const DXGKARG_SUBMITCOMMANDVIRTUAL *, TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuCancelCapturedWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
+NTSTATUS TgGpuCaptureSoftwareWork(TG_GPU_CONTEXT_ENGINE *,const DXGKARG_SUBMITCOMMANDVIRTUAL *,TG_GPU_CONTEXT_WORK *);
+NTSTATUS TgGpuArmSoftwareCompletion(TG_GPU_CONTEXT_ENGINE *,TG_GPU_CONTEXT_WORK *);
+/* Internal failure requests engine recovery without completing any fence. */
+NTSTATUS TgGpuRequestEngineRecovery(TG_GPU_CONTEXT_ENGINE *,NTSTATUS);
 /* Kernel-generated paging records share the ordered execution slot. CPU PTE
  * publication and real TLB completion precede arming the OS notification. */
 NTSTATUS TgGpuExecutePagingWork(TG_GPU_CONTEXT_ENGINE *,TG_GPU_CONTEXT_WORK *,

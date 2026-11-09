@@ -5,6 +5,7 @@
 #include "paging_buffer.h"
 #define TG_GPU_DMA_BUFFER_BYTES (64u*1024u)
 #define TG_GPU_PAGING_BUFFER_MAGIC 0x50474754u
+#define TG_GPU_QUEUE_TAG 0x51674754u
 typedef struct _TG_GPU_PAGING_BUFFER {
     TG_GPU_CONTEXT_ENGINE *Engine;
     PVOID CpuAddress;
@@ -24,16 +25,19 @@ typedef struct _TG_GPU_QUEUE_ENTRY {
     LIST_ENTRY Link;
     TG_GPU_CONTEXT_WORK Work;
     TG_GPU_PAGING_BUFFER Paging;
+    BOOLEAN Owned;
 } TG_GPU_QUEUE_ENTRY;
 
 typedef struct _TG_GPU_WORK_QUEUE {
     TG_GPU_CONTEXT_ENGINE *Engine;
     KSPIN_LOCK Lock;
+    KMUTEX DispatchGate; /* PASSIVE DDI admission and worker completion order */
     LIST_ENTRY Pending;
     KEVENT Wake;
     TG_GPU_CONTEXT_WORK Current;
     TG_GPU_PAGING_BUFFER CurrentPaging;
     PVOID CurrentPrivate;
+    TG_GPU_QUEUE_ENTRY *CurrentOwned;
     NTSTATUS Failure;
     BOOLEAN Servicing, Paused;
 } TG_GPU_WORK_QUEUE;
@@ -44,6 +48,14 @@ NTSTATUS TgGpuInitializeWorkQueue(TG_GPU_WORK_QUEUE *,TG_GPU_CONTEXT_ENGINE *);
  * require adapter fault/preempt/TDR handling, not direct DDI propagation.
  */
 NTSTATUS TgGpuQueueSubmit(TG_GPU_WORK_QUEUE *,const DXGKARG_SUBMITCOMMANDVIRTUAL *);
+/* PASSIVE DDI reserves a nonpaged node before validation. Used transfers its
+ * ownership for a rejected packet or a software packet without OS private
+ * storage. Caller holds DispatchGate through admission/idle rejection drain. */
+NTSTATUS TgGpuQueueSubmitOrReject(TG_GPU_WORK_QUEUE *,const DXGKARG_SUBMITCOMMANDVIRTUAL *,
+    TG_GPU_QUEUE_ENTRY *Reserved,BOOLEAN *Used);
+/* Caller holds DispatchGate. A rejected packet with no older queue work can
+ * advance immediately; this never executes an application or paging record. */
+NTSTATUS TgGpuDrainRejectedIdle(TG_GPU_WORK_QUEUE *);
 /* PASSIVE worker step: start/poll one item, quiesce, then notify its fence.
  * STATUS_PENDING keeps that item active. The adapter waits for Wake plus an
  * IRQ/timer timeout to call again; it must not spin on STATUS_PENDING.

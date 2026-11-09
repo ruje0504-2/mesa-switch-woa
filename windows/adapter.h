@@ -40,9 +40,9 @@ NTSTATUS TgGpuStartAdapterHardware(TG_GPU_ADAPTER *,const struct tg_gpu_power_io
 /* Explicit full platform/firmware/worker hookup after resource-only start.
  * Still library-only: no entry point registers the unfinished miniport. */
 NTSTATUS TgGpuStartPlatformAdapter(TG_GPU_ADAPTER *);
-/* Populate implemented lifecycle/context/allocation/query callbacks only.
- * No DriverEntry or INF exposes this partial adapter. Submission, interrupt,
- * paging dispatch, DRIVERCAPS and TDR must be connected before registration.
+/* Populate implemented library callbacks, including paging/submission entries.
+ * No DriverEntry or INF exposes this partial adapter. Physical privilege and
+ * residency validation, IRQ, remaining paging, DRIVERCAPS and TDR are pending.
  */
 void TgGpuRegisterAdapterDdis(DRIVER_INITIALIZATION_DATA *);
 #endif

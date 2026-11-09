@@ -164,6 +164,7 @@ for source in [*core, power, clock, root / "windows/resources.c",
                root / "windows/graphics.c",root / "windows/hardware.c",
                root / "windows/work_queue.c", root / "windows/allocation.c",
                root / "windows/query.c", root / "windows/adapter.c",
+               root / "windows/submit_ddi.c",root / "windows/recovery.c",
                root / "windows/platform_io.c",root / "windows/worker.c",
                root / "windows/platform_adapter.c",root / "windows/gr_firmware_io.c"]:
     obj = args.out / (source.stem + ".obj")

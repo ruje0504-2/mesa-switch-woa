@@ -322,7 +322,7 @@ tests exercise missing LIC, partial map/unmap failure, each allocation failure,
 live-device stop, cleanup retry and stop/start cycles; the resource-only
 lifecycle test asserts that it performs **zero GPU MMIO**. This is library integration only:
 there is still no miniport DriverEntry/INF registration, live DRIVERCAPS,
-SubmitCommandVirtual/remaining paging operations, IRQ completion or TDR adapter hookup.
+complete submission/remaining paging operations, IRQ completion or TDR adapter hookup.
 The probe uses the shared cold-bootstrap, BAR1 remap and hot channel helpers
 described below; this lifecycle module still has no live adapter hookup.
 
@@ -429,17 +429,46 @@ context reference is then released. `DxgkCbSynchronizeExecution` delivers
 so context destruction after completion cannot race a remaining context access.
 A synchronization failure keeps that notification record for retry/reset and
 prevents later fences overtaking it. Aborted work never advances the completed
-fence. The virtual submission DDI, command validation, VidMm residency and
-fault/TDR integration remain to be connected.
+fence. The submission DDI below now connects structural admission and recovery
+notification; command/privilege validation, VidMm residency and actual TDR
+reset/restart remain incomplete.
 `--windows-tests` also builds `test-context.exe`; it calls the registered WDK
 function pointers using explicit allocation, interrupt and GPU-write substitutes.
 It checks lifetime, failed root changes, pending/duplicate notification, retained
 references and failed-free retry, not live Dxgkrnl or GPU execution.
 
+`windows/submit_ddi.c` supplies the library's `SubmitCommandVirtual` entry.
+It returns only the documented [SUCCESS or malformed INVALID_PARAMETER](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_submitcommandvirtual).
+Internal OOM, unavailable hardware, lost roots and queue failures request
+recovery rather than being mislabeled as application formatting errors. Capture
+also checks the actual GPFIFO packet-length/address bounds. This is structural
+admission, **not a complete command/residency validator**.
+
+The DDI reserves a nonpaged node before validation, so a malformed packet does
+not depend on its invalid private buffer remaining alive. Its software marker
+follows all older work. Adjacent rejected markers advance the driver's fence
+notion before the preceding real DMA notification; an idle rejected marker
+advances synchronously. No extra DMA completion is generated for a rejected
+packet. A PASSIVE dispatcher mutex serializes DDI admission with worker steps;
+empty/null-render/context-switch packets retire in order without GPU accesses.
+The ordinary internal admission helper remains allocation-free/DISPATCH-safe.
+
+`windows/recovery.c` pauses admission and makes one synchronized
+`DXGK_INTERRUPT_GPU_ENGINE_TIMEOUT` recovery request while preserving the
+first internal reason and incomplete fences. Failed synchronization can be
+retried, and duplicate requests do not generate duplicate notifications.
+The worker calls it after internal service/wait errors. Stop joins the worker
+and retains all references until retirement/isolation. **Actual WDDM
+reset/restart/preemption callbacks are still missing**, as are the physical
+packed USER/KERNEL batch and privilege/residency validation. Native-submit stays
+unset; no DriverEntry or INF registers this unfinished adapter. The native
+fixtures cover fence order at notification, idle rejection, software packets,
+OOM and recovery-notification retry using controlled OS/GPU substitutes.
+
 `windows/work_queue.c` admits contexts and kernel paging records in order using the nonpaged
 private buffer supplied by Dxgkrnl for each DMA buffer. Context creation reports
-the required private-data size; this initial queue accepts no UMD-private payload
-or specialized submission flags. Admission allocates nothing and holds each
+the required private-data size; this queue accepts no UMD-private payload.
+Internal admission allocates nothing and holds each
 context/root reference. The single worker copies the head record into its own
 storage, activates and submits it, polls its GPU marker, quiesces the channel,
 then notifies completion. It never accesses the borrowed record afterward, even

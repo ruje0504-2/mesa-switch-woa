@@ -20,7 +20,7 @@ static struct {
     PVOID context;
     NTSTATUS create,join,close,exit_status,service[3];
     NTSTATUS waits[4];BOOLEAN timed[4],terminated;
-    UINT services,wait_count,joins,closes;
+    UINT services,wait_count,joins,closes,recovery_requests;
 } model;
 /* No real thread/dispatcher/GPU is used by this native scheduling fixture. */
 static NTSTATUS Create(PHANDLE out,ULONG access,POBJECT_ATTRIBUTES attr,HANDLE process,
@@ -68,6 +68,11 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
     CHECK(q==&queue && io==&hardware.Io && power==&hardware.Power && !queue.Lock && !model.terminated);
     CHECK(model.services<3);return model.service[model.services++];
 }
+NTSTATUS TgGpuRequestEngineRecovery(TG_GPU_CONTEXT_ENGINE *e,NTSTATUS status)
+{
+    CHECK(e==&engine && !NT_SUCCESS(status) && queue.Paused && queue.Failure==status);
+    ++model.recovery_requests;return STATUS_SUCCESS;
+}
 static void Setup(void)
 {
     CHECK(!worker.Thread && !worker.Queue && !worker.Hardware);
@@ -92,6 +97,7 @@ void start(void)
     model.routine(model.context);
     CHECK(model.services==3 && model.wait_count==4 && model.terminated && model.exit_status==STATUS_SUCCESS);
     CHECK(!queue.Paused && worker.Queue==&queue && worker.Hardware==&hardware);
+    CHECK(!model.recovery_requests);
     model.join=STATUS_TIMEOUT;
     CHECK(TgGpuStopWorker(&worker)==STATUS_DEVICE_BUSY && !model.closes && worker.Thread);
     model.join=STATUS_SUCCESS;model.close=STATUS_UNSUCCESSFUL;
@@ -102,10 +108,12 @@ void start(void)
     CHECK(TgGpuStartWorker(&worker,&queue,&hardware)==STATUS_SUCCESS);model.routine(model.context);
     CHECK(model.wait_count==1 && model.services==1 && model.exit_status==STATUS_DEVICE_DATA_ERROR);
     CHECK(queue.Paused && queue.Failure==STATUS_DEVICE_DATA_ERROR && worker.Failure==STATUS_DEVICE_DATA_ERROR);
+    CHECK(model.recovery_requests==1);
     CHECK(TgGpuStopWorker(&worker)==STATUS_SUCCESS);
     Setup();model.waits[0]=STATUS_UNSUCCESSFUL;
     CHECK(TgGpuStartWorker(&worker,&queue,&hardware)==STATUS_SUCCESS);model.routine(model.context);
     CHECK(!model.services && queue.Paused && worker.Failure==STATUS_UNSUCCESSFUL);
+    CHECK(model.recovery_requests==1);
     CHECK(TgGpuStopWorker(&worker)==STATUS_SUCCESS);
     CHECK(WriteFile(GetStdHandle((ULONG)-11),pass,sizeof(pass)-1,&written,NULL));ExitProcess(0);
 }

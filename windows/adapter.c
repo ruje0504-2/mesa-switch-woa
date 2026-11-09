@@ -6,6 +6,7 @@
 #include "adapter.h"
 #include "allocation.h"
 #include "query.h"
+#include "submit_ddi.h"
 #define TAG 0x44674754u
 
 static BOOLEAN mapped(const TG_GPU_ADAPTER *a)
@@ -136,4 +137,5 @@ void TgGpuRegisterAdapterDdis(DRIVER_INITIALIZATION_DATA *d)
     d->DxgkDdiAddDevice=TgGpuDdiAddDevice;d->DxgkDdiStartDevice=TgGpuDdiStartDevice;
     d->DxgkDdiStopDevice=TgGpuDdiStopDevice;d->DxgkDdiRemoveDevice=TgGpuDdiRemoveDevice;
     TgGpuRegisterContextDdis(d);TgGpuRegisterAllocationDdis(d);TgGpuRegisterQueryDdi(d);
+    TgGpuRegisterSubmissionDdi(d);
 }

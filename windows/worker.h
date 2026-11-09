@@ -11,8 +11,8 @@ typedef struct _TG_GPU_WORKER {
     NTSTATUS Failure;
 } TG_GPU_WORKER;
 /* PASSIVE, serialized adapter lifetime. Queue/hardware/IO must remain alive
- * until Stop joins and closes the kernel handle. Faults pause admission;
- * reporting/recovering a WDDM TDR is still separate. */
+ * until Stop joins and closes the kernel handle. Faults pause admission and
+ * request WDDM recovery; actual reset/restart callbacks remain separate. */
 NTSTATUS TgGpuStartWorker(TG_GPU_WORKER *,TG_GPU_WORK_QUEUE *,TG_GPU_HARDWARE *);
 NTSTATUS TgGpuStopWorker(TG_GPU_WORKER *);
 #endif

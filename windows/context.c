@@ -4,6 +4,7 @@
 #include "allocation.h"
 #include "query.h"
 #include "paging_dispatch.h"
+#include "../core/gpfifo.h"
 
 #define TAG 0x43674754u
 
@@ -72,7 +73,7 @@ NTSTATUS TgGpuStopContextEngine(TG_GPU_CONTEXT_ENGINE *e)
     if (!e) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);
     e->Stopping=TRUE;
-    status=e->Active || e->Notification || e->QueueOwner || e->HardwareOwner || e->Channel.referenced || e->Creating || e->AllocationCount || e->ResourceCount || !IsListEmpty(&e->Contexts) || !IsListEmpty(&e->Devices) ||
+    status=e->Active || e->Notification || e->QueueOwner || e->HardwareOwner || e->RecoverySending || e->Channel.referenced || e->Creating || e->AllocationCount || e->ResourceCount || !IsListEmpty(&e->Contexts) || !IsListEmpty(&e->Devices) ||
         !IsListEmpty(&e->Processes) ? STATUS_DEVICE_BUSY : STATUS_SUCCESS;
     KeReleaseSpinLock(&e->Lock,irql);
     if (!NT_SUCCESS(status)) return status;
@@ -249,17 +250,22 @@ VOID TgGpuDdiDpcRoutine(PVOID adapter)
 NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
     const DXGKARG_SUBMITCOMMANDVIRTUAL *a, TG_GPU_CONTEXT_WORK *w)
 {
-    TG_GPU_CONTEXT *c; KIRQL irql;
+    TG_GPU_CONTEXT *c; KIRQL irql;struct tg_gpu_gpfifo_entry packet;
     if (!e || !a || !w || w->Context || a->NodeOrdinal || a->EngineOrdinal ||
-        !a->DmaBufferSize || (a->DmaBufferSize & 3) || (a->DmaBufferVirtualAddress & 3))
+        !a->DmaBufferSize || (a->DmaBufferSize & 3) ||
+        !tg_gpu_build_gpfifo(a->DmaBufferVirtualAddress,a->DmaBufferSize/4,false,&packet))
         return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql); c=find_context(e,a->hContext);
     if (e->Stopping) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_NOT_READY; }
     if(e->Active==w || e->Notification==w) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_BUSY; }
-    if (!c || c->Closing || !c->Device->Process || !c->Flags.VirtualAddressing || !c->Root.Valid ||
-        !NT_SUCCESS(c->RootStatus) || a->DmaBufferVirtualAddress>=c->Root.VaLimit ||
-        a->DmaBufferSize>c->Root.VaLimit-a->DmaBufferVirtualAddress) {
+    if (!c || c->Closing || !c->Device->Process || !c->Flags.VirtualAddressing) {
         KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER;
+    }
+    if(!c->Root.Valid || !NT_SUCCESS(c->RootStatus)) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
+    }
+    if(a->DmaBufferVirtualAddress>=c->Root.VaLimit || a->DmaBufferSize>c->Root.VaLimit-a->DmaBufferVirtualAddress) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
     }
     if((e->HardwareOwner && !e->UserdBar1Ready) || !e->Graphics.Memory.Handle ||
        (c->GraphicsGeneration && c->GraphicsGeneration!=e->GraphicsGeneration)) {
@@ -271,7 +277,7 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
     }
     RtlZeroMemory(w,sizeof(*w));
     w->Engine=e;w->Context=c; w->Root=c->Root; w->DmaAddress=a->DmaBufferVirtualAddress;
-    w->DmaBytes=a->DmaBufferSize; w->SubmissionFence=a->SubmissionFenceId;
+    w->DmaBytes=a->DmaBufferSize; w->SubmissionFence=w->CompletionFence=a->SubmissionFenceId;
     w->InternalVa=c->Device->Process->Internal.Base;
     w->FencePhysicalAddress=(UINT64)e->Commands.SystemPhysicalAddress.QuadPart+TG_GPU_COMMAND_FENCE;
     ++c->References;
@@ -367,10 +373,14 @@ static BOOLEAN NotifyFence(PVOID context)
     data.InterruptType=DXGK_INTERRUPT_DMA_COMPLETED;
     data.DmaCompleted.SubmissionFenceId=w->SubmissionFence;
     data.DmaCompleted.NodeOrdinal=0; data.DmaCompleted.EngineOrdinal=0;
-    e->LastCompletedFence=w->SubmissionFence;
+    e->LastCompletedFence=w->CompletionFence;
     KeMemoryBarrier(); w->Notified=TRUE;
-    e->Dxgk.DxgkCbNotifyInterrupt(e->Dxgk.DeviceHandle,&data);
-    (VOID)e->Dxgk.DxgkCbQueueDpc(e->Dxgk.DeviceHandle);
+    /* Dxgkrnl already accounts for INVALID_PARAMETER submissions. Their
+     * ordered marker updates our fence notion without inventing a DMA event. */
+    if(!w->Rejected) {
+        e->Dxgk.DxgkCbNotifyInterrupt(e->Dxgk.DeviceHandle,&data);
+        (VOID)e->Dxgk.DxgkCbQueueDpc(e->Dxgk.DeviceHandle);
+    }
     return TRUE; /* FALSE from QueueDpc may just mean one is already queued */
 }
 NTSTATUS TgGpuContextWorkFinished(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w)
@@ -410,6 +420,12 @@ NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w
         w->CompletionReady=TRUE;e->Notification=w;
     }
     if(e->Notification!=w) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER; }
+    if(w->Rejected) {
+        /* Pure bookkeeping for an OS-rejected packet needs no DMA event.
+         * The queue has already proved all earlier hardware work retired. */
+        e->LastCompletedFence=w->CompletionFence;KeMemoryBarrier();w->Notified=TRUE;
+        e->Notification=NULL;KeReleaseSpinLock(&e->Lock,irql);return STATUS_SUCCESS;
+    }
     KeMemoryBarrier(); w->Signaling=TRUE; KeReleaseSpinLock(&e->Lock,irql);
     status=e->Dxgk.DxgkCbSynchronizeExecution(e->Dxgk.DeviceHandle,NotifyFence,w,0,&invoked);
     KeAcquireSpinLock(&e->Lock,&irql); w->Signaling=FALSE;
@@ -428,4 +444,27 @@ NTSTATUS TgGpuCancelContextNotification(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_
     if(w->Signaling) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_BUSY; }
     e->Notification=NULL;w->CompletionReady=FALSE;
     KeReleaseSpinLock(&e->Lock,irql);return STATUS_SUCCESS;
+}
+NTSTATUS TgGpuCaptureSoftwareWork(TG_GPU_CONTEXT_ENGINE *e,const DXGKARG_SUBMITCOMMANDVIRTUAL *a,TG_GPU_CONTEXT_WORK *w)
+{
+    KIRQL irql;TG_GPU_CONTEXT *c;
+    if(!e || !a || !w || a->NodeOrdinal || a->EngineOrdinal)return STATUS_INVALID_PARAMETER;
+    KeAcquireSpinLock(&e->Lock,&irql);c=find_context(e,a->hContext);
+    if(e->Stopping){KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;}
+    if((!c && !(a->Flags.ContextSwitch && !a->hContext)) || (c && c->Closing)) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
+    }
+    RtlZeroMemory(w,sizeof(*w));w->Engine=e;w->Software=TRUE;
+    w->SubmissionFence=w->CompletionFence=a->SubmissionFenceId;
+    KeReleaseSpinLock(&e->Lock,irql);return STATUS_SUCCESS;
+}
+NTSTATUS TgGpuArmSoftwareCompletion(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w)
+{
+    KIRQL irql;NTSTATUS status=STATUS_SUCCESS;
+    if(!e || !w || w->Engine!=e || !w->Software || w->Context)return STATUS_INVALID_PARAMETER;
+    KeAcquireSpinLock(&e->Lock,&irql);
+    if(w->CompletionReady)status=e->Notification==w?STATUS_SUCCESS:STATUS_INVALID_DEVICE_STATE;
+    else if(e->Active || e->Notification || e->Channel.referenced)status=STATUS_PENDING;
+    else {e->Notification=w;w->CompletionReady=TRUE;}
+    KeReleaseSpinLock(&e->Lock,irql);return status;
 }
