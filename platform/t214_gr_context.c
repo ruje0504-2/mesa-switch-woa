@@ -245,9 +245,10 @@ enum tg_gpu_gr_context_result tg_gpu_gr_context_init(
     s->last_register=gr_gpc0_fs_gpc_r();s->last_value=cfg=rd(io,s->last_register);
     s->tpcs=gr_gpc0_fs_gpc_num_available_tpcs_v(cfg);
     s->zculls=gr_gpc0_fs_gpc_num_available_zculls_v(cfg);
-    /* This implementation targets the physical GM20B topology, not desktop
-     * Maxwell. Reject another layout before writing any GR state. */
-    if(s->tpcs!=2 || s->zculls!=2)
+    /* GM20B's proj_scal_litter_num_zcull_banks_v() is four, independently
+     * of its two TPCs. The physical Lite reports 0x00040002 here. Only this
+     * full-bank layout uses the non-floorswept ZCULL setup below. */
+    if(s->tpcs!=2 || s->zculls!=4)
         return s->result=TG_GPU_GR_CTX_TOPOLOGY;
     s->last_register=gr_gpc0_gpm_pd_pes_tpc_id_mask_r(0);
     s->last_value=pes=rd(io,s->last_register);

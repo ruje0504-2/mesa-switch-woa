@@ -73,7 +73,7 @@ static void reset(struct model *m)
     memset(regs,0,0x600000);memset(inst,0,4096);memset(work,0,TG_GPU_GR_WORK_BYTES);
     *m=(struct model){.regs=regs,.inst=inst,.work=work};
     regs[0x120078/4]=1;regs[0x22430/4]=1;regs[0x22434/4]=2;
-    regs[0x502608/4]=0x20002;regs[0x500c30/4]=3;
+    regs[0x502608/4]=0x40002;regs[0x500c30/4]=3;
     regs[0x409800/4]=0x31; /* An old success/failure reply must be cleared. */
     for(unsigned i=0;i<TG_GPU_GR_CTX_CAPACITY/4;++i)
         work[TG_GPU_GR_GOLD_OFFSET/4+i]=TG_GPU_GR_GOLD_SENTINEL;
@@ -100,6 +100,8 @@ int main(int argc,char **argv)
     net.region[TG_GPU_GR_BUNDLE]=(struct tg_gpu_gr_blob){(const uint8_t *)bundle,sizeof(bundle)};
     net.region[TG_GPU_GR_METHOD]=(struct tg_gpu_gr_blob){(const uint8_t *)method,sizeof(method)};
     reset(&m);assert(run(&m,&net,&s)==TG_GPU_GR_CTX_OK && s.stage==9);
+    assert(s.gpcs==1 && s.tpcs==2 && s.zculls==4);
+    assert(m.regs[0x500910/4]==0x40002 && m.regs[0x500914/4]==0x102);
     assert(s.image_magic==0x600dc0de && s.image_changed_words==1 && m.binds==1 && m.saves==1);
     assert(m.inst[132]==(TG_GPU_GR_WORK_VA|4) && !m.regs[0x409b00/4]);
     /* Independent vendor values: CB backing limits/valid selectors, state
@@ -123,8 +125,13 @@ int main(int argc,char **argv)
         if(test<3 || test==7)assert(!m.saves);
         assert(!m.regs[0x400208/4] && m.regs[0x404154/4]==0x800);
     }
-    reset(&m);m.regs[0x502608/4]=0x20001;
-    assert(run(&m,&net,&s)==TG_GPU_GR_CTX_TOPOLOGY && !m.writes);
+    {
+        const uint32_t unsupported[]={0x20001,0x20002,0x40001,2,0x30002,0x50002,UINT32_MAX};
+        for(unsigned i=0;i<sizeof(unsupported)/sizeof(unsupported[0]);++i) {
+            reset(&m);m.regs[0x502608/4]=unsupported[i];
+            assert(run(&m,&net,&s)==TG_GPU_GR_CTX_TOPOLOGY && !m.writes);
+        }
+    }
     reset(&m);ctx[0]=0x70000;
     assert(run(&m,&net,&s)==TG_GPU_GR_CTX_FORMAT && !m.writes);ctx[0]=0x400080;
     {
