@@ -2,6 +2,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <vulkan/vulkan_core.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -106,10 +107,77 @@ static int check_pixels(const uint8_t *mapped)
     } \
 } while (0)
 
+static uint32_t preview_bgra[PIXELS];
+static bool preview_painted;
+
+static LRESULT CALLBACK preview_window(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
+{
+    switch (message) {
+    case WM_PAINT: {
+        const BITMAPINFO info = {.bmiHeader = {
+            .biSize = sizeof(BITMAPINFOHEADER), .biWidth = WIDTH, .biHeight = -HEIGHT,
+            .biPlanes = 1, .biBitCount = 32, .biCompression = BI_RGB,
+        }};
+        PAINTSTRUCT paint;
+        HDC dc = BeginPaint(window, &paint);
+        RECT area;
+        GetClientRect(window, &area);
+        const int side = area.right < area.bottom ? area.right : area.bottom;
+        const int rows = StretchDIBits(dc, (area.right - side) / 2, (area.bottom - side) / 2,
+                                      side, side, 0, 0, WIDTH, HEIGHT, preview_bgra,
+                                      &info, DIB_RGB_COLORS, SRCCOPY);
+        EndPaint(window, &paint);
+        preview_painted |= rows > 0;
+        return 0;
+    }
+    case WM_TIMER:
+        DestroyWindow(window);
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    default:
+        return DefWindowProcW(window, message, wparam, lparam);
+    }
+}
+
+static int show_preview(void)
+{
+    const WNDCLASSW cls = {
+        .style = CS_HREDRAW | CS_VREDRAW,
+        .lpfnWndProc = preview_window, .hInstance = GetModuleHandleW(NULL),
+        .hbrBackground = (HBRUSH)(COLOR_WINDOW + 1),
+        .lpszClassName = L"SwitchLiteNvkReadback",
+    };
+    if (!RegisterClassW(&cls))
+        return 1;
+    HWND window = CreateWindowExW(0, cls.lpszClassName, L"Switch Lite - NVK Vulkan on GM20B",
+                                  WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                                  530, 540, NULL, NULL, cls.hInstance, NULL);
+    if (!window)
+        return 1;
+    ShowWindow(window, SW_SHOWNORMAL);
+    UpdateWindow(window);
+    if (!preview_painted || !SetTimer(window, 1, 5 * 60 * 1000, NULL)) {
+        DestroyWindow(window);
+        return 1;
+    }
+    puts("{\"win32_readback_preview\":true}");
+    fflush(stdout);
+    MSG message;
+    BOOL next;
+    while ((next = GetMessageW(&message, NULL, 0, 0)) > 0) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+    return next == -1;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc != 3) {
-        fprintf(stderr, "usage: vk-triangle.exe <absolute-NVK-DLL> <hex-KMT-LUID>\n");
+    const bool preview = argc == 4 && strcmp(argv[3], "--preview") == 0;
+    if (argc != 3 && !preview) {
+        fprintf(stderr, "usage: vk-triangle.exe <absolute-NVK-DLL> <hex-KMT-LUID> [--preview]\n");
         return 2;
     }
     if (strlen(argv[2]) != 16 || strspn(argv[2], "0123456789abcdefABCDEF") != 16)
@@ -384,10 +452,16 @@ int main(int argc, char **argv)
     }
     CHECK(vkInvalidateMappedMemoryRanges(device, 1, &staging_range));
     exit_code = check_pixels(mapped);
-    if (!exit_code)
+    if (!exit_code) {
         printf("{\"vulkan_draw\":true,\"luid\":\"%016llx\",\"pixels\":1024,"
                "\"red\":300,\"blue\":724,\"guard_bytes\":128}\n",
                (unsigned long long)luid);
+        if (preview) {
+            const uint8_t *rgba = (const uint8_t *)mapped + GUARD;
+            for (unsigned i = 0; i < PIXELS; i++, rgba += 4)
+                preview_bgra[i] = (uint32_t)rgba[0] << 16 | (uint32_t)rgba[1] << 8 | rgba[2];
+        }
+    }
 
 done:
     if (device) {
@@ -411,5 +485,9 @@ done:
     if (instance)
         vkDestroyInstance(instance, NULL);
     FreeLibrary(icd);
+    if (!exit_code && preview && show_preview()) {
+        fprintf(stderr, "Could not display the verified readback\n");
+        return 1;
+    }
     return exit_code;
 }
