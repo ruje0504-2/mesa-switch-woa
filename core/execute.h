@@ -83,6 +83,10 @@ enum tg_gpu_execute_result tg_gpu_execute_clear(const struct tg_gpu_power_io *,
     const struct tg_gpu_power *,void *cpu,uint64_t device_address,
     const struct tg_gpu_gr_payload *,const struct tg_gpu_gr_work *,
     struct tg_gpu_execution *,struct tg_gpu_status *);
+enum tg_gpu_execute_result tg_gpu_execute_draw(const struct tg_gpu_power_io *,
+    const struct tg_gpu_power *,void *cpu,uint64_t device_address,
+    const struct tg_gpu_gr_payload *,const struct tg_gpu_gr_work *,
+    struct tg_gpu_execution *,struct tg_gpu_status *);
 /* Stop channel fetch before the caller drains MC, stops the PLL and powers
  * down. Clear execution ownership/free the arena only AFTER power_down
  * confirms no ownership. The probe does not change any Tegra SMMU domain.

@@ -9,18 +9,20 @@
 #include "../platform/t214_interrupt.h"
 #include "../core/gr_submit.h"
 #include "../core/gr_clear.h"
+#include "../core/gr_draw.h"
 
 /* Shared by the kernel backend and the existing LitePerformanceCheck UI.
  * METHOD_BUFFERED, FILE_DEVICE_UNKNOWN. RUN requires write access; the
  * device grants write access only to administrators and SYSTEM.
  */
-#define TG_GPU_CONTROL_VERSION 23u
+#define TG_GPU_CONTROL_VERSION 24u
 #define TG_GPU_IOCTL_STATUS 0x00226400u
 #define TG_GPU_IOCTL_RUN    0x0022a404u
 #define TG_GPU_IOCTL_GR_RUN 0x0022a408u
 #define TG_GPU_IOCTL_IRQ_RUN 0x0022a40cu
 #define TG_GPU_IOCTL_3D_RUN 0x0022a410u
 #define TG_GPU_IOCTL_CLEAR_RUN 0x0022a414u
+#define TG_GPU_IOCTL_DRAW_RUN 0x0022a418u
 #define TG_GPU_CONTROL_DEFAULT_KHZ 729600u
 #define TG_GPU_CONTROL_OC_KHZ 1228800u
 
@@ -130,5 +132,6 @@ struct tg_gpu_status {
     struct tg_gpu_gr_channel_status gr_channel;
     struct tg_gpu_clear_status clear;
     struct tg_gpu_gr_method_status method_error;
+    struct tg_gpu_draw_status draw;
 };
 #endif

@@ -126,20 +126,25 @@ bool tg_gpu_prepare_3d_arena(void *cpu,uint64_t physical,size_t bytes,const uint
                             TG_GPU_GR_ENGINE_NEXT_WORDS,true,&ring[1]);
 }
 static bool prepare_clear_packets(void *cpu,const struct tg_gpu_gr_work *work,
-    const uint32_t expected[2])
+    const uint32_t expected[2],bool draw,struct tg_gpu_draw_status *status)
 {
     uint32_t *push=(uint32_t *)((uint8_t *)cpu+PUSH);
     struct tg_gpu_gpfifo_entry *ring=(void *)((uint8_t *)cpu+RING);
     for(unsigned i=0;i<2;++i) {
         uint32_t words=0;
-        if(!tg_gpu_build_clear_packet(push+i*TG_GPU_CLEAR_MAX_WORDS,TG_GPU_CLEAR_MAX_WORDS,
-             TG_GPU_GR_WORK_VA+TG_GPU_CLEAR_OFFSET,FENCE_VA+i*4,expected[i],i==0,&words) ||
-           !tg_gpu_build_gpfifo(PUSH_VA+i*4*TG_GPU_CLEAR_MAX_WORDS,words,i!=0,&ring[i])) return false;
+        unsigned stride=draw?TG_GPU_DRAW_MAX_WORDS:TG_GPU_CLEAR_MAX_WORDS;
+        bool ok=draw&&i?
+            tg_gpu_build_draw_packet(push+i*stride,stride,TG_GPU_GR_WORK_VA+TG_GPU_DRAW_OFFSET,
+                FENCE_VA+i*4,expected[i],&words):
+            tg_gpu_build_clear_packet(push+i*stride,stride,TG_GPU_GR_WORK_VA+TG_GPU_CLEAR_OFFSET,
+                FENCE_VA+i*4,expected[i],i==0,&words);
+        if(!ok || !tg_gpu_build_gpfifo(PUSH_VA+i*4*stride,words,i!=0,&ring[i]))return false;
     }
     uint32_t *pixels=(uint32_t *)((uint8_t *)work->cpu+TG_GPU_CLEAR_OFFSET);
     /* CPU only initializes the sentinel; ROP must produce the final pixels. */
     for(unsigned i=0;i<TG_GPU_CLEAR_BYTES/4;++i) pixels[i]=TG_GPU_CLEAR_SENTINEL;
-    return true;
+    return !draw || tg_gpu_prepare_draw_code((uint8_t *)work->cpu+TG_GPU_DRAW_OFFSET,
+                                              TG_GPU_DRAW_BYTES,status);
 }
 
 bool tg_gpu_prepare_gr_arena(void *cpu, uint64_t physical, size_t bytes,
@@ -288,7 +293,7 @@ static bool gr_fault(const struct tg_gpu_power_io *io,struct tg_gpu_status *s)
 static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *cpu, uint64_t physical,
     const struct tg_gpu_gr_payload *firmware, const struct tg_gpu_gr_work *work,
-    const struct tg_gpu_execution_notify *notify,bool three_d,bool clear,
+    const struct tg_gpu_execution_notify *notify,bool three_d,bool clear,bool draw,
     struct tg_gpu_execution *state,
     struct tg_gpu_status *s)
 {
@@ -311,7 +316,7 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
         tg_gpu_gr_context_prepare(cpu,physical,TG_GPU_ARENA_BYTES,work))))
         return TG_GPU_EXEC_ARGUMENT;
     if(notify && !prepare_irq_packets(cpu,s->expected)) return TG_GPU_EXEC_ARGUMENT;
-    if(clear && !prepare_clear_packets(cpu,work,s->expected)) return TG_GPU_EXEC_ARGUMENT;
+    if(clear && !prepare_clear_packets(cpu,work,s->expected,draw,&s->draw)) return TG_GPU_EXEC_ARGUMENT;
     if(notify) s->irq_expected=2;
     if(three_d) {
         s->gr_channel.class_id=TG_GPU_GR_ENGINE_CLASS;
@@ -583,6 +588,11 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
     if(clear && !tg_gpu_check_clear_pixels(
         (volatile uint32_t *)((uint8_t *)work->cpu+TG_GPU_CLEAR_OFFSET),TG_GPU_CLEAR_BYTES,&s->clear))
         return TG_GPU_EXEC_PIXELS;
+    if(draw) {
+        if(!tg_gpu_check_draw_code((volatile uint32_t *)((uint8_t *)work->cpu+TG_GPU_DRAW_OFFSET),
+                                  TG_GPU_DRAW_BYTES))return TG_GPU_EXEC_PIXELS;
+        s->draw.checked=1;
+    }
     state->stage = 6;
     return TG_GPU_EXEC_OK;
 }
@@ -591,7 +601,7 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *cpu, uint64_t physical,
     const struct tg_gpu_gr_payload *firmware, struct tg_gpu_execution *state,
     struct tg_gpu_status *s)
-{ return execute(io,power,cpu,physical,firmware,NULL,NULL,false,false,state,s); }
+{ return execute(io,power,cpu,physical,firmware,NULL,NULL,false,false,false,state,s); }
 
 enum tg_gpu_execute_result tg_gpu_execute_gr(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *cpu, uint64_t physical,
@@ -599,7 +609,7 @@ enum tg_gpu_execute_result tg_gpu_execute_gr(const struct tg_gpu_power_io *io,
     struct tg_gpu_execution *state, struct tg_gpu_status *s)
 {
     if(!work) return TG_GPU_EXEC_ARGUMENT;
-    return execute(io,power,cpu,physical,firmware,work,NULL,false,false,state,s);
+    return execute(io,power,cpu,physical,firmware,work,NULL,false,false,false,state,s);
 }
 
 enum tg_gpu_execute_result tg_gpu_execute_irq(const struct tg_gpu_power_io *io,
@@ -608,7 +618,7 @@ enum tg_gpu_execute_result tg_gpu_execute_irq(const struct tg_gpu_power_io *io,
     struct tg_gpu_execution *state,struct tg_gpu_status *s)
 {
     if(!notify) return TG_GPU_EXEC_ARGUMENT;
-    return execute(io,power,cpu,physical,firmware,NULL,notify,false,false,state,s);
+    return execute(io,power,cpu,physical,firmware,NULL,notify,false,false,false,state,s);
 }
 enum tg_gpu_execute_result tg_gpu_execute_3d(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power,void *cpu,uint64_t physical,
@@ -616,7 +626,7 @@ enum tg_gpu_execute_result tg_gpu_execute_3d(const struct tg_gpu_power_io *io,
     struct tg_gpu_execution *state,struct tg_gpu_status *s)
 {
     if(!work || !firmware) return TG_GPU_EXEC_ARGUMENT;
-    return execute(io,power,cpu,physical,firmware,work,NULL,true,false,state,s);
+    return execute(io,power,cpu,physical,firmware,work,NULL,true,false,false,state,s);
 }
 enum tg_gpu_execute_result tg_gpu_execute_clear(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power,void *cpu,uint64_t physical,
@@ -624,7 +634,15 @@ enum tg_gpu_execute_result tg_gpu_execute_clear(const struct tg_gpu_power_io *io
     struct tg_gpu_execution *state,struct tg_gpu_status *s)
 {
     if(!work || !firmware) return TG_GPU_EXEC_ARGUMENT;
-    return execute(io,power,cpu,physical,firmware,work,NULL,true,true,state,s);
+    return execute(io,power,cpu,physical,firmware,work,NULL,true,true,false,state,s);
+}
+enum tg_gpu_execute_result tg_gpu_execute_draw(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power,void *cpu,uint64_t physical,
+    const struct tg_gpu_gr_payload *firmware,const struct tg_gpu_gr_work *work,
+    struct tg_gpu_execution *state,struct tg_gpu_status *s)
+{
+    if(!work || !firmware)return TG_GPU_EXEC_ARGUMENT;
+    return execute(io,power,cpu,physical,firmware,work,NULL,true,true,true,state,s);
 }
 
 void tg_gpu_execute_stop(const struct tg_gpu_power_io *io, struct tg_gpu_execution *s)

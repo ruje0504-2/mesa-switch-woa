@@ -500,6 +500,62 @@ passes 59 cases with substituted device I/O, and local packet/pixel/guard
 models, sanitizers, real NETB and ARM64 builds pass. The accepted signed
 .39 package has native SYS/CAT and all 11 catalogue memberships verified.
 
+### Fixed NAK shader draw diagnostic
+
+Version **0.1.0.41 / ABI 24 (752 bytes)** adds `--gpu-json --gpu-draw-729`
+and the separate `TG_GPU_IOCTL_DRAW_RUN`. It retains the accepted blue clear
+as its first packet. The second packet contains no `CLEAR_SURFACE`: a
+vertex-ID triangle and a central 8x8 scissor must execute a constant-red
+fragment shader to produce the expected foreground. The complete pixel and
+guard checker is shared with the clear diagnostic. `shader_pass` additionally
+requires exact requested/checked SM53 shader metadata and code hash, both
+reports, successful GR restore, fault-free completion and complete retirement.
+This fixed private workload is not a Vulkan API draw or an installed NVK ICD.
+
+`tools/build_draw_shaders.py --mesa <pinned-checkout> --out <new-directory>`
+reproduces the committed `core/draw_sm53.h` from `tools/shaders/rect.{vert,frag}`.
+It archives Mesa `0ff52079`, creates a compiler-only host overlay and invokes
+the unchanged SPIR-V frontend/NIR/NAK compiler. The overlay omits Linux device
+backends, hardware-test bindings and unrelated NVK runtime/CLC dependencies;
+NVK root-descriptor layout/constants are extracted unchanged. It neither
+modifies the external checkout nor builds an ICD. Host prerequisites are in
+the helper's docstring; Rust 1.90 is sufficient. Source/SPIR-V/header/code
+SHA256 values are recorded in `tools/shaders/manifest.json`.
+
+The generated VS/FS use 160/64 bytes of code, 24 GPRs each, no descriptors,
+constant data, scratch, call stack or shared memory. Each occupies one GPU
+read-only page at work offset `0x1a0000` / `0x1a1000`. Following NVK's
+pre-Volta upload convention, a header begins at byte `0x30`, its 80-byte SPH
+places the first instruction at `0x80`, and pipeline offsets are `0x30/0x1030`
+relative to the program region. The pixel page remains separate at `0x190000`.
+Only code/header data and report/pixel sentinels are initialized by the CPU.
+Code FNV `FB041DD2` is checked before publication and after completion; this
+does not replace pixel verification. Model packet decoding rejects clear
+methods, wrong shader bindings, bad bounds, corruption and rejected `0x0FB8`.
+The first .40 physical attempt completed the blue-clear report, then stopped
+at Stage 305/E17 with `GR_INTR=0x10`, trapped method `0x1528=0`; retirement
+and retained resources were zero. `SET_SHADER_EXCEPTIONS` is a software
+method emitted only by NVK's Horizon path, not ordinary hardware state.
+.41 omits it, preserves golden fault handling and rejects it in the decoder.
+
+**Physical Lite shader pass, 2026-11-09 01:43:22 Pacific:** .41/oem71 exited
+0 at 729.6 MHz, Stage 306, `shader_pass=true`. Reports `556A590A/AA95A6F5`
+matched; 256 pixels and all 768 guard/padding words matched, image hash
+`F20AF985`, NAK code hash `FB041DD2`, FECS restore count 1. GR/FECS/PRI/FIFO/
+PBDMA/MMU faults, execution/restore results and retained resources were zero.
+The first packet clears only blue; the second shader packet produces red.
+This establishes fixed NAK shader execution/readback, not live VidMm/WDDM
+dispatch, a Vulkan API draw or a Windows NVK ICD. The matching ABI-24 tool's
+74 native JSON fixtures pass with substituted device I/O. Native SYS/CAT and
+all 11 catalogue memberships pass, and no reboot was needed.
+
+The eventual WDDM/NVK UMA target is a **512 MiB normal GPU working set,
+up to 1 GiB pressure-test workload**, allocated dynamically within VidMm's
+actual budget. It is not a boot-time carve-out or a preallocated probe pool.
+The physical diagnostic still allocates only 512 KiB arena + 2 MiB GR work
+temporarily and frees them after reset/drain. Live WDDM residency and its
+memory-pressure behavior remain unverified.
+
 The latest build runs `test-gr-context` with model MMIO/GPU-write substitutes
 and, when provided, the real external NETB file. It checks owned mapping bounds,
 stream-port write ordering, buffer encodings, failed replies/timeouts and image

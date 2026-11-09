@@ -285,7 +285,7 @@ static VOID GpuCleanup(GPU_DEVICE *d)
     }
     d->last.resources_owned = d->power.owned || d->execution.owned || d->irq.saved;
 }
-static NTSTATUS GpuRun(WDFDEVICE device, ULONG target, BOOLEAN graphics,BOOLEAN notify,BOOLEAN three_d,BOOLEAN clear)
+static NTSTATUS GpuRun(WDFDEVICE device, ULONG target, BOOLEAN graphics,BOOLEAN notify,BOOLEAN three_d,BOOLEAN clear,BOOLEAN draw)
 {
     GPU_DEVICE *d = GpuContext(device);
     struct tg_gpu_power_io io = GpuIo(d);
@@ -361,7 +361,9 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target, BOOLEAN graphics,BOOLEAN 
     if (d->last.clock_result != TG_GPU_CLOCK_OK) goto done;
     KeMemoryBarrier();
     const struct tg_gpu_execution_notify notification={d,GpuIrqArm,GpuIrqWait};
-    d->last.execution_result = clear?
+    d->last.execution_result = draw?
+        tg_gpu_execute_draw(&io,&d->power,d->arena,(uint64_t)d->arena_address.QuadPart,
+            &firmware.payload,&d->graphics,&d->execution,&d->last):clear?
         tg_gpu_execute_clear(&io,&d->power,d->arena,(uint64_t)d->arena_address.QuadPart,
             &firmware.payload,&d->graphics,&d->execution,&d->last):three_d?
         tg_gpu_execute_3d(&io,&d->power,d->arena,(uint64_t)d->arena_address.QuadPart,
@@ -398,15 +400,15 @@ VOID GpuControl(WDFQUEUE queue, WDFREQUEST request, size_t out_size, size_t in_s
     status = WdfRequestRetrieveOutputBuffer(request, sizeof(*out), (PVOID *)&out, NULL);
     if (!NT_SUCCESS(status)) { WdfRequestComplete(request, status); return; }
     if (code == TG_GPU_IOCTL_RUN || code == TG_GPU_IOCTL_GR_RUN || code==TG_GPU_IOCTL_IRQ_RUN ||
-        code==TG_GPU_IOCTL_3D_RUN || code==TG_GPU_IOCTL_CLEAR_RUN) {
+        code==TG_GPU_IOCTL_3D_RUN || code==TG_GPU_IOCTL_CLEAR_RUN || code==TG_GPU_IOCTL_DRAW_RUN) {
         status = WdfRequestRetrieveInputBuffer(request, sizeof(op), (PVOID *)&in, NULL);
         if (NT_SUCCESS(status)) {
             op = *in;
             status = op.version == TG_GPU_CONTROL_VERSION ?
                 GpuRun(device,op.target_khz,
-                       code==TG_GPU_IOCTL_GR_RUN||code==TG_GPU_IOCTL_3D_RUN||code==TG_GPU_IOCTL_CLEAR_RUN,
-                       code==TG_GPU_IOCTL_IRQ_RUN,code==TG_GPU_IOCTL_3D_RUN||code==TG_GPU_IOCTL_CLEAR_RUN,
-                       code==TG_GPU_IOCTL_CLEAR_RUN) : STATUS_REVISION_MISMATCH;
+                       code==TG_GPU_IOCTL_GR_RUN||code==TG_GPU_IOCTL_3D_RUN||code==TG_GPU_IOCTL_CLEAR_RUN||code==TG_GPU_IOCTL_DRAW_RUN,
+                       code==TG_GPU_IOCTL_IRQ_RUN,code==TG_GPU_IOCTL_3D_RUN||code==TG_GPU_IOCTL_CLEAR_RUN||code==TG_GPU_IOCTL_DRAW_RUN,
+                       code==TG_GPU_IOCTL_CLEAR_RUN||code==TG_GPU_IOCTL_DRAW_RUN,code==TG_GPU_IOCTL_DRAW_RUN) : STATUS_REVISION_MISMATCH;
         }
     } else if (code == TG_GPU_IOCTL_STATUS) status = STATUS_SUCCESS;
     else status = STATUS_INVALID_DEVICE_REQUEST;

@@ -6,6 +6,7 @@
 #include "t214_gr_context.h"
 #include "t214_gr_context_regs.h"
 #include "../core/gm20b_mmu.h"
+#include "../core/gr_draw.h"
 
 #define GPU 0x57000000u
 static uint32_t rd(const struct tg_gpu_power_io *io, uint32_t r)
@@ -45,7 +46,8 @@ static bool prepare_work(void *arena, uint64_t physical, size_t bytes,
         bool read_only=work_bytes==TG_GPU_GR_CHANNEL_WORK_BYTES &&
             ((offset>=TG_GPU_GR_ACCESS_MAP_OFFSET &&
               offset<TG_GPU_GR_ACCESS_MAP_OFFSET+TG_GPU_GR_ACCESS_MAP_BYTES) ||
-             (offset>=TG_GPU_GR_PATCH_OFFSET && offset<TG_GPU_GR_PATCH_OFFSET+TG_GPU_GR_PATCH_BYTES));
+             (offset>=TG_GPU_GR_PATCH_OFFSET && offset<TG_GPU_GR_PATCH_OFFSET+TG_GPU_GR_PATCH_BYTES) ||
+             (offset>=TG_GPU_DRAW_OFFSET && offset<TG_GPU_DRAW_OFFSET+TG_GPU_DRAW_BYTES));
         if(!tg_gpu_pte_4k(w->physical+(uint64_t)i*4096,read_only,true,
                          &pt[(TG_GPU_GR_WORK_VA>>12)+i])) return false;
     }

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Explicit MMIO/GPU-write substitutes. No physical GPU is exercised here. */
 #include "../platform/t214_gr_context.h"
+#include "../core/gr_draw.h"
 #include "../core/gm20b_mmu.h"
 #include <assert.h>
 #include <stdio.h>
@@ -198,6 +199,10 @@ int main(int argc,char **argv)
         assert(pt[(TG_GPU_GR_WORK_VA+TG_GPU_GR_ACCESS_MAP_OFFSET)>>12]==pte);
         assert(tg_gpu_pte_4k(0x90180000,true,true,&pte));
         assert(pt[(TG_GPU_GR_WORK_VA+TG_GPU_GR_PATCH_OFFSET)>>12]==pte);
+        assert(tg_gpu_pte_4k(0x901a0000,true,true,&pte));
+        assert(pt[(TG_GPU_GR_WORK_VA+TG_GPU_DRAW_OFFSET)>>12]==pte);
+        assert(tg_gpu_pte_4k(0x901a1000,true,true,&pte));
+        assert(pt[(TG_GPU_GR_WORK_VA+TG_GPU_DRAW_OFFSET+4096)>>12]==pte);
         assert(tg_gpu_pte_4k(0x90000000,false,true,&pte)&&pt[TG_GPU_GR_WORK_VA>>12]==pte);
         assert(!pt[(TG_GPU_GR_WORK_VA+TG_GPU_GR_CHANNEL_WORK_BYTES)>>12]);
         free(arena);
