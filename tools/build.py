@@ -221,6 +221,12 @@ if args.windows_tests:
                     "/include:_load_config_used","/nodefaultlib","/release","/opt:ref","/timestamp:0",
                     f"/out:{args.out / 'test-worker.exe'}",str(worker_test),
                     str(args.out / "worker.obj"),str(sdk_lib)],check=True)
+    diagnostic_test=args.out / "test_diagnostic_windows.obj"
+    subprocess.run([args.clang_cl,*flags,"/clang:-funwind-tables",f"/Fo{diagnostic_test}","--",
+                    str(root / "tests/test_diagnostic_windows.c")],check=True)
+    subprocess.run([args.link,"/nologo","/machine:arm64","/subsystem:console,10.0","/entry:start",
+                    "/include:_load_config_used","/nodefaultlib","/release","/opt:ref","/timestamp:0",
+                    f"/out:{args.out / 'test-diagnostic.exe'}",str(diagnostic_test),str(sdk_lib)],check=True)
 
 if args.probe:
     import shutil
@@ -248,6 +254,10 @@ if args.probe:
                 km_lib / "ntoskrnl.lib", km_lib / "hal.lib", km_lib / "ntstrsafe.lib",
                 km_lib / "bufferoverflowfastfailk.lib"]
         if name == "tegragpuprobe":
+            diagnostic = args.out / "diagnostic_backend.obj"
+            subprocess.run([args.clang_cl, *kflags, f"/Fo{diagnostic}", "--",
+                            str(root / "windows/diagnostic_backend.c")], check=True)
+            libs.append(diagnostic)
             libs.append(library)
             for filename in ("NETB_img.bin", "fecs.bin", "gpccs.bin"):
                 shutil.copyfile(args.gr_firmware / filename, dest / filename)

@@ -154,11 +154,11 @@ static void test_submission(void)
     assert(tg_gpu_prepare_submission(command,sizeof(command),0xc0000000,0x4000000,
         instance,sizeof(instance),0xc0040000,0x20000000,40,0x13579bdf));
     assert(command[0]==0x20000000 && command[1]==0x2800); /* USER application */
-    assert(command[2]==0x4001000 && command[3]==0x80001500); /* KERNEL completion, wait */
-    assert(push[0]==0x20040004 && push[1]==0 && push[2]==0x4002800 && push[3]==0x13579bdf);
-    assert(push[4]==0x01000002); /* WFI enabled, not a FIFO-consumption-only fence */
+    assert(command[2]==0x4001000 && command[3]==0x80001100); /* KERNEL completion, wait */
+    assert(push[0]==0x2001001e && push[1]==1); /* WFI, scope ALL */
+    assert(push[2]==0x20010014 && push[3]==0x13579bdf); /* SET_REFERENCE */
     assert(command[TG_GPU_COMMAND_FENCE/4]==0xeca86420 && userd[35]==0);
-    assert(instance[0]==0 && instance[2]==0xc0002000 && instance[18]==0x4000000 && instance[57]==0x20);
+    assert(instance[0]==0 && instance[2]==0xc0002000 && instance[18]==0x4000000 && instance[57]==0);
     assert(instance[128]==0xa5a5a5a5 && instance[131]==0xa5a5a5a5);
     assert(runlist[0]==0x0600e000 && runlist[1]==0);
     assert(runlist[2]==0 && runlist[3]==0);
@@ -173,7 +173,7 @@ int main(void)
 {
     struct tg_gpu_gpfifo_entry entry;
     struct tg_gpu_identity identity;
-    _Static_assert(sizeof(struct tg_gpu_status) == 752, "control ABI 24 size");
+    _Static_assert(sizeof(struct tg_gpu_status) == 840, "control ABI 27 size");
     {
         uint32_t packet[12];
         memset(packet,0xa5,sizeof(packet));

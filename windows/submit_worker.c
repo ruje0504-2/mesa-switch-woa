@@ -23,7 +23,7 @@ static void drop_work(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w)
 NTSTATUS TgGpuObserveContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
     const struct tg_gpu_power_io *io,const struct tg_gpu_power *power)
 {
-    KIRQL irql;NTSTATUS status;UINT expected,offset,observed;
+    KIRQL irql;NTSTATUS status;UINT expected,offset,observed;BOOLEAN retired;
     struct tg_gpu_fault_status faults;
     struct tg_gpu_gr_status gr={0};
     if(!e || !w || !io || !io->read32 || !io->write32 || !io->delay_us ||
@@ -35,6 +35,10 @@ NTSTATUS TgGpuObserveContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w
     offset=e->UserdBar1Offset;
     if((offset&0xfff) || offset>=0x01000000) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_ADDRESS;
+    }
+    retired=w->Retired;
+    if(retired && !w->GpuCompleted) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_DEVICE_STATE;
     }
     expected=w->Expected;w->HardwareBusy=TRUE;KeReleaseSpinLock(&e->Lock,irql);
     status=STATUS_PENDING;
@@ -48,20 +52,24 @@ NTSTATUS TgGpuObserveContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w
                 status=STATUS_DEVICE_DATA_ERROR;
         }
         if(status==STATUS_PENDING) {
-            observed=io->read32(io->context,0x58000000u+offset+TG_GPU_COMMAND_FENCE-TG_GPU_COMMAND_USERD);
+            observed=retired?expected:
+                io->read32(io->context,0x58000000u+offset+TG_GPU_COMMAND_FENCE-TG_GPU_COMMAND_USERD);
             if(observed==UINT32_MAX)status=STATUS_DEVICE_DATA_ERROR;
             else if(observed==expected) {
                 if(tg_gpu_frontend_sync_memory(io,power,&e->Channel.frontend)!=TG_GPU_FE_OK)
                     status=STATUS_DEVICE_DATA_ERROR;
                 else {
                     KeMemoryBarrier();
-                    status=*(volatile UINT32 *)((UCHAR *)e->Commands.CpuAddress+TG_GPU_COMMAND_FENCE)==expected ?
+                    status=!retired || *(volatile UINT32 *)((UCHAR *)e->Commands.CpuAddress+TG_GPU_COMMAND_FENCE)==expected ?
                         STATUS_SUCCESS:STATUS_DEVICE_DATA_ERROR;
                 }
             }
         }
     }
     KeAcquireSpinLock(&e->Lock,&irql);w->HardwareBusy=FALSE;
+    if(status==STATUS_SUCCESS) {
+        if(retired)w->CpuCompleted=TRUE;else w->GpuCompleted=TRUE;
+    }
     e->Channel.fifo_interrupt=faults.fifo;e->Channel.mmu_fault=faults.mmu;
     e->Channel.pbdma_interrupt=faults.pbdma;e->Channel.pbdma_interrupt_1=faults.pbdma1;
     KeReleaseSpinLock(&e->Lock,irql);return status;

@@ -408,7 +408,9 @@ NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w
         if(e->Active!=w || !w->Context || e->Notification) {
             KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
         }
-        if(!w->Submitted || !w->Retired) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY; }
+        if(!w->Submitted || !w->Retired || !w->GpuCompleted || !w->CpuCompleted) {
+            KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
+        }
         if(*(volatile UINT32 *)((UCHAR *)e->Commands.CpuAddress+TG_GPU_COMMAND_FENCE)!=w->Expected) {
             KeReleaseSpinLock(&e->Lock,irql);return STATUS_PENDING;
         }

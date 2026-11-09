@@ -161,6 +161,8 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
         status=TgGpuQuiesceContextWork(q->Engine,w,io,power);
         if(!NT_SUCCESS(status)) goto done;
     }
+    status=TgGpuObserveContextWork(q->Engine,w,io,power);
+    if(status!=STATUS_SUCCESS)goto done;
 notify:
     /* Admission of rejected records uses this same PASSIVE gate. Consume
      * adjacent rejection markers before the real completion callback, so a

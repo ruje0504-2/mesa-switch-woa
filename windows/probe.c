@@ -12,6 +12,7 @@
 #include "../platform/t214_clock.h"
 #include "../core/execute.h"
 #include "gr_firmware_io.h"
+#include "diagnostic_backend.h"
 
 struct gpu_map { ULONG base, size; volatile UCHAR *va; };
 static const struct gpu_map map_profile[] = {
@@ -27,6 +28,7 @@ typedef struct _GPU_DEVICE {
     struct gpu_map maps[T214_GPU_RESOURCE_COUNT];
     TG_GPU_RESOURCES resources; /* borrowed view of the mappings below */
     TG_GPU_PLATFORM platform;
+    TG_GPU_DIAGNOSTIC_BACKEND *backend;
     struct tg_gpu_power power;
     struct tg_gpu_clock clock;
     struct tg_gpu_execution execution;
@@ -202,7 +204,7 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target, BOOLEAN graphics,BOOLEAN 
     if (target != TG_GPU_CONTROL_DEFAULT_KHZ && target != TG_GPU_CONTROL_OC_KHZ)
         return STATUS_INVALID_PARAMETER;
     if(notify && (!d->interrupt || !d->lic)) return STATUS_NOT_SUPPORTED;
-    if (d->power.owned || d->clock.owned || d->execution.owned || d->irq.saved)
+    if (d->backend || d->power.owned || d->clock.owned || d->execution.owned || d->irq.saved)
         return STATUS_INVALID_DEVICE_STATE;
     RtlZeroMemory(&d->power, sizeof(d->power));
     RtlZeroMemory(&d->clock, sizeof(d->clock));
@@ -290,6 +292,42 @@ early:
     }
 }
 
+static NTSTATUS GpuBackendRun(WDFDEVICE device,ULONG target)
+{
+    GPU_DEVICE *d=GpuContext(device);TG_GPU_FIRMWARE firmware={0};
+    struct tg_gpu_power_io io;NTSTATUS status,close;UCHAR address;ULONG seed;
+    if(target!=TG_GPU_CONTROL_DEFAULT_KHZ)return STATUS_INVALID_PARAMETER;
+    if(d->backend || d->power.owned || d->clock.owned || d->execution.owned || d->irq.saved)
+        return STATUS_INVALID_DEVICE_STATE;
+    status=GpuOpenPlatform(device);if(!NT_SUCCESS(status))return status;
+    status=TgGpuPlatformPreflight(&d->platform,&address);
+    if(!NT_SUCCESS(status)) {
+        close=TgGpuClosePlatform(&d->platform);return NT_SUCCESS(close)?status:close;
+    }
+    RtlZeroMemory(&d->last,sizeof(d->last));d->last.version=TG_GPU_CONTROL_VERSION;
+    d->last.tested=1;d->last.target_khz=target;d->last.backend.requested=1;
+    d->platform.IoStatus=STATUS_SUCCESS;io=GpuIo(d);
+    seed=0x13579bdfu^(ULONG)KeQueryInterruptTime();
+    if(seed==TG_GPU_CLEAR_SENTINEL || ~seed==TG_GPU_CLEAR_SENTINEL)seed^=0x1000;
+    status=TgGpuFirmwareLoad(&firmware);d->last.firmware_status=(UINT)status;
+    if(NT_SUCCESS(status)) {
+        status=TgGpuRunDiagnosticBackend(&d->backend,&io,address,&firmware.payload,seed,&d->last);
+        d->last.backend.result=(UINT)status;
+    } else {
+        d->last.stage=90;d->last.execution_result=TG_GPU_EXEC_GR_BOOT;
+        d->last.backend.result=(UINT)status;
+    }
+    TgGpuFirmwareFree(&firmware);
+    if(!d->backend) {
+        close=TgGpuClosePlatform(&d->platform);
+        if(!NT_SUCCESS(close) && !d->last.backend.result)d->last.backend.result=(UINT)close;
+    }
+    GpuSaveResult(device);
+    /* Report a GPU/worker failure in the fixed-size status, preserving its
+     * evidence for the caller. Transport failure still fails the IOCTL. */
+    return d->platform.IoStatus;
+}
+
 VOID GpuControl(WDFQUEUE queue, WDFREQUEST request, size_t out_size, size_t in_size, ULONG code)
 {
     WDFDEVICE device = WdfIoQueueGetDevice(queue);
@@ -301,15 +339,17 @@ VOID GpuControl(WDFQUEUE queue, WDFREQUEST request, size_t out_size, size_t in_s
     status = WdfRequestRetrieveOutputBuffer(request, sizeof(*out), (PVOID *)&out, NULL);
     if (!NT_SUCCESS(status)) { WdfRequestComplete(request, status); return; }
     if (code == TG_GPU_IOCTL_RUN || code == TG_GPU_IOCTL_GR_RUN || code==TG_GPU_IOCTL_IRQ_RUN ||
-        code==TG_GPU_IOCTL_3D_RUN || code==TG_GPU_IOCTL_CLEAR_RUN || code==TG_GPU_IOCTL_DRAW_RUN) {
+        code==TG_GPU_IOCTL_3D_RUN || code==TG_GPU_IOCTL_CLEAR_RUN || code==TG_GPU_IOCTL_DRAW_RUN ||
+        code==TG_GPU_IOCTL_BACKEND_RUN) {
         status = WdfRequestRetrieveInputBuffer(request, sizeof(op), (PVOID *)&in, NULL);
         if (NT_SUCCESS(status)) {
             op = *in;
-            status = op.version == TG_GPU_CONTROL_VERSION ?
+            status = op.version != TG_GPU_CONTROL_VERSION ? STATUS_REVISION_MISMATCH :
+                code==TG_GPU_IOCTL_BACKEND_RUN?GpuBackendRun(device,op.target_khz):
                 GpuRun(device,op.target_khz,
                        code==TG_GPU_IOCTL_GR_RUN||code==TG_GPU_IOCTL_3D_RUN||code==TG_GPU_IOCTL_CLEAR_RUN||code==TG_GPU_IOCTL_DRAW_RUN,
                        code==TG_GPU_IOCTL_IRQ_RUN,code==TG_GPU_IOCTL_3D_RUN||code==TG_GPU_IOCTL_CLEAR_RUN||code==TG_GPU_IOCTL_DRAW_RUN,
-                       code==TG_GPU_IOCTL_CLEAR_RUN||code==TG_GPU_IOCTL_DRAW_RUN,code==TG_GPU_IOCTL_DRAW_RUN) : STATUS_REVISION_MISMATCH;
+                       code==TG_GPU_IOCTL_CLEAR_RUN||code==TG_GPU_IOCTL_DRAW_RUN,code==TG_GPU_IOCTL_DRAW_RUN);
         }
     } else if (code == TG_GPU_IOCTL_STATUS) status = STATUS_SUCCESS;
     else status = STATUS_INVALID_DEVICE_REQUEST;
@@ -370,6 +410,10 @@ NTSTATUS GpuD0Exit(WDFDEVICE device, WDF_POWER_DEVICE_STATE target)
 {
     GPU_DEVICE *d = GpuContext(device);
     UNREFERENCED_PARAMETER(target);
+    if(d->backend) {
+        NTSTATUS status=TgGpuStopDiagnosticBackend(&d->backend,&d->last);
+        if(d->backend || !NT_SUCCESS(status))return NT_SUCCESS(status)?STATUS_DEVICE_BUSY:status;
+    }
     if (d->power.owned || d->execution.owned || d->arena || d->irq.saved) GpuCleanup(d);
     if(d->power.owned || d->irq.saved)return STATUS_DEVICE_BUSY;
     return TgGpuClosePlatform(&d->platform);
@@ -379,6 +423,10 @@ NTSTATUS GpuRelease(WDFDEVICE device, WDFCMRESLIST resources)
     GPU_DEVICE *d = GpuContext(device);
     ULONG i;
     UNREFERENCED_PARAMETER(resources);
+    if(d->backend) {
+        NTSTATUS status=TgGpuStopDiagnosticBackend(&d->backend,&d->last);
+        if(d->backend || !NT_SUCCESS(status))return NT_SUCCESS(status)?STATUS_DEVICE_BUSY:status;
+    }
     if (d->power.owned || d->execution.owned || d->arena || d->irq.saved) GpuCleanup(d);
     if(d->power.owned || d->irq.saved) return STATUS_DEVICE_BUSY;
     NTSTATUS status=TgGpuClosePlatform(&d->platform);

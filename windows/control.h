@@ -15,7 +15,7 @@
  * METHOD_BUFFERED, FILE_DEVICE_UNKNOWN. RUN requires write access; the
  * device grants write access only to administrators and SYSTEM.
  */
-#define TG_GPU_CONTROL_VERSION 24u
+#define TG_GPU_CONTROL_VERSION 27u
 #define TG_GPU_IOCTL_STATUS 0x00226400u
 #define TG_GPU_IOCTL_RUN    0x0022a404u
 #define TG_GPU_IOCTL_GR_RUN 0x0022a408u
@@ -23,6 +23,8 @@
 #define TG_GPU_IOCTL_3D_RUN 0x0022a410u
 #define TG_GPU_IOCTL_CLEAR_RUN 0x0022a414u
 #define TG_GPU_IOCTL_DRAW_RUN 0x0022a418u
+#define TG_GPU_IOCTL_BACKEND_RUN 0x0022a41cu
+#define TG_GPU_BACKEND_COMPLETE_STAGE 10u
 #define TG_GPU_CONTROL_DEFAULT_KHZ 729600u
 #define TG_GPU_CONTROL_OC_KHZ 1228800u
 
@@ -71,6 +73,17 @@ struct tg_gpu_gr_channel_status {
 struct tg_gpu_gr_method_status {
     uint32_t status, trapped_address, data_lo, data_hi;
     uint32_t exception, fe_esr, mme_esr, scc_esr;
+};
+/* Physical integration of the shared Windows backend through diagnostic WDM
+ * allocation/notification adapters. This is not registered WDDM or Vulkan. */
+struct tg_gpu_backend_status {
+    uint32_t requested, stage, result, worker_started;
+    uint32_t submissions, notifications, recovery_requests;
+    uint32_t userd_gp_get, userd_gp_put, user_priv, kernel_priv;
+    uint32_t allocations_remaining, context_generation, completion_fence;
+    uint32_t fault_id, fault_instance, fault_address_lo, fault_address_hi, fault_info;
+    uint32_t fence_observed, fence_expected, channel_stage;
+    uint32_t fence_cpu;
 };
 
 struct tg_gpu_status {
@@ -133,5 +146,6 @@ struct tg_gpu_status {
     struct tg_gpu_clear_status clear;
     struct tg_gpu_gr_method_status method_error;
     struct tg_gpu_draw_status draw;
+    struct tg_gpu_backend_status backend;
 };
 #endif

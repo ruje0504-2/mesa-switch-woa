@@ -9,9 +9,11 @@
 #define TG_GPU_COMMAND_RING 0u
 #define TG_GPU_COMMAND_PUSH 0x1000u
 #define TG_GPU_COMMAND_USERD 0x2000u
-#define TG_GPU_COMMAND_FENCE 0x2800u
+#define TG_GPU_COMMAND_FENCE (TG_GPU_COMMAND_USERD+0x48u) /* USERD.Reference */
 #define TG_GPU_COMMAND_RUNLIST 0x3000u
-/* A driver-owned, privileged three-page VA mapping plus a physical runlist.
+/* Driver-owned ring/USERD privileged pages, a read-only fetchable packet,
+ * and a physical runlist. WFI + SET_REFERENCE updates USERD through the host
+ * channel rather than a virtual semaphore store to its privileged PTE.
  * The application's packet stays USER; only the generated completion packet
  * is KERNEL. Caller owns all backing and must quiesce the hardware slot before
  * preparing it. RAMIN PDB words are preserved, not exposed in the mapped pages.

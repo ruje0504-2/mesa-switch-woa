@@ -354,7 +354,7 @@ static struct {
     UINT32 gpu_fence,*cpu_fence;
     UINT doorbells;
     UCHAR enable,voltage;
-    BOOLEAN fail_preempt,fail_reset,fail_tlb;
+    BOOLEAN fail_preempt,fail_reset,fail_tlb,delay_reference;
 } hw={.mc=0x100,.pb=1,.map=1,.sched=1,.enable=0x41,.voltage=110,.expected_root=0x900000};
 static UINT32 Read(void *context,UINT32 address)
 {
@@ -366,7 +366,7 @@ static UINT32 Read(void *context,UINT32 address)
     case 0x57001704:return 0x80090000;
     case 0x57002254:return 0x10000013;
     case 0x5801308c:return hw.userd_put;
-    case 0x58013800:return hw.gpu_fence;
+    case 0x58013048:return hw.gpu_fence;
     case 0x57002630:return hw.sched;
     case 0x57800000:return hw.inst;
     case 0x57800004:return hw.ctrl;
@@ -424,7 +424,10 @@ static void Write(void *context,UINT32 address,UINT32 value)
     case 0x57100cb8:hw.root=value;break;
     case 0x57100cbc:CHECK(value==0x80000001);++hw.tlbs;break;
     case 0x57070000:CHECK(value==1);++hw.flushes;break;
-    case 0x57070010:CHECK(value==1 && hw.cpu_fence);*hw.cpu_fence=hw.gpu_fence;break;
+    case 0x57070010:
+        CHECK(value==1 && hw.cpu_fence);
+        if(!hw.delay_reference || !hw.inst)*hw.cpu_fence=hw.gpu_fence;
+        break;
     case 0x57070004:CHECK(value==1);break;
     case 0x7000e6d4:hw.clamp=value;break;
     case 0x60006290:if(!hw.fail_reset) hw.reset|=value;break;
@@ -609,7 +612,7 @@ static void TestGraphicsImage(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT *c,TG_GPU_
     CHECK(image[0xa8/4]==(UINT32)((base+TG_GPU_CONTEXT_ACCESS_OFFSET)>>32));
     CHECK(patch[0]==0x40800c && patch[1]==(UINT32)((base+TG_GPU_CONTEXT_PAGEPOOL_OFFSET)>>8));
     CHECK(patch[12]==0x408004 && patch[13]==(UINT32)((base+TG_GPU_CONTEXT_BUNDLE_OFFSET)>>8));
-    CHECK(leaf[0]==UINT64_C(0x100910007) && leaf[1]==UINT64_C(0x100910017));
+    CHECK(leaf[0]==UINT64_C(0x100910007) && leaf[1]==UINT64_C(0x100910015));
     CHECK(leaf[2]==UINT64_C(0x100910023) && !leaf[3]);
     for(UINT i=0;i<TG_GPU_CONTEXT_GR_BYTES/PAGE_SIZE;++i) {
         UINT64 pte=leaf[TG_GPU_CONTEXT_GR_VA_OFFSET/PAGE_SIZE+i];
@@ -882,7 +885,7 @@ void start(void)
     CHECK(((TG_GPU_PROCESS *)process.hKmdProcess)->Internal.Base==TG_GPU_INTERNAL_COVERAGE);
     {
         UINT64 *pt=((TG_GPU_PROCESS *)process.hKmdProcess)->Internal.Leaf.CpuAddress;
-        CHECK(pt[0]==UINT64_C(0x100910007) && pt[1]==UINT64_C(0x100910017));
+        CHECK(pt[0]==UINT64_C(0x100910007) && pt[1]==UINT64_C(0x100910015));
         CHECK(pt[2]==UINT64_C(0x100910023) && pt[3]==0 && pt[TG_GPU_TABLE_ENTRIES-1]==0);
     }
     device.hKmdProcess=process.hKmdProcess;
@@ -914,7 +917,7 @@ void start(void)
     hw.cpu_fence=fence;
     CHECK(c->Root.Valid && instance[128]==0x90000804 && instance[130]==0x07fff000);
     submit.hContext=c;CHECK(NT_SUCCESS(TgGpuAcquireContextWork(&e,&submit,&work)));
-    CHECK(work.Root.Valid && c->References==1 && work.FencePhysicalAddress==0x91002800);
+    CHECK(work.Root.Valid && c->References==1 && work.FencePhysicalAddress==0x91002048);
     CHECK(*fence==~work.Expected && instance[0x800/4]==0);
     CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY);
     ((UINT64 *)table)[1]=0; /* VidMm made the reserved root entry invalid */
@@ -949,13 +952,20 @@ void start(void)
     *fence=work.Expected; /* explicit simulated GPU write */
     CHECK(TgGpuContextWorkFinished(&e,&work)==STATUS_SUCCESS);
     CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY);
+    CHECK(TgGpuObserveContextWork(&e,&work,&io,&power)==STATUS_PENDING);
+    *fence=~work.Expected;hw.gpu_fence=work.Expected;hw.delay_reference=TRUE;
+    CHECK(TgGpuObserveContextWork(&e,&work,&io,&power)==STATUS_SUCCESS);
+    CHECK(work.GpuCompleted && !work.CpuCompleted && *fence!=work.Expected);
     hw.fail_preempt=TRUE;
     CHECK(TgGpuQuiesceContextWork(&e,&work,&io,&power)==STATUS_IO_TIMEOUT);
     CHECK(e.Channel.referenced && hw.inst && hw.runlist && c->References==1 && !interrupts);
     CHECK(ddi.DxgkDdiDestroyContext(c)==STATUS_DEVICE_BUSY);
     hw.fail_preempt=FALSE;
     CHECK(NT_SUCCESS(TgGpuQuiesceContextWork(&e,&work,&io,&power)) && work.Retired && c->References==1);
-    CHECK(!e.Channel.referenced && !hw.inst && !hw.runlist && hw.flushes==2 && hw.tlbs==2);
+    CHECK(!e.Channel.referenced && !hw.inst && !hw.runlist && hw.flushes==4 && hw.tlbs==2);
+    CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY && !interrupts);
+    CHECK(TgGpuObserveContextWork(&e,&work,&io,&power)==STATUS_SUCCESS && work.CpuCompleted);
+    CHECK(*fence==work.Expected && hw.flushes==6);hw.delay_reference=FALSE;
     fail_sync=TRUE;CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_UNSUCCESSFUL && !work.Notified);
     CHECK(!interrupts && !c->References && !work.Context && e.Notification==&work);
     CHECK(TgGpuInitializeWorkQueue(&queue,&e)==STATUS_DEVICE_BUSY && !e.QueueOwner);
@@ -967,7 +977,7 @@ void start(void)
     ddi.DxgkDdiDpcRoutine(&e);CHECK(dpcs==1);
     CHECK(NT_SUCCESS(ddi.DxgkDdiQueryCurrentFence(&e,&query)) && query.CurrentFence==7);
     CHECK(NT_SUCCESS(TgGpuRetireContextWork(&e,&work,&io,&power)) && !work.Context && !c->References);
-    CHECK(!e.Channel.referenced && !hw.inst && !hw.runlist && hw.flushes==2 && hw.tlbs==2);
+    CHECK(!e.Channel.referenced && !hw.inst && !hw.runlist && hw.flushes==6 && hw.tlbs==2);
     CHECK(TgGpuAcquireContextWork(&e,&submit,&work)==STATUS_DEVICE_NOT_READY); /* lost root is internal state */
     ddi.DxgkDdiSetRootPageTable(&e,&root);CHECK(c->Root.Valid && instance[130]==0x0bfff000);
     root.Address.SegmentOffset=sizeof(table)-PAGE_SIZE;root.NumEntries=TG_GPU_TABLE_ENTRIES;

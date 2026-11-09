@@ -83,6 +83,7 @@ struct _TG_GPU_CONTEXT_WORK {
     UINT DmaBytes, SubmissionFence, CompletionFence, Expected;
     BOOLEAN Signaling, Notified, Prepared, HardwareBusy, Submitted, Attempted, Retired, CompletionReady, Paging;
     BOOLEAN Software,Rejected;
+    BOOLEAN GpuCompleted,CpuCompleted;
 };
 
 NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *, const DXGKRNL_INTERFACE *,
@@ -149,9 +150,10 @@ NTSTATUS TgGpuSubmitContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *,
     const struct tg_gpu_power_io *, const struct tg_gpu_power *);
 /* Check the GPU-owned fence without notification. STATUS_PENDING is not a pass. */
 NTSTATUS TgGpuContextWorkFinished(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
-/* Worker completion gate: require the GPU BAR1 alias, fault-free state and
- * matching CPU readback after L2 writeback/invalidation. A CPU word alone is
- * insufficient. MMIO/cache waits run outside the object spin lock.
+/* Two-phase worker gate: before retirement require the fault-free GPU BAR1
+ * Reference; after retirement require its saved CPU readback after L2 sync.
+ * USERD.Reference may remain in the active channel until its context saves.
+ * A CPU word alone is insufficient. Call again after Quiesce succeeds.
  */
 NTSTATUS TgGpuObserveContextWork(TG_GPU_CONTEXT_ENGINE *,TG_GPU_CONTEXT_WORK *,
     const struct tg_gpu_power_io *,const struct tg_gpu_power *);

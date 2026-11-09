@@ -15,7 +15,12 @@ NTSTATUS TgGpuCreateInternalVa(const DXGKRNL_INTERFACE *dxgk, HANDLE process,
     for (i=0;i<3;++i) {
         if (!tg_gpu_pte_4k(physical+(UINT64)i*PAGE_SIZE,i<2,true,&entries[i]))
             return STATUS_INVALID_ADDRESS;
-        entries[i]|=2; /* GM20B PTE_PRIVILEGE; application entries are USER */
+        /* GM20B's PB fetch reads the KERNEL entry's instructions as USER:
+         * the physical .51 fault was READ/PRIV at Base+0x1000. Keep that
+         * packet read-only but fetchable; ring and writable fence stay PRIV.
+         * GP_ENTRY1.PRIV describes the entry's execution, not its PB mapping.
+         */
+        if(i!=1)entries[i]|=2;
     }
     reserve.hDxgkProcess=process;
     reserve.SizeInBytes=TG_GPU_INTERNAL_COVERAGE;

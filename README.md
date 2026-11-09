@@ -500,9 +500,10 @@ The cold backend must map the shared command area's USERD page into its
 retained BAR1 root and mark it ready. The worker refuses submissions before
 that mapping is ready; verified reset invalidates that readiness, and queue
 resume requires the new mapping. Live cold-backend hookup remains unfinished.
-The queue now calls `TgGpuObserveContextWork`: require a matching GPU BAR1
-fence, check FIFO/GR faults, write back/invalidate L2 and require the same CPU
-readback before retiring/notifying. These waits run outside the object spin
+The queue calls `TgGpuObserveContextWork` in two phases: require a matching GPU
+BAR1 Reference and check FIFO/GR faults, retire the channel, then synchronize
+L2 and require the saved CPU readback before notifying. An active channel can
+retain Reference before USERD writeback. These waits run outside the object spin
 lock with hardware ownership held. `TgGpuContextWorkFinished` remains a raw
 CPU-fence query; the worker does not use that query as its completion proof.
 The controlled native test deliberately places the expected value only in the
@@ -528,15 +529,23 @@ its allowed return values differ from the worker's internal failure statuses.
 `DxgkCbReserveGpuVirtualAddressRange` inside process creation, with user-mode
 mapping disabled. A private 128 KiB leaf maps the engine's command ring,
 completion packet and USERD/fence pages, plus the current context's packed GR
-payload, all using GM20B privileged PTEs. Ring/packet and GR permission/patch
-mappings are read-only; RAMIN and the physical runlist are not mapped.
+payload. Ring, USERD/fence and GR mappings use GM20B privileged PTEs. The
+completion packet is USER-readable and read-only: physical .51 showed that
+even a KERNEL GPFIFO entry fetches its instructions as USER. Ring/packet and
+GR permission/patch mappings are read-only; RAMIN and the physical runlist are not mapped.
 VidMm owns the reservation lifetime, while the driver owns the leaf and shared
 command backing. The reserved PDE is restored before context preparation because
 VidMm may invalidate it when the root becomes resident again. Hardware submission
 must invalidate the TLB after these updates.
 
 `core/submission.c` prepares an application GPFIFO entry with USER privilege,
-followed by a KMD-generated KERNEL semaphore release with WFI enabled. Its fixed
+followed by a KMD-generated KERNEL `WFI(ALL) → SET_REFERENCE` packet. The
+completion word is USERD.Reference (+0x48), updated through the channel's
+physical USERD path. Its virtual mapping remains privileged; HCE physical
+transfer privilege stays disabled. A virtual semaphore store to that mapping
+was physically rejected even from a KERNEL entry. The existing
+[Nouveau reference fence](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/nouveau/nv10_fence.c)
+and pinned NVB06F class header describe this reference operation. Its fixed
 command buffer is serialized across contexts; it is not a general VA allocator.
 Preparation preserves RAMIN's PDB/VA limit and initializes only the complement
 of the fence value. The context helper rejects application command ranges that
@@ -825,11 +834,69 @@ Faults, restoration errors and owned resources are zero; no reboot was needed.
 All five native fixtures and signed catalogue checks pass. The kernel worker
 and complete platform-adapter startup remain library/model evidence only.
 
+### Packed Windows backend diagnostic
+
+`windows/diagnostic_backend.c` is linked only into the opt-in KMDF probe.
+`--gpu-json --gpu-backend-729` exercises the shared cold hardware owner, packed
+976 KiB graphics context, full 128 KiB root, two-entry USER/KERNEL batches,
+`SubmitCommandVirtual` admission, ordered queue and real kernel worker. It
+submits a blue clear, retires/saves the context, then restores it for the NAK
+draw. The USER push/code pages are read-only; reports/target are writable.
+The ring, writable fence and GR backing retain privileged PTEs; the completion
+packet page is read-only but permits USER instruction fetch. CPU writes
+only packets/code and sentinels, and checks reports/pixels after the actual
+GPU-alias fence, memory synchronization and retirement gates.
+
+Diagnostic WDM allocation callbacks own real uncached contiguous RAM. A
+private spin lock and event consume completion/recovery notifications; these
+are **not Dxgkrnl, VidMm reservations, hardware interrupts or OS DPCs**. Only
+this isolated diagnostic selects fixed GPU VAs. No adapter or ICD is registered,
+and native-submit stays unset. Cleanup joins the worker and detaches the queue,
+then proves GPU isolation before destroying contexts/backing. Failed cleanup
+retains the probe-owned state and resource mappings for retry. A sixth native
+fixture tests join/reset/isolation/free failures with explicit substitutes.
+
+The first **.50 / ABI 25** physical attempt executed the USER clear and wrote
+its correct report, but raised MMU fault mask `0x80` before completion:
+GP_GET/PUT 2/2, one recovery request, no completion notification, stage 505.
+Reset/isolation and all backing frees succeeded, with restore/owned zero.
+This is a failed integration test, not a shader/Vulkan pass. **.51 / ABI 26
+(840 bytes)** adds the first fault's instance/address/info plus protected-fence
+and channel-stage readback. Its physical attempt identified fault ID 7,
+instance `FDA86`, address `10001000`, info `645`: HUB/HOST READ, type 5
+(privilege violation) on the completion packet. Its fence stayed `FFFFFFFE`,
+with no completion; cleanup again freed all backing. **.52** makes only the
+packet page USER-readable/read-only while keeping the fence privileged. Its
+physical run passes instruction fetch, then faults on the virtual semaphore
+store: address `10002000`, info `6C5` (HUB/HOST WRITE, privilege violation).
+**.53** replaces that store with `WFI(ALL) → SET_REFERENCE`; full command
+validation must exclude caller-issued reference updates before native-submit
+can be advertised. Its physical run reaches Reference `1`, without MMU/GR
+faults, but fails the pre-retirement CPU visibility gate. **.54 / ABI 27
+(840 bytes)** separates GPU observation from post-retirement CPU readback,
+requires both proof flags before notification, and reports the raw CPU word.
+Allowing instruction fetch does not authorize an ordinary virtual store.
+
+**Physical packed-backend pass, 2026-11-09 06:03:16 Pacific:** .54/oem80
+returns `backend_pass=true`, with the real kernel thread, two submissions/two
+diagnostic completion notifications, no recovery request and **two GR saves /
+restores** on the same packed context. Reports `EEF8BB27/110744D8`, all **256
+pixels and 768 guards**, image/code hashes `F20AF985/FB041DD2`, GP_GET/PUT 2/2,
+USER/KERNEL flags 0/1 and GPU/CPU Reference **2/2** match. BAR1 phase is 7,
+channel stage 7, GR current context `000FDC86` has VALID clear, and faults,
+restore error, outstanding allocations and owned resources are zero. Startup,
+queue execution, saved-context reuse and safe teardown now have physical
+integration evidence through the diagnostic adapters above. All six native
+models and 100 native JSON fixtures pass, with signed SYS/CAT/all 11 catalogue
+members verified. No reboot was needed. **No live WDDM/VidMm or Vulkan API
+pass is implied**; native-submit and the render adapter remain unpublished.
+
 The owner-selected WDDM/NVK UMA budget is a **512 MiB maximum GPU working
 set**, allocated dynamically within VidMm's actual budget. The earlier 1 GiB
 pressure-test target is withdrawn. This is not a boot-time carve-out or a preallocated probe pool.
-The physical diagnostic still allocates only 512 KiB arena + 2 MiB GR work
-temporarily and frees them after reset/drain. Live WDDM residency and its
+The legacy diagnostic uses 512 KiB arena + 2 MiB GR work. The packed backend
+adds private commands, roots, immutable template, one 976 KiB context and
+five USER data pages; it frees all backing after verified isolation. Live WDDM residency and its
 memory-pressure behavior remain unverified.
 
 The latest build runs `test-gr-context` with model MMIO/GPU-write substitutes

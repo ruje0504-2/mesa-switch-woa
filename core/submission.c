@@ -22,7 +22,7 @@ bool tg_gpu_prepare_submission(void *commands, size_t bytes, uint64_t physical,
         (va & 0xfff) || va>=TG_GPU_VA_LIMIT || TG_GPU_COMMAND_RUNLIST>TG_GPU_VA_LIMIT-va ||
         (app_bytes & 3) || !fence_value || fence_value==UINT32_MAX ||
         !tg_gpu_build_gpfifo(app_va,app_bytes/4,false,&app) ||
-        !tg_gpu_build_gpfifo(va+TG_GPU_COMMAND_PUSH,5,true,&completion))
+        !tg_gpu_build_gpfifo(va+TG_GPU_COMMAND_PUSH,4,true,&completion))
         return false;
     /* The command ring and this completion packet are never user-writable.
      * Do not offer this privilege bit for an application-provided entry.
@@ -34,16 +34,18 @@ bool tg_gpu_prepare_submission(void *commands, size_t bytes, uint64_t physical,
     userd=(uint32_t *)((uint8_t *)commands+TG_GPU_COMMAND_USERD);
     runlist=(uint32_t *)((uint8_t *)commands+TG_GPU_COMMAND_RUNLIST);
     ring[0]=app; ring[1]=completion;
-    push[0]=NVDEF(NVB06F,DMA_INCR,OPCODE,VALUE) | NVVAL(NVB06F,DMA_INCR,COUNT,4) |
-            NVVAL(NVB06F,DMA_INCR,ADDRESS,NVB06F_SEMAPHOREA>>2);
-    push[1]=(uint32_t)((va+TG_GPU_COMMAND_FENCE)>>32);
-    push[2]=(uint32_t)(va+TG_GPU_COMMAND_FENCE); push[3]=fence_value;
-    /* Wait for preceding work, not merely FIFO consumption. GR-specific
-     * synchronization still belongs to NVK's emitted workload barriers.
+    /* .52 physically proved that even a KERNEL entry's virtual semaphore
+     * store is USER at the MMU. Do not make USERD writable through the process
+     * VA. The channel's own Reference update uses its physical USERD backing.
+     * WFI explicitly precedes it; consuming the ring is not completion.
+     * Full UMD command validation must exclude caller-issued SET_REFERENCE.
      */
-    push[4]=NVDEF(NVB06F,SEMAPHORED,OPERATION,RELEASE) |
-            NVDEF(NVB06F,SEMAPHORED,RELEASE_WFI,EN) |
-            NVDEF(NVB06F,SEMAPHORED,RELEASE_SIZE,4BYTE);
+    push[0]=NVDEF(NVB06F,DMA_INCR,OPCODE,VALUE) | NVVAL(NVB06F,DMA_INCR,COUNT,1) |
+            NVVAL(NVB06F,DMA_INCR,ADDRESS,NVB06F_WFI>>2);
+    push[1]=NVDEF(NVB06F,WFI,SCOPE,ALL);
+    push[2]=NVDEF(NVB06F,DMA_INCR,OPCODE,VALUE) | NVVAL(NVB06F,DMA_INCR,COUNT,1) |
+            NVVAL(NVB06F,DMA_INCR,ADDRESS,NVB06F_SET_REFERENCE>>2);
+    push[3]=fence_value;
     *(uint32_t *)((uint8_t *)commands+TG_GPU_COMMAND_FENCE)=~fence_value;
     /* Empty until the hot channel path publishes GP_PUT through BAR1. */
     userd[35]=0;
@@ -53,7 +55,7 @@ bool tg_gpu_prepare_submission(void *commands, size_t bytes, uint64_t physical,
     ramfc[18]=(uint32_t)va; ramfc[19]=(uint32_t)(va>>32)|(9u<<16);
     ramfc[33]=0x20400000; ramfc[37]=0x30000001;
     ramfc[39]=0x100; ramfc[43]=0x1f;
-    ramfc[57]=0x20; /* allow the KMD-generated privileged GPFIFO entry */
+    /* HCE physical-transfer privilege stays disabled. */
     ramfc[62]=0x10003080; ramfc[63]=0x10000010;
     tg_gpu_runlist_single(runlist);
     return true;
