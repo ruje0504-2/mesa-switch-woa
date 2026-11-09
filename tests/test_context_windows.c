@@ -748,6 +748,14 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     ((TG_GPU_PROCESS *)process.hKmdProcess)->Flags.SystemProcess=1;
     CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS);
     CHECK(((UINT64 *)paging_tables)[0]!=0 && !e.Creating && !((TG_GPU_PROCESS *)process.hKmdProcess)->PagingReferences);
+    /* VidMm maps its table backing in CPU_VIRTUAL mode after the clear. */
+    a.UpdatePageTable.PageTableLevel=0;
+    a.UpdatePageTable.Flags.InitialUpdate=0;
+    a.UpdatePageTable.PageTableAddress.CpuVirtual=leaf;
+    a.pDmaBuffer=commands[0];a.DmaSize=sizeof(commands[0]);
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS);
+    CHECK(leaf[0]==UINT64_C(0x100940201) && a.pDmaBuffer==commands[0] &&
+          a.DmaSize==sizeof(commands[0]) && !priv[0].Paging.Magic);
     for(UINT i=0;i<3;++i)ptes[i]=(DXGK_PTE){.Valid=1,.PageAddress=(0x80010000u>>PAGE_SHIFT)+i};
     a.UpdatePageTable.PageTableLevel=0;a.UpdatePageTable.UpdateMode=DXGK_PAGETABLEUPDATE_GPU_PHYSICAL;
     a.UpdatePageTable.PageTableAddress.GpuPhysical=(D3DGPU_PHYSICAL_ADDRESS){1,0,TG_GPU_TABLE_BYTES};

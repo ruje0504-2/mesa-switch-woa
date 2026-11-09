@@ -38,9 +38,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS TgGpuResolveTableSegment(PVOID Context, UINT SegmentId,
     UINT64 ByteOffset, SIZE_T Bytes, UINT64 *DeviceAddress);
 
-/* WDDM 2.4 physical-address paging path. VidMm PTE segment zero contains a
- * resident system-memory BYTE address, not the implicit allocation segment
- * number or a PFN. Nonzero entries use the dedicated table segment above.
+/* WDDM 2.4 physical-address paging path. ByteAddress is the decoded address
+ * of a resident system page for segment zero. The nonzero table segment uses
+ * a decoded byte offset within the dedicated backing above.
  * Caller holds VidMm residency through execution/fence completion. This
  * resolver neither pins pages nor accepts application-supplied addresses.
  * A future logical-DMA/IOMMU path requires a different advertised contract.

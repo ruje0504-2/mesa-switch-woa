@@ -211,10 +211,10 @@ descriptor, bounded byte-offset resolver and uncached CPU mapping. It uses
 WDDM 2.4 allocation callbacks with physical bounds of 2–4 GiB, leaves bit 34
 clear, reports `PopulatedFromSystemMemory` for correct accounting, and
 publishes no cache-coherence or sleep-retention capability.
-The paging builder now uses its production `TgGpuResolveVidMmPage` resolver:
-PTE segment zero is a resident physical byte address supplied by VidMm, while
-the nonzero table segment uses offsets. The implicit allocation preference
-ID 2 is not a PTE segment-zero substitute. Ordinary physical pages above
+The paging builder decodes VidMm's 4 KiB page numbers before calling
+`TgGpuResolveVidMmPage`. PTE segment zero selects a resident system page,
+and the nonzero table segment uses the decoded byte offset. The implicit
+system allocation preference uses ID 2. Ordinary physical pages above
 4 GiB are preserved; addresses carrying Tegra's bit-34 IOMMU tag are rejected
 by this WDDM 2.4 physical path. The resolver does not pin memory or translate
 logical DMA addresses. Native tests mix system and table pages in one queued
@@ -224,7 +224,7 @@ VidMm remains responsible for allocations within the segment; there is no
 second suballocator. The adapter must finish GPU work/drain/reset and stop
 paging before destroying the segment. Failed frees retain the tracking handle.
 Do not use the pool's own CPU VA to validate a different VidMm CPU mapping.
-Live WDDM registration and physical use of this segment remain open.
+WDDM registration and GPU page walks through live VidMm tables remain open.
 The CPU-update helper is valid for initialization/test-owned mappings; do not
 advertise `CPU_VIRTUAL` updates for the dedicated memory segment without
 resolving the documented local-segment restriction.

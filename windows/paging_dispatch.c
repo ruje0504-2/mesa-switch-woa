@@ -45,9 +45,11 @@ NTSTATUS APIENTRY TgGpuDdiBuildPagingBuffer(HANDLE adapter,DXGKARG_BUILDPAGINGBU
             a->Transfer.TransferOffset,0) : STATUS_SUCCESS;
     } else return STATUS_NOT_SUPPORTED;
     KeAcquireSpinLock(&e->Lock,&irql);p=virtual_dma?NULL:process(e,owner);
+    /* VidMm selects CPU_VIRTUAL while setting up the system address space,
+     * both for clearing tables and for populating its initial mappings. */
     if(e->Stopping || (!virtual_dma && !p) || !system_context(e,a->hSystemContext) ||
-       (immediate && (!p->Flags.SystemProcess || !a->UpdatePageTable.Flags.InitialUpdate ||
-                       e->Active || e->Notification || e->Channel.referenced))) {
+       (immediate && (!p->Flags.SystemProcess || e->Active || e->Notification ||
+                       e->Channel.referenced))) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
     }
     if (p) ++p->PagingReferences;

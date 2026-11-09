@@ -16,8 +16,8 @@ typedef struct _TG_GPU_PAGING_BUILD {
 
 /* Build private kernel paging records into the supplied DMA buffer. Ordinary
  * GPU_PHYSICAL updates have no hardware side effects here. The mandatory
- * paging-process bootstrap (CPU_VIRTUAL, NULL pDmaBuffer) is applied now,
- * through a validated alias of the owned, uncached table segment.
+ * paging-process bootstrap in CPU_VIRTUAL mode updates the validated alias
+ * of the owned, uncached table segment and leaves the DMA buffer untouched.
  * TableBytes is the actual target allocation size, including resized roots.
  * The adapter validates hProcess/hAllocation before calling this helper.
  * PTE addresses use the T214 physical VidMm resolver: segment zero is RAM;
