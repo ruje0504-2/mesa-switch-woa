@@ -71,7 +71,7 @@ NTSTATUS TgGpuStopContextEngine(TG_GPU_CONTEXT_ENGINE *e)
     if (!e) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);
     e->Stopping=TRUE;
-    status=e->Active || e->Notification || e->QueueOwner || e->Channel.referenced || e->Creating || e->AllocationCount || e->ResourceCount || !IsListEmpty(&e->Contexts) || !IsListEmpty(&e->Devices) ||
+    status=e->Active || e->Notification || e->QueueOwner || e->HardwareOwner || e->Channel.referenced || e->Creating || e->AllocationCount || e->ResourceCount || !IsListEmpty(&e->Contexts) || !IsListEmpty(&e->Devices) ||
         !IsListEmpty(&e->Processes) ? STATUS_DEVICE_BUSY : STATUS_SUCCESS;
     KeReleaseSpinLock(&e->Lock,irql);
     if (!NT_SUCCESS(status)) return status;
@@ -252,7 +252,8 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
         a->DmaBufferSize>c->Root.VaLimit-a->DmaBufferVirtualAddress) {
         KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER;
     }
-    if(!e->Graphics.Memory.Handle || (c->GraphicsGeneration && c->GraphicsGeneration!=e->GraphicsGeneration)) {
+    if((e->HardwareOwner && !e->UserdBar1Ready) || !e->Graphics.Memory.Handle ||
+       (c->GraphicsGeneration && c->GraphicsGeneration!=e->GraphicsGeneration)) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
     }
     if (a->DmaBufferVirtualAddress<c->Device->Process->Internal.Base+TG_GPU_INTERNAL_COVERAGE &&

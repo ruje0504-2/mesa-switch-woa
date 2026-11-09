@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 void test_execute_init(void);
+void test_boot_bar1(void);
 
 static void test_mmu(void)
 {
@@ -227,6 +228,7 @@ int main(void)
     test_private_channel();
     test_submission();
     test_execute_init();
+    test_boot_bar1();
     puts("GM20B format tests passed (host only; no GPU execution).");
     return 0;
 }

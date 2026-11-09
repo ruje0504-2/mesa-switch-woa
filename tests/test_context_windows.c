@@ -304,7 +304,8 @@ static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *othe
 }
 
 /* Register-state substitute for the hot channel path, not a GPU emulator.
- * It never writes the completion word. It checks submission/teardown order
+ * It never invents GPU completion. Cache flush copies only an explicit model
+ * GPU store into the CPU alias. It checks submission/teardown order
  * and can withhold preemption or reset acknowledgement to exercise lifetime.
  */
 static struct {
@@ -313,6 +314,7 @@ static struct {
     UINT tlbs,flushes,reads,writes;
     UINT32 fifo_fault;
     UINT32 userd_put;
+    UINT32 gpu_fence,*cpu_fence;
     UINT doorbells;
     UCHAR enable,voltage;
     BOOLEAN fail_preempt,fail_reset,fail_tlb;
@@ -327,6 +329,7 @@ static UINT32 Read(void *context,UINT32 address)
     case 0x57001704:return 0x80090000;
     case 0x57002254:return 0x10000013;
     case 0x5801308c:return hw.userd_put;
+    case 0x58013800:return hw.gpu_fence;
     case 0x57002630:return hw.sched;
     case 0x57800000:return hw.inst;
     case 0x57800004:return hw.ctrl;
@@ -336,7 +339,7 @@ static UINT32 Read(void *context,UINT32 address)
     case 0x57002634:return hw.preempt;
     case 0x57003080:return hw.pbdma;
     case 0x57100c80:return hw.fail_tlb ? 0x10000 : 0x18000;
-    case 0x57070000:return 0;
+    case 0x57070000:case 0x57070010:case 0x57070004:return 0;
     case 0x57002100:return hw.fifo_fault;
     case 0x5700259c:case 0x57040108:case 0x57040148:
     case 0x57001100:case 0x57120058:case 0x5712005c:return 0;
@@ -361,7 +364,7 @@ static void Write(void *context,UINT32 address,UINT32 value)
     case 0x57002630:hw.sched=value;break;
     case 0x57800000:
         CHECK(hw.sched&1);
-        if(value) CHECK(hw.tlbs && hw.root==hw.expected_root);
+        if(value) {CHECK(hw.tlbs && hw.root==hw.expected_root);hw.gpu_fence=*hw.cpu_fence;}
         else CHECK(!hw.runlist && !hw.pbdma && !hw.preempt);
         hw.inst=value;break;
     case 0x57800004:
@@ -383,7 +386,9 @@ static void Write(void *context,UINT32 address,UINT32 value)
         break;
     case 0x57100cb8:hw.root=value;break;
     case 0x57100cbc:CHECK(value==0x80000001);++hw.tlbs;break;
-    case 0x57070000:CHECK(value==1 && !hw.inst);++hw.flushes;break;
+    case 0x57070000:CHECK(value==1);++hw.flushes;break;
+    case 0x57070010:CHECK(value==1 && hw.cpu_fence);*hw.cpu_fence=hw.gpu_fence;break;
+    case 0x57070004:CHECK(value==1);break;
     case 0x7000e6d4:hw.clamp=value;break;
     case 0x60006290:if(!hw.fail_reset) hw.reset|=value;break;
     case 0x60006288:hw.clocks&=~value;break;
@@ -728,6 +733,7 @@ void start(void)
     root.hContext=c;ddi.DxgkDdiSetRootPageTable(&e,&root);
     instance=c->Instance.CpuAddress;
     fence=(UINT32 *)((UCHAR *)e.Commands.CpuAddress+TG_GPU_COMMAND_FENCE);
+    hw.cpu_fence=fence;
     CHECK(c->Root.Valid && instance[128]==0x90000804 && instance[130]==0x07fff000);
     submit.hContext=c;CHECK(NT_SUCCESS(TgGpuAcquireContextWork(&e,&submit,&work)));
     CHECK(work.Root.Valid && c->References==1 && work.FencePhysicalAddress==0x91002800);
@@ -846,7 +852,10 @@ void start(void)
     CHECK(queue.Current.Context==c && queue.Current.SubmissionFence==10 && *fence==~queue.Current.Expected);
     ((UINT32 *)((UCHAR *)c->Instance.CpuAddress+TG_GPU_CONTEXT_GR_OFFSET))[0x100/4]=0x12345678; /* simulated saved state */
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_PENDING && interrupts==1);
-    *fence=queue.Current.Expected;expected_fence=10;notify_context=c;notify_references=1;
+    *fence=queue.Current.Expected; /* A CPU word alone must never complete work. */
+    CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_PENDING && interrupts==1);
+    *fence=~queue.Current.Expected;
+    hw.gpu_fence=queue.Current.Expected;expected_fence=10;notify_context=c;notify_references=1;
     reuse_private=&entries[0];
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_SUCCESS && !reuse_private);
     CHECK(c->References==1 && c2->References==2 && e.LastCompletedFence==10 && !e.Active);
@@ -859,7 +868,7 @@ void start(void)
         TgGpuUnmapContextGraphics(v,&c->Instance); /* preserve the other context's mapping */
         CHECK(v->GraphicsPhysical==owner && owner==(UINT64)c2->Instance.SystemPhysicalAddress.QuadPart+TG_GPU_CONTEXT_GR_OFFSET);
     }
-    *fence=queue.Current.Expected;expected_fence=11;notify_context=c2;notify_references=1;
+    hw.gpu_fence=queue.Current.Expected;expected_fence=11;notify_context=c2;notify_references=1;
     reuse_private=&entries[1];
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_SUCCESS && !reuse_private);
     CHECK(c->References==1 && c2->References==1 && e.LastCompletedFence==11);
@@ -891,7 +900,7 @@ void start(void)
     submit.hContext=c;submit.SubmissionFenceId=14;submit.pDmaBufferPrivateData=&entries[0];
     CHECK(NT_SUCCESS(TgGpuQueueSubmit(&queue,&submit)));
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_PENDING);
-    *fence=queue.Current.Expected;fail_sync=TRUE;
+    hw.gpu_fence=queue.Current.Expected;fail_sync=TRUE;
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_UNSUCCESSFUL);
     CHECK(!c->References && !queue.Current.Context && e.Notification==&queue.Current);
     fail_sync=FALSE;before=hw.reads+hw.writes;

@@ -51,6 +51,7 @@ struct _TG_GPU_CONTEXT_ENGINE {
     TG_GPU_CONTEXT_WORK *Active;
     TG_GPU_CONTEXT_WORK *Notification;
     PVOID QueueOwner;
+    PVOID HardwareOwner;
     TG_GPU_PRIVATE_MEMORY Commands;
     TG_GPU_GRAPHICS_TEMPLATE Graphics;
     UINT GraphicsGeneration,ContextSerial;
@@ -136,6 +137,12 @@ NTSTATUS TgGpuSubmitContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *,
     const struct tg_gpu_power_io *, const struct tg_gpu_power *);
 /* Check the GPU-owned fence without notification. STATUS_PENDING is not a pass. */
 NTSTATUS TgGpuContextWorkFinished(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
+/* Worker completion gate: require the GPU BAR1 alias, fault-free state and
+ * matching CPU readback after L2 writeback/invalidation. A CPU word alone is
+ * insufficient. MMIO/cache waits run outside the object spin lock.
+ */
+NTSTATUS TgGpuObserveContextWork(TG_GPU_CONTEXT_ENGINE *,TG_GPU_CONTEXT_WORK *,
+    const struct tg_gpu_power_io *,const struct tg_gpu_power *);
 /* Quiesce before notifying VidSch, which may immediately recycle allocations
  * and private submission buffers. Keep the work reference until notification.
  */

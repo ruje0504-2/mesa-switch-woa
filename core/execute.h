@@ -15,6 +15,7 @@
 #define TG_GPU_ACR_SURFACE_OFFSET 0x60000u
 #define TG_GPU_ACR_SURFACE_BYTES 0x20000u
 #define TG_GPU_ACR_SURFACE_VA 0x40000u
+#define TG_GPU_BOOT_USERD_BAR1_OFFSET 0x13000u
 enum tg_gpu_execute_result {
     TG_GPU_EXEC_OK, TG_GPU_EXEC_ARGUMENT, TG_GPU_EXEC_BUSY,
     TG_GPU_EXEC_MMU_TIMEOUT, TG_GPU_EXEC_BAR1, TG_GPU_EXEC_RUNLIST,
@@ -75,6 +76,14 @@ enum tg_gpu_execute_result tg_gpu_boot_graphics(const struct tg_gpu_power_io *,
     const struct tg_gpu_power *,void *cpu,uint64_t device_address,
     const struct tg_gpu_gr_payload *,const struct tg_gpu_gr_work *,
     struct tg_gpu_execution *,struct tg_gpu_status *);
+/* Idle cold engine only. Repoint the retained bootstrap BAR1 USERD alias to
+ * a caller-owned, zeroed physical page; no GP_PUT is published. Both the new
+ * page and bootstrap arena remain referenced even after a partial failure,
+ * until full stop/drain/reset. The real context RAMIN is prepared separately.
+ */
+enum tg_gpu_execute_result tg_gpu_boot_map_userd(const struct tg_gpu_power_io *,
+    const struct tg_gpu_power *,void *cpu,uint64_t arena_physical,
+    uint64_t userd_physical,const struct tg_gpu_execution *,struct tg_gpu_status *);
 enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *uncached_cpu,
     uint64_t device_address, const struct tg_gpu_gr_payload *firmware,

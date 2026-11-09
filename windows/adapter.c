@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * WDDM lifecycle follows Microsoft's render/compute-only samples and WDK.
- * No display ownership, power-policy change or GPU MMIO occurs in this module.
+ * Retain the POST display/power policy. Resource-only StartDevice performs no
+ * GPU MMIO; the explicit hardware hookup delegates GPU ownership to hardware.c.
  */
 #include "adapter.h"
 #include "allocation.h"
@@ -41,6 +42,10 @@ NTSTATUS APIENTRY TgGpuDdiStopDevice(PVOID context)
         status=TgGpuStopWorkQueue(&a->Queue);
         if(!NT_SUCCESS(status))return status;
         a->QueueReady=FALSE;
+    }
+    if(a->Hardware.Engine) {
+        status=TgGpuStopHardware(&a->Hardware);
+        if(!NT_SUCCESS(status))return status;
     }
     if(a->EngineReady) {
         status=TgGpuStopContextEngine(&a->Engine);
@@ -102,8 +107,21 @@ NTSTATUS APIENTRY TgGpuDdiRemoveDevice(PVOID context)
     PAGED_CODE();
     if(!a)return STATUS_INVALID_PARAMETER;
     if(a->State!=TgGpuAdapterAdded || a->EngineReady || a->QueueReady ||
-       a->Tables.Memory.Handle || mapped(a))return STATUS_DEVICE_BUSY;
+       a->Hardware.Engine || a->Tables.Memory.Handle || mapped(a))return STATUS_DEVICE_BUSY;
     ExFreePoolWithTag(a,TAG);return STATUS_SUCCESS;
+}
+NTSTATUS TgGpuStartAdapterHardware(TG_GPU_ADAPTER *a,const struct tg_gpu_power_io *io,
+    UCHAR address,const struct tg_gpu_gr_payload *firmware)
+{
+    NTSTATUS status,cleanup;
+    PAGED_CODE();
+    if(!a || a->State!=TgGpuAdapterReady || !a->EngineReady || !a->QueueReady ||
+       a->Hardware.Engine || a->Engine.HardwareOwner)
+        return STATUS_INVALID_DEVICE_STATE;
+    status=TgGpuStartHardware(&a->Hardware,&a->Engine,io,address,firmware);
+    if(NT_SUCCESS(status) || !a->Hardware.Engine)return status;
+    cleanup=TgGpuDdiStopDevice(a);
+    return NT_SUCCESS(cleanup)?status:cleanup;
 }
 void TgGpuRegisterAdapterDdis(DRIVER_INITIALIZATION_DATA *d)
 {

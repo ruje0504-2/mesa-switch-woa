@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "context.h"
+#include "../core/fault.h"
 
 static NTSTATUS channel_status(enum tg_gpu_channel_result result)
 {
@@ -17,6 +18,52 @@ static NTSTATUS channel_status(enum tg_gpu_channel_result result)
 static void drop_work(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w)
 {
     --w->Context->References;e->Active=NULL;w->Context=NULL;w->Submitted=FALSE;
+}
+NTSTATUS TgGpuObserveContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
+    const struct tg_gpu_power_io *io,const struct tg_gpu_power *power)
+{
+    KIRQL irql;NTSTATUS status;UINT expected,offset,observed;
+    struct tg_gpu_fault_status faults;
+    struct tg_gpu_gr_status gr={0};
+    if(!e || !w || !io || !io->read32 || !io->write32 || !io->delay_us ||
+       !power || !power->owned || !power->ready)return STATUS_INVALID_PARAMETER;
+    KeAcquireSpinLock(&e->Lock,&irql);
+    if(e->Active!=w || !w->Context || !w->Submitted || w->HardwareBusy || !e->UserdBar1Ready) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_DEVICE_STATE;
+    }
+    offset=e->UserdBar1Offset;
+    if((offset&0xfff) || offset>=0x01000000) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_ADDRESS;
+    }
+    expected=w->Expected;w->HardwareBusy=TRUE;KeReleaseSpinLock(&e->Lock,irql);
+    status=STATUS_PENDING;
+    if(tg_gpu_fault_poll(io,&faults))status=STATUS_DEVICE_DATA_ERROR;
+    else {
+        UINT32 mc=io->read32(io->context,0x57000200);
+        if(mc==UINT32_MAX)status=STATUS_DEVICE_DATA_ERROR;
+        else if(mc&0x1000) {
+            tg_gpu_gr_snapshot(io,&gr);
+            if(gr.gr_interrupt || gr.fecs_error_mailbox || gr.fecs_host_interrupt)
+                status=STATUS_DEVICE_DATA_ERROR;
+        }
+        if(status==STATUS_PENDING) {
+            observed=io->read32(io->context,0x58000000u+offset+TG_GPU_COMMAND_FENCE-TG_GPU_COMMAND_USERD);
+            if(observed==UINT32_MAX)status=STATUS_DEVICE_DATA_ERROR;
+            else if(observed==expected) {
+                if(tg_gpu_frontend_sync_memory(io,power,&e->Channel.frontend)!=TG_GPU_FE_OK)
+                    status=STATUS_DEVICE_DATA_ERROR;
+                else {
+                    KeMemoryBarrier();
+                    status=*(volatile UINT32 *)((UCHAR *)e->Commands.CpuAddress+TG_GPU_COMMAND_FENCE)==expected ?
+                        STATUS_SUCCESS:STATUS_DEVICE_DATA_ERROR;
+                }
+            }
+        }
+    }
+    KeAcquireSpinLock(&e->Lock,&irql);w->HardwareBusy=FALSE;
+    e->Channel.fifo_interrupt=faults.fifo;e->Channel.mmu_fault=faults.mmu;
+    e->Channel.pbdma_interrupt=faults.pbdma;e->Channel.pbdma_interrupt_1=faults.pbdma1;
+    KeReleaseSpinLock(&e->Lock,irql);return status;
 }
 NTSTATUS TgGpuSubmitContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
     const struct tg_gpu_power_io *io,const struct tg_gpu_power *power)

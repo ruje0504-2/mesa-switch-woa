@@ -75,7 +75,7 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
         status=TgGpuSubmitContextWork(q->Engine,w,io,power);
         if(!NT_SUCCESS(status)) goto done;
     }
-    status=TgGpuContextWorkFinished(q->Engine,w);
+    status=TgGpuObserveContextWork(q->Engine,w,io,power);
     if(status!=STATUS_SUCCESS) goto done;
     if(!w->Retired) {
         status=TgGpuQuiesceContextWork(q->Engine,w,io,power);

@@ -27,7 +27,7 @@
 #define RING_VA 0x10000u
 #define PUSH_VA 0x11000u
 #define FENCE_VA 0x12000u
-#define USERD_VA 0x13000u
+#define USERD_VA TG_GPU_BOOT_USERD_BAR1_OFFSET
 
 static void release_packet(uint32_t *p, uint64_t va, uint32_t value)
 {
@@ -532,6 +532,37 @@ enum tg_gpu_execute_result tg_gpu_boot_graphics(const struct tg_gpu_power_io *io
     return boot(io,power,cpu,physical,firmware,work,NULL,true,false,false,state,s);
 }
 
+enum tg_gpu_execute_result tg_gpu_boot_map_userd(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power,void *cpu,uint64_t physical,uint64_t userd,
+    const struct tg_gpu_execution *state,struct tg_gpu_status *s)
+{
+    uint64_t pte;uint32_t value;
+    if(!io || !io->read32 || !io->write32 || !io->delay_us || !power ||
+       !power->owned || !power->ready || !state || !state->boot_ready || state->channel_bound ||
+       !cpu || ((uintptr_t)cpu&4095) || physical<0x80000000 || (physical&4095) ||
+       physical>UINT64_C(0x100000000)-TG_GPU_ARENA_BYTES || !s ||
+       userd<0x80000000 || userd>UINT64_C(0xfffff000) || (userd&4095) ||
+       (userd>=physical && userd<physical+TG_GPU_ARENA_BYTES) ||
+       !tg_gpu_pte_4k(userd,false,true,&pte))return TG_GPU_EXEC_ARGUMENT;
+    value=ex_read(io,0x800000);
+    if(value==UINT32_MAX || (value&0x80000000))return TG_GPU_EXEC_BUSY;
+    value=ex_read(io,0x2630);
+    if(value==UINT32_MAX || !(value&1))return TG_GPU_EXEC_BUSY;
+    if(ex_read(io,0x1704)!=((uint32_t)((physical+INST)>>12)|0x80000000))return TG_GPU_EXEC_BAR1;
+    s->bar1_phase=6;
+    ex_write(io,0x2254,0); /* No snoop while replacing its translation. */
+    ((uint64_t *)((uint8_t *)cpu+0x20000))[USERD_VA>>12]=pte;
+    /* Retain a consistent prototype RAMFC; application RAMIN is independent. */
+    ((uint32_t *)((uint8_t *)cpu+INST))[2]=(uint32_t)userd;
+    if(tg_gpu_frontend_sync_memory(io,power,&s->frontend)!=TG_GPU_FE_OK)return TG_GPU_EXEC_FRONTEND;
+    if(tg_gpu_tlb_invalidate(io,power,physical)!=TG_GPU_TLB_OK)return TG_GPU_EXEC_MMU_TIMEOUT;
+    ex_write(io,0x2254,(USERD_VA>>12)|0x10000000);
+    s->userd_gp_get=io->read32(io->context,BAR1+USERD_VA+34*4);
+    s->userd_gp_put=io->read32(io->context,BAR1+USERD_VA+35*4);
+    if(s->userd_gp_get || s->userd_gp_put)return TG_GPU_EXEC_BAR1;
+    s->bar1_phase=7;return TG_GPU_EXEC_OK;
+}
+
 static enum tg_gpu_execute_result channel_result(enum tg_gpu_channel_result r)
 {
     switch(r) {
@@ -557,6 +588,15 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
     if(result!=TG_GPU_EXEC_OK)return result;
     volatile uint32_t *fence=(volatile uint32_t *)((uint8_t *)cpu+FENCE);
     uint32_t i,gpu_first,gpu_second=0xdeadbeef;
+    if(draw) {
+        /* Exercise the shared BAR1 remap with a different owned USERD page.
+         * This final work page is outside the shader/pixel/context buffers.
+         */
+        state->stage=16;
+        result=tg_gpu_boot_map_userd(io,power,cpu,physical,
+            work->physical+TG_GPU_GR_CHANNEL_WORK_BYTES-4096,state,s);
+        if(result!=TG_GPU_EXEC_OK)return result;
+    }
     state->stage = 3;
     if(draw) {
         enum tg_gpu_channel_result r=tg_gpu_channel_bind(io,power,physical,physical+INST,

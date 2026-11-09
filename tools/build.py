@@ -57,6 +57,7 @@ host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 *[f"-I{p}" for p in mesa_includes], *map(str, core), str(root / "tests/test_core.c"),
                 str(root / "tests/test_execute_init.c"),
+                str(root / "tests/test_boot_bar1.c"),
                 "-o", str(host)], check=True)
 subprocess.run([str(host.resolve())], check=True)
 power = root / "platform/t214_power.c"
@@ -159,7 +160,7 @@ for source in [*core, power, clock, root / "windows/resources.c",
                root / "windows/table_segment.c", root / "windows/root_table.c",
                root / "windows/paging_buffer.c", root / "windows/context.c",
                root / "windows/internal_va.c", root / "windows/submit_worker.c",
-               root / "windows/graphics.c",
+               root / "windows/graphics.c",root / "windows/hardware.c",
                root / "windows/work_queue.c", root / "windows/allocation.c",
                root / "windows/query.c", root / "windows/adapter.c"]:
     obj = args.out / (source.stem + ".obj")
@@ -195,6 +196,13 @@ if args.windows_tests:
                     "/entry:start", "/include:_load_config_used", "/nodefaultlib", "/release", "/opt:ref", "/timestamp:0",
                     f"/out:{args.out / 'test-context.exe'}", str(context_test),
                     str(library), str(sdk_lib)], check=True)
+    hardware_test=args.out / "test_hardware_windows.obj"
+    subprocess.run([args.clang_cl,*flags,"/clang:-funwind-tables",f"/Fo{hardware_test}","--",
+                    str(root / "tests/test_hardware_windows.c")],check=True)
+    subprocess.run([args.link,"/nologo","/machine:arm64","/subsystem:console,10.0","/entry:start",
+                    "/include:_load_config_used","/nodefaultlib","/release","/opt:ref","/timestamp:0",
+                    f"/out:{args.out / 'test-hardware.exe'}",str(hardware_test),str(args.out / "hardware.obj"),
+                    str(args.out / "private_memory.obj"),str(sdk_lib)],check=True)
 
 if args.probe:
     import shutil

@@ -285,17 +285,43 @@ It reports zero video-present sources/children and does not acquire the POST
 display. These table/command bytes are separate from the application budget;
 no 512 MiB physical carve-out is allocated.
 
-Stop closes admission before releasing the queue, engine, table backing and
+Stop closes admission before releasing the queue, optional hardware state,
+engine, table backing and
 MMIO mappings in order. Live objects, failed frees or failed unmaps retain their
 tracking state for recovery/retry; Remove cannot free an adapter with retained
 ownership. A failed start uses the same cleanup path. Controlled native ARM64
 tests exercise missing LIC, partial map/unmap failure, each allocation failure,
-live-device stop, cleanup retry and stop/start cycles; the new lifecycle test
-asserts that it performs **zero GPU MMIO**. This is library integration only:
+live-device stop, cleanup retry and stop/start cycles; the resource-only
+lifecycle test asserts that it performs **zero GPU MMIO**. This is library integration only:
 there is still no miniport DriverEntry/INF registration, live DRIVERCAPS,
 SubmitCommandVirtual/paging dispatch, IRQ completion or TDR adapter hookup.
-The installed .44 probe uses the shared cold-bootstrap and hot channel helpers
+The installed .46 probe uses the shared cold-bootstrap, BAR1 remap and hot channel helpers
 described below; this lifecycle module still has no live adapter hookup.
+
+`TgGpuStartAdapterHardware` explicitly connects an already initialized adapter
+to `windows/hardware.c`; ordinary StartDevice still only acquires resources.
+The trusted platform must supply declared-resource I/O, the PMIC-owner bridge,
+temperature preflight and loaded firmware. The hardware state allocates a
+512 KiB boot arena and 2 MiB work area through Dxgkrnl, acquires GPU power,
+starts the fixed 729.6 MHz profile and calls the shared cold GR bootstrap.
+It remaps the retained BAR1 USERD alias to the engine's command/completion
+page, copies the golden template, and only then marks submission ready.
+Bootstrap schedules no application work and its fixed report sentinels are
+not accepted as GPU completion. Firmware source files can be released after
+their private copies have been consumed; boot/work arenas remain owned.
+
+`HardwareOwner` prevents context-engine shutdown from freeing Commands while
+BAR1 still references that page, including a partial startup. Stop detaches
+the queue first, disables fetch/Falcons, drains MC, restores clocks and powers
+down. Explicit clamp/reset readback proves isolation before any backing is
+freed. Drain, reset or allocation-free failures retain tracking for retry;
+an isolated retry performs no more GPU MMIO. A clock-restore error is reported
+even when reset safely retires DMA. Full stop advances the graphics generation.
+The initial hardware-start API requires a fresh engine/template; live TDR
+restart, platform-provider/worker hookup and miniport registration are open.
+`test-hardware.exe` covers startup stages, OOM, queue ownership, isolation,
+clock errors and free retry with **explicit GPU/OS substitutes**. It does not
+authenticate firmware or access physical GPU registers.
 
 `windows/context.c` supplies the process/device/context creation and destruction
 DDIs, root-table DDIs, completed-fence query and DPC callback. Its registration
@@ -340,9 +366,9 @@ rejection, independent golden ownership, packed headers/global pointers above
 4 GiB, PTE privilege/permissions/bounds, mapping replacement, preserved saved
 state, failed-free retry and reset generations. **These tests use synthetic
 golden data and substituted OS/GPU callbacks.** The packed allocation, privilege
-enforcement and WDDM dispatch have no physical GPU pass yet. The cold backend
-still needs to provide the template and shared command-page BAR1 mapping; the
-adapter/ICD path remains unregistered. The installed .44 probe is unchanged.
+enforcement and WDDM dispatch have no physical GPU pass yet. The explicit
+hardware API now composes the template and command-page BAR1 mapping, but its
+platform provider, worker and adapter/ICD registration remain unfinished.
 
 The submission-worker helpers capture a bounded context/root snapshot separately
 from activation. Only activation writes the complement of the private fence
@@ -395,6 +421,13 @@ The cold backend must map the shared command area's USERD page into its
 retained BAR1 root and mark it ready. The worker refuses submissions before
 that mapping is ready; verified reset invalidates that readiness, and queue
 resume requires the new mapping. Live cold-backend hookup remains unfinished.
+The queue now calls `TgGpuObserveContextWork`: require a matching GPU BAR1
+fence, check FIFO/GR faults, write back/invalidate L2 and require the same CPU
+readback before retiring/notifying. These waits run outside the object spin
+lock with hardware ownership held. `TgGpuContextWorkFinished` remains a raw
+CPU-fence query; the worker does not use that query as its completion proof.
+The controlled native test deliberately places the expected value only in the
+CPU alias and requires pending, then models a GPU write and cache visibility.
 Queuing alone never notifies a completed fence. The work reference is released
 only after bounded disable/preempt, **FECS CURRENT_CTX.VALID clearing** when
 GR is enabled, runlist removal, unbind, FB flush and TLB invalidation succeed.
@@ -688,6 +721,21 @@ This physical run validates the shared hot helpers with the private shader
 arena. It does not validate WDDM's distinct command-page BAR1 mapping, its
 two-entry USER/KERNEL batch, per-context graphics images, live VidMm dispatch
 or Vulkan API calls. Those paths remain the next integration work.
+
+**Physical BAR1-remap pass, 2026-11-09 03:58:47 Pacific:** .46/oem74 uses
+`tg_gpu_boot_map_userd` to replace the USERD alias with the separate final
+page of the owned GR allocation before binding. The helper disables snoop,
+publishes its PTE/RAMFC pointer, synchronizes memory, invalidates the boot-root
+TLB and re-enables snoop. GP_GET/GP_PUT must both start at zero; no workload is
+published during mapping. Actual draw returns `bar1_phase=7`, `shader_pass=true`,
+GP_GET/GP_PUT **2/2**, reports `AC742EBE/538BD141`, **256 pixels and 768 guards
+matching**, hashes `F20AF985/FB041DD2`, 729.6 MHz, Stage 306, restore count 1,
+and GR context `000FDE3E` with VALID clear after retirement. Faults, restore
+error and owned resources are zero. Full build/real NETB/sanitizers, native
+hardware/context/paging fixtures and SYS/CAT/all 11 memberships pass; no reboot
+was needed. This proves the shared remap with a distinct physical USERD page
+in the private diagnostic. The complete WDDM startup/queue and packed context
+path still have controlled-model evidence only; no Vulkan API pass is implied.
 
 The owner-selected WDDM/NVK UMA budget is a **512 MiB maximum GPU working
 set**, allocated dynamically within VidMm's actual budget. The earlier 1 GiB
