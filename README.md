@@ -378,12 +378,18 @@ readback and full resource retirement. An unchanged golden-image sentinel or
 stale mailbox cannot pass. No shader, Vulkan ICD or drawing is supplied by this
 diagnostic. See the status page for the actual physical validation state.
 
-The 0.1.0.31 candidate corrects the topology gate to the physical
+Version 0.1.0.31 corrects the topology gate to the physical
 `0x502608 = 0x00040002`: one GPC, two TPCs and four ZCULL banks, matching
 the pinned GM20B `proj_scal_litter_num_zcull_banks_v()` definition. It keeps
 two SMs/tiles in the non-floorswept setup while programming four active banks;
 other bank/TPC layouts are rejected before GR writes. ABI 18 is unchanged.
-Compilation and models do not establish physical golden-context success.
+One physical Lite run on 2026-11-08 passed the golden-context diagnostic at
+729.6 MHz: bind/save replies 0x10/0x1, image magic 600DC0DE, 19,328 changed body
+words and hash C28E60AD. Subsequent FIFO values 551E4780/AAE1B87F both matched;
+faults, restore status and retained-resource count were zero. This establishes
+GR initialization/golden save and FIFO completion, not shader execution or a
+Vulkan drawing pass. The installed package is oem61.inf / ABI 18; the rolling
+status records signing, backup paths and the complete physical stdout.
 
 The latest build runs `test-gr-context` with model MMIO/GPU-write substitutes
 and, when provided, the real external NETB file. It checks owned mapping bounds,
