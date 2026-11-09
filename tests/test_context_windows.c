@@ -3,6 +3,8 @@
 #include "../windows/work_queue.h"
 #include "../windows/allocation.h"
 #include "../windows/query.h"
+#include "../windows/adapter.h"
+#include "../platform/t214_resources.h"
 #include <ntimage.h>
 
 static ULONG_PTR image_cookie=0x00002b992ddfa232ULL;
@@ -23,7 +25,9 @@ void *memcpy(void *p,const void *source,size_t n)
  */
 static _Alignas(PAGE_SIZE) UCHAR pools[64][PAGE_SIZE], memory[64][TG_GPU_TABLE_BYTES];
 static BOOLEAN pool_used[64], memory_used[64], fail_pool, fail_allocate, fail_free;
-static UINT pool_fail_after=UINT32_MAX;
+static UINT pool_fail_after=UINT32_MAX,memory_fail_after=UINT32_MAX;
+static _Alignas(PAGE_SIZE) UCHAR adapter_table[TG_GPU_ADAPTER_TABLE_BYTES];
+static BOOLEAN adapter_table_used,adapter_table_fail_free;
 static BOOLEAN fail_sync, in_sync;
 static BOOLEAN fail_reserve;
 static UINT interrupts, dpcs, queues, frees, expected_fence;
@@ -73,6 +77,8 @@ static PHYSICAL_ADDRESS NTAPI Physical(PVOID address)
 {
     ULONG_PTR offset=(ULONG_PTR)address-(ULONG_PTR)memory;
     PHYSICAL_ADDRESS p;
+    ULONG_PTR table_offset=(ULONG_PTR)address-(ULONG_PTR)adapter_table;
+    if(table_offset<sizeof(adapter_table)){p.QuadPart=0x92000000+table_offset;return p;}
     CHECK(offset<sizeof(memory));p.QuadPart=0x91000000+offset;return p;
 }
 PHYSICAL_ADDRESS (NTAPI * const __imp_MmGetPhysicalAddress)(PVOID)=Physical;
@@ -80,9 +86,14 @@ static NTSTATUS NTAPI Allocate(HANDLE device,DXGKARGCB_ALLOCATECONTIGUOUSMEMORY 
 {
     UINT i;CHECK(device==(HANDLE)1 && level==PASSIVE_LEVEL);
     CHECK((a->NumberOfBytes==PAGE_SIZE || a->NumberOfBytes==TG_GPU_COMMAND_BYTES ||
-           a->NumberOfBytes==TG_GPU_TABLE_BYTES) && a->CacheType==DXGK_MEMORY_CACHING_TYPE_NON_CACHED);
+           a->NumberOfBytes==TG_GPU_TABLE_BYTES || a->NumberOfBytes==TG_GPU_ADAPTER_TABLE_BYTES) && a->CacheType==DXGK_MEMORY_CACHING_TYPE_NON_CACHED);
     CHECK(a->LowestAcceptableAddress.QuadPart==0x80000000 && a->HighestAcceptableAddress.QuadPart==0xffffffff);
     if(fail_allocate) return STATUS_INSUFFICIENT_RESOURCES;
+    if(memory_fail_after!=UINT32_MAX){if(!memory_fail_after)return STATUS_INSUFFICIENT_RESOURCES;--memory_fail_after;}
+    if(a->NumberOfBytes==TG_GPU_ADAPTER_TABLE_BYTES){
+        CHECK(!adapter_table_used);adapter_table_used=TRUE;
+        a->hMemoryHandle=(HANDLE)256;a->pMemory=adapter_table;return STATUS_SUCCESS;
+    }
     for(i=0;i<64;++i) if(!memory_used[i]) {
         memory_used[i]=TRUE;a->hMemoryHandle=(HANDLE)(ULONG_PTR)(i+1);a->pMemory=memory[i];return STATUS_SUCCESS;
     }
@@ -91,6 +102,11 @@ static NTSTATUS NTAPI Allocate(HANDLE device,DXGKARGCB_ALLOCATECONTIGUOUSMEMORY 
 static NTSTATUS NTAPI Free(HANDLE device,const DXGKARGCB_FREECONTIGUOUSMEMORY *a)
 {
     UINT i=(UINT)(ULONG_PTR)a->hMemoryHandle-1;
+    if(a->hMemoryHandle==(HANDLE)256){
+        CHECK(device==(HANDLE)1 && level==PASSIVE_LEVEL && adapter_table_used);
+        if(fail_free || adapter_table_fail_free)return STATUS_UNSUCCESSFUL;
+        adapter_table_used=FALSE;++frees;return STATUS_SUCCESS;
+    }
     CHECK(device==(HANDLE)1 && level==PASSIVE_LEVEL && i<64 && memory_used[i]);
     if(fail_free) return STATUS_UNSUCCESSFUL;
     memory_used[i]=FALSE;++frees;return STATUS_SUCCESS;
@@ -360,7 +376,9 @@ static bool WritePmic(void *context,UINT8 address,UINT8 reg,UINT8 value)
     if(reg==6) hw.enable=value;else hw.voltage=value;return true;
 }
 
-static void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRIVER_INITIALIZATION_DATA *d)
+#include "resource_fixture.h"
+
+static __declspec(noinline) void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRIVER_INITIALIZATION_DATA *d)
 {
     DXGKARG_QUERYADAPTERINFO a={0};
     DXGK_QUERYSEGMENTIN4 input={0};
@@ -444,8 +462,101 @@ static void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRIVER_INITIALIZATION_DA
     memset(&physical,0xa5,sizeof(physical));
     CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_NOT_SUPPORTED);
     for(i=0;i<sizeof(physical);++i) CHECK(((UCHAR *)&physical)[i]==0xa5);
+    struct {struct tg_gpu_adapter_info info;UCHAR guard[16];} abi;
+    struct tg_gpu_adapter_info request={.version=TG_GPU_ADAPTER_ABI,.size=sizeof(request)};
+    memset(&abi,0xa5,sizeof(abi));
+    a.Type=DXGKQAITYPE_UMDRIVERPRIVATE;a.pInputData=&request;a.InputDataSize=sizeof(request);
+    a.pOutputData=&abi;a.OutputDataSize=sizeof(abi);
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
+    CHECK(abi.info.version==1 && abi.info.size==48 && !abi.info.reserved);
+    CHECK(abi.info.memory_budget_bytes==UINT64_C(536870912));
+    CHECK(abi.info.vendor==0x10de && abi.info.chipset==0x12e && abi.info.sm==53 && abi.info.gr_class==0xb197);
+    CHECK(abi.info.flags==(e->AdapterIdentityReady?TG_GPU_ADAPTER_LUID_VALID:0u));
+    CHECK(!(abi.info.flags&TG_GPU_ADAPTER_NATIVE_SUBMIT));
+    CHECK(abi.info.luid_low==(e->AdapterIdentityReady?e->AdapterLuid.LowPart:0u));
+    CHECK(abi.info.luid_high==(e->AdapterIdentityReady?e->AdapterLuid.HighPart:0));
+    for(i=0;i<sizeof(abi.guard);++i)CHECK(abi.guard[i]==0xa5);
+    a.OutputDataSize=sizeof(abi.info)-1;
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_BUFFER_TOO_SMALL);
+    a.OutputDataSize=sizeof(abi);a.InputDataSize=sizeof(request)-1;
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_BUFFER_TOO_SMALL);
+    a.InputDataSize=sizeof(request);++request.version;
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_GRAPHICS_DRIVER_MISMATCH);
+    --request.version;--request.size;
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_GRAPHICS_DRIVER_MISMATCH);
+    ++request.size;
+    /* Actual KMT in/out shape: the request header aliases the reply. */
+    abi.info=request;a.pInputData=&abi.info;
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
+    CHECK(abi.info.memory_budget_bytes==UINT64_C(536870912));
     CHECK(d->DxgkDdiQueryAdapterInfo(NULL,&a)==STATUS_INVALID_PARAMETER);
     CHECK(d->DxgkDdiQueryAdapterInfo(e,NULL)==STATUS_INVALID_PARAMETER);
+}
+
+static __declspec(noinline) void TestAdapterLifecycle(const DXGKRNL_INTERFACE *callbacks)
+{
+    DXGKRNL_INTERFACE dxgk=*callbacks;DRIVER_INITIALIZATION_DATA d={0};
+    DXGK_START_INFO start={.RequiredDmaQueueEntry=32,.AdapterLuid={0x12345678,-3}};
+    TG_GPU_ADAPTER *a=NULL;ULONG sources=5,children=6;UINT before=hw.reads+hw.writes;
+    dxgk.Size=sizeof(dxgk);dxgk.DxgkCbGetDeviceInformation=ResourceInfo;
+    dxgk.DxgkCbMapMemory=ResourceMap;dxgk.DxgkCbUnmapMemory=ResourceUnmap;
+    TgGpuRegisterAdapterDdis(&d);
+    CHECK(d.DxgkDdiAddDevice==TgGpuDdiAddDevice && d.DxgkDdiStartDevice==TgGpuDdiStartDevice);
+    CHECK(d.DxgkDdiStopDevice==TgGpuDdiStopDevice && d.DxgkDdiRemoveDevice==TgGpuDdiRemoveDevice);
+    CHECK(d.DxgkDdiSubmitCommandVirtual==NULL && d.DxgkDdiInterruptRoutine==NULL);
+    CHECK(d.DxgkDdiAddDevice(NULL,(PVOID *)&a)==STATUS_INVALID_PARAMETER && !a);
+    fail_pool=TRUE;
+    CHECK(d.DxgkDdiAddDevice((PDEVICE_OBJECT)1,(PVOID *)&a)==STATUS_NO_MEMORY && !a);
+    fail_pool=FALSE;
+    CHECK(NT_SUCCESS(d.DxgkDdiAddDevice((PDEVICE_OBJECT)1,(PVOID *)&a)));
+    CHECK(a && a->PhysicalDevice==(PDEVICE_OBJECT)1 && a->State==TgGpuAdapterAdded);
+    CHECK(NT_SUCCESS(d.DxgkDdiStopDevice(a)));
+    --dxgk.Size;
+    CHECK(d.DxgkDdiStartDevice(a,&start,&dxgk,&sources,&children)==STATUS_INVALID_PARAMETER);
+    ++dxgk.Size;
+    CHECK(sources==5 && children==6 && a->State==TgGpuAdapterAdded);
+    ResourceList(FALSE); /* Native completion requires the declared LIC resource. */
+    CHECK(d.DxgkDdiStartDevice(a,&start,&dxgk,&sources,&children)==STATUS_DEVICE_CONFIGURATION_ERROR);
+    CHECK(!sources && !children && !resource_live && a->State==TgGpuAdapterAdded);
+    ResourceList(TRUE);resource_fail_map=4;resource_fail_unmap=2;
+    CHECK(d.DxgkDdiStartDevice(a,&start,&dxgk,&sources,&children)==STATUS_UNSUCCESSFUL);
+    CHECK(resource_live==2 && a->State==TgGpuAdapterStopping);
+    CHECK(d.DxgkDdiRemoveDevice(a)==STATUS_DEVICE_BUSY);
+    CHECK(d.DxgkDdiStartDevice(a,&start,&dxgk,&sources,&children)==STATUS_INVALID_DEVICE_STATE);
+    resource_fail_unmap=0;CHECK(NT_SUCCESS(d.DxgkDdiStopDevice(a)) && !resource_live);
+    for(UINT n=0;n<2;++n) {
+        ResourceList(TRUE);memory_fail_after=n;
+        CHECK(d.DxgkDdiStartDevice(a,&start,&dxgk,&sources,&children)==STATUS_INSUFFICIENT_RESOURCES);
+        CHECK(a->State==TgGpuAdapterAdded && !adapter_table_used && !resource_live);
+    }
+    memory_fail_after=UINT32_MAX;
+    ResourceList(TRUE);CHECK(NT_SUCCESS(d.DxgkDdiStartDevice(a,&start,&dxgk,&sources,&children)));
+    CHECK(!sources && !children && a->State==TgGpuAdapterReady && a->EngineReady && a->QueueReady);
+    CHECK(a->Engine.Tables==&a->Tables && a->Queue.Engine==&a->Engine && a->Engine.QueueOwner==&a->Queue);
+    CHECK(a->Tables.Memory.Bytes==2u*1024*1024 && adapter_table_used);
+    CHECK(a->Engine.AdapterIdentityReady && a->Engine.AdapterLuid.LowPart==0x12345678);
+    TestAdapterQueries(&a->Engine,&d);
+    CHECK(d.DxgkDdiRemoveDevice(a)==STATUS_DEVICE_BUSY);
+    CHECK(d.DxgkDdiStartDevice(a,&start,&dxgk,&sources,&children)==STATUS_INVALID_DEVICE_STATE);
+    DXGKARG_CREATEDEVICE device={.hDevice=(HANDLE)500};device.Flags.SystemDevice=1;
+    CHECK(NT_SUCCESS(d.DxgkDdiCreateDevice(a,&device)));
+    CHECK(d.DxgkDdiStopDevice(a)==STATUS_DEVICE_BUSY && a->EngineReady && !a->QueueReady);
+    CHECK(a->Engine.Stopping && !a->Engine.AdapterIdentityReady && resource_live && adapter_table_used);
+    CHECK(NT_SUCCESS(d.DxgkDdiDestroyDevice(device.hDevice)));
+    fail_free=TRUE;CHECK(d.DxgkDdiStopDevice(a)==STATUS_UNSUCCESSFUL && a->Engine.Commands.Handle);
+    fail_free=FALSE;adapter_table_fail_free=TRUE;
+    CHECK(d.DxgkDdiStopDevice(a)==STATUS_UNSUCCESSFUL && !a->EngineReady && adapter_table_used);
+    CHECK(resource_live && a->State==TgGpuAdapterStopping);
+    adapter_table_fail_free=FALSE;resource_fail_unmap=5;
+    CHECK(d.DxgkDdiStopDevice(a)==STATUS_UNSUCCESSFUL && resource_live==16 && !adapter_table_used);
+    resource_fail_unmap=0;
+    CHECK(NT_SUCCESS(d.DxgkDdiStopDevice(a)) && !resource_live && a->State==TgGpuAdapterAdded);
+    ResourceList(TRUE);CHECK(NT_SUCCESS(d.DxgkDdiStartDevice(a,&start,&dxgk,&sources,&children)));
+    CHECK(NT_SUCCESS(d.DxgkDdiStopDevice(a)));
+    CHECK(NT_SUCCESS(d.DxgkDdiRemoveDevice(a)));
+    CHECK(hw.reads+hw.writes==before); /* This module never touches hardware. */
+    for(UINT i=0;i<64;++i)CHECK(!pool_used[i] && !memory_used[i]);
+    CHECK(!adapter_table_used && !resource_live);
 }
 
 void start(void)
@@ -470,7 +581,7 @@ void start(void)
         .read_pmic=ReadPmic,.write_pmic=WritePmic};
     UINT32 *instance,*fence;UINT i,before;ULONG written;UINT64 pde;
     struct tg_gpu_channel rejected={0};
-    static const char pass[]="PASS: WDK memory queries, allocation lifecycle/rollback, ordered work queue and verified retirement (controlled substitutes)\r\n";
+    static const char pass[]="PASS: WDK adapter lifecycle/LUID/512MiB ABI, memory queries, allocation rollback, ordered queue and retirement (controlled substitutes; no live WDDM or GPU pass)\r\n";
     hw.fifo_fault=0x100;before=hw.writes;
     CHECK(tg_gpu_channel_submit(&io,&power,0x90000000,0x91004000,0x91003000,&e,&rejected)==TG_GPU_CHANNEL_FAULT);
     CHECK(!rejected.referenced && hw.writes==before && rejected.fifo_interrupt==0x100);
@@ -672,5 +783,6 @@ void start(void)
     CHECK(NT_SUCCESS(TgGpuStopContextEngine(&e)));
     CHECK(NT_SUCCESS(TgGpuStopContextEngine(&other)));
     for(i=0;i<64;++i) CHECK(!pool_used[i] && !memory_used[i]);
+    TestAdapterLifecycle(&dxgk);
     WriteFile(GetStdHandle((ULONG)-11),pass,sizeof(pass)-1,&written,NULL);ExitProcess(0);
 }

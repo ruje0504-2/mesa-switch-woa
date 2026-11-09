@@ -19,6 +19,7 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
     if (!e || !a) return STATUS_INVALID_PARAMETER;
     if (a->Flags.Value) return STATUS_NOT_SUPPORTED; /* no GPU virtualization */
     switch (a->Type) {
+    case DXGKQAITYPE_UMDRIVERPRIVATE:
     case DXGKQAITYPE_QUERYSEGMENT4:
     case DXGKQAITYPE_GPUMMUCAPS:
     case DXGKQAITYPE_PAGETABLELEVELDESC:
@@ -36,6 +37,25 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
     if (!NT_SUCCESS(status)) return status;
 
     switch (a->Type) {
+    case DXGKQAITYPE_UMDRIVERPRIVATE: {
+        struct tg_gpu_adapter_query request;
+        struct tg_gpu_adapter_info info={.version=TG_GPU_ADAPTER_ABI,.size=sizeof(info),
+            .memory_budget_bytes=TG_GPU_MEMORY_BUDGET_BYTES,.vendor=0x10de,
+            .chipset=0x12e,.sm=53,.gr_class=0xb197};
+        status=buffers(a,sizeof(info),sizeof(info));
+        if(!NT_SUCCESS(status))return status;
+        /* Snapshot the request before writing: D3DKMT may alias both buffers. */
+        RtlCopyMemory(&request,a->pInputData,sizeof(request));
+        if(request.version!=TG_GPU_ADAPTER_ABI || request.size!=sizeof(info))
+            return STATUS_GRAPHICS_DRIVER_MISMATCH;
+        if(e->AdapterIdentityReady) {
+            info.flags=TG_GPU_ADAPTER_LUID_VALID;
+            info.luid_low=e->AdapterLuid.LowPart;info.luid_high=e->AdapterLuid.HighPart;
+        }
+        /* NATIVE_SUBMIT stays unset: this library has no live WDDM worker yet. */
+        RtlCopyMemory(a->pOutputData,&info,sizeof(info));
+        return STATUS_SUCCESS;
+    }
     case DXGKQAITYPE_QUERYSEGMENT4: {
         const DXGK_QUERYSEGMENTIN4 *in=a->pInputData;
         DXGK_QUERYSEGMENTOUT4 *out=a->pOutputData;

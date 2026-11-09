@@ -5,6 +5,7 @@
 #include "internal_va.h"
 #include "../core/channel.h"
 #include "../platform/t214_clock.h"
+#include "adapter_abi.h"
 
 typedef struct _TG_GPU_CONTEXT_ENGINE TG_GPU_CONTEXT_ENGINE;
 typedef struct _TG_GPU_PROCESS TG_GPU_PROCESS;
@@ -55,6 +56,8 @@ struct _TG_GPU_CONTEXT_ENGINE {
     UINT Creating;
     UINT AllocationCount,ResourceCount;
     BOOLEAN Stopping;
+    LUID AdapterLuid;
+    BOOLEAN AdapterIdentityReady;
 };
 /* The single physical execution slot is serialized; the number of software
  * contexts is limited only by allocation failures, not a fixed slot array.

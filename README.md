@@ -266,10 +266,35 @@ covering a 40-bit GPU VA, and physical-mode ordered paging. The first segment
 query changes only the count; the descriptor query preserves OS extension bytes.
 Paging and context buffers share one size/private-record contract. These queries
 claim no coherent memory, system IOMMU, large pages, standby retention or display
-capabilities. `DRIVERCAPS` and private UMD queries remain unsupported until the
-submission, recovery and UMD contracts are integrated; this component alone
-cannot start a WDDM adapter. Native ARM64 tests exercise the real WDK callback,
-including count-only queries, descriptor strides and invalid adapter/level inputs.
+capabilities. The UMD-private query now implements the 48-byte
+`windows/adapter_abi.h` contract: the caller initializes its version/size
+header in an in/out buffer; the response supplies GM20B identity, the **512 MiB
+budget ceiling** and the OS-provided adapter LUID when available. Aliased KMT
+input/output buffers are supported. The native-submit flag remains unset.
+`DRIVERCAPS` stays unsupported until submission/recovery are integrated.
+Native ARM64 tests cover real WDK callback shapes, count-only queries, strides,
+bad ABI requests, aliased query buffers and preservation of extension bytes.
+
+`windows/adapter.c` composes the existing resource, table, context and queue
+modules into AddDevice/StartDevice/StopDevice/RemoveDevice callbacks. The
+adapter handle starts with the context engine, so every existing DDI receives
+the same handle. Start validates the WDDM 2.4 callbacks, maps only declared
+GPU/LIC resources, creates a **2 MiB page-table segment** and the private
+command area, initializes the queue and records `DXGK_START_INFO.AdapterLuid`.
+It reports zero video-present sources/children and does not acquire the POST
+display. These table/command bytes are separate from the application budget;
+no 512 MiB physical carve-out is allocated.
+
+Stop closes admission before releasing the queue, engine, table backing and
+MMIO mappings in order. Live objects, failed frees or failed unmaps retain their
+tracking state for recovery/retry; Remove cannot free an adapter with retained
+ownership. A failed start uses the same cleanup path. Controlled native ARM64
+tests exercise missing LIC, partial map/unmap failure, each allocation failure,
+live-device stop, cleanup retry and stop/start cycles; the new lifecycle test
+asserts that it performs **zero GPU MMIO**. This is library integration only:
+there is still no miniport DriverEntry/INF registration, live DRIVERCAPS,
+SubmitCommandVirtual/paging dispatch, IRQ completion or TDR adapter hookup.
+The installed .41 probe and its accepted hardware draw remain unchanged.
 
 `windows/context.c` supplies the process/device/context creation and destruction
 DDIs, root-table DDIs, completed-fence query and DPC callback. Its registration
@@ -549,9 +574,9 @@ dispatch, a Vulkan API draw or a Windows NVK ICD. The matching ABI-24 tool's
 74 native JSON fixtures pass with substituted device I/O. Native SYS/CAT and
 all 11 catalogue memberships pass, and no reboot was needed.
 
-The eventual WDDM/NVK UMA target is a **512 MiB normal GPU working set,
-up to 1 GiB pressure-test workload**, allocated dynamically within VidMm's
-actual budget. It is not a boot-time carve-out or a preallocated probe pool.
+The owner-selected WDDM/NVK UMA budget is a **512 MiB maximum GPU working
+set**, allocated dynamically within VidMm's actual budget. The earlier 1 GiB
+pressure-test target is withdrawn. This is not a boot-time carve-out or a preallocated probe pool.
 The physical diagnostic still allocates only 512 KiB arena + 2 MiB GR work
 temporarily and frees them after reset/drain. Live WDDM residency and its
 memory-pressure behavior remain unverified.
