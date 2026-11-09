@@ -737,7 +737,7 @@ Lite, the VS/FS compiler returns exit 0, SM53, 24 GPRs and 160/64 code bytes;
 both stages' code, 80-byte headers, metadata and disassembly match the accepted
 host output **byte-for-byte**. This is native CPU shader compilation, not GPU
 submission, a Vulkan API pass or an ICD DLL. The build-host Mesa CLC and
-`vtn_bindgen2` tools are also available for the later full NVK runtime build.
+`vtn_bindgen2` tools are also used by the full NVK runtime preflight below.
 
 The generated VS/FS use 160/64 bytes of code, 24 GPRs each, no descriptors,
 constant data, scratch, call stack or shared memory. Each occupies one GPU
@@ -765,6 +765,67 @@ This establishes fixed NAK shader execution/readback, not live VidMm/WDDM
 dispatch, a Vulkan API draw or a Windows NVK ICD. The matching ABI-24 tool's
 74 native JSON fixtures pass with substituted device I/O. Native SYS/CAT and
 all 11 catalogue memberships pass, and no reboot was needed.
+
+### Windows NVK ICD instance preflight
+
+`tools/build_windows_icd.py` builds the **complete pinned NVK runtime DLL**,
+including NIR/NAK, NIL, MME, Vulkan command encoding, meta shaders and common
+runtime/Windows WSI. It archives Mesa `0ff52079` into a fresh external output
+directory, applies `mesa-windows-nak.patch` and `mesa-windows-icd.patch`, and
+copies `tools/nvkmd_windows/` plus the shared `windows/adapter_abi.h` into the
+overlay. The original Mesa checkout remains unchanged. The Windows changes
+remove unused POSIX includes, exclude DRM factories/bindings, avoid Win32's
+`TRUE`/`FALSE` token expansion in class enums, and export the ICD entry point.
+NIR/NAK algorithms and GPU command encoders remain unchanged.
+
+The Windows backend currently implements **real OS KMT enumeration/private
+adapter queries only**. It uses `Gdi32`'s public `D3DKMTEnumAdapters2`,
+`D3DKMTQueryAdapterInfo` and `D3DKMTCloseAdapter`, closing every successfully
+enumerated handle even for unsupported adapters/ABIs, following the
+[KMT enumeration contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtenumadapters2).
+The query must match
+ABI 1, OS LUID, T214/SM53/B197 identity and the 512 MiB ceiling. The MinGW
+declarations' size and every consumed field offset are checked against the
+real Windows SDK in a separate clang-cl compile. Controlled native fixtures
+cover the capability gate, incompatible identities, failures and cleanup;
+they do not substitute for live KMT enumeration.
+
+No `nvkmd` Windows memory/VA/context/submit/sync operations exist yet. No
+physical device is exposed. A future KMD setting `NATIVE_SUBMIT` still causes
+an explicit initialization failure until those operations are implemented;
+there is no diagnostic IOCTL or CPU-rendering fallback. The System-class
+probe is not a Dxgkrnl render adapter, so zero compatible devices is expected.
+This is an ICD **instance preflight**, not a Vulkan draw/conformance pass.
+
+Use the same ARM64 LLVM-MinGW/Rust-gnullvm Meson cross file and Python/Rust
+environment as the compiler tool. Put build-native `mesa_clc` and
+`vtn_bindgen2` in PATH. Bindgen must use the target MinGW sysroot **and its
+Clang resource directory** (the target's `endian.h` is a compiler header),
+not macOS headers. For example:
+
+```sh
+python3 tools/build_windows_icd.py --mesa "$MESA_SRC" --out "$ICD_OUT" \
+  --cross-file "$WINDOWS_CROSS_FILE" --cc "$ARM64_MINGW_CC" \
+  --clang-cl "$CLANG_CL" --sdk-include "$SDK_INCLUDE" --wdk-include "$WDK_INCLUDE"
+```
+
+Outputs are `libvulkan_nouveau.dll`, portable `nvk_windows_icd.json`,
+`nvk-windows-check.exe`, `test-kmt.exe` and a SHA256/build-identity manifest.
+Run `test-kmt.exe` for the 20 controlled transport cases. Run
+`nvk-windows-check.exe <absolute-NVK-DLL-path>` for a **direct ICD** load,
+instance version/create/enumerate/destroy and real KMT scan. It does not use
+or register the system Vulkan loader. Keep these files in a private test
+directory; building/running the preflight does not install a miniport/ICD,
+change the registry or touch the POST display or sleep policy.
+
+**Physical Lite instance preflight, 2026-11-09 07:27:36 Pacific:** a fresh
+archive/overlay build passes the SDK layout compile, all 20 controlled native
+transport cases, DLL load and Vulkan version/instance/create/enumerate/destroy
+calls. API version is **1.4.354**. KMT returns **2 OS adapters**, both private
+queries succeed, **0 matching/native-ready KMDs** and **0 physical devices**;
+`vulkan_draw=false`. DLL SHA256:
+`7020d7da51105df9dffe5b8ac19a011e543f183b1707fce9b3a09da2fafbd101`.
+The kernel driver remains .57/ABI 29; no driver/registry install or reboot.
 
 ### Shared cold graphics bootstrap
 
