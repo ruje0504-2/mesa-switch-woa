@@ -3,6 +3,7 @@
 #include "worker.h"
 #include "submit_ddi.h"
 #include "reset_backend.h"
+#include "paging_dispatch.h"
 #include "../core/fault.h"
 #include "../platform/t214_resources.h"
 #include "nouveau/headers/drf.h"
@@ -14,7 +15,14 @@
 #define REPORT_OFFSET 0x1000u
 #define PIXEL_OFFSET 0x2000u
 #define CODE_OFFSET 0x3000u
-#define DATA_BYTES 0x5000u
+#define DRAW_DATA_BYTES 0x5000u
+#define PAGING_SRC_OFFSET 0x5000u
+#define PAGING_DST_OFFSET 0x6000u
+#define DATA_BYTES 0x7000u
+#define PAGING_FENCE 1u
+#define PAGING_SRC_GUARD 32u
+#define PAGING_DST_GUARD 48u
+#define PAGING_TEST_BYTES (PAGE_SIZE-96u)
 #define DECOY_OFFSET 0x800u
 #define PREEMPT_FENCE 0xcafeu
 #define REFERENCE_HEADER (NVDEF(NVB06F,DMA_INCR,OPCODE,VALUE)|NVVAL(NVB06F,DMA_INCR,COUNT,1)|NVVAL(NVB06F,DMA_INCR,ADDRESS,NVB06F_SET_REFERENCE>>2))
@@ -30,6 +38,9 @@ struct _TG_GPU_DIAGNOSTIC_BACKEND {
     TG_GPU_PROCESS *Process;
     TG_GPU_DEVICE *Device;
     TG_GPU_CONTEXT *Context;
+    TG_GPU_CONTEXT *PagingContext;
+    TG_GPU_QUEUE_ENTRY PagingPrivate;
+    UINT64 PagingBuffer[64];
     struct {struct tg_gpu_submit_request Header;UINT Words[PAGE_SIZE/4];} Private;
     KEVENT Completed;
     KSPIN_LOCK NotifyLock;
@@ -76,17 +87,26 @@ static NTSTATUS NTAPI synchronize(HANDLE device,PKSYNCHRONIZE_ROUTINE routine,
     KeAcquireSpinLock(&b->NotifyLock,&irql);*result=routine(context);
     KeReleaseSpinLock(&b->NotifyLock,irql);return STATUS_SUCCESS;
 }
+static UINT draw_fence(UINT cycle,UINT index)
+{
+    return 3 + cycle * 4 + index;
+}
+
 static VOID NTAPI notification(HANDLE device,DXGKARGCB_NOTIFY_INTERRUPT_DATA *a)
 {
     TG_GPU_DIAGNOSTIC_BACKEND *b=device;UINT n=b->Progress.notifications,p=b->Progress.preemption_notifications;
-    if(a->InterruptType==DXGK_INTERRUPT_DMA_COMPLETED &&
+    if (a->InterruptType==DXGK_INTERRUPT_DMA_COMPLETED &&
+        !a->DmaCompleted.NodeOrdinal && !a->DmaCompleted.EngineOrdinal &&
+        a->DmaCompleted.SubmissionFenceId==PAGING_FENCE && !b->Progress.paging_fence)
+        b->Progress.paging_fence=PAGING_FENCE;
+    else if(a->InterruptType==DXGK_INTERRUPT_DMA_COMPLETED &&
        !a->DmaCompleted.NodeOrdinal && !a->DmaCompleted.EngineOrdinal &&
-       n<4 && a->DmaCompleted.SubmissionFenceId==(n/2)*3+(n%2?3u:1u))
+       n<4 && a->DmaCompleted.SubmissionFenceId==draw_fence(n/2,n%2?2u:0u))
         InterlockedIncrement((volatile LONG *)&b->Progress.notifications);
     else if(a->InterruptType==DXGK_INTERRUPT_DMA_PREEMPTED &&
         !a->DmaPreempted.NodeOrdinal && !a->DmaPreempted.EngineOrdinal &&
         p<2 && a->DmaPreempted.PreemptionFenceId==PREEMPT_FENCE+p &&
-        a->DmaPreempted.LastCompletedFenceId==p*3+1) {
+        a->DmaPreempted.LastCompletedFenceId==draw_fence(p,0)) {
         b->Progress.preemption_completed=a->DmaPreempted.LastCompletedFenceId;
         InterlockedIncrement((volatile LONG *)&b->Progress.preemption_notifications);
     }
@@ -109,20 +129,20 @@ static NTSTATUS NTAPI reserve(HANDLE device,DXGKARGCB_RESERVEGPUVIRTUALADDRESSRA
      * VidMm; the diagnostic alone chooses a fixed private 64 MiB window. */
     a->StartVirtualAddress=INTERNAL_VA;return STATUS_SUCCESS;
 }
-static NTSTATUS map_data(TG_GPU_DIAGNOSTIC_BACKEND *b)
+static NTSTATUS map_data(TG_GPU_DIAGNOSTIC_BACKEND *b,TG_GPU_CONTEXT *context)
 {
     UINT64 *root=b->Tables.Memory.CpuAddress,*leaf=root+TG_GPU_TABLE_ENTRIES;
     UINT i;DXGKARG_SETROOTPAGETABLE set={0};
     if(!tg_gpu_pde_small((UINT64)b->Tables.Memory.SystemPhysicalAddress.QuadPart+TG_GPU_TABLE_BYTES,&root[0]))
         return STATUS_INVALID_ADDRESS;
-    for(i=0;i<DATA_BYTES/PAGE_SIZE;++i) {
+    for(i=0;i<DRAW_DATA_BYTES/PAGE_SIZE;++i) {
         if(!tg_gpu_pte_4k((UINT64)b->Data.SystemPhysicalAddress.QuadPart+(UINT64)i*PAGE_SIZE,
             i==0 || i>=3,true,&leaf[(USER_VA>>TG_GPU_PAGE_SHIFT)+i]))return STATUS_INVALID_ADDRESS;
         /* USER mappings: never set PTE_PRIVILEGE for reports, code or target. */
     }
-    KeMemoryBarrier();set.hContext=b->Context;set.Address.SegmentId=b->Tables.SegmentId;
+    KeMemoryBarrier();set.hContext=context;set.Address.SegmentId=b->Tables.SegmentId;
     set.NumEntries=TG_GPU_TABLE_ENTRIES;TgGpuDdiSetRootPageTable(&b->Engine,&set);
-    return b->Context->RootStatus;
+    return context->RootStatus;
 }
 static NTSTATUS enqueue(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT index,UINT offset,UINT words)
 {
@@ -131,7 +151,7 @@ static NTSTATUS enqueue(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT index,UINT offset,UINT
     if(words>PAGE_SIZE/4)return STATUS_INVALID_PARAMETER;
     b->Private.Header=(struct tg_gpu_submit_request){TG_GPU_SUBMIT_ABI,sizeof(b->Private.Header)+words*4,words*4,0};
     RtlCopyMemory(b->Private.Words,(UCHAR *)b->Data.CpuAddress+offset,words*4);
-    a.SubmissionFenceId=b->Cycle*3+index+1;a.pDmaBufferPrivateData=&b->Private;
+    a.SubmissionFenceId=draw_fence(b->Cycle,index);a.pDmaBufferPrivateData=&b->Private;
     a.DmaBufferPrivateDataSize=sizeof(b->Private);a.DmaBufferUmdPrivateDataSize=b->Private.Header.size;
     KeMemoryBarrier();status=TgGpuDdiSubmitCommandVirtual(&b->Engine,&a);
     if(status!=STATUS_SUCCESS)return status;
@@ -148,7 +168,7 @@ static NTSTATUS enqueue(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT index,UINT offset,UINT
 static NTSTATUS reject_reference(TG_GPU_DIAGNOSTIC_BACKEND *b)
 {
     DXGKARG_SUBMITCOMMANDVIRTUAL a={.hContext=b->Context,.DmaBufferVirtualAddress=USER_VA,
-        .DmaBufferSize=8,.SubmissionFenceId=b->Cycle*3};
+        .DmaBufferSize=8,.SubmissionFenceId=draw_fence(b->Cycle,0)-1};
     b->Private.Header=(struct tg_gpu_submit_request){TG_GPU_SUBMIT_ABI,sizeof(b->Private.Header)+8,8,0};
     b->Private.Words[0]=REFERENCE_HEADER;b->Private.Words[1]=b->Engine.Marker+1;
     a.pDmaBufferPrivateData=&b->Private;a.DmaBufferPrivateDataSize=sizeof(b->Private);
@@ -166,7 +186,7 @@ static NTSTATUS wait_completed(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT completed)
         KeClearEvent(&b->Completed);KeMemoryBarrier();
         if(b->Progress.recovery_requests || !NT_SUCCESS(b->Worker.Failure))
             return NT_SUCCESS(b->Worker.Failure)?STATUS_DEVICE_DATA_ERROR:b->Worker.Failure;
-        if(b->Progress.notifications==completed)break;
+        if(b->Progress.notifications==completed && b->Progress.paging_fence==PAGING_FENCE)break;
         now=KeQueryInterruptTime();if(now>=deadline)return STATUS_IO_TIMEOUT;
         timeout.QuadPart=-(LONGLONG)(deadline-now);
         status=KeWaitForSingleObject(&b->Completed,Executive,KernelMode,FALSE,&timeout);
@@ -205,6 +225,85 @@ static NTSTATUS preempt_then_draw(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT seed)
     }
     (VOID)KeReleaseMutex(&b->Queue.DispatchGate,FALSE);
     if(NT_SUCCESS(status))status=wait_completed(b,(b->Cycle+1)*2);
+    return status;
+}
+static NTSTATUS test_virtual_paging(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT pattern)
+{
+    DXGKARG_CREATECONTEXT create={.EngineAffinity=1,.Flags={.VirtualAddressing=1,.SystemContext=1}};
+    NTSTATUS status=TgGpuDdiCreateContext(b->Device,&create);
+    if (status!=STATUS_SUCCESS) return status;
+    b->PagingContext=create.hContext;
+    status=map_data(b,b->PagingContext);
+    if (status!=STATUS_SUCCESS) return status;
+
+    UINT64 physical=(UINT64)b->Data.SystemPhysicalAddress.QuadPart;
+    UINT32 *src=(UINT32 *)((UCHAR *)b->Data.CpuAddress+PAGING_SRC_OFFSET);
+    UINT32 *dst=(UINT32 *)((UCHAR *)b->Data.CpuAddress+PAGING_DST_OFFSET);
+    for (UINT i=0;i<PAGE_SIZE/4;++i) src[i]=dst[i]=TG_GPU_CLEAR_SENTINEL;
+    if (pattern==TG_GPU_CLEAR_SENTINEL) pattern^=1;
+
+    DXGK_PTE entries[2]={0};
+    entries[0].Valid=entries[1].Valid=1;
+    entries[0].PageAddress=physical+PAGING_SRC_OFFSET;
+    entries[1].PageAddress=physical+PAGING_DST_OFFSET;
+    DXGKARG_BUILDPAGINGBUFFER build={.pDmaBuffer=b->PagingBuffer,.DmaSize=sizeof(b->PagingBuffer),
+        .pDmaBufferPrivateData=&b->PagingPrivate,.DmaBufferPrivateDataSize=sizeof(b->PagingPrivate),
+        .hSystemContext=b->PagingContext,.DmaBufferGpuVirtualAddress=0x200000,
+        .Operation=DXGK_OPERATION_UPDATE_PAGE_TABLE};
+    build.UpdatePageTable=(DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE){
+        .PageTableAddress.GpuPhysical={.SegmentId=b->Tables.SegmentId,.SegmentOffset=TG_GPU_TABLE_BYTES},
+        .pPageTableEntries=entries,.StartIndex=(UINT)((USER_VA+PAGING_SRC_OFFSET)>>TG_GPU_PAGE_SHIFT),
+        .NumPageTableEntries=2,.hProcess=b->Process,.UpdateMode=DXGK_PAGETABLEUPDATE_GPU_PHYSICAL};
+    status=TgGpuDdiBuildPagingBuffer(&b->Engine,&build);
+    if (status!=STATUS_SUCCESS) return status;
+
+    build.DmaBufferWriteOffset=b->PagingPrivate.Paging.BuiltBytes;
+    build.Operation=DXGK_OPERATION_FLUSH_TLB;
+    build.FlushTlb=(DXGK_BUILDPAGINGBUFFER_FLUSHTLB){
+        .RootPageTableAddress={.SegmentId=b->Tables.SegmentId},.hProcess=b->Process};
+    status=TgGpuDdiBuildPagingBuffer(&b->Engine,&build);
+    if (status!=STATUS_SUCCESS) return status;
+
+    build.DmaBufferWriteOffset=b->PagingPrivate.Paging.BuiltBytes;
+    build.Operation=DXGK_OPERATION_VIRTUAL_FILL;
+    build.FillVirtual=(DXGK_BUILDPAGINGBUFFER_FILLVIRTUAL){.FillSizeInBytes=PAGING_TEST_BYTES,
+        .FillPattern=pattern,.DestinationVirtualAddress=USER_VA+PAGING_SRC_OFFSET+PAGING_SRC_GUARD};
+    status=TgGpuDdiBuildPagingBuffer(&b->Engine,&build);
+    if (status!=STATUS_SUCCESS) return status;
+
+    build.DmaBufferWriteOffset=b->PagingPrivate.Paging.BuiltBytes;
+    build.Operation=DXGK_OPERATION_VIRTUAL_TRANSFER;
+    build.TransferVirtual=(DXGK_BUILDPAGINGBUFFER_TRANSFERVIRTUAL){.TransferSizeInBytes=PAGING_TEST_BYTES,
+        .SourceVirtualAddress=USER_VA+PAGING_SRC_OFFSET+PAGING_SRC_GUARD,
+        .DestinationVirtualAddress=USER_VA+PAGING_DST_OFFSET+PAGING_DST_GUARD,
+        .TransferDirection=DXGK_MEMORY_TRANSFER_LOCAL_TO_LOCAL};
+    status=TgGpuDdiBuildPagingBuffer(&b->Engine,&build);
+    if (status!=STATUS_SUCCESS) return status;
+
+    DXGKARG_SUBMITCOMMANDVIRTUAL submit={.hContext=b->PagingContext,.Flags.Paging=1,
+        .DmaBufferVirtualAddress=build.DmaBufferGpuVirtualAddress,
+        .DmaBufferSize=b->PagingPrivate.Paging.BuiltBytes,
+        .pDmaBufferPrivateData=&b->PagingPrivate,.DmaBufferPrivateDataSize=sizeof(b->PagingPrivate),
+        .SubmissionFenceId=PAGING_FENCE};
+    status=TgGpuDdiSubmitCommandVirtual(&b->Engine,&submit);
+    if (status!=STATUS_SUCCESS) return status;
+    status=wait_completed(b,0);
+    if (status!=STATUS_SUCCESS) return status;
+    if (b->Engine.Marker!=2 || b->Engine.LastCompletedFence!=PAGING_FENCE ||
+        b->PagingContext->References) return STATUS_DEVICE_DATA_ERROR;
+
+    for (UINT i=0;i<PAGE_SIZE;i+=4) {
+        UINT32 expected_src=i>=PAGING_SRC_GUARD && i<PAGING_SRC_GUARD+PAGING_TEST_BYTES?
+            pattern:TG_GPU_CLEAR_SENTINEL;
+        UINT32 expected_dst=i>=PAGING_DST_GUARD && i<PAGING_DST_GUARD+PAGING_TEST_BYTES?
+            pattern:TG_GPU_CLEAR_SENTINEL;
+        b->Progress.paging_errors+=((volatile UINT32 *)src)[i/4]!=expected_src;
+        b->Progress.paging_errors+=((volatile UINT32 *)dst)[i/4]!=expected_dst;
+    }
+    b->Progress.paging_bytes=PAGING_TEST_BYTES;
+    if (b->Progress.paging_errors) return STATUS_DATA_ERROR;
+    status=TgGpuDdiDestroyContext(b->PagingContext);
+    if (status==STATUS_SUCCESS) b->PagingContext=NULL;
     return status;
 }
 static NTSTATUS draw_cycle(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT seed,struct tg_gpu_status *s)
@@ -297,6 +396,11 @@ NTSTATUS TgGpuStopDiagnosticBackend(TG_GPU_DIAGNOSTIC_BACKEND **state,struct tg_
     }
     hardware_status=TgGpuStopHardware(&b->Hardware);
     if(b->Hardware.Engine){status=hardware_status;goto done;}
+    if (b->PagingContext) {
+        status=TgGpuDdiDestroyContext(b->PagingContext);
+        if (status!=STATUS_SUCCESS) goto done;
+        b->PagingContext=NULL;
+    }
     if(b->Context) {
         status=TgGpuDdiDestroyContext(b->Context);if(!NT_SUCCESS(status))goto done;b->Context=NULL;
     }
@@ -319,7 +423,7 @@ done:
         s->backend.allocations_remaining=(UINT)b->Allocations;
     }
     if(!b->Allocations && !b->Worker.Thread && !b->Hardware.Engine && !b->QueueInitialized &&
-       !b->Context && !b->Device && !b->Process && !b->EngineInitialized) {
+       !b->Context && !b->PagingContext && !b->Device && !b->Process && !b->EngineInitialized) {
         ExFreePoolWithTag(b,TAG);*state=NULL;
     }
     return status;
@@ -349,7 +453,7 @@ NTSTATUS TgGpuRunDiagnosticBackend(TG_GPU_DIAGNOSTIC_BACKEND **state,
     b->Progress.stage=2;status=TgGpuStartHardware(&b->Hardware,&b->Engine,io,address,firmware);
     *s=b->Hardware.Status;s->tested=1;s->expected[0]=seed;s->expected[1]=~seed;
     if(!NT_SUCCESS(status))goto done;
-    b->Progress.stage=3;process.hDxgkProcess=b;
+    b->Progress.stage=3;process.hDxgkProcess=b;process.Flags.SystemProcess=1;
     status=TgGpuDdiCreateProcess(&b->Engine,&process);if(!NT_SUCCESS(status))goto done;
     b->Process=process.hKmdProcess;device.hKmdProcess=b->Process;
     status=TgGpuDdiCreateDevice(&b->Engine,&device);if(!NT_SUCCESS(status))goto done;b->Device=device.hDevice;
@@ -357,11 +461,12 @@ NTSTATUS TgGpuRunDiagnosticBackend(TG_GPU_DIAGNOSTIC_BACKEND **state,
     status=TgGpuDdiCreateContext(b->Device,&context);if(!NT_SUCCESS(status))goto done;b->Context=context.hContext;
     status=TgGpuAllocatePrivateMemory(&b->Dxgk,DATA_BYTES,0x80000000,0xffffffff,&b->Data);
     if(!NT_SUCCESS(status))goto done;
-    status=map_data(b);if(!NT_SUCCESS(status))goto done;
+    status=map_data(b,b->Context);if(!NT_SUCCESS(status))goto done;
     b->Progress.stage=4;status=TgGpuInitializeWorkQueue(&b->Queue,&b->Engine);
     if(!NT_SUCCESS(status))goto done;b->QueueInitialized=TRUE;
     status=TgGpuStartWorker(&b->Worker,&b->Queue,&b->Hardware);
     if(!NT_SUCCESS(status))goto done;b->Progress.worker_started=1;
+    status=test_virtual_paging(b,seed);if(!NT_SUCCESS(status))goto done;
     status=draw_cycle(b,seed,s);if(!NT_SUCCESS(status))goto done;
     b->Progress.stage=8;status=TgGpuResetBackend(&b->Engine,&b->Queue,&b->Hardware,&b->Worker);
     b->QueueInitialized=b->Queue.Engine==&b->Engine;if(!NT_SUCCESS(status))goto done;
@@ -383,7 +488,7 @@ NTSTATUS TgGpuRunDiagnosticBackend(TG_GPU_DIAGNOSTIC_BACKEND **state,
     b->Progress.lost_context_rejected=1;
     status=TgGpuDdiDestroyContext(b->Context);if(!NT_SUCCESS(status))goto done;b->Context=NULL;
     status=TgGpuDdiCreateContext(b->Device,&context);if(!NT_SUCCESS(status))goto done;b->Context=context.hContext;
-    status=map_data(b);if(!NT_SUCCESS(status))goto done;
+    status=map_data(b,b->Context);if(!NT_SUCCESS(status))goto done;
     *s=b->Hardware.Status;s->tested=1;b->Cycle=1;
     seed^=0x70801021u;if(seed==TG_GPU_CLEAR_SENTINEL || ~seed==TG_GPU_CLEAR_SENTINEL)seed^=0x1000;
     status=draw_cycle(b,seed,s);

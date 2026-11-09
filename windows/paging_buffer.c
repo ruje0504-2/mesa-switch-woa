@@ -1,12 +1,17 @@
 /* SPDX-License-Identifier: MIT */
 #include "paging_buffer.h"
 
-enum { PAGING_UPDATE = 1, PAGING_FLUSH = 2 };
+enum { PAGING_UPDATE = 1, PAGING_FLUSH, PAGING_FILL, PAGING_COPY };
 typedef struct _PAGING_RECORD {
     UINT Kind, Bytes;
-    D3DGPU_PHYSICAL_ADDRESS Table;
-    UINT TableBytes, Start, Count, Reserved;
-    UINT64 VaLimit, FirstVa, LastVa;
+    union {
+        struct {
+            D3DGPU_PHYSICAL_ADDRESS Table;
+            UINT TableBytes, Start, Count, Reserved;
+            UINT64 VaLimit, FirstVa, LastVa;
+        };
+        struct tg_gpu_paging_dma Dma;
+    };
     /* Encoded UINT64 entries immediately follow an UPDATE record. */
 } PAGING_RECORD;
 _Static_assert(sizeof(PAGING_RECORD) == 64, "paging record alignment");
@@ -35,8 +40,13 @@ static NTSTATUS ValidateRecord(const TG_GPU_TABLE_SEGMENT *Tables,
     UINT64 address;
     TG_GPU_ROOT_TABLE root;
     if (Available < sizeof(*Record) || Record->Bytes < sizeof(*Record) ||
-        Record->Bytes > Available || (Record->Bytes & 7) || Record->Reserved ||
-        Record->Table.Padding || Record->Table.SegmentId != Tables->SegmentId)
+        Record->Bytes > Available || (Record->Bytes & 7))
+        return STATUS_INVALID_PARAMETER;
+    if (Record->Kind == PAGING_FILL || Record->Kind == PAGING_COPY)
+        return Record->Bytes == sizeof(*Record) &&
+            Record->Dma.fill == (Record->Kind == PAGING_FILL) &&
+            tg_gpu_paging_dma_valid(&Record->Dma) ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
+    if (Record->Reserved || Record->Table.Padding || Record->Table.SegmentId != Tables->SegmentId)
         return STATUS_INVALID_PARAMETER;
     if (Record->Kind == PAGING_FLUSH) {
         if (Record->Bytes != sizeof(*Record) || Record->Start)
@@ -152,7 +162,35 @@ NTSTATUS TgGpuBuildPagingBuffer(DXGKARG_BUILDPAGINGBUFFER *Args,
         if (!NT_SUCCESS(status)) return status;
         if (!Args->pDmaBuffer || Args->DmaSize < sizeof(record))
             return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
-    } else return STATUS_NOT_SUPPORTED; /* dispatch other operations elsewhere */
+    } else if (Args->Operation == DXGK_OPERATION_VIRTUAL_FILL ||
+               Args->Operation == DXGK_OPERATION_VIRTUAL_TRANSFER) {
+        if (Args->MultipassOffset)
+            return STATUS_INVALID_PARAMETER;
+        if (Args->Operation == DXGK_OPERATION_VIRTUAL_FILL) {
+            record.Kind = PAGING_FILL;
+            record.Dma = (struct tg_gpu_paging_dma){
+                .destination = Args->FillVirtual.DestinationVirtualAddress,
+                .bytes = Args->FillVirtual.FillSizeInBytes,
+                .pattern = Args->FillVirtual.FillPattern,
+                .fill = true,
+            };
+        } else {
+            const DXGK_BUILDPAGINGBUFFER_TRANSFERVIRTUAL *transfer = &Args->TransferVirtual;
+            if (transfer->Flags.Flags || (UINT)transfer->TransferDirection > DXGK_MEMORY_TRANSFER_LOCAL_TO_LOCAL)
+                return STATUS_NOT_SUPPORTED;
+            record.Kind = PAGING_COPY;
+            record.Dma = (struct tg_gpu_paging_dma){
+                .source = transfer->SourceVirtualAddress,
+                .destination = transfer->DestinationVirtualAddress,
+                .bytes = transfer->TransferSizeInBytes,
+            };
+        }
+        record.Bytes = sizeof(record);
+        if (!tg_gpu_paging_dma_valid(&record.Dma))
+            return STATUS_INVALID_PARAMETER;
+        if (!Args->pDmaBuffer || Args->DmaSize < sizeof(record))
+            return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+    } else return STATUS_NOT_SUPPORTED;
     if ((ULONG_PTR)Args->pDmaBuffer & 7) return STATUS_INVALID_PARAMETER;
     *(PAGING_RECORD *)Args->pDmaBuffer = record;
     for (i = 0; i < count; ++i)
@@ -166,30 +204,37 @@ NTSTATUS TgGpuBuildPagingBuffer(DXGKARG_BUILDPAGINGBUFFER *Args,
     return STATUS_SUCCESS;
 }
 
-NTSTATUS TgGpuValidatePagingBuffer(const TG_GPU_TABLE_SEGMENT *Tables,const void *Buffer,SIZE_T Bytes)
+NTSTATUS TgGpuValidatePagingBuffer(const TG_GPU_TABLE_SEGMENT *Tables,const void *Buffer,SIZE_T Bytes,
+                                  BOOLEAN *RequiresSystemContext)
 {
+    BOOLEAN requires = FALSE;
     if (!Tables || (Bytes && !Buffer) || ((ULONG_PTR)Buffer & 7) || (Bytes & 7))
         return STATUS_INVALID_PARAMETER;
     for (SIZE_T offset = 0; offset < Bytes; ) {
         const PAGING_RECORD *record = (const void *)((const UCHAR *)Buffer + offset);
         NTSTATUS status = ValidateRecord(Tables, record, Bytes - offset);
         if (!NT_SUCCESS(status)) return status;
+        if (record->Kind == PAGING_FILL || record->Kind == PAGING_COPY)
+            requires = TRUE;
         offset += record->Bytes;
     }
+    if (RequiresSystemContext) *RequiresSystemContext = requires;
     return STATUS_SUCCESS;
 }
 NTSTATUS TgGpuExecutePagingBuffer(const TG_GPU_TABLE_SEGMENT *Tables,
     const void *Buffer, SIZE_T Bytes, BOOLEAN AddressSpaceIdle,
     const struct tg_gpu_power_io *Io, const struct tg_gpu_power *Power,
-    SIZE_T *CompletedBytes)
+    SIZE_T *CompletedBytes, TG_GPU_PAGING_DMA_STEP *NextDma)
 {
-    SIZE_T offset;NTSTATUS status;
+    SIZE_T offset;NTSTATUS status;BOOLEAN requires;
     if (!CompletedBytes) return STATUS_INVALID_PARAMETER;
     *CompletedBytes = 0;
+    if (NextDma) NextDma->RecordBytes = 0;
     /* Reject a malformed trailing record before publishing any earlier one. */
-    status=TgGpuValidatePagingBuffer(Tables,Buffer,Bytes);
+    status=TgGpuValidatePagingBuffer(Tables,Buffer,Bytes,&requires);
     if(!NT_SUCCESS(status) || !Bytes)return status;
     if (!AddressSpaceIdle) return STATUS_GRAPHICS_ALLOCATION_BUSY;
+    if (requires && !NextDma) return STATUS_NOT_SUPPORTED;
     if (!Io || !Io->read32 || !Io->write32 || !Io->delay_us ||
         !Power || !Power->owned || !Power->ready) return STATUS_DEVICE_NOT_READY;
     for (offset = 0; offset < Bytes; ) {
@@ -206,7 +251,7 @@ NTSTATUS TgGpuExecutePagingBuffer(const TG_GPU_TABLE_SEGMENT *Tables,
             for (i = 0; i < record->Count; ++i)
                 ((volatile UINT64 *)cpu)[record->Start+i] = values[i];
             KeMemoryBarrier();
-        } else {
+        } else if (record->Kind == PAGING_FLUSH) {
             TG_GPU_ROOT_TABLE root;
             DXGK_BUILDPAGINGBUFFER_FLUSHTLB flush = {0};
             status = RecordRoot(Tables, record, &root);
@@ -216,6 +261,10 @@ NTSTATUS TgGpuExecutePagingBuffer(const TG_GPU_TABLE_SEGMENT *Tables,
             flush.EndVirtualAddress = record->LastVa;
             status = TgGpuFlushRootTable(&root, &flush, Io, Power);
             if (!NT_SUCCESS(status)) return status;
+        } else {
+            NextDma->Operation = record->Dma;
+            NextDma->RecordBytes = record->Bytes;
+            return STATUS_SUCCESS;
         }
         offset += record->Bytes;
         *CompletedBytes = offset;

@@ -12,6 +12,7 @@ typedef struct _TG_GPU_PAGING_BUFFER {
     PVOID CpuAddress;
     UINT64 GpuAddress;
     UINT BuiltBytes,Capacity,Magic;
+    HANDLE SystemContext; /* identity only, acquired at submit for CE records */
 } TG_GPU_PAGING_BUFFER;
 
 /* Dxgkrnl supplies nonpaged private storage for each submitted DMA buffer.

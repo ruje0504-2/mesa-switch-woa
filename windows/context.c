@@ -284,6 +284,32 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
     ++c->References;
     KeReleaseSpinLock(&e->Lock,irql); return STATUS_SUCCESS;
 }
+NTSTATUS TgGpuCapturePagingContext(TG_GPU_CONTEXT_ENGINE *e,HANDLE handle,TG_GPU_CONTEXT_WORK *w)
+{
+    KIRQL irql;
+    NTSTATUS status = STATUS_INVALID_PARAMETER;
+
+    KeAcquireSpinLock(&e->Lock,&irql);
+    TG_GPU_CONTEXT *c = find_context(e,handle);
+    if (e->Stopping || e->Resetting || e->RecoveryPending)
+        status = STATUS_DEVICE_NOT_READY;
+    else if (c && !c->Closing && c->Flags.SystemContext && c->Flags.VirtualAddressing &&
+             c->Device->Process && c->Device->Process->Flags.SystemProcess) {
+        status = STATUS_DEVICE_NOT_READY;
+        if (c->Root.Valid && NT_SUCCESS(c->RootStatus) && e->Graphics.Memory.Handle &&
+            (!c->GraphicsGeneration || c->GraphicsGeneration == e->GraphicsGeneration)) {
+            w->Context = c;
+            w->Root = c->Root;
+            w->InternalVa = c->Device->Process->Internal.Base;
+            w->FencePhysicalAddress = (UINT64)e->Commands.SystemPhysicalAddress.QuadPart+TG_GPU_COMMAND_FENCE;
+            ++c->References;
+            status = STATUS_SUCCESS;
+        }
+    }
+    KeReleaseSpinLock(&e->Lock,irql);
+    return status;
+}
+
 NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w)
 {
     KIRQL irql;UINT marker;NTSTATUS status;
@@ -293,7 +319,9 @@ NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *
         w->Expected || !w->Root.Valid) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
     }
-    if(e->Active || e->Notification || e->Channel.referenced) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_BUSY; }
+    if((e->Active && !(w->Paging && e->Active==w)) || e->Notification || e->Channel.referenced) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_BUSY;
+    }
     if(!e->Graphics.Memory.Handle || (w->Context->GraphicsGeneration &&
        w->Context->GraphicsGeneration!=e->GraphicsGeneration)) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;

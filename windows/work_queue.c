@@ -58,6 +58,7 @@ static NTSTATUS queue_submit(TG_GPU_WORK_QUEUE *q,const DXGKARG_SUBMITCOMMANDVIR
         status=TgGpuCaptureSoftwareWork(q->Engine,a,&entry->Work);
     } else if(a->Flags.Paging) {
         const TG_GPU_PAGING_BUFFER *p=&entry->Paging;UINT64 offset;
+        BOOLEAN requires_context;
         if(a->NodeOrdinal || a->EngineOrdinal || p->Magic!=TG_GPU_PAGING_BUFFER_MAGIC ||
            p->Engine!=q->Engine || !p->CpuAddress || ((ULONG_PTR)p->CpuAddress&7) ||
            p->Capacity>TG_GPU_DMA_BUFFER_BYTES || p->BuiltBytes>p->Capacity ||
@@ -69,7 +70,8 @@ static NTSTATUS queue_submit(TG_GPU_WORK_QUEUE *q,const DXGKARG_SUBMITCOMMANDVIR
            (offset&7) || (a->DmaBufferSize&7)) {
             status=STATUS_INVALID_PARAMETER;goto rejected;
         }
-        status=TgGpuValidatePagingBuffer(q->Engine->Tables,(UCHAR *)p->CpuAddress+(SIZE_T)offset,a->DmaBufferSize);
+        status=TgGpuValidatePagingBuffer(q->Engine->Tables,
+            (UCHAR *)p->CpuAddress+(SIZE_T)offset,a->DmaBufferSize,&requires_context);
         if(NT_SUCCESS(status)) {
             KeAcquireSpinLock(&q->Engine->Lock,&engine_irql);
             status=q->Engine->Stopping?STATUS_DEVICE_NOT_READY:STATUS_SUCCESS;
@@ -77,9 +79,15 @@ static NTSTATUS queue_submit(TG_GPU_WORK_QUEUE *q,const DXGKARG_SUBMITCOMMANDVIR
                 RtlZeroMemory(&entry->Work,sizeof(entry->Work));
                 entry->Work.Engine=q->Engine;entry->Work.Paging=TRUE;
                 entry->Work.SubmissionFence=entry->Work.CompletionFence=a->SubmissionFenceId;
-                entry->Work.DmaAddress=offset;entry->Work.DmaBytes=a->DmaBufferSize;
+                entry->Work.PagingOffset=(UINT)offset;entry->Work.PagingBytes=a->DmaBufferSize;
             }
             KeReleaseSpinLock(&q->Engine->Lock,engine_irql);
+            if (NT_SUCCESS(status) && requires_context) {
+                if (!p->SystemContext || (a->hContext && a->hContext!=p->SystemContext))
+                    status=STATUS_INVALID_PARAMETER;
+                else
+                    status=TgGpuCapturePagingContext(q->Engine,p->SystemContext,&entry->Work);
+            }
         }
     } else {
         RtlZeroMemory(entry,sizeof(*entry));
@@ -166,8 +174,7 @@ static NTSTATUS preempt_prefix(TG_GPU_WORK_QUEUE *q)
             KeAcquireSpinLock(&e->Lock,&irql);e->LastCompletedFence=entry->Work.CompletionFence;
             KeReleaseSpinLock(&e->Lock,irql);
         } else if(!entry->Work.Rejected)aborted=TRUE;
-        status=entry->Work.Paging || entry->Work.Software?STATUS_SUCCESS:
-            TgGpuCancelCapturedWork(e,&entry->Work);
+        status=entry->Work.Context?TgGpuCancelCapturedWork(e,&entry->Work):STATUS_SUCCESS;
         if(!NT_SUCCESS(status)) {
             KeAcquireSpinLock(&q->Lock,&irql);InsertHeadList(&q->Pending,&entry->Link);
             KeReleaseSpinLock(&q->Lock,irql);return status;
@@ -224,7 +231,7 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
     }
     if(w->Paging) {
         status=TgGpuExecutePagingWork(q->Engine,w,
-            (UCHAR *)q->CurrentPaging.CpuAddress+(SIZE_T)w->DmaAddress,w->DmaBytes,io,power);
+            (UCHAR *)q->CurrentPaging.CpuAddress+w->PagingOffset,w->PagingBytes,io,power);
         if(status!=STATUS_SUCCESS)goto done;
         goto notify;
     }
@@ -316,7 +323,7 @@ NTSTATUS TgGpuResetWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io *
         if(!NT_SUCCESS(status)) goto done;
         RtlZeroMemory(w,sizeof(*w));q->CurrentPrivate=NULL;
     }
-    if(w->Paging && w->Attempted && !w->CompletionReady) {
+    if(w->PagingStarted && !w->CompletionReady) {
         status=TgGpuResetContextWork(q->Engine,w,io,power,clock);
         if(!NT_SUCCESS(status))goto done;
     } else if(w->Context) {
@@ -335,8 +342,7 @@ NTSTATUS TgGpuResetWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io *
      */
     while(!IsListEmpty(&q->Pending)) {
         entry=CONTAINING_RECORD(q->Pending.Flink,TG_GPU_QUEUE_ENTRY,Link);
-        status=entry->Work.Paging || entry->Work.Software || entry->Work.Preemption?
-            STATUS_SUCCESS:TgGpuCancelCapturedWork(q->Engine,&entry->Work);
+        status=entry->Work.Context?TgGpuCancelCapturedWork(q->Engine,&entry->Work):STATUS_SUCCESS;
         if(!NT_SUCCESS(status)) goto done;
         BOOLEAN owned=entry->Owned;
         if(entry->Work.Preemption)--q->Preemptions;

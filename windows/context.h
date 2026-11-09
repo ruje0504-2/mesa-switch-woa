@@ -85,6 +85,8 @@ struct _TG_GPU_CONTEXT_WORK {
     BOOLEAN Signaling, Notified, Prepared, HardwareBusy, Submitted, Attempted, Retired, CompletionReady, Paging;
     BOOLEAN Software,Rejected,Preemption;
     BOOLEAN GpuCompleted,CpuCompleted;
+    UINT PagingOffset, PagingBytes, PagingCursor, PagingDmaBytes;
+    BOOLEAN PagingStarted;
 };
 
 NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *, const DXGKRNL_INTERFACE *,
@@ -126,6 +128,7 @@ NTSTATUS TgGpuAcquireContextWork(TG_GPU_CONTEXT_ENGINE *,
  */
 NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *,
     const DXGKARG_SUBMITCOMMANDVIRTUAL *, TG_GPU_CONTEXT_WORK *);
+NTSTATUS TgGpuCapturePagingContext(TG_GPU_CONTEXT_ENGINE *,HANDLE,TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuCancelCapturedWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuCaptureSoftwareWork(TG_GPU_CONTEXT_ENGINE *,const DXGKARG_SUBMITCOMMANDVIRTUAL *,TG_GPU_CONTEXT_WORK *);

@@ -324,22 +324,51 @@ static void TestPagingBuffer(void)
     bytes=(UCHAR *)flush.pDmaBuffer-commands;
     /* No borrowed PTE pointer survives BuildPagingBuffer. */
     memset(ptes,0,sizeof(ptes));
-    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,FALSE,&io,&power,&completed)==STATUS_GRAPHICS_ALLOCATION_BUSY);
+    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,FALSE,&io,&power,&completed,NULL)==STATUS_GRAPHICS_ALLOCATION_BUSY);
     CHECK(completed==0 && entries[7]==UINT64_C(0xa5a5a5a5a5a5a5a5) && !model.Writes);
     power.ready=false;
-    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed)==STATUS_DEVICE_NOT_READY);
+    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed,NULL)==STATUS_DEVICE_NOT_READY);
     CHECK(completed==0 && !model.Writes);power.ready=true;
     /* Corrupt the trailing operation, retaining the valid update prefix. */
     saved=*(UINT *)(commands+prefix);*(UINT *)(commands+prefix)=UINT32_MAX;
-    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed)==STATUS_INVALID_PARAMETER);
+    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed,NULL)==STATUS_INVALID_PARAMETER);
     CHECK(completed==0 && entries[7]==UINT64_C(0xa5a5a5a5a5a5a5a5) && !model.Writes);
     *(UINT *)(commands+prefix)=saved;
-    CHECK(NT_SUCCESS(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed)));
+    CHECK(NT_SUCCESS(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed,NULL)));
     CHECK(completed==bytes && model.Writes==2 && model.Root==0x900200);
     CHECK(entries[7]==UINT64_C(0x101700011) && entries[8]==UINT64_C(0x100900021) && entries[9]==UINT64_C(0x100800035));
     model.Control=0x10000;
-    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed)==STATUS_IO_TIMEOUT);
+    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed,NULL)==STATUS_IO_TIMEOUT);
     CHECK(completed==prefix && completed!=bytes); /* do not complete the paging fence */
+
+    /* The executor stops at a CE record and reports only preceding bytes.
+     * The source VA is the OS-supplied address, without AllocationOffset. */
+    model.Control=0x18000;
+    DXGKARG_BUILDPAGINGBUFFER dma = {.Operation=DXGK_OPERATION_VIRTUAL_FILL,
+        .pDmaBuffer=commands+bytes,.DmaSize=sizeof(commands)-(UINT)bytes};
+    dma.FillVirtual=(DXGK_BUILDPAGINGBUFFER_FILLVIRTUAL){.DestinationVirtualAddress=0x1030,
+        .FillSizeInBytes=4000,.FillPattern=0x78563412};
+    CHECK(TgGpuBuildPagingBuffer(&dma,&build)==STATUS_SUCCESS);
+    SIZE_T copy_offset=(UCHAR *)dma.pDmaBuffer-commands;
+    dma.Operation=DXGK_OPERATION_VIRTUAL_TRANSFER;
+    dma.DmaSize=(UINT)(sizeof(commands)-copy_offset);
+    dma.TransferVirtual=(DXGK_BUILDPAGINGBUFFER_TRANSFERVIRTUAL){
+        .AllocationOffsetInBytes=PAGE_SIZE,.SourceVirtualAddress=0x1030,
+        .DestinationVirtualAddress=0x2030,.TransferSizeInBytes=4000};
+    dma.TransferVirtual.Flags.Src64KBPages=1;
+    CHECK(TgGpuBuildPagingBuffer(&dma,&build)==STATUS_NOT_SUPPORTED);
+    dma.TransferVirtual.Flags.Flags=0;
+    CHECK(TgGpuBuildPagingBuffer(&dma,&build)==STATUS_SUCCESS);
+    SIZE_T end=(UCHAR *)dma.pDmaBuffer-commands;
+    BOOLEAN requires=FALSE;
+    CHECK(TgGpuValidatePagingBuffer(&segment,commands,end,&requires)==STATUS_SUCCESS && requires);
+    TG_GPU_PAGING_DMA_STEP step={0};
+    CHECK(TgGpuExecutePagingBuffer(&segment,commands,end,TRUE,&io,&power,&completed,&step)==STATUS_SUCCESS);
+    CHECK(completed==bytes && step.RecordBytes==copy_offset-bytes && step.Operation.fill &&
+        step.Operation.bytes==4000 && step.Operation.destination==0x1030 && step.Operation.pattern==0x78563412);
+    CHECK(TgGpuExecutePagingBuffer(&segment,commands+copy_offset,end-copy_offset,TRUE,&io,&power,&completed,&step)==STATUS_SUCCESS);
+    CHECK(!completed && step.RecordBytes==end-copy_offset && !step.Operation.fill &&
+        step.Operation.source==0x1030 && step.Operation.destination==0x2030 && step.Operation.bytes==4000);
 
     /* Mandatory immediate initialization accepts a different CPU alias only
      * when every page resolves to the owned contiguous table span.

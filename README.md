@@ -999,6 +999,22 @@ not a registered WDDM adapter or Vulkan API draw**.
 
 ### Packed Windows backend diagnostic
 
+**.59 / ABI 31 (904 bytes)** adds ordered `VIRTUAL_FILL` and
+`VIRTUAL_TRANSFER` records. The worker retains the system context and the
+Windows paging fence across the entire buffer. Each B0B5 packet uses the
+shared staging region and must retire with matching GPU and CPU Reference
+values before the worker advances to the next record.
+
+**Physical Lite pass, 2026-11-09 08:26:52 Pacific.** One diagnostic paging
+buffer updated two PTEs, flushed the TLB, filled 4,000 bytes and copied those
+bytes to a second VA. Both data regions and all 48 guard words matched. The
+buffer emitted one paging notification at fence 1. The later clear and draw
+cycles retained all 256 matching pixels and 768 guards, ended at fence 9 and
+GPU/CPU Reference 6/6, and left zero faults or owned resources. Six controlled
+ARM64 backend models and 115 JSON cases passed. This uses diagnostic
+allocation and notification callbacks. Live VidMm and Vulkan API execution
+remain pending.
+
 `windows/diagnostic_backend.c` is linked only into the opt-in KMDF probe.
 `--gpu-json --gpu-backend-729` exercises the shared cold hardware owner, packed
 976 KiB graphics context, full 128 KiB root, two-entry USER/KERNEL batches,

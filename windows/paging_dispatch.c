@@ -25,8 +25,8 @@ NTSTATUS APIENTRY TgGpuDdiBuildPagingBuffer(HANDLE adapter,DXGKARG_BUILDPAGINGBU
 {
     TG_GPU_CONTEXT_ENGINE *e=adapter;TG_GPU_PROCESS *p;TG_GPU_ROOT_TABLE root={0};
     TG_GPU_PAGING_BUILD build={0};TG_GPU_QUEUE_ENTRY *entry;KIRQL irql;
-    HANDLE owner;NTSTATUS status;UINT count=0,available,offset;PVOID before;
-    UINT64 *scratch=NULL;BOOLEAN immediate=FALSE;
+    HANDLE owner=NULL;NTSTATUS status;UINT count=0,available,offset;PVOID before;
+    UINT64 *scratch=NULL;BOOLEAN immediate=FALSE,virtual_dma=FALSE;
     PAGED_CODE();
     if(!e || !a || !e->Tables)return STATUS_INVALID_PARAMETER;
     if(a->Operation==DXGK_OPERATION_UPDATE_PAGE_TABLE) {
@@ -35,14 +35,23 @@ NTSTATUS APIENTRY TgGpuDdiBuildPagingBuffer(HANDLE adapter,DXGKARG_BUILDPAGINGBU
         owner=u->hProcess;count=u->NumPageTableEntries;
         immediate=u->UpdateMode==DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;
     } else if(a->Operation==DXGK_OPERATION_FLUSH_TLB)owner=a->FlushTlb.hProcess;
-    else return STATUS_NOT_SUPPORTED;
-    KeAcquireSpinLock(&e->Lock,&irql);p=process(e,owner);
-    if(e->Stopping || !p || !system_context(e,a->hSystemContext) ||
+    else if (a->Operation==DXGK_OPERATION_VIRTUAL_FILL || a->Operation==DXGK_OPERATION_VIRTUAL_TRANSFER) {
+        if (!a->hSystemContext) return STATUS_INVALID_PARAMETER;
+        virtual_dma=TRUE;
+    } else if (a->Operation==DXGK_OPERATION_TRANSFER && !a->Transfer.TransferSize && !a->MultipassOffset) {
+        /* Global TDR eviction can have no contents to move. This path is
+         * called while the GPU is isolated and must perform no MMIO. */
+        return a->Transfer.hAllocation ? TgGpuValidatePagingAllocation(e,a->Transfer.hAllocation,
+            a->Transfer.TransferOffset,0) : STATUS_SUCCESS;
+    } else return STATUS_NOT_SUPPORTED;
+    KeAcquireSpinLock(&e->Lock,&irql);p=virtual_dma?NULL:process(e,owner);
+    if(e->Stopping || (!virtual_dma && !p) || !system_context(e,a->hSystemContext) ||
        (immediate && (!p->Flags.SystemProcess || !a->UpdatePageTable.Flags.InitialUpdate ||
                        e->Active || e->Notification || e->Channel.referenced))) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
     }
-    ++p->PagingReferences;++e->Creating;KeReleaseSpinLock(&e->Lock,irql);
+    if (p) ++p->PagingReferences;
+    ++e->Creating;KeReleaseSpinLock(&e->Lock,irql);
     build.Tables=e->Tables;build.TableBytes=TG_GPU_TABLE_BYTES;
     build.GpuPagesUncached=build.InitialMappingUncached=TRUE;
     if(a->Operation==DXGK_OPERATION_UPDATE_PAGE_TABLE) {
@@ -55,7 +64,7 @@ NTSTATUS APIENTRY TgGpuDdiBuildPagingBuffer(HANDLE adapter,DXGKARG_BUILDPAGINGBU
         scratch=ExAllocatePool2(POOL_FLAG_NON_PAGED,(SIZE_T)(count?count:1)*sizeof(*scratch),TAG);
         if(!scratch){status=STATUS_NO_MEMORY;goto done;}
         build.Scratch=scratch;build.ScratchEntries=count;
-    } else {
+    } else if (!virtual_dma) {
         /* This DDI reports a full 128 KiB root and its full entry capacity in
          * GetRootPageTableSize. No root pointer from an older context is used
          * while VidMm may be moving that context's root allocation. */
@@ -63,6 +72,15 @@ NTSTATUS APIENTRY TgGpuDdiBuildPagingBuffer(HANDLE adapter,DXGKARG_BUILDPAGINGBU
         status=TgGpuResolveRootTable(e->Tables,&set,&root);
         if(!NT_SUCCESS(status))goto done;
         build.Root=&root;
+    } else {
+        BOOLEAN fill=a->Operation==DXGK_OPERATION_VIRTUAL_FILL;
+        HANDLE allocation=fill?a->FillVirtual.hAllocation:a->TransferVirtual.hAllocation;
+        if (allocation) {
+            status=TgGpuValidatePagingAllocation(e,allocation,
+                fill?a->FillVirtual.AllocationOffsetInBytes:a->TransferVirtual.AllocationOffsetInBytes,
+                fill?a->FillVirtual.FillSizeInBytes:a->TransferVirtual.TransferSizeInBytes);
+            if (!NT_SUCCESS(status)) goto done;
+        }
     }
     if(immediate) {status=TgGpuBuildPagingBuffer(a,&build);goto done;}
     entry=a->pDmaBufferPrivateData;offset=a->DmaBufferWriteOffset;available=a->DmaSize;before=a->pDmaBuffer;
@@ -74,7 +92,8 @@ NTSTATUS APIENTRY TgGpuDdiBuildPagingBuffer(HANDLE adapter,DXGKARG_BUILDPAGINGBU
     }
     if(offset && (entry->Paging.Magic!=TG_GPU_PAGING_BUFFER_MAGIC || entry->Paging.Engine!=e ||
         entry->Paging.CpuAddress!=(UCHAR *)before-offset || entry->Paging.GpuAddress!=a->DmaBufferGpuVirtualAddress ||
-        entry->Paging.BuiltBytes!=offset || entry->Paging.Capacity!=offset+available)) {
+        entry->Paging.BuiltBytes!=offset || entry->Paging.Capacity!=offset+available ||
+        (entry->Paging.SystemContext && a->hSystemContext && entry->Paging.SystemContext!=a->hSystemContext))) {
         status=STATUS_INVALID_PARAMETER;goto done;
     }
     status=TgGpuBuildPagingBuffer(a,&build);
@@ -83,14 +102,16 @@ NTSTATUS APIENTRY TgGpuDdiBuildPagingBuffer(HANDLE adapter,DXGKARG_BUILDPAGINGBU
         if(written) {
             if(!offset) {
                 RtlZeroMemory(entry,sizeof(*entry));
-                entry->Paging=(TG_GPU_PAGING_BUFFER){e,before,a->DmaBufferGpuVirtualAddress,0,available,TG_GPU_PAGING_BUFFER_MAGIC};
+                entry->Paging=(TG_GPU_PAGING_BUFFER){.Engine=e,.CpuAddress=before,.GpuAddress=a->DmaBufferGpuVirtualAddress,
+                    .Capacity=available,.Magic=TG_GPU_PAGING_BUFFER_MAGIC};
             }
+            if (virtual_dma) entry->Paging.SystemContext=a->hSystemContext;
             entry->Paging.BuiltBytes=offset+written;a->DmaSize=available-written;
         }
     }
 done:
     if(scratch)ExFreePoolWithTag(scratch,TAG);
-    KeAcquireSpinLock(&e->Lock,&irql);--p->PagingReferences;--e->Creating;
+    KeAcquireSpinLock(&e->Lock,&irql);if (p) --p->PagingReferences;--e->Creating;
     KeReleaseSpinLock(&e->Lock,irql);return status;
 }
 void TgGpuRegisterPagingDdi(DRIVER_INITIALIZATION_DATA *d)

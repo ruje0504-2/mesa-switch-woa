@@ -47,7 +47,8 @@ mesa_includes = [mesa_src, mesa_src / "nouveau/headers",
                  mesa_src / "nouveau/headers/nvidia/classes"]
 encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
 core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c", root / "core/fault.c",
-        root / "core/execute.c", root / "core/submission.c", root / "core/channel.c", root / "core/command_stream.c",
+        root / "core/execute.c", root / "core/submission.c", root / "core/channel.c",
+        root / "core/command_stream.c", root / "core/paging_dma.c",
         root / "platform/t214_mmu.c", root / "platform/t214_frontend.c",
         root / "platform/t214_gr.c", root / "platform/t214_acr.c", root / "platform/t214_pmu.c",
         root / "core/gr_firmware.c", root / "core/acr_firmware.c", root / "core/gr_image.c",
@@ -197,7 +198,8 @@ if args.windows_tests:
                     str(args.out / "paging.obj"), str(args.out / "gm20b_mmu.obj"),
                     str(args.out / "table_segment.obj"), str(args.out / "private_memory.obj"),
                     str(args.out / "root_table.obj"), str(args.out / "t214_mmu.obj"),
-                    str(args.out / "paging_buffer.obj"), str(args.out / "resources.obj"),
+                    str(args.out / "paging_buffer.obj"), str(args.out / "paging_dma.obj"),
+                    str(args.out / "resources.obj"),
                     str(sdk_lib)], check=True)
     context_test = args.out / "test_context_windows.obj"
     subprocess.run([args.clang_cl, *flags, "/clang:-funwind-tables", f"/Fo{context_test}", "--",
