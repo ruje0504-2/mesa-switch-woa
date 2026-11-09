@@ -24,6 +24,8 @@ typedef struct _TG_GPU_PAGING_BUILD {
  */
 NTSTATUS TgGpuBuildPagingBuffer(DXGKARG_BUILDPAGINGBUFFER *Args,
                                const TG_GPU_PAGING_BUILD *Build);
+/* Whole-buffer validation without publishing a PTE or issuing MMIO. */
+NTSTATUS TgGpuValidatePagingBuffer(const TG_GPU_TABLE_SEGMENT *,const void *,SIZE_T);
 
 /* Submit-worker path, not a GPU command packet parser or a registered DDI.
  * Retire earlier GPU work and hold affected address spaces idle/serialized.

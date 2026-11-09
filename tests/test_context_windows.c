@@ -4,6 +4,7 @@
 #include "../windows/allocation.h"
 #include "../windows/query.h"
 #include "../windows/adapter.h"
+#include "../windows/paging_dispatch.h"
 #include "../platform/t214_resources.h"
 #include <ntimage.h>
 
@@ -30,6 +31,7 @@ static BOOLEAN pool_used[64], memory_used[64], fail_pool, fail_allocate, fail_fr
 static HANDLE fail_memory_handle;
 static UINT pool_fail_after=UINT32_MAX,memory_fail_after=UINT32_MAX;
 static _Alignas(PAGE_SIZE) UCHAR adapter_table[TG_GPU_ADAPTER_TABLE_BYTES];
+static _Alignas(PAGE_SIZE) UCHAR paging_tables[2*TG_GPU_TABLE_BYTES];
 static BOOLEAN adapter_table_used,adapter_table_fail_free;
 static BOOLEAN fail_sync, in_sync;
 static BOOLEAN fail_reserve;
@@ -89,6 +91,8 @@ static PHYSICAL_ADDRESS NTAPI Physical(PVOID address)
     PHYSICAL_ADDRESS p;
     ULONG_PTR table_offset=(ULONG_PTR)address-(ULONG_PTR)adapter_table;
     ULONG_PTR graphics_offset=(ULONG_PTR)address-(ULONG_PTR)graphics_memory;
+    ULONG_PTR paging_offset=(ULONG_PTR)address-(ULONG_PTR)paging_tables;
+    if(paging_offset<sizeof(paging_tables)){p.QuadPart=0x94000000+paging_offset;return p;}
     if(table_offset<sizeof(adapter_table)){p.QuadPart=0x92000000+table_offset;return p;}
     if(graphics_offset<sizeof(graphics_memory)) {
         p.QuadPart=0x93000000+(graphics_offset/TG_GPU_CONTEXT_PRIVATE_BYTES)*0x100000+
@@ -244,6 +248,10 @@ static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *othe
     resource=create.hResource;handles[0]=info[0].hAllocation;handles[1]=info[1].hAllocation;
     CHECK(resource && handles[0] && handles[1] && e->AllocationCount==2 && e->ResourceCount==1);
     CHECK(info[0].Size==8192 && info[1].Size==65536 && info[0].Alignment==PAGE_SIZE);
+    CHECK(TgGpuValidatePagingAllocation(e,handles[0],PAGE_SIZE,PAGE_SIZE)==STATUS_SUCCESS);
+    CHECK(TgGpuValidatePagingAllocation(e,handles[0],8192,1)==STATUS_INVALID_BUFFER_SIZE);
+    CHECK(TgGpuValidatePagingAllocation(e,handles[0],UINT64_MAX,1)==STATUS_INVALID_BUFFER_SIZE);
+    CHECK(TgGpuValidatePagingAllocation(other,handles[0],0,1)==STATUS_INVALID_PARAMETER);
     CHECK(info[0].PreferredSegment.SegmentId0==2 && info[0].SupportedWriteSegmentSet==2);
     CHECK(info[0].FlagsWddm2.Value==0x80000881 && info[1].FlagsWddm2.Value==0x80);
     CHECK(!info[0].FlagsWddm2.AccessedPhysically && !info[0].FlagsWddm2.Cached &&
@@ -667,6 +675,107 @@ static __declspec(noinline) void TestAdapterLifecycle(const DXGKRNL_INTERFACE *c
     CHECK(!adapter_table_used && !resource_live);
 }
 
+__declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxgk)
+{
+    static TG_GPU_CONTEXT_ENGINE e;static TG_GPU_WORK_QUEUE q;
+    static TG_GPU_QUEUE_ENTRY priv[3];static _Alignas(PAGE_SIZE) UCHAR commands[2][512];
+    TG_GPU_TABLE_SEGMENT tables={.Memory={(HANDLE)99,paging_tables,{.QuadPart=0x94000000},sizeof(paging_tables)},.SegmentId=1};
+    DRIVER_INITIALIZATION_DATA ddi={0};DXGKARG_GETROOTPAGETABLESIZE size={.NumberOfPte=1};
+    DXGKARG_CREATEPROCESS process={.hDxgkProcess=(HANDLE)100,.Flags.SystemProcess=1};
+    DXGKARG_CREATEDEVICE device={.hDevice=(HANDLE)101};
+    DXGKARG_CREATECONTEXT context={.hContext=(HANDLE)102,.EngineAffinity=1,.Flags.VirtualAddressing=1};
+    DXGKARG_SETROOTPAGETABLE set={.Address={1,0,0},.NumEntries=TG_GPU_TABLE_ENTRIES};
+    DXGKARG_BUILDPAGINGBUFFER a={.Operation=DXGK_OPERATION_UPDATE_PAGE_TABLE};
+    DXGKARG_SUBMITCOMMANDVIRTUAL submit={.DmaBufferVirtualAddress=0x10000,.DmaBufferSize=40,
+        .SubmissionFenceId=100,.pDmaBufferPrivateData=&priv[2],.DmaBufferPrivateDataSize=sizeof(priv[2])};
+    DXGK_PTE ptes[3]={{.Valid=1,.Segment=1,.PageAddress=TG_GPU_TABLE_BYTES}};
+    struct tg_gpu_power power={.owned=true,.ready=true,.pmic_address=0x33,.original_enable=0x40,.original_voltage=50};
+    struct tg_gpu_clock clock={0};
+    struct tg_gpu_power_io io={&hw,Read,Write,ReadPmic,WritePmic,Delay};
+    UINT64 *leaf=(UINT64 *)(paging_tables+TG_GPU_TABLE_BYTES);UINT before=interrupts;
+    CHECK(TgGpuInitializeContextEngine(&e,dxgk,&tables)==STATUS_SUCCESS);TestGraphicsTemplate(&e);
+    TgGpuRegisterContextDdis(&ddi);
+    CHECK(ddi.DxgkDdiBuildPagingBuffer==TgGpuDdiBuildPagingBuffer && !ddi.DxgkDdiSubmitCommandVirtual);
+    CHECK(ddi.DxgkDdiGetRootPageTableSize(&e,&size)==TG_GPU_TABLE_BYTES && size.NumberOfPte==TG_GPU_TABLE_ENTRIES);
+    CHECK(ddi.DxgkDdiCreateProcess(&e,&process)==STATUS_SUCCESS);device.hKmdProcess=process.hKmdProcess;
+    CHECK(ddi.DxgkDdiCreateDevice(&e,&device)==STATUS_SUCCESS);
+    CHECK(ddi.DxgkDdiCreateContext(device.hDevice,&context)==STATUS_SUCCESS);
+    set.hContext=context.hContext;ddi.DxgkDdiSetRootPageTable(&e,&set);
+    a.UpdatePageTable=(DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE){.PageTableLevel=1,
+        .UpdateMode=DXGK_PAGETABLEUPDATE_CPU_VIRTUAL,.PageTableAddress.CpuVirtual=paging_tables,
+        .pPageTableEntries=ptes,.NumPageTableEntries=1,.Flags.InitialUpdate=1};
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_INVALID_PARAMETER); /* missing process */
+    a.UpdatePageTable.hProcess=process.hKmdProcess;
+    ((TG_GPU_PROCESS *)process.hKmdProcess)->Flags.SystemProcess=0;
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_INVALID_PARAMETER);
+    ((TG_GPU_PROCESS *)process.hKmdProcess)->Flags.SystemProcess=1;
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS);
+    CHECK(((UINT64 *)paging_tables)[0]!=0 && !e.Creating && !((TG_GPU_PROCESS *)process.hKmdProcess)->PagingReferences);
+    for(UINT i=0;i<3;++i)ptes[i]=(DXGK_PTE){.Valid=1,.PageAddress=0x80010000+(UINT64)i*PAGE_SIZE};
+    a.UpdatePageTable.PageTableLevel=0;a.UpdatePageTable.UpdateMode=DXGK_PAGETABLEUPDATE_GPU_PHYSICAL;
+    a.UpdatePageTable.PageTableAddress.GpuPhysical=(D3DGPU_PHYSICAL_ADDRESS){1,0,TG_GPU_TABLE_BYTES};
+    a.UpdatePageTable.StartIndex=7;a.UpdatePageTable.NumPageTableEntries=3;
+    a.pDmaBuffer=commands[0];a.DmaSize=72;a.pDmaBufferPrivateData=&priv[0];a.DmaBufferPrivateDataSize=sizeof(priv[0]);
+    a.DmaBufferGpuVirtualAddress=0x100000;
+    fail_pool=TRUE;CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_NO_MEMORY);fail_pool=FALSE;
+    a.hSystemContext=context.hContext;
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_INVALID_PARAMETER);a.hSystemContext=NULL;
+    ptes[2].NoExecute=1;
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_NOT_SUPPORTED && !priv[0].Paging.Magic);
+    ptes[2].NoExecute=0;
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER);
+    CHECK(a.MultipassOffset==1 && !a.DmaSize && priv[0].Paging.BuiltBytes==72 && !leaf[7]);
+    a.pDmaBuffer=commands[1];a.DmaSize=sizeof(commands[1]);a.pDmaBufferPrivateData=&priv[1];a.DmaBufferGpuVirtualAddress=0x200000;
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS && !a.MultipassOffset);
+    CHECK(priv[1].Paging.BuiltBytes==80 && !leaf[8] && !leaf[9]);
+    a.Operation=DXGK_OPERATION_FLUSH_TLB;a.DmaBufferWriteOffset=80;
+    a.FlushTlb=(DXGK_BUILDPAGINGBUFFER_FLUSHTLB){.RootPageTableAddress={1,0,0},.hProcess=process.hKmdProcess};
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS);
+    CHECK(priv[1].Paging.BuiltBytes==144 && a.DmaSize==sizeof(commands[1])-144);
+    memset(ptes,0,sizeof(ptes)); /* builder retained no OS PTE array */
+    memset(&hw,0,sizeof(hw));hw.mc=0x100;hw.pb=hw.map=hw.sched=1;hw.enable=0x41;hw.voltage=110;
+    hw.expected_root=0x940000;hw.cpu_fence=(UINT32 *)((UCHAR *)e.Commands.CpuAddress+TG_GPU_COMMAND_FENCE);
+    e.UserdBar1Ready=TRUE;e.UserdBar1Offset=0x13000;
+    CHECK(TgGpuInitializeWorkQueue(&q,&e)==STATUS_SUCCESS);
+    submit.hContext=context.hContext;CHECK(TgGpuQueueSubmit(&q,&submit)==STATUS_SUCCESS);
+    submit.Flags.Paging=1;submit.hContext=NULL;submit.DmaBufferVirtualAddress=0x100000;submit.DmaBufferSize=72;
+    submit.pDmaBufferPrivateData=&priv[0];submit.SubmissionFenceId=101;
+    submit.DmaBufferUmdPrivateDataSize=1;CHECK(TgGpuQueueSubmit(&q,&submit)==STATUS_INVALID_PARAMETER);
+    submit.DmaBufferUmdPrivateDataSize=0;CHECK(TgGpuQueueSubmit(&q,&submit)==STATUS_SUCCESS);
+    CHECK(TgGpuQueueSubmit(&q,&submit)==STATUS_DEVICE_BUSY);
+    submit.DmaBufferVirtualAddress=0x200000;submit.DmaBufferSize=144;submit.pDmaBufferPrivateData=&priv[1];submit.SubmissionFenceId=102;
+    CHECK(TgGpuQueueSubmit(&q,&submit)==STATUS_SUCCESS);
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_PENDING && !leaf[7]);
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_PENDING && !leaf[7] && interrupts==before);
+    hw.gpu_fence=q.Current.Expected;expected_fence=100;reuse_private=&priv[2];
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_SUCCESS && !reuse_private && !leaf[7]);
+    expected_fence=101;reuse_private=&priv[0];
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_SUCCESS && !reuse_private && leaf[7] && !leaf[8]);
+    expected_fence=102;reuse_private=&priv[1];
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_SUCCESS && !reuse_private && leaf[8] && leaf[9]);
+    CHECK(e.LastCompletedFence==102 && interrupts==before+3 && !e.Active && !e.Notification && hw.root==0x940000);
+    /* Failed TLB invalidation must pin the paging slot and never notify its
+     * fence. Full reset cancels it only after proving device isolation. */
+    a.pDmaBuffer=commands[0];a.DmaSize=sizeof(commands[0]);a.DmaBufferWriteOffset=0;
+    a.pDmaBufferPrivateData=&priv[0];a.DmaBufferGpuVirtualAddress=0x100000;
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS);
+    submit.pDmaBufferPrivateData=&priv[0];submit.DmaBufferVirtualAddress=0x100000;submit.DmaBufferSize=64;submit.SubmissionFenceId=103;
+    CHECK(TgGpuQueueSubmit(&q,&submit)==STATUS_SUCCESS);hw.fail_tlb=TRUE;
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_IO_TIMEOUT && e.Active==&q.Current);
+    CHECK(q.Current.Paging && e.LastCompletedFence==102 && interrupts==before+3);
+    hw.fail_tlb=FALSE;hw.fail_reset=TRUE;
+    CHECK(TgGpuResetWorkQueue(&q,&io,&power,&clock)==STATUS_DEVICE_DATA_ERROR && q.Current.Engine);
+    hw.fail_reset=FALSE;CHECK(TgGpuResetWorkQueue(&q,&io,&power,&clock)==STATUS_SUCCESS);
+    CHECK(!q.Current.Engine && !e.Active && !e.Notification && e.LastCompletedFence==102 && interrupts==before+3);
+    CHECK(TgGpuStopWorkQueue(&q)==STATUS_SUCCESS);
+    CHECK(ddi.DxgkDdiDestroyContext(context.hContext)==STATUS_SUCCESS);
+    CHECK(ddi.DxgkDdiDestroyDevice(device.hDevice)==STATUS_SUCCESS);
+    CHECK(ddi.DxgkDdiDestroyProcess(&e,process.hKmdProcess)==STATUS_SUCCESS);
+    CHECK(TgGpuStopContextEngine(&e)==STATUS_SUCCESS);
+    for(UINT i=0;i<64;++i)CHECK(!pool_used[i] && !memory_used[i]);
+    for(UINT i=0;i<4;++i)CHECK(!graphics_used[i]);
+}
+
 void start(void)
 {
     static TG_GPU_CONTEXT_ENGINE e,other;
@@ -932,5 +1041,6 @@ void start(void)
     for(i=0;i<64;++i) CHECK(!pool_used[i] && !memory_used[i]);
     for(i=0;i<4;++i)CHECK(!graphics_used[i]);
     TestAdapterLifecycle(&dxgk);
+    TestPagingDispatch(&dxgk);
     WriteFile(GetStdHandle((ULONG)-11),pass,sizeof(pass)-1,&written,NULL);ExitProcess(0);
 }

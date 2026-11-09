@@ -224,7 +224,7 @@ VidMm remains responsible for allocations within the segment; there is no
 second suballocator. The adapter must finish GPU work/drain/reset and stop
 paging before destroying the segment. Failed frees retain the tracking handle.
 Do not use the pool's own CPU VA to validate a different VidMm CPU mapping.
-WDDM callback wiring and physical use of this segment remain open.
+Live WDDM registration and physical use of this segment remain open.
 The CPU-update helper is valid for initialization/test-owned mappings; do not
 advertise `CPU_VIRTUAL` updates for the dedicated memory segment without
 resolving the documented local-segment restriction.
@@ -236,10 +236,32 @@ no borrowed PTE array. The mandatory NULL-DMA CPU initialization path checks
 every page of VidMm's uncached alias against the owned table backing.
 At ordered submission, the worker helper publishes uncached entries before
 real TLB MMIO. It rejects an invalid trailing record before any publication.
-A TLB error returns incomplete progress, never permission to complete the
-paging fence or recycle old pages. The adapter still has to supply residency,
-address-space serialization, submission/DDI wiring, and fence/fault handling;
+A TLB error returns incomplete progress, never permission to complete its
+paging fence or recycle old pages. Address-space serialization and normal
+completion are now connected to the shared queue; complete residency,
+submission/fault dispatch and the remaining paging operations are still open;
 this library is not yet an advertised WDDM paging mode.
+
+`windows/paging_dispatch.c` implements the `BuildPagingBuffer` DDI for these
+two operations. It validates KMD process/allocation handles, allocation-relative
+ranges and the optional system context, keeps the process/engine alive through
+scratch allocation, and snapshots a kernel-only CPU/GPU buffer descriptor.
+Continued builds check the exact write offset/capacity and never retain VidMm's
+PTE array. Mandatory NULL-DMA CPU initialization requires an initial update of
+the system paging process with no active GPU slot. Microsoft documents that
+[paging-process bootstrap](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/system-paging-process)
+separately from ordinary queued updates.
+
+`windows/paging_submit.c` serializes paging and rendering in the same execution
+slot. It drains the memory caches before publishing uncached PTE updates and
+executes requested TLB invalidations in record order. Only complete success
+arms synchronized OS fence notification; a split buffer containing just updates
+does not imply that a later buffer's flush has already run. Partial failure
+pins the slot until verified reset, and canceled fences are never reported as
+complete. OS private/DMA storage and residency remain valid until notification.
+The native context fixture now covers a pending render followed by split paging
+buffers, immediate private-buffer reuse, malformed inputs, OOM and TLB/reset
+failure. These are controlled OS/GPU models, **not live WDDM or hardware proof**.
 
 `windows/root_table.c` consumes real WDK root-table arguments. It rounds root
 sizes to whole CPU pages, resolves the complete segment span, writes the RAMIN
@@ -250,6 +272,12 @@ submission point, with old pages retained through completion/reset; they must
 not run early from `BuildPagingBuffer`. The context DDIs below now consume
 these helpers. The channel worker below implements hardware binding; complete
 miniport registration and physical validation remain unfinished.
+The WDDM `GetRootPageTableSize` callback reports a full **128 KiB / 16,384-entry**
+root from the first allocation, using the documented ability to increase the
+[actual entry count](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_getrootpagetablesize).
+This makes the queued DDI's full-root alias valid instead of presuming that a
+smaller OS allocation has 128 KiB of backing. The generic helper above still
+supports explicitly sized roots.
 `platform/t214_mmu.c` performs the Switchroot TLB invalidate sequence and
 reports timeout/read failures. Add `--windows-tests` to build `test-paging.exe`
 against the real WDK types, then run it in ARM64 Windows/WinPE. This test uses
@@ -294,7 +322,7 @@ tests exercise missing LIC, partial map/unmap failure, each allocation failure,
 live-device stop, cleanup retry and stop/start cycles; the resource-only
 lifecycle test asserts that it performs **zero GPU MMIO**. This is library integration only:
 there is still no miniport DriverEntry/INF registration, live DRIVERCAPS,
-SubmitCommandVirtual/paging dispatch, IRQ completion or TDR adapter hookup.
+SubmitCommandVirtual/remaining paging operations, IRQ completion or TDR adapter hookup.
 The probe uses the shared cold-bootstrap, BAR1 remap and hot channel helpers
 described below; this lifecycle module still has no live adapter hookup.
 
@@ -343,7 +371,7 @@ complete. Stop joins the thread before queue reset or releasing any I/O backing;
 failed join/close preserves tracking for retry. `test-worker.exe` exercises these
 states with a controlled dispatcher/thread substitute, **not an actual kernel
 thread**. Full platform-adapter startup and queue execution still have no live
-WDDM evidence; paging/IRQ/TDR dispatch and registration remain unfinished.
+WDDM evidence; complete paging/submission/IRQ/TDR dispatch and registration remain unfinished.
 
 `windows/context.c` supplies the process/device/context creation and destruction
 DDIs, root-table DDIs, completed-fence query and DPC callback. Its registration
@@ -408,7 +436,7 @@ function pointers using explicit allocation, interrupt and GPU-write substitutes
 It checks lifetime, failed root changes, pending/duplicate notification, retained
 references and failed-free retry, not live Dxgkrnl or GPU execution.
 
-`windows/work_queue.c` admits multiple contexts in order using the nonpaged
+`windows/work_queue.c` admits contexts and kernel paging records in order using the nonpaged
 private buffer supplied by Dxgkrnl for each DMA buffer. Context creation reports
 the required private-data size; this initial queue accepts no UMD-private payload
 or specialized submission flags. Admission allocates nothing and holds each

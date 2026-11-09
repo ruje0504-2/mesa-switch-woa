@@ -19,6 +19,7 @@ struct _TG_GPU_PROCESS {
     TG_GPU_CONTEXT_ENGINE *Engine;
     HANDLE Runtime;
     UINT Devices;
+    UINT PagingReferences;
     DXGK_CREATEPROCESSFLAGS Flags;
     TG_GPU_INTERNAL_VA Internal;
     BOOLEAN Closing;
@@ -78,7 +79,7 @@ struct _TG_GPU_CONTEXT_WORK {
     TG_GPU_ROOT_TABLE Root;
     UINT64 DmaAddress, FencePhysicalAddress, InternalVa;
     UINT DmaBytes, SubmissionFence, Expected;
-    BOOLEAN Signaling, Notified, Prepared, HardwareBusy, Submitted, Attempted, Retired, CompletionReady;
+    BOOLEAN Signaling, Notified, Prepared, HardwareBusy, Submitted, Attempted, Retired, CompletionReady, Paging;
 };
 
 NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *, const DXGKRNL_INTERFACE *,
@@ -122,6 +123,10 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *,
     const DXGKARG_SUBMITCOMMANDVIRTUAL *, TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuCancelCapturedWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
+/* Kernel-generated paging records share the ordered execution slot. CPU PTE
+ * publication and real TLB completion precede arming the OS notification. */
+NTSTATUS TgGpuExecutePagingWork(TG_GPU_CONTEXT_ENGINE *,TG_GPU_CONTEXT_WORK *,
+    const void *,SIZE_T,const struct tg_gpu_power_io *,const struct tg_gpu_power *);
 /* After acquisition and before hardware binding, repair the reserved PDE and
  * encode the USER workload plus a driver-generated KERNEL completion packet.
  * This performs no MMIO. The hardware backend still binds RAMIN, invalidates
@@ -148,7 +153,9 @@ NTSTATUS TgGpuObserveContextWork(TG_GPU_CONTEXT_ENGINE *,TG_GPU_CONTEXT_WORK *,
  */
 NTSTATUS TgGpuQuiesceContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *,
     const struct tg_gpu_power_io *, const struct tg_gpu_power *);
-/* Only a matching GPU fence plus successful retirement can notify VidSch.
+/* Render work requires a matching GPU fence plus successful retirement.
+ * Paging work enters the common notification phase only after the encoded
+ * table updates and requested TLB invalidations have completed successfully.
  * Drop context ownership before notification; it may immediately cause object
  * destruction. A failed synchronization retains an engine-only notification
  * record for retry/reset and prevents the next work from overtaking its fence.

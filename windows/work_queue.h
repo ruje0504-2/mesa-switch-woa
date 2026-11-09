@@ -2,17 +2,28 @@
 #ifndef TEGRA_GPU_WORK_QUEUE_H
 #define TEGRA_GPU_WORK_QUEUE_H
 #include "context.h"
+#include "paging_buffer.h"
 #define TG_GPU_DMA_BUFFER_BYTES (64u*1024u)
+#define TG_GPU_PAGING_BUFFER_MAGIC 0x50474754u
+typedef struct _TG_GPU_PAGING_BUFFER {
+    TG_GPU_CONTEXT_ENGINE *Engine;
+    PVOID CpuAddress;
+    UINT64 GpuAddress;
+    UINT BuiltBytes,Capacity,Magic;
+} TG_GPU_PAGING_BUFFER;
 
 /* Dxgkrnl supplies nonpaged private storage for each submitted DMA buffer.
  * No user pointers or caller-initialized list links are trusted. This initial
  * virtual backend accepts no UMD-private payload; the entire area belongs to
  * the kernel queue after admission. The adapter must still validate commands
  * and residency before calling the queue, and preserve OS submission order.
+ * Kernel-built paging metadata retains an OS-owned immutable DMA buffer; it
+ * is never interpreted as a USER GPFIFO workload or an application context.
  */
 typedef struct _TG_GPU_QUEUE_ENTRY {
     LIST_ENTRY Link;
     TG_GPU_CONTEXT_WORK Work;
+    TG_GPU_PAGING_BUFFER Paging;
 } TG_GPU_QUEUE_ENTRY;
 
 typedef struct _TG_GPU_WORK_QUEUE {
@@ -21,6 +32,7 @@ typedef struct _TG_GPU_WORK_QUEUE {
     LIST_ENTRY Pending;
     KEVENT Wake;
     TG_GPU_CONTEXT_WORK Current;
+    TG_GPU_PAGING_BUFFER CurrentPaging;
     PVOID CurrentPrivate;
     NTSTATUS Failure;
     BOOLEAN Servicing, Paused;

@@ -236,3 +236,12 @@ void TgGpuRegisterAllocationDdis(DRIVER_INITIALIZATION_DATA *d)
     d->DxgkDdiOpenAllocation=TgGpuDdiOpenAllocation;
     d->DxgkDdiCloseAllocation=TgGpuDdiCloseAllocation;
 }
+NTSTATUS TgGpuValidatePagingAllocation(TG_GPU_CONTEXT_ENGINE *e,HANDLE handle,UINT64 offset,UINT64 bytes)
+{
+    TG_GPU_ALLOCATION *a=handle;NTSTATUS status=STATUS_SUCCESS;KIRQL irql;
+    if(!e || !a)return STATUS_INVALID_PARAMETER;
+    KeAcquireSpinLock(&e->Lock,&irql);
+    if(a->Engine!=e)status=STATUS_INVALID_PARAMETER;
+    else if(offset>a->Bytes || bytes>a->Bytes-offset)status=STATUS_INVALID_BUFFER_SIZE;
+    KeReleaseSpinLock(&e->Lock,irql);return status;
+}

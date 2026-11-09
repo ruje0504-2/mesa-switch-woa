@@ -12,6 +12,8 @@
 #define TG_GPU_IMPLICIT_SYSTEM_SEGMENT 2u
 
 void TgGpuRegisterAllocationDdis(DRIVER_INITIALIZATION_DATA *);
+/* OS-supplied KMD handle, held alive by VidMm for this paging call. */
+NTSTATUS TgGpuValidatePagingAllocation(TG_GPU_CONTEXT_ENGINE *,HANDLE,UINT64,UINT64);
 DXGKDDI_CREATEALLOCATION TgGpuDdiCreateAllocation;
 DXGKDDI_DESTROYALLOCATION TgGpuDdiDestroyAllocation;
 DXGKDDI_OPENALLOCATIONINFO TgGpuDdiOpenAllocation;

@@ -16,11 +16,11 @@ NTSTATUS TgGpuInitializeWorkQueue(TG_GPU_WORK_QUEUE *q,TG_GPU_CONTEXT_ENGINE *e)
 }
 NTSTATUS TgGpuQueueSubmit(TG_GPU_WORK_QUEUE *q,const DXGKARG_SUBMITCOMMANDVIRTUAL *a)
 {
-    TG_GPU_QUEUE_ENTRY *entry;LIST_ENTRY *l;KIRQL irql;NTSTATUS status;
+    TG_GPU_QUEUE_ENTRY *entry;LIST_ENTRY *l;KIRQL irql,engine_irql;NTSTATUS status;
     if(!q || !q->Engine || !a || !a->pDmaBufferPrivateData ||
         ((ULONG_PTR)a->pDmaBufferPrivateData&(TYPE_ALIGNMENT(TG_GPU_QUEUE_ENTRY)-1)) ||
         a->DmaBufferPrivateDataSize<sizeof(*entry) || a->DmaBufferUmdPrivateDataSize ||
-        a->Flags.Value) return STATUS_INVALID_PARAMETER;
+        (a->Flags.Value&~1u)) return STATUS_INVALID_PARAMETER;
     entry=a->pDmaBufferPrivateData;
     KeAcquireSpinLock(&q->Lock,&irql);
     if(q->Paused || !NT_SUCCESS(q->Failure)) {
@@ -31,8 +31,35 @@ NTSTATUS TgGpuQueueSubmit(TG_GPU_WORK_QUEUE *q,const DXGKARG_SUBMITCOMMANDVIRTUA
         if(CONTAINING_RECORD(l,TG_GPU_QUEUE_ENTRY,Link)==entry) {
             KeReleaseSpinLock(&q->Lock,irql);return STATUS_DEVICE_BUSY;
         }
-    RtlZeroMemory(entry,sizeof(*entry));
-    status=TgGpuCaptureContextWork(q->Engine,a,&entry->Work);
+    if(a->Flags.Paging) {
+        const TG_GPU_PAGING_BUFFER *p=&entry->Paging;UINT64 offset;
+        if(a->NodeOrdinal || a->EngineOrdinal || p->Magic!=TG_GPU_PAGING_BUFFER_MAGIC ||
+           p->Engine!=q->Engine || !p->CpuAddress || ((ULONG_PTR)p->CpuAddress&7) ||
+           p->Capacity>TG_GPU_DMA_BUFFER_BYTES || p->BuiltBytes>p->Capacity ||
+           a->DmaBufferVirtualAddress<p->GpuAddress) {
+            KeReleaseSpinLock(&q->Lock,irql);return STATUS_INVALID_PARAMETER;
+        }
+        offset=a->DmaBufferVirtualAddress-p->GpuAddress;
+        if(offset>p->BuiltBytes || a->DmaBufferSize>p->BuiltBytes-offset ||
+           (offset&7) || (a->DmaBufferSize&7)) {
+            KeReleaseSpinLock(&q->Lock,irql);return STATUS_INVALID_PARAMETER;
+        }
+        status=TgGpuValidatePagingBuffer(q->Engine->Tables,(UCHAR *)p->CpuAddress+(SIZE_T)offset,a->DmaBufferSize);
+        if(NT_SUCCESS(status)) {
+            KeAcquireSpinLock(&q->Engine->Lock,&engine_irql);
+            status=q->Engine->Stopping?STATUS_DEVICE_NOT_READY:STATUS_SUCCESS;
+            if(NT_SUCCESS(status)) {
+                RtlZeroMemory(&entry->Work,sizeof(entry->Work));
+                entry->Work.Engine=q->Engine;entry->Work.Paging=TRUE;
+                entry->Work.SubmissionFence=a->SubmissionFenceId;
+                entry->Work.DmaAddress=offset;entry->Work.DmaBytes=a->DmaBufferSize;
+            }
+            KeReleaseSpinLock(&q->Engine->Lock,engine_irql);
+        }
+    } else {
+        RtlZeroMemory(entry,sizeof(*entry));
+        status=TgGpuCaptureContextWork(q->Engine,a,&entry->Work);
+    }
     if(NT_SUCCESS(status)) InsertTailList(&q->Pending,&entry->Link);
     KeReleaseSpinLock(&q->Lock,irql);
     if(NT_SUCCESS(status)) (VOID)KeSetEvent(&q->Wake,IO_NO_INCREMENT,FALSE);
@@ -51,9 +78,9 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
         KeReleaseSpinLock(&q->Lock,irql);return status;
     }
     q->Servicing=TRUE;w=&q->Current;
-    if(!w->Context && !w->CompletionReady && !IsListEmpty(&q->Pending)) {
+    if(!w->Engine && !IsListEmpty(&q->Pending)) {
         entry=CONTAINING_RECORD(RemoveHeadList(&q->Pending),TG_GPU_QUEUE_ENTRY,Link);
-        *w=entry->Work;q->CurrentPrivate=entry;
+        *w=entry->Work;q->CurrentPrivate=entry;q->CurrentPaging=entry->Paging;
         /* Transfer the retained reference to queue-owned storage. Dxgkrnl may
          * reuse its original buffer immediately from the completion callback.
          */
@@ -61,7 +88,14 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
     }
     KeReleaseSpinLock(&q->Lock,irql);
     status=STATUS_SUCCESS;
-    if(!w->Context) goto done;
+    if(!w->Engine) goto done;
+    if(w->Paging) {
+        status=TgGpuExecutePagingWork(q->Engine,w,
+            (UCHAR *)q->CurrentPaging.CpuAddress+(SIZE_T)w->DmaAddress,w->DmaBytes,io,power);
+        if(status!=STATUS_SUCCESS)goto done;
+        goto notify;
+    }
+    if(w->CompletionReady)goto notify;
     if(!w->Expected) {
         status=TgGpuActivateContextWork(q->Engine,w);
         if(status==STATUS_DEVICE_BUSY) { status=STATUS_PENDING;goto done; }
@@ -81,10 +115,11 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
         status=TgGpuQuiesceContextWork(q->Engine,w,io,power);
         if(!NT_SUCCESS(status)) goto done;
     }
+notify:
     KeAcquireSpinLock(&q->Lock,&irql);q->CurrentPrivate=NULL;KeReleaseSpinLock(&q->Lock,irql);
     status=TgGpuSignalContextWork(q->Engine,w);
     if(status!=STATUS_SUCCESS) goto done;
-    RtlZeroMemory(w,sizeof(*w));
+    RtlZeroMemory(w,sizeof(*w));RtlZeroMemory(&q->CurrentPaging,sizeof(q->CurrentPaging));
     KeAcquireSpinLock(&q->Lock,&irql);wake=!IsListEmpty(&q->Pending);KeReleaseSpinLock(&q->Lock,irql);
 done:
     KeAcquireSpinLock(&q->Lock,&irql);
@@ -106,19 +141,23 @@ NTSTATUS TgGpuResetWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io *
         if(!NT_SUCCESS(status)) goto done;
         RtlZeroMemory(w,sizeof(*w));q->CurrentPrivate=NULL;
     }
-    if(w->Context) {
+    if(w->Paging && w->Attempted && !w->CompletionReady) {
+        status=TgGpuResetContextWork(q->Engine,w,io,power,clock);
+        if(!NT_SUCCESS(status))goto done;
+    } else if(w->Context) {
         if(!w->Expected) status=TgGpuCancelCapturedWork(q->Engine,w);
         else if(!w->Attempted) status=TgGpuRetireContextWork(q->Engine,w,NULL,NULL);
         else status=TgGpuResetContextWork(q->Engine,w,io,power,clock);
         if(!NT_SUCCESS(status)) goto done;
-        RtlZeroMemory(w,sizeof(*w));q->CurrentPrivate=NULL;
     }
+    RtlZeroMemory(w,sizeof(*w));q->CurrentPrivate=NULL;
+    RtlZeroMemory(&q->CurrentPaging,sizeof(q->CurrentPaging));
     /* Admission is paused and this worker is exclusive. Clear each borrowed
      * queue entry before the adapter reports reset/preemption to Dxgkrnl.
      */
     while(!IsListEmpty(&q->Pending)) {
         entry=CONTAINING_RECORD(q->Pending.Flink,TG_GPU_QUEUE_ENTRY,Link);
-        status=TgGpuCancelCapturedWork(q->Engine,&entry->Work);
+        status=entry->Work.Paging?STATUS_SUCCESS:TgGpuCancelCapturedWork(q->Engine,&entry->Work);
         if(!NT_SUCCESS(status)) goto done;
         RemoveEntryList(&entry->Link);RtlZeroMemory(entry,sizeof(*entry));
     }
@@ -131,7 +170,7 @@ NTSTATUS TgGpuResumeWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power *po
     KIRQL irql;NTSTATUS status=STATUS_SUCCESS;
     if(!q || !q->Engine || !power) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&q->Lock,&irql);
-    if(q->Servicing || q->Current.Context || q->Current.CompletionReady || !IsListEmpty(&q->Pending) || !NT_SUCCESS(q->Failure))
+    if(q->Servicing || q->Current.Engine || !IsListEmpty(&q->Pending) || !NT_SUCCESS(q->Failure))
         status=STATUS_DEVICE_BUSY;
     else if(!power->owned || !power->ready || !q->Engine->UserdBar1Ready) status=STATUS_DEVICE_NOT_READY;
     else q->Paused=FALSE;
@@ -142,7 +181,7 @@ NTSTATUS TgGpuStopWorkQueue(TG_GPU_WORK_QUEUE *q)
     KIRQL irql,engine_irql;TG_GPU_CONTEXT_ENGINE *e;
     if(!q || !q->Engine) return STATUS_INVALID_PARAMETER;
     e=q->Engine;KeAcquireSpinLock(&q->Lock,&irql);q->Paused=TRUE;
-    if(q->Servicing || q->Current.Context || q->Current.CompletionReady || !IsListEmpty(&q->Pending)) {
+    if(q->Servicing || q->Current.Engine || !IsListEmpty(&q->Pending)) {
         KeReleaseSpinLock(&q->Lock,irql);return STATUS_DEVICE_BUSY;
     }
     KeAcquireSpinLock(&e->Lock,&engine_irql);e->QueueOwner=NULL;KeReleaseSpinLock(&e->Lock,engine_irql);

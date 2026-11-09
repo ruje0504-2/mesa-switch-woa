@@ -3,6 +3,7 @@
 #include "work_queue.h"
 #include "allocation.h"
 #include "query.h"
+#include "paging_dispatch.h"
 
 #define TAG 0x43674754u
 
@@ -103,7 +104,7 @@ NTSTATUS APIENTRY TgGpuDdiDestroyProcess(HANDLE adapter, HANDLE process)
     TG_GPU_CONTEXT_ENGINE *e=adapter; TG_GPU_PROCESS *p; KIRQL irql; NTSTATUS status;
     if (!e) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql); p=find_process(e,process);
-    if (!p || p->Devices || p->Closing) { KeReleaseSpinLock(&e->Lock,irql); return p ? STATUS_DEVICE_BUSY : STATUS_INVALID_PARAMETER; }
+    if (!p || p->Devices || p->PagingReferences || p->Closing) { KeReleaseSpinLock(&e->Lock,irql); return p ? STATUS_DEVICE_BUSY : STATUS_INVALID_PARAMETER; }
     p->Closing=TRUE; KeReleaseSpinLock(&e->Lock,irql);
     status=TgGpuFreePrivateMemory(&e->Dxgk,&p->Internal.Leaf);
     KeAcquireSpinLock(&e->Lock,&irql);
@@ -189,7 +190,14 @@ NTSTATUS APIENTRY TgGpuDdiDestroyContext(HANDLE context)
     KeReleaseSpinLock(&e->Lock,irql); ExFreePoolWithTag(c,TAG); return STATUS_SUCCESS;
 }
 SIZE_T APIENTRY TgGpuDdiGetRootPageTableSize(HANDLE adapter, DXGKARG_GETROOTPAGETABLESIZE *a)
-{ return adapter ? TgGpuRootTableSize(a) : 0; }
+{
+    if(!adapter || !a || a->PhysicalAdapterIndex || a->NumberOfPte>TG_GPU_TABLE_ENTRIES)return 0;
+    /* A complete native GM20B root is 128 KiB. Report its actual capacity to
+     * VidMm, including at first allocation, so later paging records never
+     * presume a 128 KiB alias for a smaller OS root allocation. The generic
+     * root helper still supports resized roots for other explicit callers. */
+    a->NumberOfPte=TG_GPU_TABLE_ENTRIES;return TG_GPU_TABLE_BYTES;
+}
 VOID APIENTRY TgGpuDdiSetRootPageTable(HANDLE adapter, const DXGKARG_SETROOTPAGETABLE *a)
 {
     TG_GPU_CONTEXT_ENGINE *e=adapter; TG_GPU_CONTEXT *c; KIRQL irql;
@@ -224,6 +232,7 @@ void TgGpuRegisterContextDdis(DRIVER_INITIALIZATION_DATA *d)
     d->DxgkDdiDpcRoutine=TgGpuDdiDpcRoutine;
     TgGpuRegisterAllocationDdis(d);
     TgGpuRegisterQueryDdi(d);
+    TgGpuRegisterPagingDdi(d);
 }
 NTSTATUS APIENTRY TgGpuDdiQueryCurrentFence(HANDLE adapter, DXGKARG_QUERYCURRENTFENCE *a)
 {

@@ -17,7 +17,8 @@ static NTSTATUS channel_status(enum tg_gpu_channel_result result)
 }
 static void drop_work(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w)
 {
-    --w->Context->References;e->Active=NULL;w->Context=NULL;w->Submitted=FALSE;
+    if(w->Context)--w->Context->References;
+    e->Active=NULL;w->Context=NULL;w->Submitted=FALSE;
 }
 NTSTATUS TgGpuObserveContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
     const struct tg_gpu_power_io *io,const struct tg_gpu_power *power)
@@ -125,7 +126,7 @@ NTSTATUS TgGpuResetContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
     if(!e || !w || !power || !clock || !io || !io->read32 || !io->write32 ||
         !io->delay_us || !io->read_pmic || !io->write_pmic) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);
-    if(e->Active!=w || !w->Context || (e->Channel.referenced &&
+    if(e->Active!=w || (!w->Context && !w->Paging) || (e->Channel.referenced &&
         (e->Channel.owner!=w || e->Channel.power!=power))) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
     }

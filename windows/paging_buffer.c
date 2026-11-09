@@ -166,28 +166,32 @@ NTSTATUS TgGpuBuildPagingBuffer(DXGKARG_BUILDPAGINGBUFFER *Args,
     return STATUS_SUCCESS;
 }
 
+NTSTATUS TgGpuValidatePagingBuffer(const TG_GPU_TABLE_SEGMENT *Tables,const void *Buffer,SIZE_T Bytes)
+{
+    if (!Tables || (Bytes && !Buffer) || ((ULONG_PTR)Buffer & 7) || (Bytes & 7))
+        return STATUS_INVALID_PARAMETER;
+    for (SIZE_T offset = 0; offset < Bytes; ) {
+        const PAGING_RECORD *record = (const void *)((const UCHAR *)Buffer + offset);
+        NTSTATUS status = ValidateRecord(Tables, record, Bytes - offset);
+        if (!NT_SUCCESS(status)) return status;
+        offset += record->Bytes;
+    }
+    return STATUS_SUCCESS;
+}
 NTSTATUS TgGpuExecutePagingBuffer(const TG_GPU_TABLE_SEGMENT *Tables,
     const void *Buffer, SIZE_T Bytes, BOOLEAN AddressSpaceIdle,
     const struct tg_gpu_power_io *Io, const struct tg_gpu_power *Power,
     SIZE_T *CompletedBytes)
 {
-    SIZE_T offset;
-    NTSTATUS status;
+    SIZE_T offset;NTSTATUS status;
     if (!CompletedBytes) return STATUS_INVALID_PARAMETER;
     *CompletedBytes = 0;
-    if (!Tables || (Bytes && !Buffer) || ((ULONG_PTR)Buffer & 7) || (Bytes & 7))
-        return STATUS_INVALID_PARAMETER;
-    if (!Bytes) return STATUS_SUCCESS;
+    /* Reject a malformed trailing record before publishing any earlier one. */
+    status=TgGpuValidatePagingBuffer(Tables,Buffer,Bytes);
+    if(!NT_SUCCESS(status) || !Bytes)return status;
     if (!AddressSpaceIdle) return STATUS_GRAPHICS_ALLOCATION_BUSY;
     if (!Io || !Io->read32 || !Io->write32 || !Io->delay_us ||
         !Power || !Power->owned || !Power->ready) return STATUS_DEVICE_NOT_READY;
-    /* Reject a malformed trailing record before publishing any earlier one. */
-    for (offset = 0; offset < Bytes; ) {
-        const PAGING_RECORD *record = (const void *)((const UCHAR *)Buffer + offset);
-        status = ValidateRecord(Tables, record, Bytes - offset);
-        if (!NT_SUCCESS(status)) return status;
-        offset += record->Bytes;
-    }
     for (offset = 0; offset < Bytes; ) {
         const PAGING_RECORD *record = (const void *)((const UCHAR *)Buffer + offset);
         if (record->Kind == PAGING_UPDATE) {
