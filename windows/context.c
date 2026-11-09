@@ -166,8 +166,11 @@ NTSTATUS APIENTRY TgGpuDdiCreateContext(HANDLE device, DXGKARG_CREATECONTEXT *a)
     InsertTailList(&e->Contexts,&c->Link); KeReleaseSpinLock(&e->Lock,irql);
     RtlZeroMemory(&a->ContextInfo,sizeof(a->ContextInfo));
     a->ContextInfo.DmaBufferSize=TG_GPU_DMA_BUFFER_BYTES;
-    a->ContextInfo.DmaBufferPrivateDataSize=sizeof(TG_GPU_QUEUE_ENTRY)+
-        sizeof(struct tg_gpu_submit_request)+TG_GPU_SUBMIT_MAX_BYTES;
+    /* The system paging context must match QUERYSEGMENT4's private data size.
+     * Application contexts also reserve room for UMD submission data. */
+    a->ContextInfo.DmaBufferPrivateDataSize=sizeof(TG_GPU_QUEUE_ENTRY);
+    if (!a->Flags.SystemContext)
+        a->ContextInfo.DmaBufferPrivateDataSize+=sizeof(struct tg_gpu_submit_request)+TG_GPU_SUBMIT_MAX_BYTES;
     a->ContextInfo.Caps.NoPatchingRequired=a->Flags.VirtualAddressing;
     /* VidMm manages residency. No system-IOMMU capability or GDI acceleration
      * is implied by creating the object. Submission/paging dispatch is separate.
