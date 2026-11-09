@@ -274,6 +274,7 @@ static VOID GpuCleanup(GPU_DEVICE *d)
         /* Full reset/power-down retired the GPU's register ownership too. */
         d->clock.owned = d->clock.running = false;
         d->execution.owned = d->execution.fifo_ready = false;
+        d->execution.channel=(struct tg_gpu_channel){0};
         if (d->arena) {
             MmFreeContiguousMemorySpecifyCache(d->arena, TG_GPU_ARENA_BYTES, MmNonCached);
             d->arena = NULL;

@@ -50,6 +50,10 @@ struct _TG_GPU_CONTEXT_ENGINE {
     TG_GPU_CONTEXT_WORK *Notification;
     PVOID QueueOwner;
     TG_GPU_PRIVATE_MEMORY Commands;
+    /* The cold backend must map Commands' USERD page into its retained BAR1
+     * root and program FIFO_BAR1_BASE before making this mapping ready. */
+    UINT32 UserdBar1Offset;
+    BOOLEAN UserdBar1Ready;
     struct tg_gpu_channel Channel;
     volatile UINT LastCompletedFence;
     UINT Marker;

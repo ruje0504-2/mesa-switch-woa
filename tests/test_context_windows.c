@@ -290,6 +290,8 @@ static struct {
     UINT32 clamp,reset,clocks,out5,mc_flush;
     UINT tlbs,flushes,reads,writes;
     UINT32 fifo_fault;
+    UINT32 userd_put;
+    UINT doorbells;
     UCHAR enable,voltage;
     BOOLEAN fail_preempt,fail_reset,fail_tlb;
 } hw={.mc=0x100,.pb=1,.map=1,.sched=1,.enable=0x41,.voltage=110,.expected_root=0x900000};
@@ -300,6 +302,9 @@ static UINT32 Read(void *context,UINT32 address)
     case 0x57000200:return hw.mc;
     case 0x57000204:return hw.pb;
     case 0x57002390:return hw.map;
+    case 0x57001704:return 0x80090000;
+    case 0x57002254:return 0x10000013;
+    case 0x5801308c:return hw.userd_put;
     case 0x57002630:return hw.sched;
     case 0x57800000:return hw.inst;
     case 0x57800004:return hw.ctrl;
@@ -326,6 +331,9 @@ static void Write(void *context,UINT32 address,UINT32 value)
 {
     CHECK(context==&hw && level==PASSIVE_LEVEL);++hw.writes;
     switch(address) {
+    case 0x5801308c:
+        CHECK(hw.inst && hw.ctrl && hw.runlist==2 && !hw.sched && value==2);
+        hw.userd_put=value;++hw.doorbells;break;
     case 0x57000200:hw.mc=value;break;
     case 0x57000204:hw.pb=value;break;
     case 0x57002630:hw.sched=value;break;
@@ -581,9 +589,9 @@ void start(void)
         .read_pmic=ReadPmic,.write_pmic=WritePmic};
     UINT32 *instance,*fence;UINT i,before;ULONG written;UINT64 pde;
     struct tg_gpu_channel rejected={0};
-    static const char pass[]="PASS: WDK adapter lifecycle/LUID/512MiB ABI, memory queries, allocation rollback, ordered queue and retirement (controlled substitutes; no live WDDM or GPU pass)\r\n";
+    static const char pass[]="PASS: WDK adapter lifecycle/LUID/512MiB ABI, BAR1 notifications, allocation rollback, ordered queue and retirement (controlled substitutes; no live WDDM or GPU pass)\r\n";
     hw.fifo_fault=0x100;before=hw.writes;
-    CHECK(tg_gpu_channel_submit(&io,&power,0x90000000,0x91004000,0x91003000,&e,&rejected)==TG_GPU_CHANNEL_FAULT);
+    CHECK(tg_gpu_channel_submit(&io,&power,0x90000000,0x91004000,0x91003000,0x13000,&e,&rejected)==TG_GPU_CHANNEL_FAULT);
     CHECK(!rejected.referenced && hw.writes==before && rejected.fifo_interrupt==0x100);
     hw.fifo_fault=0;
     dxgk.Version=DXGKDDI_INTERFACE_VERSION_WDDM2_4;dxgk.DeviceHandle=(HANDLE)1;
@@ -637,10 +645,15 @@ void start(void)
     CHECK(TgGpuAcquireContextWork(&e,&submit,&blocked)==STATUS_DEVICE_BUSY && !blocked.Context);
     CHECK(ddi.DxgkDdiDestroyContext(c)==STATUS_DEVICE_BUSY);
     CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY && !interrupts);
+    before=hw.reads+hw.writes;
+    CHECK(TgGpuSubmitContextWork(&e,&work,&io,&power)==STATUS_DEVICE_NOT_READY);
+    CHECK(!work.Attempted && !e.Channel.referenced && hw.reads+hw.writes==before);
+    e.UserdBar1Offset=0x13000;e.UserdBar1Ready=TRUE; /* explicit cold-backend substitute */
     hw.fifo_fault=0x40000000; /* normal runlist event cannot reject the channel */
     CHECK(NT_SUCCESS(TgGpuSubmitContextWork(&e,&work,&io,&power)));
     hw.fifo_fault=0;
     CHECK(work.Submitted && e.Channel.referenced && !hw.sched && hw.runlist==2);
+    CHECK(e.Channel.bound && e.Channel.submitted && hw.userd_put==2 && hw.doorbells==1);
     CHECK(hw.inst==((UINT32)((UINT64)c->Instance.SystemPhysicalAddress.QuadPart>>12)|0x80000000));
     before=hw.writes;
     CHECK(TgGpuSubmitContextWork(&e,&work,&io,&power)==STATUS_INVALID_DEVICE_STATE && hw.writes==before);
@@ -696,7 +709,7 @@ void start(void)
     CHECK(!work.Submitted && hw.clamp==1 && !hw.reset);
     hw.fail_reset=FALSE;
     CHECK(NT_SUCCESS(TgGpuResetContextWork(&e,&work,&io,&power,&clock)));
-    CHECK(!e.Channel.referenced && !c->References && !work.Context && !power.owned);
+    CHECK(!e.Channel.referenced && !c->References && !work.Context && !power.owned && !e.UserdBar1Ready);
     CHECK(hw.enable==0x40 && hw.voltage==50 && (hw.reset&0x01000000));
     CHECK(e.LastCompletedFence==7 && interrupts==1);
     /* Cancellation before any hardware attempt performs no MMIO and does not
@@ -709,7 +722,7 @@ void start(void)
     /* Start a fresh controlled cold GPU and submit multiple contexts before
      * any fence completes. Admission must not overwrite the active marker.
      */
-    power.owned=power.ready=true;hw.mc=0x100;hw.pb=hw.map=hw.sched=1;
+    power.owned=power.ready=true;e.UserdBar1Ready=TRUE;hw.mc=0x100;hw.pb=hw.map=hw.sched=1;
     hw.clamp=hw.reset=hw.inst=hw.ctrl=hw.preempt=hw.pbdma=hw.runlist=0;
     hw.enable=0x41;hw.voltage=110;
     root.hContext=c2;root.Address.SegmentOffset=PAGE_SIZE;
@@ -754,11 +767,13 @@ void start(void)
     CHECK(!c->References && !c2->References && !queue.Current.Context && IsListEmpty(&queue.Pending));
     CHECK(e.LastCompletedFence==11 && interrupts==3 && !e.Active && !e.Notification);
     CHECK(TgGpuResumeWorkQueue(&queue,&power)==STATUS_DEVICE_NOT_READY);
+    power.owned=power.ready=true;
+    CHECK(!e.UserdBar1Ready && TgGpuResumeWorkQueue(&queue,&power)==STATUS_DEVICE_NOT_READY);
     /* Model the adapter's cold reinitialization, then fail only synchronized
      * notification. Hardware/context ownership is already retired: reset
      * cancels the engine-only notice without another register access.
      */
-    power.owned=power.ready=true;hw.mc=0x100;hw.pb=hw.map=hw.sched=1;
+    power.owned=power.ready=true;e.UserdBar1Ready=TRUE;hw.mc=0x100;hw.pb=hw.map=hw.sched=1;
     hw.clamp=hw.reset=hw.inst=hw.ctrl=hw.preempt=hw.pbdma=hw.runlist=0;
     CHECK(NT_SUCCESS(TgGpuResumeWorkQueue(&queue,&power)));
     submit.hContext=c;submit.SubmissionFenceId=14;submit.pDmaBufferPrivateData=&entries[0];

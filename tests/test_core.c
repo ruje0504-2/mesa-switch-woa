@@ -156,8 +156,8 @@ static void test_submission(void)
     assert(command[2]==0x4001000 && command[3]==0x80001500); /* KERNEL completion, wait */
     assert(push[0]==0x20040004 && push[1]==0 && push[2]==0x4002800 && push[3]==0x13579bdf);
     assert(push[4]==0x01000002); /* WFI enabled, not a FIFO-consumption-only fence */
-    assert(command[TG_GPU_COMMAND_FENCE/4]==0xeca86420 && userd[35]==2);
-    assert(instance[0]==2 && instance[2]==0xc0002000 && instance[18]==0x4000000 && instance[57]==0x20);
+    assert(command[TG_GPU_COMMAND_FENCE/4]==0xeca86420 && userd[35]==0);
+    assert(instance[0]==0 && instance[2]==0xc0002000 && instance[18]==0x4000000 && instance[57]==0x20);
     assert(instance[128]==0xa5a5a5a5 && instance[131]==0xa5a5a5a5);
     assert(runlist[0]==0x0600e000 && runlist[1]==0);
     assert(runlist[2]==0 && runlist[3]==0);

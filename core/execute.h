@@ -3,6 +3,7 @@
 #define TEGRA_GPU_EXECUTE_H
 #include "../platform/t214_power.h"
 #include "../windows/control.h"
+#include "channel.h"
 #include <stddef.h>
 
 #define TG_GPU_ARENA_BYTES 0x80000u
@@ -39,6 +40,7 @@ struct tg_gpu_execution {
     uint32_t old_pbdma_enable;
     uint32_t ce_reset_mask;
     uint32_t stage;
+    struct tg_gpu_channel channel;
 };
 
 /* Optional CPU-notification acceptance gate. arm runs after cold FIFO/GR

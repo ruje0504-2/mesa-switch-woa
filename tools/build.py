@@ -47,7 +47,8 @@ mesa_includes = [mesa_src, mesa_src / "nouveau/headers",
                  mesa_src / "nouveau/headers/nvidia/classes"]
 encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
 core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c", root / "core/fault.c",
-        root / "core/execute.c", root / "core/submission.c", root / "platform/t214_frontend.c",
+        root / "core/execute.c", root / "core/submission.c", root / "core/channel.c",
+        root / "platform/t214_mmu.c", root / "platform/t214_frontend.c",
         root / "platform/t214_gr.c", root / "platform/t214_acr.c", root / "platform/t214_pmu.c",
         root / "core/gr_firmware.c", root / "core/acr_firmware.c", root / "core/gr_image.c",
         root / "core/gr_submit.c", root / "core/gr_clear.c", root / "core/gr_draw.c",
@@ -83,6 +84,12 @@ tlb_test = args.out / "test-tlb"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(tlb), str(root / "tests/test_tlb.c"), "-o", str(tlb_test)], check=True)
 subprocess.run([str(tlb_test.resolve())], check=True)
+channel_test=args.out / "test-channel"
+subprocess.run([args.cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
+                str(root / "core/channel.c"),str(root / "core/fault.c"),str(tlb),
+                str(root / "platform/t214_frontend.c"),str(root / "tests/test_channel.c"),
+                "-o",str(channel_test)],check=True)
+subprocess.run([str(channel_test.resolve())],check=True)
 gr_firmware = root / "core/gr_firmware.c"
 gr_firmware_test = args.out / "test-gr-firmware"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -147,7 +154,7 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
          "/DDXGKDDI_INTERFACE_VERSION=DXGKDDI_INTERFACE_VERSION_WDDM2_4",
          *[f"/I{p}" for p in mesa_includes], *[f"/imsvc{p}" for p in includes]]
 objects = []
-for source in [*core, power, clock, tlb, root / "core/channel.c", root / "windows/resources.c",
+for source in [*core, power, clock, root / "windows/resources.c",
                root / "windows/private_memory.c", root / "windows/paging.c",
                root / "windows/table_segment.c", root / "windows/root_table.c",
                root / "windows/paging_buffer.c", root / "windows/context.c",

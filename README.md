@@ -294,8 +294,8 @@ live-device stop, cleanup retry and stop/start cycles; the new lifecycle test
 asserts that it performs **zero GPU MMIO**. This is library integration only:
 there is still no miniport DriverEntry/INF registration, live DRIVERCAPS,
 SubmitCommandVirtual/paging dispatch, IRQ completion or TDR adapter hookup.
-The installed .43 probe uses the shared cold-bootstrap prefix described below;
-this lifecycle module still has no live adapter or submission hookup.
+The installed .44 probe uses the shared cold-bootstrap and hot channel helpers
+described below; this lifecycle module still has no live adapter hookup.
 
 `windows/context.c` supplies the process/device/context creation and destruction
 DDIs, root-table DDIs, completed-fence query and DPC callback. Its registration
@@ -346,10 +346,23 @@ partial submission/reset failure, restart admission and canceled notifications.
 `windows/submit_worker.c` connects prepared work to `core/channel.c` after
 exclusive cold initialization. The worker blocks scheduling, invalidates the
 root TLB, binds RAMIN, enables the channel and submits the physical runlist
-before allowing execution. Both ring entries are preloaded; this hot path
-does not use the diagnostic probe's second BAR1 doorbell. Queuing alone never
-notifies a completed fence. The work reference is released only after bounded
-disable/preempt/runlist removal, unbind, FB flush and TLB invalidation succeed.
+before allowing execution. Saved RAMFC and USERD GP_PUT start **empty**.
+`tg_gpu_channel_bind` leaves them empty; `tg_gpu_channel_publish` notifies
+through the owned BAR1 USERD alias only after binding. The helper validates
+the active BAR1 instance/snoop base and increasing non-wrapping indices,
+posts GP_PUT, requires its readback, and retains ownership after a failed
+write/readback or a subsequent fault. The WDDM wrapper publishes both entries
+as one batch: USER workload plus the KERNEL completion packet.
+
+The cold backend must map the shared command area's USERD page into its
+retained BAR1 root and mark it ready. The worker refuses submissions before
+that mapping is ready; verified reset invalidates that readiness, and queue
+resume requires the new mapping. Live cold-backend hookup remains unfinished.
+Queuing alone never notifies a completed fence. The work reference is released
+only after bounded disable/preempt, **FECS CURRENT_CTX.VALID clearing** when
+GR is enabled, runlist removal, unbind, FB flush and TLB invalidation succeed.
+The helper observes GR unloading and never clears its valid bit itself;
+the remaining instance bits are not interpreted as a resident context.
 A timeout retains RAMIN, roots and commands. Recovery disables fetch, drains
 MC, restores clocks and powers down; clamp/reset readback must confirm isolation
 before releasing failed work. No caller-supplied "hardware retired" boolean
@@ -358,7 +371,7 @@ MMIO/waits run outside the object spin lock, with an active reference held.
 Native ARM64 tests exercise submission order, duplicate rejection, preempt
 timeout/retry, failed reset acknowledgement and cancellation without MMIO using
 controlled hardware substitutes. Physical execution and privilege enforcement
-remain unverified. These are worker helpers, not a registered
+of the complete WDDM path remain unverified. These are worker helpers, not a registered
 [`SubmitCommandVirtual` DDI](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_submitcommandvirtual):
 its allowed return values differ from the worker's internal failure statuses.
 
@@ -613,6 +626,30 @@ restore error or retained ownership. Build/model/real NETB checks and native
 SYS/CAT/all 11 memberships pass; installation needed no reboot. This validates
 the shared prefix through the diagnostic, not the standalone held-ready entry,
 per-context WDDM graphics images or a live submission backend.
+
+### Shared hot channel validation
+
+Version **0.1.0.44 / ABI 24** routes the shader diagnostic through the same
+`core/channel.c` bind, BAR1 publication and retirement helpers used by the
+WDDM worker. It starts empty, publishes the clear and draw entries separately,
+verifies both GPU reports and the complete pixel/code readback, then preempts
+TSG zero and requires **FECS CURRENT_CTX.VALID=0** before successful retirement.
+The earlier FIFO/golden/IRQ/3D/clear diagnostics keep their existing bind path.
+
+**Physical Lite pass, 2026-11-09 03:07:00 Pacific:** .44/oem73 returns exit 0,
+`shader_pass=true`, 729.6 MHz, Stage 306, reports `E6794A33/1986B5CC`, restore
+count 1, **256 pixels and 768 guards matching**, image/code hashes
+`F20AF985/FB041DD2` and zero faults, restore error or retained resources.
+After retirement, the observed GR context is `000FDDF9`: its instance bits
+remain, but the valid bit is clear. SYS/CAT/all 11 memberships, the full build,
+model/sanitizer checks and native WDK context/paging fixtures pass. Installation
+needed no reboot. The native fixtures cover empty preparation, BAR1 ordering,
+unready mapping rejection and readiness invalidation across reset.
+
+This physical run validates the shared hot helpers with the private shader
+arena. It does not validate WDDM's distinct command-page BAR1 mapping, its
+two-entry USER/KERNEL batch, per-context graphics images, live VidMm dispatch
+or Vulkan API calls. Those paths remain the next integration work.
 
 The owner-selected WDDM/NVK UMA budget is a **512 MiB maximum GPU working
 set**, allocated dynamically within VidMm's actual budget. The earlier 1 GiB

@@ -27,6 +27,9 @@ NTSTATUS TgGpuSubmitContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
     if(e->Active!=w || !w->Context || !w->Prepared || w->Attempted || w->Signaling || w->HardwareBusy) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_DEVICE_STATE;
     }
+    if(!e->UserdBar1Ready) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
+    }
     w->HardwareBusy=TRUE;w->Attempted=TRUE;
     instance=(UINT64)w->Context->Instance.SystemPhysicalAddress.QuadPart;
     runlist=(UINT64)e->Commands.SystemPhysicalAddress.QuadPart+TG_GPU_COMMAND_RUNLIST;
@@ -34,7 +37,8 @@ NTSTATUS TgGpuSubmitContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
     /* All waits/MMIO run outside the object spin lock. References remain held
      * even when a partial bind fails or a teardown request races this worker.
      */
-    result=tg_gpu_channel_submit(io,power,w->Root.DeviceAddress,instance,runlist,w,&e->Channel);
+    result=tg_gpu_channel_submit(io,power,w->Root.DeviceAddress,instance,runlist,
+                                 e->UserdBar1Offset,w,&e->Channel);
     KeAcquireSpinLock(&e->Lock,&irql);
     w->Submitted=result==TG_GPU_CHANNEL_OK;w->HardwareBusy=FALSE;
     KeReleaseSpinLock(&e->Lock,irql);return channel_status(result);
@@ -101,6 +105,7 @@ NTSTATUS TgGpuResetContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
      */
     clock->running=false;
     KeAcquireSpinLock(&e->Lock,&irql);
+    e->UserdBar1Ready=FALSE;
     RtlZeroMemory(&e->Channel,sizeof(e->Channel));drop_work(e,w);
     KeReleaseSpinLock(&e->Lock,irql);
     if(cr!=TG_GPU_CLOCK_OK) status=STATUS_DEVICE_DATA_ERROR;

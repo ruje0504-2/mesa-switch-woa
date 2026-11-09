@@ -42,7 +42,9 @@ static enum tg_gpu_channel_result fault(const struct tg_gpu_power_io *io,struct 
     return pending || c->frontend.result ?
         TG_GPU_CHANNEL_FAULT : TG_GPU_CHANNEL_OK;
 }
-enum tg_gpu_channel_result tg_gpu_channel_submit(const struct tg_gpu_power_io *io,
+static bool userd_page(uint32_t offset)
+{ return offset<0x01000000u && !(offset&0xfff); }
+enum tg_gpu_channel_result tg_gpu_channel_bind(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power,uint64_t root,uint64_t instance,uint64_t runlist,
     const void *owner,struct tg_gpu_channel *c)
 {
@@ -63,7 +65,8 @@ enum tg_gpu_channel_result tg_gpu_channel_submit(const struct tg_gpu_power_io *i
     if(value==UINT32_MAX) return TG_GPU_CHANNEL_IO;
     if(value&0x80000000) return TG_GPU_CHANNEL_BUSY;
     if(fault(io,c)!=TG_GPU_CHANNEL_OK) return TG_GPU_CHANNEL_FAULT;
-    c->owner=owner;c->power=power;c->root=root;c->referenced=true;c->submitted=false;
+    c->owner=owner;c->power=power;c->root=root;c->referenced=true;
+    c->bound=c->submitted=false;c->userd_offset=c->last_put=0;
     c->stage=2;
     value=get(io,0x2630);
     if(value==UINT32_MAX) return TG_GPU_CHANNEL_IO;
@@ -86,8 +89,45 @@ enum tg_gpu_channel_result tg_gpu_channel_submit(const struct tg_gpu_power_io *i
     put(io,0x2630,value&~1u);
     if(!wait_bits(io,c,0x2630,1,0)) return TG_GPU_CHANNEL_IO;
     if(fault(io,c)!=TG_GPU_CHANNEL_OK) return TG_GPU_CHANNEL_FAULT;
-    c->stage=4;c->submitted=true;
-    return TG_GPU_CHANNEL_OK; /* queued, not a completed GPU fence */
+    c->stage=4;c->bound=true;
+    return TG_GPU_CHANNEL_OK; /* bound, still no published workload */
+}
+enum tg_gpu_channel_result tg_gpu_channel_publish(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power,uint32_t offset,uint32_t gp_put,
+    const void *owner,struct tg_gpu_channel *c)
+{
+    uint32_t base,bar1,address;
+    if(!c || !owner || !userd_page(offset) || !gp_put || gp_put>=512)
+        return TG_GPU_CHANNEL_ARGUMENT;
+    if(!ready(io,power))return TG_GPU_CHANNEL_NOT_READY;
+    if(!c->referenced || !c->bound)return TG_GPU_CHANNEL_NOT_READY;
+    if(c->owner!=owner || c->power!=power)return TG_GPU_CHANNEL_BUSY;
+    if(gp_put<=c->last_put || (c->last_put && offset!=c->userd_offset))
+        return TG_GPU_CHANNEL_ARGUMENT;
+    bar1=get(io,0x1704);base=get(io,0x2254);
+    if(bar1==UINT32_MAX || base==UINT32_MAX)return TG_GPU_CHANNEL_IO;
+    if(!(bar1&0x80000000) || !(base&0x10000000) || (base&0xfffffu)!=(offset>>12))
+        return TG_GPU_CHANNEL_NOT_READY;
+    if(fault(io,c)!=TG_GPU_CHANNEL_OK)return TG_GPU_CHANNEL_FAULT;
+    address=0x58000000u+offset+35*4;
+    /* The alias write is the notification, not a CPU store to saved RAMFC.
+     * Record the possible DMA reference before attempting the posted write.
+     */
+    c->submitted=true;c->userd_offset=offset;c->last_put=gp_put;
+    io->write32(io->context,address,gp_put);
+    c->last_register=address;c->last_value=io->read32(io->context,address);
+    if(c->last_value!=gp_put)return TG_GPU_CHANNEL_IO;
+    return fault(io,c);
+}
+enum tg_gpu_channel_result tg_gpu_channel_submit(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power,uint64_t root,uint64_t instance,uint64_t runlist,
+    uint32_t userd_bar1_offset,const void *owner,struct tg_gpu_channel *c)
+{
+    enum tg_gpu_channel_result result;
+    if(!userd_page(userd_bar1_offset))return TG_GPU_CHANNEL_ARGUMENT;
+    result=tg_gpu_channel_bind(io,power,root,instance,runlist,owner,c);
+    if(result!=TG_GPU_CHANNEL_OK)return result;
+    return tg_gpu_channel_publish(io,power,userd_bar1_offset,2,owner,c);
 }
 enum tg_gpu_channel_result tg_gpu_channel_retire(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power,const void *owner,struct tg_gpu_channel *c)
@@ -109,6 +149,15 @@ enum tg_gpu_channel_result tg_gpu_channel_retire(const struct tg_gpu_power_io *i
     if(!wait_bits(io,c,0x800004,1,0)) return TG_GPU_CHANNEL_IO;
     put(io,0x2634,TG_GPU_PREEMPT_TSG0); /* preempt the group, not a bare CHID */
     if(!wait_bits(io,c,0x2634,0x100000,0)) return TG_GPU_CHANNEL_TIMEOUT;
+    value=get(io,0x200);
+    if(value==UINT32_MAX)return TG_GPU_CHANNEL_IO;
+    /* A GR context can still reference RAMIN/image backing after its FIFO
+     * reader becomes idle. nvgpu gk20a_is_channel_ctx_resident explicitly
+     * tests FECS CURRENT_CTX.VALID: the instance bits may remain after unload.
+     * Never clear that bit ourselves to manufacture retirement evidence.
+     */
+    if((value&0x1000) && !wait_bits(io,c,0x409b00,0x80000000,0))
+        return TG_GPU_CHANNEL_TIMEOUT;
     put(io,0x2274,0);
     if(!wait_bits(io,c,0x2284,0x100000,0)) return TG_GPU_CHANNEL_TIMEOUT;
     /* With no other channels in this engine, PBDMA must become invalid/idle.
@@ -120,7 +169,7 @@ enum tg_gpu_channel_result tg_gpu_channel_retire(const struct tg_gpu_power_io *i
     c->stage=6;
     if(tg_gpu_frontend_flush(io,power,&c->frontend)!=TG_GPU_FE_OK) return TG_GPU_CHANNEL_FLUSH;
     if(tg_gpu_tlb_invalidate(io,power,c->root)!=TG_GPU_TLB_OK) return TG_GPU_CHANNEL_TLB;
-    c->owner=NULL;c->referenced=false;c->submitted=false;c->stage=7;
+    c->owner=NULL;c->referenced=c->bound=c->submitted=false;c->stage=7;
     return TG_GPU_CHANNEL_OK;
 }
 void tg_gpu_channel_disable(const struct tg_gpu_power_io *io,const struct tg_gpu_power *power)

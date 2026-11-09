@@ -532,6 +532,20 @@ enum tg_gpu_execute_result tg_gpu_boot_graphics(const struct tg_gpu_power_io *io
     return boot(io,power,cpu,physical,firmware,work,NULL,true,false,false,state,s);
 }
 
+static enum tg_gpu_execute_result channel_result(enum tg_gpu_channel_result r)
+{
+    switch(r) {
+    case TG_GPU_CHANNEL_OK:return TG_GPU_EXEC_OK;
+    case TG_GPU_CHANNEL_ARGUMENT:return TG_GPU_EXEC_ARGUMENT;
+    case TG_GPU_CHANNEL_BUSY:return TG_GPU_EXEC_BUSY;
+    case TG_GPU_CHANNEL_TLB:return TG_GPU_EXEC_MMU_TIMEOUT;
+    case TG_GPU_CHANNEL_TIMEOUT:return TG_GPU_EXEC_RUNLIST;
+    case TG_GPU_CHANNEL_FAULT:return TG_GPU_EXEC_FAULT;
+    case TG_GPU_CHANNEL_FLUSH:return TG_GPU_EXEC_FRONTEND;
+    default:return TG_GPU_EXEC_FIFO_INIT;
+    }
+}
+
 static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *cpu, uint64_t physical,
     const struct tg_gpu_gr_payload *firmware, const struct tg_gpu_gr_work *work,
@@ -544,16 +558,24 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
     volatile uint32_t *fence=(volatile uint32_t *)((uint8_t *)cpu+FENCE);
     uint32_t i,gpu_first,gpu_second=0xdeadbeef;
     state->stage = 3;
-    state->channel_bound=true;
-    ex_write(io, 0x800000, (uint32_t)((physical + INST) >> 12) | 0x80000000);
-    s->channel_instance_after = ex_read(io, 0x800000);
-    if (s->channel_instance_after != ((uint32_t)((physical + INST) >> 12) | 0x80000000))
-        return TG_GPU_EXEC_FIFO_INIT;
-    ex_write(io, 0x800004, (ex_read(io, 0x800004) & ~0x400u) | 0x400);
-    ex_write(io, 0x2270, (uint32_t)((physical + RUNLIST) >> 12));
-    ex_write(io, 0x2274, TG_GPU_RUNLIST_ENTRIES); /* TSG zero + its one channel */
-    if (!ex_wait(io, 0x2284, 0x100000, 0)) return TG_GPU_EXEC_RUNLIST;
-    ex_write(io, 0x2630, ex_read(io, 0x2630) & ~1u);
+    if(draw) {
+        enum tg_gpu_channel_result r=tg_gpu_channel_bind(io,power,physical,physical+INST,
+                                                       physical+RUNLIST,state,&state->channel);
+        state->channel_bound=state->channel.referenced;
+        s->channel_instance_after=ex_read(io,0x800000);
+        if(r!=TG_GPU_CHANNEL_OK)return channel_result(r);
+    } else {
+        state->channel_bound=true;
+        ex_write(io, 0x800000, (uint32_t)((physical + INST) >> 12) | 0x80000000);
+        s->channel_instance_after = ex_read(io, 0x800000);
+        if (s->channel_instance_after != ((uint32_t)((physical + INST) >> 12) | 0x80000000))
+            return TG_GPU_EXEC_FIFO_INIT;
+        ex_write(io, 0x800004, (ex_read(io, 0x800004) & ~0x400u) | 0x400);
+        ex_write(io, 0x2270, (uint32_t)((physical + RUNLIST) >> 12));
+        ex_write(io, 0x2274, TG_GPU_RUNLIST_ENTRIES); /* TSG zero + its one channel */
+        if (!ex_wait(io, 0x2284, 0x100000, 0)) return TG_GPU_EXEC_RUNLIST;
+        ex_write(io, 0x2630, ex_read(io, 0x2630) & ~1u);
+    }
     s->scheduler_after = ex_read(io, 0x2630);
     if (s->scheduler_after == UINT32_MAX || (s->scheduler_after & 1))
         return TG_GPU_EXEC_SCHEDULER;
@@ -564,7 +586,10 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
      */
     if (ex_fault(io)) { tg_gpu_execute_snapshot(io, state, s); return TG_GPU_EXEC_FAULT; }
     if(three_d && gr_fault(io,s)) return TG_GPU_EXEC_GR_ENGINE;
-    io->write32(io->context, BAR1 + USERD_VA + 35 * 4, 1);
+    if(draw) {
+        enum tg_gpu_channel_result r=tg_gpu_channel_publish(io,power,USERD_VA,1,state,&state->channel);
+        if(r!=TG_GPU_CHANNEL_OK)return channel_result(r);
+    } else io->write32(io->context, BAR1 + USERD_VA + 35 * 4, 1);
     gpu_first = io->read32(io->context, BAR1 + FENCE_VA);
     for (i = 0; i < 10000 && gpu_first != s->expected[0]; ++i) {
         if (ex_fault(io) || (three_d && gr_fault(io,s))) break;
@@ -575,7 +600,10 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
     if (gpu_first == s->expected[0]) {
         if(notify && !notify->wait(notify->context,1)) return TG_GPU_EXEC_IRQ;
         state->stage = 5;
-        io->write32(io->context, BAR1 + USERD_VA + 35 * 4, 2);
+        if(draw) {
+            enum tg_gpu_channel_result r=tg_gpu_channel_publish(io,power,USERD_VA,2,state,&state->channel);
+            if(r!=TG_GPU_CHANNEL_OK)return channel_result(r);
+        } else io->write32(io->context, BAR1 + USERD_VA + 35 * 4, 2);
         gpu_second = io->read32(io->context, BAR1 + FENCE_VA + 4);
         for (i = 0; i < 10000 && gpu_second != s->expected[1]; ++i) {
             if (ex_fault(io) || (three_d && gr_fault(io,s))) break;
@@ -617,6 +645,12 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
         if(!tg_gpu_check_draw_code((volatile uint32_t *)((uint8_t *)work->cpu+TG_GPU_DRAW_OFFSET),
                                   TG_GPU_DRAW_BYTES))return TG_GPU_EXEC_PIXELS;
         s->draw.checked=1;
+        state->stage=15;
+        enum tg_gpu_channel_result r=tg_gpu_channel_retire(io,power,state,&state->channel);
+        if(r!=TG_GPU_CHANNEL_OK)return channel_result(r);
+        state->channel_bound=false;
+        tg_gpu_gr_snapshot(io,&s->gr);
+        s->gr_channel.current_context=s->gr.current_context;
     }
     state->stage = 6;
     return TG_GPU_EXEC_OK;

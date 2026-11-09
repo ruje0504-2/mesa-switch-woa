@@ -133,7 +133,7 @@ NTSTATUS TgGpuResumeWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power *po
     KeAcquireSpinLock(&q->Lock,&irql);
     if(q->Servicing || q->Current.Context || q->Current.CompletionReady || !IsListEmpty(&q->Pending) || !NT_SUCCESS(q->Failure))
         status=STATUS_DEVICE_BUSY;
-    else if(!power->owned || !power->ready) status=STATUS_DEVICE_NOT_READY;
+    else if(!power->owned || !power->ready || !q->Engine->UserdBar1Ready) status=STATUS_DEVICE_NOT_READY;
     else q->Paused=FALSE;
     KeReleaseSpinLock(&q->Lock,irql);return status;
 }
