@@ -34,6 +34,12 @@ typedef struct _GPU_DEVICE {
     PVOID arena;
     PHYSICAL_ADDRESS arena_address;
     struct tg_gpu_gr_work graphics;
+    PVOID lic;
+    WDFINTERRUPT interrupt;
+    WDFDPC irq_dpc;
+    struct tg_gpu_irq_state irq;
+    volatile LONG irq_live, irq_dpcs;
+    KEVENT irq_event;
 } GPU_DEVICE;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(GPU_DEVICE, GpuContext)
 DRIVER_INITIALIZE DriverEntry;
@@ -42,6 +48,8 @@ EVT_WDF_DEVICE_PREPARE_HARDWARE GpuPrepare;
 EVT_WDF_DEVICE_RELEASE_HARDWARE GpuRelease;
 EVT_WDF_DEVICE_D0_EXIT GpuD0Exit;
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL GpuControl;
+EVT_WDF_INTERRUPT_ISR GpuInterrupt;
+EVT_WDF_DPC GpuInterruptDpc;
 
 static NTSTATUS GpuPlatform(GPU_DEVICE *d, struct tg_gpu_pmic_request *op)
 {
@@ -82,6 +90,8 @@ static uint32_t GpuRead(void *context, uint32_t address)
 {
     GPU_DEVICE *d = context;
     ULONG i;
+    if(d->lic && address>=T214_GPU_LIC_BASE && address-T214_GPU_LIC_BASE<=T214_GPU_LIC_SIZE-4)
+        return READ_REGISTER_ULONG((PULONG)((PUCHAR)d->lic+address-T214_GPU_LIC_BASE));
     if (address == 0x600060a0) {
         struct tg_gpu_pmic_request op = {0, TG_GPU_PMIC_QUERY_PLLP, 0, 0};
         return NT_SUCCESS(GpuPlatform(d, &op)) ? op.value : 0;
@@ -98,6 +108,10 @@ static void GpuWrite(void *context, uint32_t address, uint32_t value)
 {
     GPU_DEVICE *d = context;
     ULONG i;
+    if(d->lic && address>=T214_GPU_LIC_BASE && address-T214_GPU_LIC_BASE<=T214_GPU_LIC_SIZE-4) {
+        WRITE_REGISTER_ULONG((PULONG)((PUCHAR)d->lic+address-T214_GPU_LIC_BASE),value);
+        return;
+    }
     /* Retain the old ACPI resource layout, but never write global SMMU ASIDs.
      * Direct physical probe buffers do not use the bit-34 translation tag.
      */
@@ -142,6 +156,78 @@ static struct tg_gpu_power_io GpuIo(GPU_DEVICE *d)
     struct tg_gpu_power_io io = {d, GpuRead, GpuWrite, GpuReadPmic, GpuWritePmic, GpuDelay};
     return io;
 }
+
+BOOLEAN GpuInterrupt(WDFINTERRUPT interrupt,ULONG message)
+{
+    GPU_DEVICE *d=GpuContext(WdfInterruptGetDevice(interrupt));
+    UNREFERENCED_PARAMETER(message);
+    if(!InterlockedCompareExchange(&d->irq_live,0,0)) return FALSE;
+    struct tg_gpu_power_io io=GpuIo(d);
+    if(!tg_gpu_irq_handle(&io,&d->irq,&d->last.interrupt)) return FALSE;
+    (VOID)WdfDpcEnqueue(d->irq_dpc);
+    return TRUE;
+}
+VOID GpuInterruptDpc(WDFDPC dpc)
+{
+    GPU_DEVICE *d=GpuContext((WDFDEVICE)WdfDpcGetParentObject(dpc));
+    InterlockedIncrement(&d->irq_dpcs);
+    KeSetEvent(&d->irq_event,IO_NO_INCREMENT,FALSE);
+}
+static bool GpuIrqArm(void *context)
+{
+    GPU_DEVICE *d=context;
+    struct tg_gpu_power_io io=GpuIo(d);
+    KeClearEvent(&d->irq_event);
+    WdfInterruptAcquireLock(d->interrupt);
+    enum tg_gpu_irq_result r=tg_gpu_irq_arm(&io,&d->power,&d->irq,&d->last.interrupt);
+    d->last.irq_gsi=T214_GPU_NONSTALL_GSI;
+    InterlockedExchange(&d->irq_live,r==TG_GPU_IRQ_OK);
+    WdfInterruptReleaseLock(d->interrupt);
+    return r==TG_GPU_IRQ_OK;
+}
+static bool GpuIrqWait(void *context,uint32_t expected)
+{
+    GPU_DEVICE *d=context;
+    ULONGLONG deadline=KeQueryInterruptTime()+20000000; /* two seconds per event */
+    for(;;) {
+        LARGE_INTEGER timeout;
+        uint32_t count,error;
+        KeClearEvent(&d->irq_event); /* clear before checking to avoid a lost wake */
+        WdfInterruptAcquireLock(d->interrupt);
+        count=d->last.interrupt.interrupts;error=d->last.interrupt.result;
+        WdfInterruptReleaseLock(d->interrupt);
+        if(error) return false;
+        if(count>expected) {
+            WdfInterruptAcquireLock(d->interrupt);
+            d->last.interrupt.result=TG_GPU_IRQ_UNEXPECTED;
+            WdfInterruptReleaseLock(d->interrupt);
+            return false;
+        }
+        if(count>=expected && (uint32_t)InterlockedCompareExchange(&d->irq_dpcs,0,0)>=expected)
+            return count==expected;
+        ULONGLONG now=KeQueryInterruptTime();
+        if(now>=deadline) {
+            WdfInterruptAcquireLock(d->interrupt);
+            if(!d->last.interrupt.result) d->last.interrupt.result=TG_GPU_IRQ_TIMEOUT;
+            WdfInterruptReleaseLock(d->interrupt);
+            return false;
+        }
+        timeout.QuadPart=-(LONGLONG)(deadline-now);
+        (VOID)KeWaitForSingleObject(&d->irq_event,Executive,KernelMode,FALSE,&timeout);
+    }
+}
+static VOID GpuIrqStop(GPU_DEVICE *d)
+{
+    if(!d->interrupt) return;
+    struct tg_gpu_power_io io=GpuIo(d);
+    WdfInterruptAcquireLock(d->interrupt);
+    InterlockedExchange(&d->irq_live,0);
+    if(d->irq.saved && d->power.ready)
+        (VOID)tg_gpu_irq_disarm(&io,&d->irq,&d->last.interrupt);
+    WdfInterruptReleaseLock(d->interrupt);
+    (VOID)WdfDpcCancel(d->irq_dpc,TRUE);
+    d->last.irq_dpcs=(uint32_t)InterlockedCompareExchange(&d->irq_dpcs,0,0);
+}
 static VOID GpuSaveResult(WDFDEVICE device)
 {
     GPU_DEVICE *d = GpuContext(device);
@@ -166,6 +252,7 @@ static VOID GpuCleanup(GPU_DEVICE *d)
     struct tg_gpu_power_io io = GpuIo(d);
     enum tg_gpu_clock_result cr;
     enum tg_gpu_power_result pr;
+    GpuIrqStop(d); /* no ISR/DPC can touch MMIO after this point */
     tg_gpu_execute_stop(&io, &d->execution);
     if (d->execution.owned && d->power.ready) {
         pr = tg_gpu_power_drain(&io, &d->power);
@@ -179,6 +266,11 @@ static VOID GpuCleanup(GPU_DEVICE *d)
     pr = tg_gpu_power_down(&io, &d->power);
     d->last.restore_result = ((uint32_t)cr << 16) | pr;
     if (!d->power.owned) {
+        /* Reset retires GPU mask ownership. LIC remains powered and must
+         * still be restored after a partial interrupt-unwind failure.
+         */
+        if(d->irq.saved && tg_gpu_irq_retire(&io,&d->irq)!=TG_GPU_IRQ_OK)
+            d->last.interrupt.restore_result=TG_GPU_IRQ_REGISTER;
         /* Full reset/power-down retired the GPU's register ownership too. */
         d->clock.owned = d->clock.running = false;
         d->execution.owned = d->execution.fifo_ready = false;
@@ -191,9 +283,9 @@ static VOID GpuCleanup(GPU_DEVICE *d)
             d->graphics=(struct tg_gpu_gr_work){0};
         }
     }
-    d->last.resources_owned = d->power.owned || d->execution.owned;
+    d->last.resources_owned = d->power.owned || d->execution.owned || d->irq.saved;
 }
-static NTSTATUS GpuRun(WDFDEVICE device, ULONG target, BOOLEAN graphics)
+static NTSTATUS GpuRun(WDFDEVICE device, ULONG target, BOOLEAN graphics,BOOLEAN notify)
 {
     GPU_DEVICE *d = GpuContext(device);
     struct tg_gpu_power_io io = GpuIo(d);
@@ -205,7 +297,8 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target, BOOLEAN graphics)
     ULONG seed;
     if (target != TG_GPU_CONTROL_DEFAULT_KHZ && target != TG_GPU_CONTROL_OC_KHZ)
         return STATUS_INVALID_PARAMETER;
-    if (d->power.owned || d->clock.owned || d->execution.owned)
+    if(notify && (!d->interrupt || !d->lic)) return STATUS_NOT_SUPPORTED;
+    if (d->power.owned || d->clock.owned || d->execution.owned || d->irq.saved)
         return STATUS_INVALID_DEVICE_STATE;
     RtlZeroMemory(&d->power, sizeof(d->power));
     RtlZeroMemory(&d->clock, sizeof(d->clock));
@@ -220,6 +313,7 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target, BOOLEAN graphics)
     if (!NT_SUCCESS(status)) goto early;
     if (op.value >= 80) { status = STATUS_DEVICE_NOT_READY; goto early; }
     RtlZeroMemory(&d->last, sizeof(d->last));
+    InterlockedExchange(&d->irq_dpcs,0);
     d->last.version = TG_GPU_CONTROL_VERSION;
     d->last.tested = 1;
     d->last.target_khz = target;
@@ -265,7 +359,10 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target, BOOLEAN graphics)
     d->last.rail_uv = d->clock.rail_uv;
     if (d->last.clock_result != TG_GPU_CLOCK_OK) goto done;
     KeMemoryBarrier();
-    d->last.execution_result = graphics?
+    const struct tg_gpu_execution_notify notification={d,GpuIrqArm,GpuIrqWait};
+    d->last.execution_result = notify?
+        tg_gpu_execute_irq(&io,&d->power,d->arena,(uint64_t)d->arena_address.QuadPart,
+            &firmware.payload,&notification,&d->execution,&d->last):graphics?
         tg_gpu_execute_gr(&io,&d->power,d->arena,(uint64_t)d->arena_address.QuadPart,
             &firmware.payload,&d->graphics,&d->execution,&d->last):
         tg_gpu_execute(&io,&d->power,d->arena,(uint64_t)d->arena_address.QuadPart,
@@ -295,12 +392,12 @@ VOID GpuControl(WDFQUEUE queue, WDFREQUEST request, size_t out_size, size_t in_s
     UNREFERENCED_PARAMETER(out_size); UNREFERENCED_PARAMETER(in_size);
     status = WdfRequestRetrieveOutputBuffer(request, sizeof(*out), (PVOID *)&out, NULL);
     if (!NT_SUCCESS(status)) { WdfRequestComplete(request, status); return; }
-    if (code == TG_GPU_IOCTL_RUN || code == TG_GPU_IOCTL_GR_RUN) {
+    if (code == TG_GPU_IOCTL_RUN || code == TG_GPU_IOCTL_GR_RUN || code==TG_GPU_IOCTL_IRQ_RUN) {
         status = WdfRequestRetrieveInputBuffer(request, sizeof(op), (PVOID *)&in, NULL);
         if (NT_SUCCESS(status)) {
             op = *in;
             status = op.version == TG_GPU_CONTROL_VERSION ?
-                GpuRun(device, op.target_khz, code==TG_GPU_IOCTL_GR_RUN) : STATUS_REVISION_MISMATCH;
+                GpuRun(device, op.target_khz, code==TG_GPU_IOCTL_GR_RUN,code==TG_GPU_IOCTL_IRQ_RUN) : STATUS_REVISION_MISMATCH;
         }
     } else if (code == TG_GPU_IOCTL_STATUS) status = STATUS_SUCCESS;
     else status = STATUS_INVALID_DEVICE_REQUEST;
@@ -311,11 +408,25 @@ NTSTATUS GpuPrepare(WDFDEVICE device, WDFCMRESLIST raw, WDFCMRESLIST translated)
 {
     GPU_DEVICE *d = GpuContext(device);
     ULONG i, n, found = 0;
-    UNREFERENCED_PARAMETER(raw);
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR irq=NULL,irq_raw=NULL;
+    NTSTATUS status=STATUS_DEVICE_CONFIGURATION_ERROR;
     RtlCopyMemory(d->maps, map_profile, sizeof(map_profile));
     for (i = 0; i < WdfCmResourceListGetCount(translated); ++i) {
         PCM_PARTIAL_RESOURCE_DESCRIPTOR r = WdfCmResourceListGetDescriptor(translated, i);
+        PCM_PARTIAL_RESOURCE_DESCRIPTOR rr=WdfCmResourceListGetDescriptor(raw,i);
+        if(r && r->Type==CmResourceTypeInterrupt && rr && rr->Type==CmResourceTypeInterrupt &&
+           rr->u.Interrupt.Vector==T214_GPU_NONSTALL_GSI) {
+            if(irq || (r->Flags&CM_RESOURCE_INTERRUPT_LATCHED) ||
+               r->ShareDisposition!=CmResourceShareDeviceExclusive) goto fail;
+            irq=r;irq_raw=rr;
+        }
         if (!r || r->Type != CmResourceTypeMemory) continue;
+        if(r->u.Memory.Start.QuadPart==T214_GPU_LIC_BASE && r->u.Memory.Length==T214_GPU_LIC_SIZE) {
+            if(d->lic) goto fail;
+            d->lic=MmMapIoSpace(r->u.Memory.Start,r->u.Memory.Length,MmNonCached);
+            if(!d->lic) goto fail;
+            continue;
+        }
         for (n = 0; n < T214_GPU_RESOURCE_COUNT; ++n)
             if (r->u.Memory.Start.QuadPart == d->maps[n].base && r->u.Memory.Length == d->maps[n].size) break;
         if (n == T214_GPU_RESOURCE_COUNT || d->maps[n].va) goto fail;
@@ -323,26 +434,40 @@ NTSTATUS GpuPrepare(WDFDEVICE device, WDFCMRESLIST raw, WDFCMRESLIST translated)
         if (!d->maps[n].va) goto fail;
         ++found;
     }
-    if (found == T214_GPU_RESOURCE_COUNT) return STATUS_SUCCESS;
+    if(found!=T214_GPU_RESOURCE_COUNT) goto fail;
+    if(d->lic) {
+        WDF_INTERRUPT_CONFIG config;
+        if(!irq) goto fail;
+        WDF_INTERRUPT_CONFIG_INIT(&config,GpuInterrupt,NULL);
+        config.AutomaticSerialization=FALSE;
+        config.InterruptRaw=irq_raw;config.InterruptTranslated=irq;
+        status=WdfInterruptCreate(device,&config,WDF_NO_OBJECT_ATTRIBUTES,&d->interrupt);
+        if(!NT_SUCCESS(status)) goto fail;
+    }
+    return STATUS_SUCCESS;
 fail:
+    if(d->lic) { MmUnmapIoSpace(d->lic,T214_GPU_LIC_SIZE);d->lic=NULL; }
     for (n = 0; n < T214_GPU_RESOURCE_COUNT; ++n)
         if (d->maps[n].va) { MmUnmapIoSpace((PVOID)d->maps[n].va, d->maps[n].size); d->maps[n].va = NULL; }
-    return STATUS_DEVICE_CONFIGURATION_ERROR;
+    return status;
 }
 NTSTATUS GpuD0Exit(WDFDEVICE device, WDF_POWER_DEVICE_STATE target)
 {
     GPU_DEVICE *d = GpuContext(device);
     UNREFERENCED_PARAMETER(target);
-    if (d->power.owned || d->execution.owned || d->arena) GpuCleanup(d);
-    if (!d->power.owned) GpuClosePlatform(d);
-    return d->power.owned ? STATUS_DEVICE_BUSY : STATUS_SUCCESS;
+    if (d->power.owned || d->execution.owned || d->arena || d->irq.saved) GpuCleanup(d);
+    if (!d->power.owned && !d->irq.saved) GpuClosePlatform(d);
+    return d->power.owned || d->irq.saved ? STATUS_DEVICE_BUSY : STATUS_SUCCESS;
 }
 NTSTATUS GpuRelease(WDFDEVICE device, WDFCMRESLIST resources)
 {
     GPU_DEVICE *d = GpuContext(device);
     ULONG i;
     UNREFERENCED_PARAMETER(resources);
-    if (d->power.owned || d->execution.owned || d->arena) GpuCleanup(d);
+    if (d->power.owned || d->execution.owned || d->arena || d->irq.saved) GpuCleanup(d);
+    if(d->power.owned || d->irq.saved) return STATUS_DEVICE_BUSY;
+    if(d->interrupt) { WdfObjectDelete(d->interrupt);d->interrupt=NULL; }
+    if(d->lic) { MmUnmapIoSpace(d->lic,T214_GPU_LIC_SIZE);d->lic=NULL; }
     GpuClosePlatform(d);
     for (i = 0; i < T214_GPU_RESOURCE_COUNT; ++i)
         if (d->maps[i].va) { MmUnmapIoSpace((PVOID)d->maps[i].va, d->maps[i].size); d->maps[i].va = NULL; }
@@ -373,6 +498,16 @@ NTSTATUS GpuDeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT init)
     attr.ExecutionLevel = WdfExecutionLevelPassive;
     status = WdfDeviceCreate(&init, &attr, &device);
     if (!NT_SUCCESS(status)) return status;
+    KeInitializeEvent(&GpuContext(device)->irq_event,NotificationEvent,FALSE);
+    {
+        WDF_DPC_CONFIG config;
+        WDF_DPC_CONFIG_INIT(&config,GpuInterruptDpc);
+        config.AutomaticSerialization=FALSE;
+        WDF_OBJECT_ATTRIBUTES_INIT(&attr);
+        attr.ParentObject=device;
+        status=WdfDpcCreate(&config,&attr,&GpuContext(device)->irq_dpc);
+        if(!NT_SUCCESS(status)) return status;
+    }
     GpuContext(device)->last.version = TG_GPU_CONTROL_VERSION;
     GpuContext(device)->last.target_khz = TG_GPU_CONTROL_DEFAULT_KHZ;
     {

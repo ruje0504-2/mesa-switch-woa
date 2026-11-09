@@ -20,7 +20,7 @@ enum tg_gpu_execute_result {
     TG_GPU_EXEC_TIMEOUT, TG_GPU_EXEC_FAULT, TG_GPU_EXEC_FIFO_INIT,
     TG_GPU_EXEC_PBDMA_INIT, TG_GPU_EXEC_SCHEDULER, TG_GPU_EXEC_FRONTEND,
     TG_GPU_EXEC_GR_BOOT, TG_GPU_EXEC_ACR_BOOT, TG_GPU_EXEC_PMU_BOOT,
-    TG_GPU_EXEC_GR_CONTEXT
+    TG_GPU_EXEC_GR_CONTEXT, TG_GPU_EXEC_IRQ
 };
 
 /* A single diagnostic channel using caller-owned contiguous, uncached
@@ -37,6 +37,16 @@ struct tg_gpu_execution {
     uint32_t old_pbdma_enable;
     uint32_t ce_reset_mask;
     uint32_t stage;
+};
+
+/* Optional CPU-notification acceptance gate. arm runs after cold FIFO/GR
+ * setup; wait requires a distinct ISR/DPC after each GPU report. The caller
+ * masks/synchronizes the interrupt before execute_stop or power-down.
+ */
+struct tg_gpu_execution_notify {
+    void *context;
+    bool (*arm)(void *);
+    bool (*wait)(void *,uint32_t expected_count);
 };
 
 bool tg_gpu_prepare_arena(void *cpu, uint64_t device_address, size_t bytes,
@@ -56,6 +66,10 @@ enum tg_gpu_execute_result tg_gpu_execute_gr(const struct tg_gpu_power_io *io,
     uint64_t device_address, const struct tg_gpu_gr_payload *firmware,
     const struct tg_gpu_gr_work *work, struct tg_gpu_execution *state,
     struct tg_gpu_status *result);
+enum tg_gpu_execute_result tg_gpu_execute_irq(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power,void *uncached_cpu,uint64_t device_address,
+    const struct tg_gpu_gr_payload *firmware,const struct tg_gpu_execution_notify *,
+    struct tg_gpu_execution *,struct tg_gpu_status *result);
 /* Stop channel fetch before the caller drains MC, stops the PLL and powers
  * down. Clear execution ownership/free the arena only AFTER power_down
  * confirms no ownership. The probe does not change any Tegra SMMU domain.

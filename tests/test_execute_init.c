@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "../core/execute.h"
+#include "../core/gpfifo.h"
 #include <assert.h>
 #include <string.h>
 
@@ -19,11 +20,17 @@ struct fifo_model {
     uint32_t pb_fault, mmu_fault;
     bool live_gr_snapshot;
     unsigned gr_reads;
+    bool simulated_gpu,notify_armed,fail_notify_arm;
+    unsigned notify_generated,notify_waited,fail_notify_wait;
 };
 static uint32_t *arena_userd, *arena_runlist;
+static uint32_t *arena_push,*arena_fence;
+static struct tg_gpu_gpfifo_entry *arena_ring;
 static uint32_t read32(void *context, uint32_t address)
 {
     struct fifo_model *m = context;
+    if(m->simulated_gpu && (address==0x58012000 || address==0x58012004))
+        return arena_fence[(address-0x58012000)/4];
     if (address==0x57409800 || address==0x57400100 || address==0x57409b00 ||
         address==0x57409b04 || address==0x57409c18 || address==0x57409400 || address==0x57409818) {
         if (m->live_gr_snapshot) { ++m->gr_reads; return address^0x53570000; }
@@ -177,6 +184,19 @@ static void write32(void *context, uint32_t address, uint32_t value)
         assert(!(m->stall & 0x100) && arena_userd[0] == 0);
         assert(value == m->put+1); /* neither release can skip its doorbell */
         m->put = value; arena_userd[35] = value;
+        if(m->simulated_gpu) {
+            assert(m->notify_armed && value>=1 && value<=2);
+            unsigned i=value-1;
+            assert(arena_ring[i].low==0x11000+i*28);
+            assert(((arena_ring[i].high>>10)&0x1fffff)==7);
+            assert(arena_push[i*7+5]==0x2001c008 && arena_push[i*7+6]==0);
+            assert(arena_push[i*7+2]==0x12000+i*4);
+            /* Explicit GPU substitute for this test only. Production code
+             * only publishes the doorbell and never assigns a passing fence.
+             */
+            arena_fence[i]=arena_push[i*7+3];
+            ++m->notify_generated;
+        }
     } else if (address == 0x57800000 || address == 0x57800004) {
         assert((m->mc & 0x100) && m->ticks - m->enabled_at >= 20);
         ++m->channel_writes;
@@ -193,6 +213,20 @@ static void write32(void *context, uint32_t address, uint32_t value)
 }
 static void delay(void *context, uint32_t us)
 { ((struct fifo_model *)context)->ticks += us; }
+static bool notify_arm(void *context)
+{
+    struct fifo_model *m=context;
+    assert(!m->runlist && !m->put && m->bar1 && (m->pb&1));
+    m->notify_armed=!m->fail_notify_arm;
+    return m->notify_armed;
+}
+static bool notify_wait(void *context,uint32_t count)
+{
+    struct fifo_model *m=context;
+    assert(count==m->put && m->notify_generated==count);
+    ++m->notify_waited;
+    return m->fail_notify_wait!=count;
+}
 
 void test_execute_init(void)
 {
@@ -204,6 +238,8 @@ void test_execute_init(void)
     struct tg_gpu_status result = {.expected={0x13579bdf,0x2468ace0}};
     arena_userd = (uint32_t *)(arena + 0x41000);
     arena_runlist = (uint32_t *)(arena + 0x45000);
+    arena_push=(uint32_t *)(arena+0x43000);arena_fence=(uint32_t *)(arena+0x44000);
+    arena_ring=(void *)(arena+0x42000);
     assert(tg_gpu_execute(&io,&power,arena,0xc0000000,NULL,&state,&result) == TG_GPU_EXEC_ARGUMENT);
     assert(m.writes == 0 && m.channel_reads == 0);
     power.owned = power.ready = true;
@@ -400,6 +436,22 @@ void test_execute_init(void)
         } else assert(m.event_acks==((j==0 || j==6)?1u:0u));
         assert(m.summary_acks==m.event_acks);
         assert(result.observed[0]==0xdeadbeef && result.observed[1]==0xdeadbeef);
+        tg_gpu_execute_stop(&io,&state);
+    }
+    const struct tg_gpu_execution_notify notify={&m,notify_arm,notify_wait};
+    for(unsigned fail=0;fail<=3;++fail) {
+        memset(&m,0,sizeof(m));memset(&state,0,sizeof(state));
+        memset(&result.frontend,0,sizeof(result.frontend));
+        m.runlist_map=1;m.allow_mmu=true;m.simulated_gpu=true;
+        m.fail_notify_arm=fail==3;m.fail_notify_wait=fail<3?fail:0;
+        assert(tg_gpu_execute_irq(&io,&power,arena,0xc0000000,NULL,&notify,&state,&result)==
+               (fail?TG_GPU_EXEC_IRQ:TG_GPU_EXEC_OK));
+        assert(m.put==(fail==3?0u:fail==1?1u:2u));
+        assert(result.irq_expected==2 && m.notify_waited==(fail==3?0u:fail==1?1u:2u));
+        if(!fail) {
+            assert(result.observed[0]==result.expected[0]&&result.observed[1]==result.expected[1]);
+            assert(state.stage==6);
+        }
         tg_gpu_execute_stop(&io,&state);
     }
 }

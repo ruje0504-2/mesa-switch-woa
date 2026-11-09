@@ -13,6 +13,12 @@
 /* Tegra GIC SPI 157/158, plus the 32 private interrupts for ACPI GSIs. */
 #define T214_GPU_STALL_GSI        189
 #define T214_GPU_NONSTALL_GSI     190
+/* Optional CPU-side LIC forwarding for SPI 158. Only GPU bit 30 is owned.
+ * FIR, FIR_SET/CLR, IER, IER_SET/CLR and IRQ/FIQ class, in LIC bank 4.
+ */
+#define T214_GPU_LIC_BASE         0x60004414
+#define T214_GPU_LIC_SIZE         0x0000001C
+#define T214_GPU_LIC_NONSTALL     0x40000000u
 
 /* Narrow GPU power/clock registers, excluding the fan owner's CPU CAR
  * block. PLLP is read through that owner; PMIC access uses its SPB target.

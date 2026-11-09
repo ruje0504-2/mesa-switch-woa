@@ -24,6 +24,11 @@ TgGpuReleaseResources(const DXGKRNL_INTERFACE *Dxgk,
     NTSTATUS result = STATUS_SUCCESS;
     ULONG i;
     PAGED_CODE();
+    if(Resources->LicMapping) {
+        NTSTATUS status=Dxgk->DxgkCbUnmapMemory(Dxgk->DeviceHandle,Resources->LicMapping);
+        if(NT_SUCCESS(status)) Resources->LicMapping=NULL;
+        else result=status;
+    }
     for (i = TgGpuApertureCount; i != 0; --i) {
         if (Resources->Mapping[i - 1]) {
             NTSTATUS status = Dxgk->DxgkCbUnmapMemory(
@@ -47,6 +52,7 @@ TgGpuAcquireResources(const DXGKRNL_INTERFACE *Dxgk,
     NTSTATUS status;
     PAGED_CODE();
 
+    if(Resources->LicMapping) return STATUS_INVALID_DEVICE_STATE;
     for (i = 0; i < TgGpuApertureCount; ++i)
         if (Resources->Mapping[i])
             return STATUS_INVALID_DEVICE_STATE;
@@ -64,6 +70,13 @@ TgGpuAcquireResources(const DXGKRNL_INTERFACE *Dxgk,
     for (i = 0; i < list->Count; ++i) {
         const CM_PARTIAL_RESOURCE_DESCRIPTOR *resource = &list->PartialDescriptors[i];
         if (resource->Type == CmResourceTypeMemory) {
+            if(resource->u.Memory.Start.QuadPart==T214_GPU_LIC_BASE) {
+                if(resource->u.Memory.Length!=T214_GPU_LIC_SIZE ||
+                   resource->ShareDisposition!=CmResourceShareDeviceExclusive || Resources->Lic.Type)
+                    return STATUS_DEVICE_CONFIGURATION_ERROR;
+                Resources->Lic=*resource;
+                continue;
+            }
             ULONG aperture;
             for (aperture = 0; aperture < TgGpuApertureCount; ++aperture)
                 if (resource->u.Memory.Start.QuadPart == TgGpuBases[aperture])
@@ -97,6 +110,14 @@ TgGpuAcquireResources(const DXGKRNL_INTERFACE *Dxgk,
         if (!NT_SUCCESS(status)) {
             NTSTATUS cleanup = TgGpuReleaseResources(Dxgk, Resources);
             return NT_SUCCESS(cleanup) ? status : cleanup;
+        }
+    }
+    if(Resources->Lic.Type) {
+        status=Dxgk->DxgkCbMapMemory(Dxgk->DeviceHandle,Resources->Lic.u.Memory.Start,
+            T214_GPU_LIC_SIZE,FALSE,FALSE,MmNonCached,&Resources->LicMapping);
+        if(!NT_SUCCESS(status)) {
+            NTSTATUS cleanup=TgGpuReleaseResources(Dxgk,Resources);
+            return NT_SUCCESS(cleanup)?status:cleanup;
         }
     }
     return STATUS_SUCCESS;

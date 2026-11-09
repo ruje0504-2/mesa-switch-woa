@@ -391,6 +391,28 @@ GR initialization/golden save and FIFO completion, not shader execution or a
 Vulkan drawing pass. The installed package is oem61.inf / ABI 18; the rolling
 status records signing, backup paths and the complete physical stdout.
 
+The next source candidate, **0.1.0.32 / ABI 19 (608 bytes)**, adds the separate
+`--gpu-json --gpu-irq-729` diagnostic. It appends a FIFO nonstall notification
+after each of two independent reports and admits the second only after the
+first ISR/DPC has arrived. `irq_pass` requires both GPU readbacks, two genuine
+FIFO acknowledgements and DPCs, and successful restoration/retirement. IRQ
+receipt alone never writes or completes a fence. The accepted FIFO and golden
+entry points remain separate.
+
+IRQ testing requires `SWITCH_LITE_GPU_IRQ=1` in the paired firmware profile.
+This adds only LIC bank 4's `0x60004414/0x1C` resource to GPU0; it changes no
+wake policy. The older table remains usable for FIFO/GR and rejects IRQ runs
+before GPU power-up. Only nonstall SPI 158 / GSI 190 and LIC bit 30 are enabled.
+The handler acknowledges FIFO channel events without clearing unrelated
+PBDMA/MMU faults. Windows owns the GIC. Teardown masks/synchronizes the ISR,
+cancels/waits for its private DPC, and restores LIC bits; failed restoration
+retains ownership until retry or verified GPU reset/LIC retirement.
+
+The host models, real NETB checks, real-WDK ARM64 build and native Windows
+allocation/context/resource/JSON fixtures pass. Those fixtures use explicit
+OS/device/GPU substitutes; **0.1.0.32 has no physical IRQ pass yet**. The rolling
+status identifies the installed version and next hardware step.
+
 The latest build runs `test-gr-context` with model MMIO/GPU-write substitutes
 and, when provided, the real external NETB file. It checks owned mapping bounds,
 stream-port write ordering, buffer encodings, failed replies/timeouts and image

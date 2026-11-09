@@ -50,7 +50,7 @@ core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c
         root / "core/execute.c", root / "core/submission.c", root / "platform/t214_frontend.c",
         root / "platform/t214_gr.c", root / "platform/t214_acr.c", root / "platform/t214_pmu.c",
         root / "core/gr_firmware.c", root / "core/acr_firmware.c",
-        root / "platform/t214_gr_context.c", encoder]
+        root / "platform/t214_gr_context.c", root / "platform/t214_interrupt.c", encoder]
 host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 *[f"-I{p}" for p in mesa_includes], *map(str, core), str(root / "tests/test_core.c"),
@@ -72,6 +72,11 @@ subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(root / "platform/t214_frontend.c"), str(root / "tests/test_frontend.c"),
                 "-o", str(frontend_test)], check=True)
 subprocess.run([str(frontend_test.resolve())], check=True)
+interrupt_test=args.out / "test-interrupt"
+subprocess.run([args.cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
+                str(root / "platform/t214_interrupt.c"),str(root / "tests/test_interrupt.c"),
+                "-o",str(interrupt_test)],check=True)
+subprocess.run([str(interrupt_test.resolve())],check=True)
 tlb = root / "platform/t214_mmu.c"
 tlb_test = args.out / "test-tlb"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -155,7 +160,7 @@ if args.windows_tests:
                     str(args.out / "paging.obj"), str(args.out / "gm20b_mmu.obj"),
                     str(args.out / "table_segment.obj"), str(args.out / "private_memory.obj"),
                     str(args.out / "root_table.obj"), str(args.out / "t214_mmu.obj"),
-                    str(args.out / "paging_buffer.obj"),
+                    str(args.out / "paging_buffer.obj"), str(args.out / "resources.obj"),
                     str(sdk_lib)], check=True)
     context_test = args.out / "test_context_windows.obj"
     subprocess.run([args.clang_cl, *flags, "/clang:-funwind-tables", f"/Fo{context_test}", "--",

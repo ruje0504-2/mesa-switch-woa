@@ -99,6 +99,21 @@ bool tg_gpu_prepare_arena(void *cpu, uint64_t physical, size_t bytes,
     return true;
 }
 
+static bool prepare_irq_packets(void *cpu,const uint32_t expected[2])
+{
+    uint32_t *push=(uint32_t *)((uint8_t *)cpu+PUSH);
+    struct tg_gpu_gpfifo_entry *ring=(void *)((uint8_t *)cpu+RING);
+    for(unsigned i=0;i<2;++i) {
+        release_packet(push+i*7,FENCE_VA+i*4,expected[i]);
+        push[i*7+5]=NVDEF(NVB06F,DMA_INCR,OPCODE,VALUE)|
+            NVVAL(NVB06F,DMA_INCR,COUNT,1)|NVVAL(NVB06F,DMA_INCR,SUBCHANNEL,6)|
+            NVVAL(NVB06F,DMA_INCR,ADDRESS,NVB06F_NON_STALL_INTERRUPT>>2);
+        push[i*7+6]=0; /* Nouveau nvc0_fence_emit32's notification handle. */
+        if(!tg_gpu_build_gpfifo(PUSH_VA+i*28,7,i!=0,&ring[i])) return false;
+    }
+    return true;
+}
+
 bool tg_gpu_prepare_gr_arena(void *cpu, uint64_t physical, size_t bytes,
                             const struct tg_gpu_gr_payload *firmware)
 {
@@ -223,6 +238,7 @@ static bool ex_fault(const struct tg_gpu_power_io *io)
 static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *cpu, uint64_t physical,
     const struct tg_gpu_gr_payload *firmware, const struct tg_gpu_gr_work *work,
+    const struct tg_gpu_execution_notify *notify,
     struct tg_gpu_execution *state,
     struct tg_gpu_status *s)
 {
@@ -230,6 +246,7 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
     uint32_t i, intr_stall, gpu_first, gpu_second = 0xdeadbeef;
     if (!io || !io->read32 || !io->write32 || !io->delay_us || !power ||
         !power->owned || !power->ready || !cpu || !state || !s || state->owned ||
+        (notify && (!notify->arm || !notify->wait)) ||
         !tg_gpu_prepare_arena(cpu, physical, TG_GPU_ARENA_BYTES, s->expected))
         return TG_GPU_EXEC_ARGUMENT;
     if (firmware && !tg_gpu_prepare_gr_arena(cpu,physical,TG_GPU_ARENA_BYTES,firmware))
@@ -239,6 +256,8 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
         return TG_GPU_EXEC_ARGUMENT;
     if(work && (!firmware || !tg_gpu_gr_context_prepare(cpu,physical,TG_GPU_ARENA_BYTES,work)))
         return TG_GPU_EXEC_ARGUMENT;
+    if(notify && !prepare_irq_packets(cpu,s->expected)) return TG_GPU_EXEC_ARGUMENT;
+    if(notify) s->irq_expected=2;
     fence = (volatile uint32_t *)((uint8_t *)cpu + FENCE);
     userd = (volatile uint32_t *)((uint8_t *)cpu + USERD);
     s->observed[0] = fence[0]; s->observed[1] = fence[1];
@@ -425,6 +444,10 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
                 return TG_GPU_EXEC_GR_CONTEXT;
         }
     }
+    if(notify) {
+        state->stage=13;
+        if(!notify->arm(notify->context)) return TG_GPU_EXEC_IRQ;
+    }
     state->stage = 3;
     ex_write(io, 0x800000, (uint32_t)((physical + INST) >> 12) | 0x80000000);
     s->channel_instance_after = ex_read(io, 0x800000);
@@ -453,6 +476,7 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
     }
     s->observed[0] = fence[0];
     if (gpu_first == s->expected[0]) {
+        if(notify && !notify->wait(notify->context,1)) return TG_GPU_EXEC_IRQ;
         state->stage = 5;
         io->write32(io->context, BAR1 + USERD_VA + 35 * 4, 2);
         gpu_second = io->read32(io->context, BAR1 + FENCE_VA + 4);
@@ -461,6 +485,8 @@ static enum tg_gpu_execute_result execute(const struct tg_gpu_power_io *io,
             io->delay_us(io->context, 10);
             gpu_second = io->read32(io->context, BAR1 + FENCE_VA + 4);
         }
+        if(gpu_second==s->expected[1] && notify && !notify->wait(notify->context,2))
+            return TG_GPU_EXEC_IRQ;
     }
     /* Observe the GPU alias while polling, but require matching CPU/DRAM
      * readback after real L2 writeback before reporting a completed test.
@@ -488,7 +514,7 @@ enum tg_gpu_execute_result tg_gpu_execute(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *cpu, uint64_t physical,
     const struct tg_gpu_gr_payload *firmware, struct tg_gpu_execution *state,
     struct tg_gpu_status *s)
-{ return execute(io,power,cpu,physical,firmware,NULL,state,s); }
+{ return execute(io,power,cpu,physical,firmware,NULL,NULL,state,s); }
 
 enum tg_gpu_execute_result tg_gpu_execute_gr(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power, void *cpu, uint64_t physical,
@@ -496,7 +522,16 @@ enum tg_gpu_execute_result tg_gpu_execute_gr(const struct tg_gpu_power_io *io,
     struct tg_gpu_execution *state, struct tg_gpu_status *s)
 {
     if(!work) return TG_GPU_EXEC_ARGUMENT;
-    return execute(io,power,cpu,physical,firmware,work,state,s);
+    return execute(io,power,cpu,physical,firmware,work,NULL,state,s);
+}
+
+enum tg_gpu_execute_result tg_gpu_execute_irq(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power,void *cpu,uint64_t physical,
+    const struct tg_gpu_gr_payload *firmware,const struct tg_gpu_execution_notify *notify,
+    struct tg_gpu_execution *state,struct tg_gpu_status *s)
+{
+    if(!notify) return TG_GPU_EXEC_ARGUMENT;
+    return execute(io,power,cpu,physical,firmware,NULL,notify,state,s);
 }
 
 void tg_gpu_execute_stop(const struct tg_gpu_power_io *io, struct tg_gpu_execution *s)

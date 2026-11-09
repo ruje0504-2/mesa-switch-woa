@@ -24,6 +24,11 @@ typedef struct _TG_GPU_RESOURCES {
     CM_PARTIAL_RESOURCE_DESCRIPTOR Memory[TgGpuApertureCount];
     CM_PARTIAL_RESOURCE_DESCRIPTOR Interrupt[2]; /* stall, nonstall */
     PVOID Mapping[TgGpuApertureCount];
+    /* Optional on the earlier GPU table. Required before enabling nonstall
+     * interrupts; supplied by SWITCH_LITE_GPU_IRQ=1, not a raw mapping guess.
+     */
+    CM_PARTIAL_RESOURCE_DESCRIPTOR Lic;
+    PVOID LicMapping;
 } TG_GPU_RESOURCES;
 
 /* Adapter start/stop helpers following the render-only WDDM sample's
