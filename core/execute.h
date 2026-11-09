@@ -20,7 +20,7 @@ enum tg_gpu_execute_result {
     TG_GPU_EXEC_TIMEOUT, TG_GPU_EXEC_FAULT, TG_GPU_EXEC_FIFO_INIT,
     TG_GPU_EXEC_PBDMA_INIT, TG_GPU_EXEC_SCHEDULER, TG_GPU_EXEC_FRONTEND,
     TG_GPU_EXEC_GR_BOOT, TG_GPU_EXEC_ACR_BOOT, TG_GPU_EXEC_PMU_BOOT,
-    TG_GPU_EXEC_GR_CONTEXT, TG_GPU_EXEC_IRQ, TG_GPU_EXEC_GR_ENGINE
+    TG_GPU_EXEC_GR_CONTEXT, TG_GPU_EXEC_IRQ, TG_GPU_EXEC_GR_ENGINE, TG_GPU_EXEC_PIXELS
 };
 
 /* A single diagnostic channel using caller-owned contiguous, uncached
@@ -76,6 +76,10 @@ enum tg_gpu_execute_result tg_gpu_execute_irq(const struct tg_gpu_power_io *io,
  * allocation. It neither accepts application commands nor runs shaders.
  */
 enum tg_gpu_execute_result tg_gpu_execute_3d(const struct tg_gpu_power_io *,
+    const struct tg_gpu_power *,void *cpu,uint64_t device_address,
+    const struct tg_gpu_gr_payload *,const struct tg_gpu_gr_work *,
+    struct tg_gpu_execution *,struct tg_gpu_status *);
+enum tg_gpu_execute_result tg_gpu_execute_clear(const struct tg_gpu_power_io *,
     const struct tg_gpu_power *,void *cpu,uint64_t device_address,
     const struct tg_gpu_gr_payload *,const struct tg_gpu_gr_work *,
     struct tg_gpu_execution *,struct tg_gpu_status *);

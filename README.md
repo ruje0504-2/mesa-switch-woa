@@ -472,6 +472,34 @@ Vulkan drawing. Native SYS/CAT/11-member verification and all 47 ABI-21 JSON
 fixture cases pass; the latter substitute device I/O. The rolling status lists
 raw evidence, installed package and next work.
 
+Version **0.1.0.39 / ABI 23 (720 bytes)** adds a separate fixed ROP clear
+diagnostic: `--gpu-json --gpu-clear-729` / `TG_GPU_IOCTL_CLEAR_RUN`.
+`core/gr_clear` encodes a 16x16 A8B8G8R8 pitch target (128-byte rows), blue
+background and central 8x8 red rectangle, each followed by a Mesa 3D report.
+The target occupies a private page in the existing 2 MiB GR mapping. CPU
+initialization writes only `DEADBEEF`; after both reports and L2 visibility,
+the checker compares all 256 pixels plus 768 guard/padding words. Sampling
+two pixels alone cannot pass. `pixel_pass` requires this complete comparison
+and the inherited golden/image/engine/retirement conditions.
+
+The .37 clear stopped at Stage 304/E17 with GR class-error `00100000`, no
+GPU reports and clean retirement. ABI 23/.38 added read-only trapped-method,
+data, class-error and FE/MME/SCC diagnostics before reset; it identified
+`0x0FB8 (SET_ANTI_ALIAS_RASTER)=0`, class-error 4. This extra write is absent
+from pinned NVK's initialization; .39 removes it and its packet regression
+rejects reintroduction. No unknown error is cleared or accepted as success.
+
+**Physical Lite clear pass, 2026-11-09 00:59:21 Pacific:** one .39 run exited
+0 at 729.6 MHz, Stage 306, `pixel_pass=true`. Reports `0C8E163C/F371E9C3`
+matched, all 256 pixels matched, guards remained intact, image hash
+`F20AF985`, first background/foreground `FFFF0000/FF0000FF`, FECS restore
+count 1. GR/FECS/PRI/FIFO/PBDMA/MMU faults, result/restore and retained
+resources were zero. This is hardware off-screen color clearing/readback,
+not shader execution or a Vulkan API pass. The native ABI-23 tool fixture
+passes 59 cases with substituted device I/O, and local packet/pixel/guard
+models, sanitizers, real NETB and ARM64 builds pass. The accepted signed
+.39 package has native SYS/CAT and all 11 catalogue memberships verified.
+
 The latest build runs `test-gr-context` with model MMIO/GPU-write substitutes
 and, when provided, the real external NETB file. It checks owned mapping bounds,
 stream-port write ordering, buffer encodings, failed replies/timeouts and image

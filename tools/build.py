@@ -50,7 +50,7 @@ core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c
         root / "core/execute.c", root / "core/submission.c", root / "platform/t214_frontend.c",
         root / "platform/t214_gr.c", root / "platform/t214_acr.c", root / "platform/t214_pmu.c",
         root / "core/gr_firmware.c", root / "core/acr_firmware.c", root / "core/gr_image.c",
-        root / "core/gr_submit.c",
+        root / "core/gr_submit.c", root / "core/gr_clear.c",
         root / "platform/t214_gr_context.c", root / "platform/t214_interrupt.c", encoder]
 host = args.out / "test-gm20b-core"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -115,6 +115,12 @@ subprocess.run([args.cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
                 str(root / "core/gr_image.c"),str(root / "tests/test_gr_image.c"),
                 "-o",str(gr_image_test)],check=True)
 subprocess.run([str(gr_image_test.resolve())],check=True)
+gr_clear_test = args.out / "test-gr-clear"
+subprocess.run([args.cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
+                *[f"-I{p}" for p in mesa_includes],
+                str(root / "core/gr_clear.c"),str(root / "core/report.c"),str(encoder),
+                str(root / "tests/test_gr_clear.c"),"-o",str(gr_clear_test)],check=True)
+subprocess.run([str(gr_clear_test.resolve())],check=True)
 gr_context_test = args.out / "test-gr-context"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(root / "platform/t214_gr_context.c"),str(root / "core/gr_image.c"), str(gr), str(gr_firmware),
