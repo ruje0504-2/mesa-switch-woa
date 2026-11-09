@@ -38,6 +38,7 @@ static BOOLEAN fail_sync, in_sync;
 static BOOLEAN fail_reserve;
 static UINT interrupts, dpcs, queues, frees, expected_fence,recovery_interrupts;
 static UINT expected_driver_fence;
+static UINT preemption_interrupts,expected_preemption,expected_preempt_completed;
 static TG_GPU_CONTEXT_ENGINE *notify_engine;
 static TG_GPU_QUEUE_ENTRY *reuse_private;
 static TG_GPU_CONTEXT *notify_context;
@@ -74,7 +75,8 @@ NTSTATUS (NTAPI * const __imp_ZwWaitForSingleObject)(HANDLE,BOOLEAN,PLARGE_INTEG
 static PVOID NTAPI Pool(POOL_FLAGS flags,SIZE_T bytes,ULONG tag)
 {
     UINT i;
-    CHECK(flags==POOL_FLAG_NON_PAGED && bytes<=PAGE_SIZE && tag!=0 && level==PASSIVE_LEVEL);
+    CHECK(flags==POOL_FLAG_NON_PAGED && bytes<=PAGE_SIZE && tag!=0 &&
+        (level==PASSIVE_LEVEL || (level==DISPATCH_LEVEL && tag==TG_GPU_QUEUE_TAG)));
     if(fail_pool) return NULL;
     if(pool_fail_after!=UINT32_MAX) {
         if(!pool_fail_after) return NULL;
@@ -87,7 +89,7 @@ static PVOID NTAPI Pool(POOL_FLAGS flags,SIZE_T bytes,ULONG tag)
 }
 static VOID NTAPI FreePool(PVOID p,ULONG tag)
 {
-    UINT i; CHECK(tag!=0 && level==PASSIVE_LEVEL);
+    UINT i; CHECK(tag!=0 && (level==PASSIVE_LEVEL || (level==DISPATCH_LEVEL && tag==TG_GPU_QUEUE_TAG)));
     for(i=0;i<64;++i) if(p==pools[i]) { CHECK(pool_used[i]);pool_used[i]=FALSE;return; }
     CHECK(FALSE);
 }
@@ -163,7 +165,7 @@ static NTSTATUS NTAPI Free(HANDLE device,const DXGKARGCB_FREECONTIGUOUSMEMORY *a
 static NTSTATUS NTAPI Synchronize(HANDLE device,PKSYNCHRONIZE_ROUTINE routine,
                                   PVOID context,ULONG message,PBOOLEAN result)
 {
-    CHECK(device==(HANDLE)1 && !message && level==PASSIVE_LEVEL);
+    CHECK(device==(HANDLE)1 && !message && level<=DISPATCH_LEVEL);
     if(fail_sync) return STATUS_UNSUCCESSFUL;
     in_sync=TRUE;*result=routine(context);in_sync=FALSE;return STATUS_SUCCESS;
 }
@@ -173,6 +175,15 @@ static VOID NTAPI Interrupt(HANDLE device,DXGKARGCB_NOTIFY_INTERRUPT_DATA *data)
     if(data->InterruptType==DXGK_INTERRUPT_GPU_ENGINE_TIMEOUT) {
         CHECK(!data->GpuEngineTimeout.NodeOrdinal && !data->GpuEngineTimeout.EngineOrdinal);
         ++recovery_interrupts;return;
+    }
+    if(data->InterruptType==DXGK_INTERRUPT_DMA_PREEMPTED) {
+        CHECK(data->DmaPreempted.PreemptionFenceId==expected_preemption);
+        CHECK(data->DmaPreempted.LastCompletedFenceId==expected_preempt_completed);
+        CHECK(!data->DmaPreempted.NodeOrdinal && !data->DmaPreempted.EngineOrdinal);
+        CHECK(notify_engine && notify_engine->LastCompletedFence==expected_preempt_completed);
+        CHECK(!notify_engine->Active && !notify_engine->Channel.referenced);
+        if(notify_context)CHECK(notify_context->References==notify_references);
+        ++preemption_interrupts;return;
     }
     CHECK(data->InterruptType==DXGK_INTERRUPT_DMA_COMPLETED);
     CHECK(data->DmaCompleted.NodeOrdinal==0 && data->DmaCompleted.EngineOrdinal==0);
@@ -817,6 +828,19 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS);
     submit.Flags.Value=1;submit.pDmaBufferPrivateData=&priv[0];submit.DmaBufferPrivateDataSize=sizeof(priv[0]);
     submit.DmaBufferVirtualAddress=0x100000;submit.DmaBufferSize=64;submit.SubmissionFenceId=108;
+    CHECK(TgGpuQueueSubmit(&q,&submit)==STATUS_SUCCESS);
+    {
+        DXGKARG_PREEMPTCOMMAND preempt={.PreemptionFenceId=900};
+        TG_GPU_PAGING_BUFFER saved=priv[0].Paging;UINT events=preemption_interrupts;
+        UINT accesses_before=hw.reads+hw.writes;
+        notify_engine=&e;notify_context=NULL;expected_preemption=900;expected_preempt_completed=107;
+        level=DISPATCH_LEVEL;CHECK(TgGpuDdiPreemptCommand(&e,&preempt)==STATUS_SUCCESS);level=PASSIVE_LEVEL;
+        CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_SUCCESS && preemption_interrupts==events+1);
+        CHECK(hw.reads+hw.writes==accesses_before && e.LastCompletedFence==107);
+        CHECK(priv[0].Paging.Magic==saved.Magic && priv[0].Paging.CpuAddress==saved.CpuAddress &&
+            priv[0].Paging.GpuAddress==saved.GpuAddress && priv[0].Paging.BuiltBytes==saved.BuiltBytes);
+        notify_engine=NULL;
+    }
     CHECK(TgGpuQueueSubmit(&q,&submit)==STATUS_SUCCESS);hw.fail_tlb=TRUE;
     CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_IO_TIMEOUT && e.Active==&q.Current);
     CHECK(q.Current.Paging && e.LastCompletedFence==107 && interrupts==before+6);
@@ -837,6 +861,109 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     CHECK(ddi.DxgkDdiDestroyDevice(device.hDevice)==STATUS_SUCCESS);
     CHECK(ddi.DxgkDdiDestroyProcess(&e,process.hKmdProcess)==STATUS_SUCCESS);
     e.HardwareOwner=NULL;CHECK(TgGpuStopContextEngine(&e)==STATUS_SUCCESS);
+    for(UINT i=0;i<64;++i)CHECK(!pool_used[i] && !memory_used[i]);
+    for(UINT i=0;i<4;++i)CHECK(!graphics_used[i]);
+}
+
+static VOID RequestPreempt(TG_GPU_CONTEXT_ENGINE *e,UINT fence)
+{
+    DXGKARG_PREEMPTCOMMAND a={.PreemptionFenceId=fence};UINT accesses=hw.reads+hw.writes;
+    level=DISPATCH_LEVEL;CHECK(TgGpuDdiPreemptCommand(e,&a)==STATUS_SUCCESS);
+    CHECK(level==DISPATCH_LEVEL && !e->Creating && hw.reads+hw.writes==accesses);level=PASSIVE_LEVEL;
+}
+static __declspec(noinline) VOID TestPreemption(const DXGKRNL_INTERFACE *dxgk)
+{
+    static TG_GPU_CONTEXT_ENGINE e;static TG_GPU_WORK_QUEUE q;static TG_GPU_HARDWARE owner;
+    static TG_GPU_QUEUE_ENTRY entries[3];static _Alignas(PAGE_SIZE) UCHAR table[TG_GPU_TABLE_BYTES];
+    TG_GPU_TABLE_SEGMENT tables={.Memory={(HANDLE)4,table,{.QuadPart=0x90000000},sizeof(table)},.SegmentId=1};
+    DXGKARG_CREATEPROCESS process={.hDxgkProcess=(HANDLE)100};DXGKARG_CREATEDEVICE device={0};
+    DXGKARG_CREATECONTEXT create={.EngineAffinity=1,.Flags.VirtualAddressing=1};
+    DXGKARG_SETROOTPAGETABLE root={.Address={1,0,0},.NumEntries=2};
+    DXGKARG_SUBMITCOMMANDVIRTUAL submit={.DmaBufferVirtualAddress=0x10000,.DmaBufferSize=40,
+        .pDmaBufferPrivateData=&entries[0],.DmaBufferPrivateDataSize=sizeof(entries[0])};
+    struct tg_gpu_power power={.owned=true,.ready=true,.stage=TG_GPU_STAGE_READY};
+    struct tg_gpu_power_io io={&hw,Read,Write,ReadPmic,WritePmic,Delay};
+    struct tg_gpu_clock clock={0};DRIVER_INITIALIZATION_DATA ddi={0};TG_GPU_CONTEXT *c;
+    UINT events=preemption_interrupts,dma=interrupts,pools,accesses,faults=recovery_interrupts;
+    CHECK(TgGpuInitializeContextEngine(&e,dxgk,&tables)==STATUS_SUCCESS);TestGraphicsTemplate(&e);
+    CHECK(TgGpuDdiCreateProcess(&e,&process)==STATUS_SUCCESS);device.hKmdProcess=process.hKmdProcess;
+    CHECK(TgGpuDdiCreateDevice(&e,&device)==STATUS_SUCCESS);
+    CHECK(TgGpuDdiCreateContext(device.hDevice,&create)==STATUS_SUCCESS);c=create.hContext;
+    root.hContext=c;TgGpuDdiSetRootPageTable(&e,&root);CHECK(c->Root.Valid);
+    CHECK(TgGpuInitializeWorkQueue(&q,&e)==STATUS_SUCCESS);pools=PoolsInUse();
+    memset(&hw,0,sizeof(hw));hw.mc=0x100;hw.pb=hw.map=hw.sched=1;hw.expected_root=0x900000;
+    hw.cpu_fence=(UINT32 *)((UCHAR *)e.Commands.CpuAddress+TG_GPU_COMMAND_FENCE);
+    owner.Engine=&e;owner.Ready=TRUE;owner.Power=power;e.HardwareOwner=&owner;
+    e.UserdBar1Ready=TRUE;e.UserdBar1Offset=0x13000;e.LastCompletedFence=17;
+    notify_engine=&e;notify_context=c;notify_references=0;
+    TgGpuRegisterAdapterDdis(&ddi);CHECK(ddi.DxgkDdiPreemptCommand==TgGpuDdiPreemptCommand);
+    expected_preemption=500;expected_preempt_completed=17;RequestPreempt(&e,500);
+    CHECK(q.Preemptions==1 && PoolsInUse()==pools+1 && preemption_interrupts==events);
+    CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_SUCCESS && preemption_interrupts==events+1);
+    CHECK(!q.Preemptions && PoolsInUse()==pools && e.LastCompletedFence==17 && interrupts==dma);
+    /* Cancel only the admitted prefix; the newer null-render packet remains. */
+    submit.hContext=c;submit.SubmissionFenceId=200;CHECK(TgGpuDdiSubmitCommandVirtual(&e,&submit)==STATUS_SUCCESS);
+    expected_preemption=501;RequestPreempt(&e,501);
+    submit.Flags.NullRendering=1;submit.SubmissionFenceId=201;submit.pDmaBufferPrivateData=&entries[1];
+    CHECK(TgGpuDdiSubmitCommandVirtual(&e,&submit)==STATUS_SUCCESS && c->References==1);
+    accesses=hw.reads+hw.writes;
+    CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_SUCCESS && preemption_interrupts==events+2);
+    CHECK(!c->References && !entries[0].Work.Engine && e.LastCompletedFence==17 && interrupts==dma);
+    CHECK(hw.reads+hw.writes==accesses && !IsListEmpty(&q.Pending));
+    expected_fence=expected_driver_fence=201;
+    CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_SUCCESS && e.LastCompletedFence==201);
+    /* A real in-flight record must finish and retire before preemption; the
+     * second captured record is canceled without touching its command bytes. */
+    submit.Flags.Value=0;submit.SubmissionFenceId=202;submit.pDmaBufferPrivateData=&entries[0];
+    CHECK(TgGpuDdiSubmitCommandVirtual(&e,&submit)==STATUS_SUCCESS);
+    submit.SubmissionFenceId=203;submit.pDmaBufferPrivateData=&entries[1];
+    CHECK(TgGpuDdiSubmitCommandVirtual(&e,&submit)==STATUS_SUCCESS);
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_PENDING && c->References==2);
+    expected_preemption=502;expected_preempt_completed=202;RequestPreempt(&e,502);
+    submit.Flags.NullRendering=1;submit.SubmissionFenceId=204;submit.pDmaBufferPrivateData=&entries[2];
+    CHECK(TgGpuDdiSubmitCommandVirtual(&e,&submit)==STATUS_SUCCESS);
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_PENDING && c->References==2);
+    CHECK(preemption_interrupts==events+2 && e.LastCompletedFence==201);
+    hw.gpu_fence=q.Current.Expected;expected_fence=expected_driver_fence=202;notify_references=1;
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_SUCCESS && e.LastCompletedFence==202);
+    CHECK(preemption_interrupts==events+2 && c->References==1);notify_references=0;accesses=hw.reads+hw.writes;
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_SUCCESS && preemption_interrupts==events+3);
+    CHECK(hw.reads+hw.writes==accesses && !c->References && e.LastCompletedFence==202);
+    expected_fence=expected_driver_fence=204;
+    CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_SUCCESS && e.LastCompletedFence==204);
+    /* Several preemption fences must each notify exactly once, in order. */
+    submit.Flags.Value=0;submit.SubmissionFenceId=205;submit.pDmaBufferPrivateData=&entries[0];
+    CHECK(TgGpuDdiSubmitCommandVirtual(&e,&submit)==STATUS_SUCCESS);RequestPreempt(&e,503);
+    submit.SubmissionFenceId=206;submit.pDmaBufferPrivateData=&entries[1];
+    CHECK(TgGpuDdiSubmitCommandVirtual(&e,&submit)==STATUS_SUCCESS);RequestPreempt(&e,504);
+    expected_preemption=503;expected_preempt_completed=204;notify_references=1;
+    CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_SUCCESS && q.Preemptions==1 && c->References==1);
+    expected_preemption=504;notify_references=0;
+    CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_SUCCESS && !q.Preemptions && !c->References);
+    CHECK(preemption_interrupts==events+5 && e.LastCompletedFence==204 && PoolsInUse()==pools);
+    /* A rejected fence behind an aborted packet must not overtake it. */
+    submit.SubmissionFenceId=207;submit.pDmaBufferPrivateData=&entries[0];
+    CHECK(TgGpuDdiSubmitCommandVirtual(&e,&submit)==STATUS_SUCCESS);
+    submit.SubmissionFenceId=208;submit.DmaBufferSize=3;submit.pDmaBufferPrivateData=&entries[1];
+    CHECK(TgGpuDdiSubmitCommandVirtual(&e,&submit)==STATUS_INVALID_PARAMETER);
+    RequestPreempt(&e,505);expected_preemption=505;expected_preempt_completed=204;
+    CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_SUCCESS && e.LastCompletedFence==204 && !c->References);
+    CHECK(preemption_interrupts==events+6 && PoolsInUse()==pools);
+    /* Failed interrupt synchronization retains the owned marker until reset. */
+    RequestPreempt(&e,506);fail_sync=TRUE;
+    CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_UNSUCCESSFUL && e.Notification==&q.Current);
+    CHECK(PoolsInUse()==pools+1 && preemption_interrupts==events+6);
+    fail_sync=FALSE;CHECK(TgGpuResetWorkQueue(&q,NULL,&power,&clock)==STATUS_SUCCESS);
+    CHECK(!e.Notification && !q.Current.Engine && PoolsInUse()==pools && e.LastCompletedFence==204);
+    CHECK(TgGpuResumeWorkQueue(&q,&power)==STATUS_SUCCESS);
+    fail_pool=TRUE;accesses=hw.reads+hw.writes;RequestPreempt(&e,507);fail_pool=FALSE;
+    CHECK(e.RecoveryPending && e.RecoveryNotified && e.RecoveryStatus==STATUS_NO_MEMORY && q.Paused);
+    CHECK(recovery_interrupts==faults+1 && preemption_interrupts==events+6 && e.LastCompletedFence==204);
+    CHECK(hw.reads+hw.writes==accesses && PoolsInUse()==pools);
+    CHECK(TgGpuStopWorkQueue(&q)==STATUS_SUCCESS);e.HardwareOwner=NULL;
+    notify_engine=NULL;notify_context=NULL;
+    CHECK(TgGpuDdiDestroyContext(c)==STATUS_SUCCESS && TgGpuDdiDestroyDevice(device.hDevice)==STATUS_SUCCESS);
+    CHECK(TgGpuDdiDestroyProcess(&e,process.hKmdProcess)==STATUS_SUCCESS && TgGpuStopContextEngine(&e)==STATUS_SUCCESS);
     for(UINT i=0;i<64;++i)CHECK(!pool_used[i] && !memory_used[i]);
     for(UINT i=0;i<4;++i)CHECK(!graphics_used[i]);
 }
@@ -1114,5 +1241,6 @@ void start(void)
     for(i=0;i<4;++i)CHECK(!graphics_used[i]);
     TestAdapterLifecycle(&dxgk);
     TestPagingDispatch(&dxgk);
+    TestPreemption(&dxgk);
     WriteFile(GetStdHandle((ULONG)-11),pass,sizeof(pass)-1,&written,NULL);ExitProcess(0);
 }

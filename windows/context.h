@@ -82,7 +82,7 @@ struct _TG_GPU_CONTEXT_WORK {
     UINT64 DmaAddress, FencePhysicalAddress, InternalVa;
     UINT DmaBytes, SubmissionFence, CompletionFence, Expected;
     BOOLEAN Signaling, Notified, Prepared, HardwareBusy, Submitted, Attempted, Retired, CompletionReady, Paging;
-    BOOLEAN Software,Rejected;
+    BOOLEAN Software,Rejected,Preemption;
     BOOLEAN GpuCompleted,CpuCompleted;
 };
 
@@ -129,7 +129,8 @@ NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *
 NTSTATUS TgGpuCancelCapturedWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuCaptureSoftwareWork(TG_GPU_CONTEXT_ENGINE *,const DXGKARG_SUBMITCOMMANDVIRTUAL *,TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuArmSoftwareCompletion(TG_GPU_CONTEXT_ENGINE *,TG_GPU_CONTEXT_WORK *);
-/* Internal failure requests engine recovery without completing any fence. */
+/* DISPATCH-safe internal recovery request; no waits/MMIO or completed fence. */
+_IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS TgGpuRequestEngineRecovery(TG_GPU_CONTEXT_ENGINE *,NTSTATUS);
 /* Kernel-generated paging records share the ordered execution slot. CPU PTE
  * publication and real TLB completion precede arming the OS notification. */

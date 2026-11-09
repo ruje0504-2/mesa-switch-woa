@@ -834,6 +834,29 @@ Faults, restoration errors and owned resources are zero; no reboot was needed.
 All five native fixtures and signed catalogue checks pass. The kernel worker
 and complete platform-adapter startup remain library/model evidence only.
 
+### DMA-buffer-boundary preemption
+
+The library now registers `TgGpuDdiPreemptCommand`. The
+[WDDM preempt callback](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_preemptcommand)
+must be nonpageable at DISPATCH_LEVEL and return SUCCESS. It allocates a
+nonpaged queue marker, takes only spin locks and wakes the kernel worker;
+failure requests recovery without inventing a preempt completion. The
+recovery-notification helper is now DISPATCH-safe as well.
+
+The worker implements DMA-buffer-boundary granularity: a running buffer must
+finish its GPU/retirement/CPU gate before reporting preemption. It cancels
+only queued records before the marker, retaining later submissions. A
+`DMA_PREEMPTED` notification contains the requested preemption fence and the
+last genuinely completed submission fence; it never completes canceled work
+or advances over an aborted record. Canceled paging private data retains its
+built descriptor for OS resubmission. Owned markers survive failed interrupt
+synchronization until retry/reset. Native controlled tests cover idle/running
+queues, cuts, multiple requests, paging resubmission, rejected-fence ordering,
+synchronization failure and DISPATCH-level OOM recovery. This does not implement
+instruction-level preemption or the still-pending TDR reset/restart callbacks.
+Queue cancellation detaches one record under a short spin lock, then drops
+its reference and frees owned metadata at PASSIVE_LEVEL under DispatchGate.
+
 ### Packed Windows backend diagnostic
 
 `windows/diagnostic_backend.c` is linked only into the opt-in KMDF probe.
@@ -890,6 +913,29 @@ integration evidence through the diagnostic adapters above. All six native
 models and 100 native JSON fixtures pass, with signed SYS/CAT/all 11 catalogue
 members verified. No reboot was needed. **No live WDDM/VidMm or Vulkan API
 pass is implied**; native-submit and the render adapter remain unpublished.
+
+**Physical preemption pass, 2026-11-09 06:32 Pacific:** .55 / ABI 28
+(856 bytes) adds one deliberately queued report packet between the clear and
+draw. While holding the real dispatcher mutex, the diagnostic calls
+`PreemptCommand` at actual DISPATCH_LEVEL and queues the surviving draw after
+the marker. The kernel worker cancels the earlier queued packet, emits one
+preempt notification with last-completed fence **1**, then completes the draw
+at submission fence **3**. There are three admitted submissions but only two
+DMA completions/two GR saves/restores; the canceled report remains **DEADBEEF**.
+All 256 pixels/768 guards, hashes `F20AF985/FB041DD2`, GPU/CPU Reference 2/2
+and safe teardown still pass, with faults/recovery/owned zero. Six native
+controlled fixtures and 104 JSON cases pass; SYS/CAT/all 11 members verify,
+and installation needs no reboot. This physically tests the queued-prefix
+cut through diagnostic adapters, not a live OS scheduler or interruption of
+an in-flight shader. The running-buffer boundary case retains model evidence.
+
+**.56 regression, 2026-11-09 06:37 Pacific:** prefix cancellation now detaches
+one record at a time and releases references/owned metadata outside the spin
+lock. Native queue/preemption tests and the same physical test pass again:
+reports `3A5917D1/C5A6E82E`, three admissions/two completions, one preemption
+with last-completed 1, canceled report DEADBEEF, two GR saves/restores and the
+same complete image/code checks. Faults/restore/owned remain zero. The .55
+ABI-28 tool and its unchanged 104 JSON fixtures remain matched. No reboot.
 
 The owner-selected WDDM/NVK UMA budget is a **512 MiB maximum GPU working
 set**, allocated dynamically within VidMm's actual budget. The earlier 1 GiB

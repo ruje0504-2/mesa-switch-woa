@@ -38,5 +38,28 @@ NTSTATUS APIENTRY TgGpuDdiSubmitCommandVirtual(HANDLE adapter,const DXGKARG_SUBM
      * Microsoft permits only SUCCESS or malformed INVALID_PARAMETER here. */
     return STATUS_SUCCESS;
 }
+NTSTATUS APIENTRY TgGpuDdiPreemptCommand(HANDLE adapter,const DXGKARG_PREEMPTCOMMAND *a)
+{
+    TG_GPU_CONTEXT_ENGINE *e=adapter;TG_GPU_WORK_QUEUE *q;TG_GPU_QUEUE_ENTRY *entry=NULL;
+    KIRQL irql;NTSTATUS status;
+    /* Nonpageable DISPATCH_LEVEL callback: no dispatcher mutex or GPU waits.
+     * WDDM requires SUCCESS even on an internal failure; request recovery
+     * instead of inventing a preempt completion or returning a bugcheck code. */
+    if(!e)return STATUS_SUCCESS;
+    KeAcquireSpinLock(&e->Lock,&irql);++e->Creating;q=e->QueueOwner;
+    status=e->Stopping?STATUS_DEVICE_NOT_READY:STATUS_SUCCESS;KeReleaseSpinLock(&e->Lock,irql);
+    if(!a || a->NodeOrdinal || a->EngineOrdinal || a->Flags.Value)status=STATUS_INVALID_PARAMETER;
+    if(NT_SUCCESS(status)) {
+        entry=ExAllocatePool2(POOL_FLAG_NON_PAGED,sizeof(*entry),TG_GPU_QUEUE_TAG);
+        status=entry?TgGpuQueuePreempt(q,a,entry):STATUS_NO_MEMORY;
+        if(entry && !NT_SUCCESS(status))ExFreePoolWithTag(entry,TG_GPU_QUEUE_TAG);
+    }
+    if(!NT_SUCCESS(status))(VOID)TgGpuRequestEngineRecovery(e,status);
+    KeAcquireSpinLock(&e->Lock,&irql);--e->Creating;KeReleaseSpinLock(&e->Lock,irql);
+    return STATUS_SUCCESS;
+}
 void TgGpuRegisterSubmissionDdi(DRIVER_INITIALIZATION_DATA *d)
-{d->DxgkDdiSubmitCommandVirtual=TgGpuDdiSubmitCommandVirtual;}
+{
+    d->DxgkDdiSubmitCommandVirtual=TgGpuDdiSubmitCommandVirtual;
+    d->DxgkDdiPreemptCommand=TgGpuDdiPreemptCommand;
+}

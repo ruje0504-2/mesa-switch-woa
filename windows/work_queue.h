@@ -39,6 +39,7 @@ typedef struct _TG_GPU_WORK_QUEUE {
     PVOID CurrentPrivate;
     TG_GPU_QUEUE_ENTRY *CurrentOwned;
     NTSTATUS Failure;
+    UINT Preemptions; /* owned markers still in Pending, excludes Current */
     BOOLEAN Servicing, Paused;
 } TG_GPU_WORK_QUEUE;
 
@@ -48,6 +49,11 @@ NTSTATUS TgGpuInitializeWorkQueue(TG_GPU_WORK_QUEUE *,TG_GPU_CONTEXT_ENGINE *);
  * require adapter fault/preempt/TDR handling, not direct DDI propagation.
  */
 NTSTATUS TgGpuQueueSubmit(TG_GPU_WORK_QUEUE *,const DXGKARG_SUBMITCOMMANDVIRTUAL *);
+/* DISPATCH-safe DMA-buffer-boundary preemption. Takes ownership of Reserved
+ * only on success, and cuts the queue at the request's admission point.
+ * Newer submissions stay after that marker for the next scheduling interval. */
+NTSTATUS TgGpuQueuePreempt(TG_GPU_WORK_QUEUE *,const DXGKARG_PREEMPTCOMMAND *,
+    TG_GPU_QUEUE_ENTRY *Reserved);
 /* PASSIVE DDI reserves a nonpaged node before validation. Used transfers its
  * ownership for a rejected packet or a software packet without OS private
  * storage. Caller holds DispatchGate through admission/idle rejection drain. */

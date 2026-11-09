@@ -95,11 +95,72 @@ done:
 }
 NTSTATUS TgGpuQueueSubmit(TG_GPU_WORK_QUEUE *q,const DXGKARG_SUBMITCOMMANDVIRTUAL *a)
 {return queue_submit(q,a,NULL,NULL);}
+NTSTATUS TgGpuQueuePreempt(TG_GPU_WORK_QUEUE *q,const DXGKARG_PREEMPTCOMMAND *a,
+    TG_GPU_QUEUE_ENTRY *entry)
+{
+    KIRQL irql,engine_irql;NTSTATUS status=STATUS_SUCCESS;
+    if(!q || !a || !entry || a->NodeOrdinal || a->EngineOrdinal || a->Flags.Value)
+        return STATUS_INVALID_PARAMETER;
+    KeAcquireSpinLock(&q->Lock,&irql);
+    if(!q->Engine || q->Paused || !NT_SUCCESS(q->Failure))status=STATUS_DEVICE_NOT_READY;
+    else {
+        KeAcquireSpinLock(&q->Engine->Lock,&engine_irql);
+        if(q->Engine->Stopping || q->Engine->RecoveryPending)status=STATUS_DEVICE_NOT_READY;
+        KeReleaseSpinLock(&q->Engine->Lock,engine_irql);
+        if(NT_SUCCESS(status)) {
+            RtlZeroMemory(entry,sizeof(*entry));entry->Owned=TRUE;
+            entry->Work.Engine=q->Engine;entry->Work.Preemption=TRUE;
+            entry->Work.SubmissionFence=a->PreemptionFenceId;
+            InsertTailList(&q->Pending,&entry->Link);++q->Preemptions;
+        }
+    }
+    KeReleaseSpinLock(&q->Lock,irql);
+    if(NT_SUCCESS(status))(VOID)KeSetEvent(&q->Wake,IO_NO_INCREMENT,FALSE);
+    return status;
+}
 NTSTATUS TgGpuQueueSubmitOrReject(TG_GPU_WORK_QUEUE *q,const DXGKARG_SUBMITCOMMANDVIRTUAL *a,
     TG_GPU_QUEUE_ENTRY *reserved,BOOLEAN *used)
 {
     if(!reserved || !used)return STATUS_INVALID_PARAMETER;
     return queue_submit(q,a,reserved,used);
+}
+/* DispatchGate held, Current empty. This never touches hardware:
+ * any running DMA buffer must first complete/retire through the normal gate.
+ * Drop only the prefix before the first preemption marker, not newer work.
+ */
+static NTSTATUS preempt_prefix(TG_GPU_WORK_QUEUE *q)
+{
+    TG_GPU_QUEUE_ENTRY *entry;TG_GPU_CONTEXT_ENGINE *e=q->Engine;
+    NTSTATUS status;KIRQL irql;BOOLEAN aborted=FALSE,owned;
+    KeAcquireSpinLock(&e->Lock,&irql);
+    status=e->Active || e->Notification || e->Channel.referenced?STATUS_PENDING:STATUS_SUCCESS;
+    KeReleaseSpinLock(&e->Lock,irql);if(status!=STATUS_SUCCESS)return status;
+    for(;;) {
+        KeAcquireSpinLock(&q->Lock,&irql);
+        if(IsListEmpty(&q->Pending)) {
+            KeReleaseSpinLock(&q->Lock,irql);return STATUS_INVALID_DEVICE_STATE;
+        }
+        entry=CONTAINING_RECORD(q->Pending.Flink,TG_GPU_QUEUE_ENTRY,Link);
+        if(entry->Work.Preemption) {
+            KeReleaseSpinLock(&q->Lock,irql);return STATUS_SUCCESS;
+        }
+        RemoveEntryList(&entry->Link);KeReleaseSpinLock(&q->Lock,irql);
+        if(entry->Work.Rejected && !aborted) {
+            KeAcquireSpinLock(&e->Lock,&irql);e->LastCompletedFence=entry->Work.CompletionFence;
+            KeReleaseSpinLock(&e->Lock,irql);
+        } else if(!entry->Work.Rejected)aborted=TRUE;
+        status=entry->Work.Paging || entry->Work.Software?STATUS_SUCCESS:
+            TgGpuCancelCapturedWork(e,&entry->Work);
+        if(!NT_SUCCESS(status)) {
+            KeAcquireSpinLock(&q->Lock,&irql);InsertHeadList(&q->Pending,&entry->Link);
+            KeReleaseSpinLock(&q->Lock,irql);return status;
+        }
+        owned=entry->Owned;
+        /* VidSch can resubmit an aborted paging packet. Preserve the KMD's
+         * immutable paging descriptor in OS private storage until OS reuse. */
+        RtlZeroMemory(&entry->Work,sizeof(entry->Work));InitializeListHead(&entry->Link);
+        if(owned)ExFreePoolWithTag(entry,TG_GPU_QUEUE_TAG);
+    }
 }
 NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io *io,
                              const struct tg_gpu_power *power)
@@ -118,10 +179,19 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
         KeReleaseSpinLock(&q->Lock,irql);(VOID)KeReleaseMutex(&q->DispatchGate,FALSE);return status;
     }
     q->Servicing=TRUE;w=&q->Current;
+    if(!w->Engine && q->Preemptions) {
+        /* Cancel/free one detached record at a time at PASSIVE, rather than
+         * holding a spin lock across an arbitrarily long admitted prefix. */
+        KeReleaseSpinLock(&q->Lock,irql);
+        status=preempt_prefix(q);
+        if(status!=STATUS_SUCCESS)goto done;
+        KeAcquireSpinLock(&q->Lock,&irql);
+    }
     if(!w->Engine && !IsListEmpty(&q->Pending)) {
         entry=CONTAINING_RECORD(RemoveHeadList(&q->Pending),TG_GPU_QUEUE_ENTRY,Link);
         *w=entry->Work;q->CurrentPrivate=entry;q->CurrentPaging=entry->Paging;
         q->CurrentOwned=entry->Owned?entry:NULL;
+        if(w->Preemption){--q->Preemptions;q->CurrentPrivate=NULL;}
         /* Transfer the retained reference to queue-owned storage. Dxgkrnl may
          * reuse its original buffer immediately from the completion callback.
          */
@@ -130,7 +200,7 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
     KeReleaseSpinLock(&q->Lock,irql);
     status=STATUS_SUCCESS;
     if(!w->Engine) goto done;
-    if(w->Software) {
+    if(w->Software || w->Preemption) {
         status=TgGpuArmSoftwareCompletion(q->Engine,w);
         if(status!=STATUS_SUCCESS)goto done;
         goto notify;
@@ -167,7 +237,7 @@ notify:
     /* Admission of rejected records uses this same PASSIVE gate. Consume
      * adjacent rejection markers before the real completion callback, so a
      * concurrent QueryCurrentFence never regresses behind those packets. */
-    for(;;) {
+    if(!w->Preemption)for(;;) {
         KeAcquireSpinLock(&q->Lock,&irql);
         entry=IsListEmpty(&q->Pending)?NULL:CONTAINING_RECORD(q->Pending.Flink,TG_GPU_QUEUE_ENTRY,Link);
         if(!entry || !entry->Work.Rejected) {KeReleaseSpinLock(&q->Lock,irql);break;}
@@ -235,9 +305,11 @@ NTSTATUS TgGpuResetWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io *
      */
     while(!IsListEmpty(&q->Pending)) {
         entry=CONTAINING_RECORD(q->Pending.Flink,TG_GPU_QUEUE_ENTRY,Link);
-        status=entry->Work.Paging || entry->Work.Software?STATUS_SUCCESS:TgGpuCancelCapturedWork(q->Engine,&entry->Work);
+        status=entry->Work.Paging || entry->Work.Software || entry->Work.Preemption?
+            STATUS_SUCCESS:TgGpuCancelCapturedWork(q->Engine,&entry->Work);
         if(!NT_SUCCESS(status)) goto done;
         BOOLEAN owned=entry->Owned;
+        if(entry->Work.Preemption)--q->Preemptions;
         RemoveEntryList(&entry->Link);RtlZeroMemory(entry,sizeof(*entry));
         if(owned)ExFreePoolWithTag(entry,TG_GPU_QUEUE_TAG);
     }
@@ -250,7 +322,7 @@ NTSTATUS TgGpuResumeWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power *po
     KIRQL irql;NTSTATUS status=STATUS_SUCCESS;
     if(!q || !q->Engine || !power) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&q->Lock,&irql);
-    if(q->Servicing || q->Current.Engine || !IsListEmpty(&q->Pending) || !NT_SUCCESS(q->Failure))
+    if(q->Servicing || q->Current.Engine || q->Preemptions || !IsListEmpty(&q->Pending) || !NT_SUCCESS(q->Failure))
         status=STATUS_DEVICE_BUSY;
     else if(!power->owned || !power->ready || !q->Engine->UserdBar1Ready || q->Engine->RecoveryPending) status=STATUS_DEVICE_NOT_READY;
     else q->Paused=FALSE;
@@ -261,7 +333,7 @@ NTSTATUS TgGpuStopWorkQueue(TG_GPU_WORK_QUEUE *q)
     KIRQL irql,engine_irql;TG_GPU_CONTEXT_ENGINE *e;
     if(!q || !q->Engine) return STATUS_INVALID_PARAMETER;
     e=q->Engine;KeAcquireSpinLock(&q->Lock,&irql);q->Paused=TRUE;
-    if(q->Servicing || q->Current.Engine || !IsListEmpty(&q->Pending)) {
+    if(q->Servicing || q->Current.Engine || q->Preemptions || !IsListEmpty(&q->Pending)) {
         KeReleaseSpinLock(&q->Lock,irql);return STATUS_DEVICE_BUSY;
     }
     KeAcquireSpinLock(&e->Lock,&engine_irql);e->QueueOwner=NULL;KeReleaseSpinLock(&e->Lock,engine_irql);

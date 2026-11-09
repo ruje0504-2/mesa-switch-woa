@@ -13,7 +13,6 @@ static BOOLEAN notify(PVOID context)
 NTSTATUS TgGpuRequestEngineRecovery(TG_GPU_CONTEXT_ENGINE *e,NTSTATUS reason)
 {
     TG_GPU_WORK_QUEUE *q;KIRQL irql,queue_irql;BOOLEAN invoked=FALSE,send=FALSE;NTSTATUS status;
-    PAGED_CODE();
     if(!e || NT_SUCCESS(reason) || !e->Dxgk.DeviceHandle || !e->Dxgk.DxgkCbSynchronizeExecution ||
        !e->Dxgk.DxgkCbNotifyInterrupt || !e->Dxgk.DxgkCbQueueDpc)return STATUS_INVALID_PARAMETER;
     /* Adapter/queue lifetime is serialized against stop by the caller. No

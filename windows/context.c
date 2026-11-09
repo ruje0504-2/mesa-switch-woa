@@ -370,10 +370,17 @@ static BOOLEAN NotifyFence(PVOID context)
 {
     TG_GPU_CONTEXT_WORK *w=context; TG_GPU_CONTEXT_ENGINE *e=w->Engine;
     DXGKARGCB_NOTIFY_INTERRUPT_DATA data={0};
-    data.InterruptType=DXGK_INTERRUPT_DMA_COMPLETED;
-    data.DmaCompleted.SubmissionFenceId=w->SubmissionFence;
-    data.DmaCompleted.NodeOrdinal=0; data.DmaCompleted.EngineOrdinal=0;
-    e->LastCompletedFence=w->CompletionFence;
+    if(w->Preemption) {
+        data.InterruptType=DXGK_INTERRUPT_DMA_PREEMPTED;
+        data.DmaPreempted.PreemptionFenceId=w->SubmissionFence;
+        data.DmaPreempted.LastCompletedFenceId=w->CompletionFence;
+        data.DmaPreempted.NodeOrdinal=data.DmaPreempted.EngineOrdinal=0;
+    } else {
+        data.InterruptType=DXGK_INTERRUPT_DMA_COMPLETED;
+        data.DmaCompleted.SubmissionFenceId=w->SubmissionFence;
+        data.DmaCompleted.NodeOrdinal=0; data.DmaCompleted.EngineOrdinal=0;
+        e->LastCompletedFence=w->CompletionFence;
+    }
     KeMemoryBarrier(); w->Notified=TRUE;
     /* Dxgkrnl already accounts for INVALID_PARAMETER submissions. Their
      * ordered marker updates our fence notion without inventing a DMA event. */
@@ -463,10 +470,13 @@ NTSTATUS TgGpuCaptureSoftwareWork(TG_GPU_CONTEXT_ENGINE *e,const DXGKARG_SUBMITC
 NTSTATUS TgGpuArmSoftwareCompletion(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w)
 {
     KIRQL irql;NTSTATUS status=STATUS_SUCCESS;
-    if(!e || !w || w->Engine!=e || !w->Software || w->Context)return STATUS_INVALID_PARAMETER;
+    if(!e || !w || w->Engine!=e || (!w->Software && !w->Preemption) || w->Context)return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);
     if(w->CompletionReady)status=e->Notification==w?STATUS_SUCCESS:STATUS_INVALID_DEVICE_STATE;
     else if(e->Active || e->Notification || e->Channel.referenced)status=STATUS_PENDING;
-    else {e->Notification=w;w->CompletionReady=TRUE;}
+    else {
+        if(w->Preemption)w->CompletionFence=e->LastCompletedFence;
+        e->Notification=w;w->CompletionReady=TRUE;
+    }
     KeReleaseSpinLock(&e->Lock,irql);return status;
 }
