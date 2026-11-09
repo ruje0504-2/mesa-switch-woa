@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Build the complete pinned NVK Windows ARM64 ICD in an isolated overlay.
 
-The current Windows nvkmd enumerates real KMT adapters and validates the KMD
-ABI but has no memory/VA/submit implementation. It exposes no VkPhysicalDevice.
-This builds an ICD/instance preflight, not a Vulkan draw or conformance pass.
+Windows nvkmd uses SDK-compiled KMT calls for memory, VA, queue and sync.
+Physical device enumeration requires the live KMD's native-submit flag.
 Requires the same Meson/Rust/bindgen LLVM-MinGW environment as the NAK tool,
 plus build-native mesa_clc and vtn_bindgen2 in PATH (-Dmesa-clc=system).
 No registry, device, driver install or external Mesa checkout is modified.
@@ -53,15 +52,18 @@ def main():
         run("git", "-C", src, "apply", HERE / patch)
     win = src / "src/nouveau/vulkan/nvkmd/windows"
     shutil.copytree(HERE / "nvkmd_windows", win)
-    shutil.copyfile(HERE.parent / "windows/adapter_abi.h", win / "adapter_abi.h")
+    for abi in ("adapter_abi.h", "allocation_abi.h", "submit_abi.h"):
+        shutil.copyfile(HERE.parent / "windows" / abi, win / abi)
     if a.prepare_only:
         print(f"Prepared {src}; not configured or built")
         return
-    run(a.clang_cl, "--target=aarch64-pc-windows-msvc", "/c", "/W4", "/WX",
-        "-Wno-nonportable-include-path", "/D_ARM64_",
+    sdk_cc = (a.clang_cl, "--target=aarch64-pc-windows-msvc", "/c", "/std:c11",
+        "/W4", "/WX", "-Wno-nonportable-include-path", "/D_ARM64_",
         "/imsvc" + str(a.sdk_include / "um"), "/imsvc" + str(a.sdk_include / "shared"),
-        "/imsvc" + str(a.wdk_include / "km/crt"), "/Fo" + str(out / "kmt-sdk.obj"),
-        "--", HERE / "nvkmd_windows/test-kmt-sdk.c")
+        "/imsvc" + str(a.wdk_include / "km/crt"))
+    run(*sdk_cc, "/Fo" + str(out / "kmt-sdk.obj"), "--", win / "test-kmt-sdk.c")
+    run(*sdk_cc, "/O2", "/GS-", "/Zl", "/Fo" + str(win / "kmt-native.obj"),
+        "--", win / "kmt_native.c")
     build = out / "build"
     # Changes to the overlay/transport must change the compiler cache identity.
     digest = hashlib.sha256(REV.encode())
@@ -91,7 +93,7 @@ def main():
     files = [dll, out / "nvk-windows-check.exe", out / "test-kmt.exe", manifest]
     (out / "manifest.json").write_text(json.dumps({
         "mesa": REV, "overlay_id": digest.hexdigest(), "sdk_kmt_layout_verified": True,
-        "scope": "full NVK ICD binary; KMT enumeration and instance only; no Windows execution backend",
+        "scope": "NVK ICD with Windows KMT transport gated by the native-submit KMD flag",
         "files": {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files},
     }, indent=2) + "\n")
 

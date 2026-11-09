@@ -769,36 +769,29 @@ dispatch, a Vulkan API draw or a Windows NVK ICD. The matching ABI-24 tool's
 74 native JSON fixtures pass with substituted device I/O. Native SYS/CAT and
 all 11 catalogue memberships pass, and no reboot was needed.
 
-### Windows NVK ICD instance preflight
+### Windows NVK ICD
 
-`tools/build_windows_icd.py` builds the **complete pinned NVK runtime DLL**,
-including NIR/NAK, NIL, MME, Vulkan command encoding, meta shaders and common
-runtime/Windows WSI. It archives Mesa `0ff52079` into a fresh external output
-directory, applies `mesa-windows-nak.patch` and `mesa-windows-icd.patch`, and
-copies `tools/nvkmd_windows/` plus the shared `windows/adapter_abi.h` into the
-overlay. The original Mesa checkout remains unchanged. The Windows changes
-remove unused POSIX includes, exclude DRM factories/bindings, avoid Win32's
-`TRUE`/`FALSE` token expansion in class enums, and export the ICD entry point.
-NIR/NAK algorithms and GPU command encoders remain unchanged.
+`tools/build_windows_icd.py` builds the pinned ARM64 NVK runtime with NIR/NAK,
+NIL, MME and the Windows KMT backend. It archives Mesa `0ff52079`, applies the
+Windows overlays and copies the shared adapter, allocation and submit ABIs.
+The SDK-compiled KMT bridge links into the ICD, and the enumeration structures
+used by MinGW are checked against the same Windows SDK.
 
-The Windows backend currently implements **real OS KMT enumeration/private
-adapter queries only**. It uses `Gdi32`'s public `D3DKMTEnumAdapters2`,
-`D3DKMTQueryAdapterInfo` and `D3DKMTCloseAdapter`, closing every successfully
-enumerated handle even for unsupported adapters/ABIs, following the
-[KMT enumeration contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtenumadapters2).
-The query must match
-ABI 1, OS LUID, T214/SM53/B197 identity and the 512 MiB ceiling. The MinGW
-declarations' size and every consumed field offset are checked against the
-real Windows SDK in a separate clang-cl compile. Controlled native fixtures
-cover the capability gate, incompatible identities, failures and cleanup;
-they do not substitute for live KMT enumeration.
+The ICD scans compute-only adapters with `D3DKMTEnumAdapters3` and checks ABI 1,
+T214/SM53/B197, the OS LUID and the 512 MiB ceiling. A matching KMD must set
+`NATIVE_SUBMIT` before NVK exposes its Vulkan physical device. The Windows
+backend opens that LUID, manages VidMm allocations and VA reservations, and
+submits linear NVK pushes through KMT. CPU waits and queue signals use Windows
+monitored fences. Windows keeps GPU memory in the UMA heap and uses the KMD's
+ceiling for per-device allocations. Privileged register-write MME programs
+and their callers are excluded from the Windows command stream.
 
-No `nvkmd` Windows memory/VA/context/submit/sync operations exist yet. No
-physical device is exposed. A future KMD setting `NATIVE_SUBMIT` still causes
-an explicit initialization failure until those operations are implemented;
-there is no diagnostic IOCTL or CPU-rendering fallback. The System-class
-probe is not a Dxgkrnl render adapter, so zero compatible devices is expected.
-This is an ICD **instance preflight**, not a Vulkan draw/conformance pass.
+The .83 one-boot test exercised the new KMT bridge on the Lite, including
+aligned and fixed VA reservations, residency, event waits and GPU B0B5 copy.
+The .84 observation miniport exposed one matching Vulkan LUID and received
+NVK initialization commands through the Windows loader. That package rejected
+application execution by design. A verified Vulkan triangle requires the
+graphics command and MME validation in the KMD.
 
 Use the same ARM64 LLVM-MinGW/Rust-gnullvm Meson cross file and Python/Rust
 environment as the compiler tool. Put build-native `mesa_clc` and
@@ -814,21 +807,11 @@ python3 tools/build_windows_icd.py --mesa "$MESA_SRC" --out "$ICD_OUT" \
 
 Outputs are `libvulkan_nouveau.dll`, portable `nvk_windows_icd.json`,
 `nvk-windows-check.exe`, `test-kmt.exe` and a SHA256/build-identity manifest.
-Run `test-kmt.exe` for the 20 controlled transport cases. Run
-`nvk-windows-check.exe <absolute-NVK-DLL-path>` for a **direct ICD** load,
-instance version/create/enumerate/destroy and real KMT scan. It does not use
-or register the system Vulkan loader. Keep these files in a private test
-directory; building/running the preflight does not install a miniport/ICD,
-change the registry or touch the POST display or sleep policy.
-
-**Physical Lite instance preflight, 2026-11-09 07:27:36 Pacific:** a fresh
-archive/overlay build passes the SDK layout compile, all 20 controlled native
-transport cases, DLL load and Vulkan version/instance/create/enumerate/destroy
-calls. API version is **1.4.354**. KMT returns **2 OS adapters**, both private
-queries succeed, **0 matching/native-ready KMDs** and **0 physical devices**;
-`vulkan_draw=false`. DLL SHA256:
-`7020d7da51105df9dffe5b8ac19a011e543f183b1707fce9b3a09da2fafbd101`.
-The kernel driver remains .57/ABI 29; no driver/registry install or reboot.
+Run `test-kmt.exe` for the controlled enumeration cases. Run
+`nvk-windows-check.exe <absolute-NVK-DLL-path>` to load the ICD and verify the
+KMT readiness gate and Vulkan LUID. These checks use explicit DLL paths.
+The offscreen triangle is a separate Vulkan Loader test with fence and pixel
+readback checks.
 
 ### Shared cold graphics bootstrap
 

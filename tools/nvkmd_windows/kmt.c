@@ -61,9 +61,11 @@ tg_gpu_kmt_scan(const struct tg_kmt_api *api, struct tg_kmt_scan *out)
          if (api->query(&q) >= 0) {
             out->queried++;
             if (matches(&info, &adapters[n].luid)) {
-               out->matched++;
-               if (info.flags & TG_GPU_ADAPTER_NATIVE_SUBMIT)
-                  out->native_ready++;
+               if (out->matched++ == 0)
+                  out->first_match = info;
+               if ((info.flags & TG_GPU_ADAPTER_NATIVE_SUBMIT) &&
+                   out->native_ready++ == 0)
+                  out->first_ready = info;
             }
          }
          const struct tg_kmt_close c = { .handle = adapters[n].handle };

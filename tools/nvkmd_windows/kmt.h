@@ -13,6 +13,7 @@ struct tg_kmt_api {
 struct tg_kmt_scan {
    uint32_t enumerated, queried, matched, native_ready;
    LONG close_status;
+   struct tg_gpu_adapter_info first_match, first_ready;
 };
 /* A successful scan owns no adapter handles. Unsupported adapters/ABIs are
  * skipped; OS enumeration/allocation/close failures are returned unchanged.
