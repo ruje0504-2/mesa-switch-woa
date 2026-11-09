@@ -211,13 +211,9 @@ static NTSTATUS NTAPI Reserve(HANDLE device,DXGKARGCB_RESERVEGPUVIRTUALADDRESSRA
     a->StartVirtualAddress=TG_GPU_INTERNAL_COVERAGE;return STATUS_SUCCESS;
 }
 
-/* The allocation handle table below is a Dxgkrnl test substitute, not a KMD
- * table. Release can destroy the referenced object synchronously, as the OS
- * contract allows. Its callbacks also enforce APC-or-lower/no-spinlock use.
- */
+/* Model a Dxgkrnl handle lookup and track references across the open DDI. */
 static HANDLE os_allocation[8];
-static UINT os_references[8],handle_acquires,handle_releases,destroy_on_release;
-static TG_GPU_CONTEXT_ENGINE *release_engine;
+static UINT os_references[8],handle_acquires,handle_releases;
 static VOID *APIENTRY AcquireHandle(const DXGKARGCB_GETHANDLEDATA *a,DXGKARG_RELEASE_HANDLE *release)
 {
     CHECK(a && release && level==PASSIVE_LEVEL && a->Type==DXGK_HANDLE_ALLOCATION && !a->Flags.Value);
@@ -228,15 +224,9 @@ static VOID *APIENTRY AcquireHandle(const DXGKARGCB_GETHANDLEDATA *a,DXGKARG_REL
 }
 static VOID APIENTRY ReleaseHandle(const DXGKARGCB_RELEASEHANDLEDATA a)
 {
-    UINT id=(UINT)(ULONG_PTR)a.ReleaseHandle;HANDLE allocation;
-    DXGKARG_DESTROYALLOCATION destroy={.NumAllocations=1};
+    UINT id=(UINT)(ULONG_PTR)a.ReleaseHandle;
     CHECK(level==PASSIVE_LEVEL && a.Type==DXGK_HANDLE_ALLOCATION && id>0 && id<8 && os_references[id]);
     --os_references[id];++handle_releases;
-    if(destroy_on_release==id && !os_references[id]) {
-        allocation=os_allocation[id];destroy.pAllocationList=&allocation;
-        CHECK(release_engine && NT_SUCCESS(TgGpuDdiDestroyAllocation(release_engine,&destroy)));
-        os_allocation[id]=NULL;destroy_on_release=0;
-    }
 }
 static UINT PoolsInUse(void)
 { UINT i,count=0;for(i=0;i<64;++i) count+=pool_used[i]!=FALSE;return count; }
@@ -255,7 +245,8 @@ static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *othe
     DXGKARG_CREATEALLOCATION create={.NumAllocations=2,.pAllocationInfo=info,.Flags.Resource=1};
     DXGKARG_DESTROYALLOCATION destroy={0};
     DXGK_OPENALLOCATIONINFO oi[2]={{.hAllocation=1},{.hAllocation=2}},oi2={.hAllocation=1};
-    DXGKARG_OPENALLOCATION open={.NumAllocations=2,.pOpenAllocation=oi,.Flags.Create=1};
+    DXGKARG_OPENALLOCATION open={.NumAllocations=2,.pOpenAllocation=oi,.Flags.Create=1,
+        .SubresourceIndex=UINT32_MAX}; /* unused for opaque GPU buffers */
     DXGKARG_OPENALLOCATION open2={.NumAllocations=1,.pOpenAllocation=&oi2,.Flags.ReadOnly=1};
     DXGKARG_CLOSEALLOCATION close={0};
     DXGKARG_CREATEDEVICE second={.hDevice=(HANDLE)202,.hKmdProcess=device->Process};
@@ -307,9 +298,9 @@ static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *othe
     oi[1].hAllocation=2;
     CHECK(NT_SUCCESS(ddi->DxgkDdiOpenAllocation(device,&open)));
     opened[0]=oi[0].hDeviceSpecificAllocation;opened[1]=oi[1].hDeviceSpecificAllocation;
-    CHECK(os_references[1]==1 && os_references[2]==1 && device->OpenAllocations==2);
+    CHECK(!os_references[1] && !os_references[2] && device->OpenAllocations==2);
     CHECK(NT_SUCCESS(ddi->DxgkDdiOpenAllocation(second.hDevice,&open2)));readonly=oi2.hDeviceSpecificAllocation;
-    CHECK(os_references[1]==2);
+    CHECK(!os_references[1] && handle_acquires==handle_releases);
     CHECK(TgGpuValidateOpenAllocationRange(device,opened[0],8191,1,TRUE)==STATUS_SUCCESS);
     CHECK(TgGpuValidateOpenAllocationRange(device,opened[0],8192,1,FALSE)==STATUS_INVALID_BUFFER_SIZE);
     CHECK(TgGpuValidateOpenAllocationRange(device,opened[0],UINT64_MAX,2,FALSE)==STATUS_INVALID_BUFFER_SIZE);
@@ -325,7 +316,7 @@ static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *othe
     CHECK(ddi->DxgkDdiCloseAllocation(device,&close)==STATUS_INVALID_PARAMETER && device->OpenAllocations==2);
     opened[1]=oi[1].hDeviceSpecificAllocation;
     CHECK(NT_SUCCESS(ddi->DxgkDdiCloseAllocation(device,&close)));
-    CHECK(!device->OpenAllocations && os_references[1]==1 && !os_references[2]);
+    CHECK(!device->OpenAllocations && !os_references[1] && !os_references[2]);
     close.NumAllocations=1;close.pOpenHandleList=&readonly;
     CHECK(NT_SUCCESS(ddi->DxgkDdiCloseAllocation(second.hDevice,&close)) && !os_references[1]);
     /* A failed bulk destroy has no partial side effects. */
@@ -337,16 +328,18 @@ static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *othe
     CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)));
     CHECK(!e->AllocationCount && !e->ResourceCount && PoolsInUse()==before);
     os_allocation[1]=os_allocation[2]=NULL;
-    /* Model the owner requesting destruction while a second device still has
-     * an open reference. The final ReleaseHandle destroys the allocation.
-     */
+    /* Model the close-before-destroy ordering for a device-owned allocation. */
     create.NumAllocations=1;create.hResource=NULL;create.Flags.Value=0;
     CHECK(NT_SUCCESS(ddi->DxgkDdiCreateAllocation(e,&create)));
     os_allocation[3]=info[0].hAllocation;oi2.hAllocation=3;
     CHECK(NT_SUCCESS(ddi->DxgkDdiOpenAllocation(second.hDevice,&open2)));
-    readonly=oi2.hDeviceSpecificAllocation;destroy_on_release=3;release_engine=e;
+    readonly=oi2.hDeviceSpecificAllocation;
+    destroy=(DXGKARG_DESTROYALLOCATION){.NumAllocations=1,.pAllocationList=&os_allocation[3]};
+    CHECK(!os_references[3] && ddi->DxgkDdiDestroyAllocation(e,&destroy)==STATUS_DEVICE_BUSY);
     CHECK(NT_SUCCESS(ddi->DxgkDdiCloseAllocation(second.hDevice,&close)));
-    CHECK(!destroy_on_release && !os_allocation[3] && !e->AllocationCount && !e->Creating);
+    CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)));
+    os_allocation[3]=NULL;
+    CHECK(!e->AllocationCount && !e->Creating);
     CHECK(handle_acquires==handle_releases);
     CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyDevice(second.hDevice)));
     CHECK(PoolsInUse()==before-1);

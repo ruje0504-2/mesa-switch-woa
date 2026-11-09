@@ -186,17 +186,15 @@ Sizes are rounded to 4 KiB, CPU-visible memory starts write-combined, and no
 physical-access, cached/coherent, protected or scanout capability is implied.
 Bulk validation/allocation failures unwind every new object while preserving
 an existing resource. OS-reserved allocation input flags are retained.
-OpenAllocation resolves D3DKMT handles through `DxgkCbAcquireHandleData` and
-holds the OS reference until CloseAllocation. Allocation metadata belongs to
-the adapter, not its creating device, allowing a resource to outlive that
-device. Close drops local references before `DxgkCbReleaseHandleData`, which
-may immediately destroy the allocation; the adapter operation stays retained
-through that callback. A range helper checks device ownership, read-only opens
-and bounds, but does not establish residency or validate a command stream.
+OpenAllocation resolves D3DKMT handles through `DxgkCbAcquireHandleData`
+and releases each lookup reference before returning. Dxgkrnl manages the
+lifetime of the device-specific bindings and closes them before destroying
+the allocation. Allocation metadata belongs to the adapter, so a resource
+can outlive its creating device. The range helper checks device ownership,
+read-only opens and bounds. Residency and command validation are separate.
 Native ARM64 tests cover batch rollback, resource append failure, shared opens,
-read-only/bounds rejection, duplicate close/destroy rejection, and synchronous
-destruction from the final OS release. The callbacks populate the initialization
-table but still require the complete adapter/UMD path and live VidMm validation.
+read-only/bounds rejection, duplicate close/destroy rejection, and balanced
+lookup references on both successful and partially failed opens.
 [Microsoft GPUVA allocation example](https://github.com/microsoft/graphics-driver-samples/blob/de4a2161991eda254013da6c18226f5ea06e4a9c/compute-only-sample/coskmd/CosKmdAdapter.cpp)
 and [handle lifetime contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkcb_acquirehandledata).
 

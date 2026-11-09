@@ -19,7 +19,6 @@ typedef struct _TG_GPU_ALLOCATION {
 typedef struct _TG_GPU_OPEN_ALLOCATION {
     TG_GPU_DEVICE *Device;
     TG_GPU_ALLOCATION *Allocation;
-    DXGKARG_RELEASE_HANDLE Release;
     BOOLEAN ReadOnly;
 } TG_GPU_OPEN_ALLOCATION;
 
@@ -151,25 +150,19 @@ unlock:
 }
 static void close_one(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_OPEN_ALLOCATION *open)
 {
-    DXGKARGCB_RELEASEHANDLEDATA release={.ReleaseHandle=open->Release,.Type=DXGK_HANDLE_ALLOCATION};
     KIRQL irql;
     KeAcquireSpinLock(&e->Lock,&irql);
     --open->Allocation->Opens;--open->Device->OpenAllocations;
     KeReleaseSpinLock(&e->Lock,irql);
     ExFreePoolWithTag(open,TAG);
-    /* This can synchronously destroy the allocation. No object/lock access is
-     * allowed afterward except the separately retained adapter operation.
-     */
-    e->Dxgk.DxgkCbReleaseHandleData(release);
 }
 NTSTATUS APIENTRY TgGpuDdiOpenAllocation(HANDLE device,const DXGKARG_OPENALLOCATION *a)
 {
     TG_GPU_DEVICE *d=device;TG_GPU_CONTEXT_ENGINE *e;TG_GPU_OPEN_ALLOCATION *open;
     TG_GPU_ALLOCATION *allocation;KIRQL irql;NTSTATUS status=STATUS_SUCCESS;UINT i,created=0;
     DXGKARGCB_GETHANDLEDATA query={.Type=DXGK_HANDLE_ALLOCATION};
-    DXGKARGCB_RELEASEHANDLEDATA release={.Type=DXGK_HANDLE_ALLOCATION};
     if(!d || !a || !a->NumAllocations || !a->pOpenAllocation || a->PrivateDriverSize ||
-        a->Flags.Reserved || a->SubresourceIndex) return STATUS_INVALID_PARAMETER;
+        a->Flags.Reserved) return STATUS_INVALID_PARAMETER;
     e=d->Engine;
     if(!e->Dxgk.DxgkCbAcquireHandleData || !e->Dxgk.DxgkCbReleaseHandleData)
         return STATUS_INVALID_DEVICE_STATE;
@@ -178,18 +171,23 @@ NTSTATUS APIENTRY TgGpuDdiOpenAllocation(HANDLE device,const DXGKARG_OPENALLOCAT
     if(e->Stopping) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY; }
     ++d->OpenAllocations;++e->Creating;KeReleaseSpinLock(&e->Lock,irql);
     for(i=0;i<a->NumAllocations;++i) {
+        DXGKARGCB_RELEASEHANDLEDATA release={.Type=DXGK_HANDLE_ALLOCATION};
         open=ExAllocatePool2(POOL_FLAG_NON_PAGED,sizeof(*open),TAG);
         if(!open) { status=STATUS_NO_MEMORY;break; }
         query.hObject=a->pOpenAllocation[i].hAllocation;
-        allocation=e->Dxgk.DxgkCbAcquireHandleData(&query,&open->Release);
-        if(!allocation || allocation->Engine!=e) {
-            release.ReleaseHandle=open->Release;ExFreePoolWithTag(open,TAG);
-            if(release.ReleaseHandle) e->Dxgk.DxgkCbReleaseHandleData(release);
-            status=STATUS_INVALID_PARAMETER;break;
+        allocation=e->Dxgk.DxgkCbAcquireHandleData(&query,&release.ReleaseHandle);
+        if(allocation && release.ReleaseHandle && allocation->Engine==e) {
+            open->Device=d;open->Allocation=allocation;open->ReadOnly=a->Flags.ReadOnly;
+            KeAcquireSpinLock(&e->Lock,&irql);++allocation->Opens;++d->OpenAllocations;KeReleaseSpinLock(&e->Lock,irql);
+            a->pOpenAllocation[i].hDeviceSpecificAllocation=open;++created;
+        } else {
+            ExFreePoolWithTag(open,TAG);
+            status=STATUS_INVALID_PARAMETER;
         }
-        open->Device=d;open->Allocation=allocation;open->ReadOnly=a->Flags.ReadOnly;
-        KeAcquireSpinLock(&e->Lock,&irql);++allocation->Opens;++d->OpenAllocations;KeReleaseSpinLock(&e->Lock,irql);
-        a->pOpenAllocation[i].hDeviceSpecificAllocation=open;++created;
+        /* The lookup reference is scoped to this DDI. Dxgkrnl owns the
+         * binding and calls CloseAllocation before destroying its object. */
+        if(release.ReleaseHandle) e->Dxgk.DxgkCbReleaseHandleData(release);
+        if(!NT_SUCCESS(status))break;
     }
     if(!NT_SUCCESS(status)) for(i=0;i<created;++i) {
         close_one(e,a->pOpenAllocation[i].hDeviceSpecificAllocation);
