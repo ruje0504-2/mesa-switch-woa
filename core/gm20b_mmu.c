@@ -23,19 +23,28 @@ tg_gpu_va_indices(uint64_t va, struct tg_gpu_va_indices *indices)
 }
 
 bool
-tg_gpu_pte_4k(uint64_t gpu_address, bool read_only, bool gpu_uncached,
-              uint64_t *pte)
+tg_gpu_pte_4k_kind(uint64_t gpu_address, bool read_only, bool gpu_uncached,
+                   uint8_t kind, uint64_t *pte)
 {
-    if (!pte || !page_address_valid(gpu_address))
+    if (!pte || !page_address_valid(gpu_address) ||
+        (kind != TG_GPU_PTE_KIND_PITCH && kind != TG_GPU_PTE_KIND_GENERIC_16BX2))
         return false;
 
     /* gk20a_vmm_aper(NCOH) returns 0 on GM20B. Using the discrete-GPU
      * SYS_NCOH aperture (3 << 33) here would address the wrong aperture.
-     * Pitch-linear kind 0, valid, unprivileged; VOL bypasses the GPU cache.
+     * Maxwell's kind occupies bits 43:36. VOL bypasses the GPU cache.
      */
     *pte = (gpu_address >> 8) | UINT64_C(1) |
-           ((uint64_t)read_only << 2) | ((uint64_t)gpu_uncached << 32);
+           ((uint64_t)read_only << 2) | ((uint64_t)gpu_uncached << 32) |
+           ((uint64_t)kind << 36);
     return true;
+}
+
+bool
+tg_gpu_pte_4k(uint64_t gpu_address, bool read_only, bool gpu_uncached,
+              uint64_t *pte)
+{
+    return tg_gpu_pte_4k_kind(gpu_address, read_only, gpu_uncached, TG_GPU_PTE_KIND_PITCH, pte);
 }
 
 bool

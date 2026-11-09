@@ -3,7 +3,7 @@
 
 _Static_assert(sizeof(DXGK_PTE) == 16, "Windows PTE layout changed");
 
-static NTSTATUS EncodePage(UINT Level, const DXGK_PTE *Pte,
+static NTSTATUS EncodePage(UINT Level, UINT8 Kind, const DXGK_PTE *Pte,
                           const TG_GPU_PAGE_UPDATE_TARGET *Target, UINT64 *Encoded)
 {
     UINT64 address;
@@ -30,7 +30,8 @@ static NTSTATUS EncodePage(UINT Level, const DXGK_PTE *Pte,
         (Level ? TG_GPU_TABLE_BYTES : PAGE_SIZE) > TG_GPU_VA_LIMIT - address)
         return STATUS_INVALID_PARAMETER;
     if (Level == 0) {
-        if (!tg_gpu_pte_4k(address, Pte->ReadOnly != 0, Target->GpuPagesUncached != FALSE, Encoded))
+        if (!tg_gpu_pte_4k_kind(address, Pte->ReadOnly != 0, Target->GpuPagesUncached != FALSE,
+                               Kind, Encoded))
             return STATUS_INVALID_PARAMETER;
     } else if (!tg_gpu_pde_small(address, Encoded)) return STATUS_INVALID_PARAMETER;
     return STATUS_SUCCESS;
@@ -48,7 +49,13 @@ NTSTATUS TgGpuEncodePageTable(const DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *Upda
         Update->PageTableLevel > 1 || Update->Reserved0)
         return STATUS_INVALID_PARAMETER;
     if (Update->Flags.Use64KBPages ||
-        Update->Flags.Reserved || Update->DriverProtection || Update->pPageTableEntries64KB)
+        Update->Flags.Reserved || Update->pPageTableEntries64KB)
+        return STATUS_NOT_SUPPORTED;
+    /* NVK passes the Maxwell kind as DriverProtection on its 4 KiB GPUVA
+     * mappings. Table pointers and CPU bootstrap retain pitch semantics. */
+    if (Update->DriverProtection &&
+        (Update->PageTableLevel || Update->UpdateMode != DXGK_PAGETABLEUPDATE_GPU_PHYSICAL ||
+         Update->DriverProtection != TG_GPU_PTE_KIND_GENERIC_16BX2))
         return STATUS_NOT_SUPPORTED;
     if (!Update->PageTableLevel && Target->Size != TG_GPU_TABLE_BYTES)
         return STATUS_INVALID_PARAMETER;
@@ -62,7 +69,7 @@ NTSTATUS TgGpuEncodePageTable(const DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *Upda
      * if a later segment translation or attribute is rejected.
      */
     for (i = 0; i < count; ++i) {
-        status = EncodePage(Update->PageTableLevel,
+        status = EncodePage(Update->PageTableLevel, (UINT8)Update->DriverProtection,
             &Update->pPageTableEntries[Update->Flags.Repeat ? 0 : i], Target, &Target->Scratch[i]);
         if (!NT_SUCCESS(status)) return status;
     }

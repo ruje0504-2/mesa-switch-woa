@@ -378,6 +378,18 @@ static void TestPagingBuffer(void)
     CHECK(!completed && step.RecordBytes==end-copy_offset && !step.Operation.fill &&
         step.Operation.source==0x1030 && step.Operation.destination==0x2030 && step.Operation.bytes==4000);
 
+    /* VidMm carries an NVK image's block-linear kind in DriverProtection. */
+    args.pDmaBuffer=commands;args.DmaSize=sizeof(commands);
+    args.UpdatePageTable.StartIndex=10;args.UpdatePageTable.NumPageTableEntries=1;
+    ptes[0]=(DXGK_PTE){.Valid=1,.ReadOnly=1,.Segment=1,.PageAddress=1};
+    args.UpdatePageTable.DriverProtection=0xff;
+    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_NOT_SUPPORTED && args.pDmaBuffer==commands);
+    args.UpdatePageTable.DriverProtection=TG_GPU_PTE_KIND_GENERIC_16BX2;
+    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_SUCCESS);
+    bytes=(UCHAR *)args.pDmaBuffer-commands;
+    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed,NULL)==STATUS_SUCCESS);
+    CHECK(completed==bytes && entries[10]==((UINT64_C(0xfe)<<36)|UINT64_C(0x100900015)));
+
     /* Mandatory immediate initialization accepts a different CPU alias only
      * when every page resolves to the owned contiguous table span.
      */
@@ -386,6 +398,8 @@ static void TestPagingBuffer(void)
     args.UpdatePageTable.PageTableAddress.CpuVirtual=alias_bytes;
     args.UpdatePageTable.StartIndex=12;args.UpdatePageTable.NumPageTableEntries=1;
     ptes[0].Valid=1;ptes[0].Segment=1;ptes[0].PageAddress=1;
+    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_NOT_SUPPORTED);
+    args.UpdatePageTable.DriverProtection=0;ptes[0].ReadOnly=0;
     CHECK(NT_SUCCESS(TgGpuBuildPagingBuffer(&args,&build)));
     CHECK(entries[12]==UINT64_C(0x100900011));
     entries[12]=0;bad_alias_page=TRUE;
