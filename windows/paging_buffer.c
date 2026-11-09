@@ -116,7 +116,8 @@ NTSTATUS TgGpuBuildPagingBuffer(DXGKARG_BUILDPAGINGBUFFER *Args,
         if (!target.Size || target.Size > TG_GPU_TABLE_BYTES ||
             (target.Size & (PAGE_SIZE - 1))) return STATUS_INVALID_PARAMETER;
         if (update->UpdateMode == DXGK_PAGETABLEUPDATE_CPU_VIRTUAL) {
-            if (Args->pDmaBuffer) return STATUS_NOT_SUPPORTED;
+            /* VidMm can supply a DMA pointer during immediate system paging
+             * initialization. Update only the validated table alias. */
             return InitialUpdate(Args, Build, &target);
         }
         if (update->UpdateMode != DXGK_PAGETABLEUPDATE_GPU_PHYSICAL)

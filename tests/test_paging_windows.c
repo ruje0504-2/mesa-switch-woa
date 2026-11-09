@@ -384,8 +384,22 @@ static void TestPagingBuffer(void)
     CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_INVALID_ADDRESS && entries[12]==0);
     bad_alias_page=FALSE;build.InitialMappingUncached=FALSE;
     CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_NOT_SUPPORTED && entries[12]==0);
-    build.InitialMappingUncached=TRUE;args.pDmaBuffer=commands;
-    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_NOT_SUPPORTED && entries[12]==0);
+    /* The Lite's first VidMm update cleared a leaf-table tail with a DMA
+     * pointer present. Only entries in that range belong to this update. */
+    build.InitialMappingUncached=TRUE;
+    memset(entries,0xa5,TG_GPU_TABLE_BYTES);
+    memset(commands,0xcc,sizeof(commands));
+    args.pDmaBuffer=commands;args.DmaSize=sizeof(commands);
+    args.UpdatePageTable.StartIndex=128;
+    args.UpdatePageTable.NumPageTableEntries=TG_GPU_TABLE_ENTRIES-128;
+    args.UpdatePageTable.Flags.InitialUpdate=1;
+    args.UpdatePageTable.Flags.Repeat=1;
+    ptes[0]=(DXGK_PTE){0};
+    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_SUCCESS);
+    CHECK(args.pDmaBuffer==commands && args.DmaSize==sizeof(commands) && !args.MultipassOffset);
+    for (i=0;i<sizeof(commands);++i) CHECK(commands[i]==0xcc);
+    for (i=0;i<128;++i) CHECK(entries[i]==UINT64_C(0xa5a5a5a5a5a5a5a5));
+    for (;i<TG_GPU_TABLE_ENTRIES;++i) CHECK(entries[i]==0);
 }
 
 void start(void)
