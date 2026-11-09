@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Packet decoding and explicit CPU pixel substitutes; no physical GPU pass. */
 #include "../core/gr_clear.h"
+#include "../core/command_stream.h"
 #include "../core/gm20b_mmu.h"
 #include <assert.h>
 #include <stdio.h>
@@ -34,6 +35,7 @@ int main(void)
     assert(tg_gpu_build_clear_packet(commands,TG_GPU_CLEAR_MAX_WORDS,
         UINT64_C(0x123400000),0x12000,0x12345678,true,&words));
     assert(words<TG_GPU_CLEAR_MAX_WORDS&&commands[words]==0xa5a5a5a5);
+    assert(tg_gpu_validate_command_stream(commands,words*4));
     struct decoded d={0};parse(&d,commands,words);
     assert(d.regs[0]==0xb197&&d.clears==1&&d.reports==1);
     assert(d.regs[0x800/4]==1&&d.regs[0x804/4]==0x23400000);

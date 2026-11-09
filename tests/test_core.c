@@ -173,7 +173,7 @@ int main(void)
 {
     struct tg_gpu_gpfifo_entry entry;
     struct tg_gpu_identity identity;
-    _Static_assert(sizeof(struct tg_gpu_status) == 872, "control ABI 29 size");
+    _Static_assert(sizeof(struct tg_gpu_status) == 888, "control ABI 30 size");
     {
         uint32_t packet[12];
         memset(packet,0xa5,sizeof(packet));

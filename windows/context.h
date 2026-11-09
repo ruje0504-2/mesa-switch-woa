@@ -63,6 +63,7 @@ struct _TG_GPU_CONTEXT_ENGINE {
     struct tg_gpu_channel Channel;
     volatile UINT LastCompletedFence;
     UINT Marker;
+    UINT SnapshotUploads,SnapshotBytes;
     UINT Creating;
     UINT AllocationCount,ResourceCount;
     BOOLEAN Stopping;

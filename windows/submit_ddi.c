@@ -6,7 +6,8 @@
 NTSTATUS APIENTRY TgGpuDdiSubmitCommandVirtual(HANDLE adapter,const DXGKARG_SUBMITCOMMANDVIRTUAL *a)
 {
     TG_GPU_CONTEXT_ENGINE *e=adapter;TG_GPU_QUEUE_ENTRY *reserved;TG_GPU_HARDWARE *h;
-    TG_GPU_WORK_QUEUE *q;NTSTATUS status;BOOLEAN used=FALSE;KIRQL irql;
+    TG_GPU_WORK_QUEUE *q;TG_GPU_COMMAND_SNAPSHOT *snapshot=NULL;
+    NTSTATUS status;BOOLEAN used=FALSE;KIRQL irql;
     PAGED_CODE();
     if(!e || !a || !e->Dxgk.DeviceHandle)return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);++e->Creating;q=e->QueueOwner;KeReleaseSpinLock(&e->Lock,irql);
@@ -26,7 +27,16 @@ NTSTATUS APIENTRY TgGpuDdiSubmitCommandVirtual(HANDLE adapter,const DXGKARG_SUBM
     else if(e->Resetting || e->RecoveryPending || !q || q->Engine!=e ||
        !h || h->Engine!=e || !h->Ready || !h->Power.owned || !h->Power.ready)
         status=STATUS_DEVICE_NOT_READY;
-    else status=TgGpuQueueSubmitOrReject(q,a,reserved,&used);
+    else {
+        BOOLEAN application=!a->Flags.Paging && !a->Flags.ContextSwitch &&
+            !a->Flags.NullRendering && a->DmaBufferSize;
+        status=application?TgGpuCaptureCommandSnapshot(a,&snapshot):STATUS_SUCCESS;
+        if(status==STATUS_SUCCESS || status==STATUS_INVALID_PARAMETER)
+            status=TgGpuQueueSubmitOrReject(q,a,reserved,snapshot,&used);
+    }
+    /* Only a successful application admission owns the captured bytes. An
+     * ordered rejection marker can own Reserved without owning Snapshot. */
+    if(snapshot && status!=STATUS_SUCCESS)TgGpuFreeCommandSnapshot(snapshot);
     if(reserved && !used)ExFreePoolWithTag(reserved,TG_GPU_QUEUE_TAG);
     if(status==STATUS_INVALID_PARAMETER && used) {
         NTSTATUS drain=TgGpuDrainRejectedIdle(q);

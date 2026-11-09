@@ -459,17 +459,19 @@ The ordinary internal admission helper remains allocation-free/DISPATCH-safe.
 first internal reason and incomplete fences. Failed synchronization can be
 retried, and duplicate requests do not generate duplicate notifications.
 The worker calls it after internal service/wait errors. Stop joins the worker
-and retains all references until retirement/isolation. **Actual WDDM
-reset/restart/preemption callbacks are still missing**, as are the physical
-packed USER/KERNEL batch and privilege/residency validation. Native-submit stays
-unset; no DriverEntry or INF registers this unfinished adapter. The native
+and retains all references until retirement/isolation. Global reset/restart and
+preemption library callbacks now exist, and the packed USER/KERNEL batch has
+physical diagnostic evidence. Actual Dxgkrnl/VidMm dispatch and full class-specific
+privilege/residency validation remain open. Native-submit stays unset; no
+DriverEntry or INF registers this unfinished adapter. The native
 fixtures cover fence order at notification, idle rejection, software packets,
 OOM and recovery-notification retry using controlled OS/GPU substitutes.
 
-`windows/work_queue.c` admits contexts and kernel paging records in order using the nonpaged
-private buffer supplied by Dxgkrnl for each DMA buffer. Context creation reports
-the required private-data size; this queue accepts no UMD-private payload.
-Internal admission allocates nothing and holds each
+`windows/work_queue.c` admits contexts and kernel paging records in order.
+Application submissions use an owned nonpaged node and immutable command snapshot;
+kernel paging records retain the OS-provided private descriptor. Context creation
+reports room for the inline submission ABI and its maximum 64 KiB command stream.
+The trusted internal/model admission helper allocates nothing and holds each
 context/root reference. The single worker copies the head record into its own
 storage, activates and submits it, polls its GPU marker, quiesces the channel,
 then notifies completion. It never accesses the borrowed record afterward, even
@@ -479,9 +481,9 @@ references until isolation succeeds, then cancels pending work without reporting
 its fences complete. Admission resumes only explicitly after recovery. Wake is
 a synchronization event consumed by the adapter worker; pending work waits on
 that event, stop, or a polling timeout rather than busy-looping.
-The queue and channel helpers are compiled backend components, not an exposed
-`SubmitCommandVirtual` DDI: adapter dispatch, malformed-buffer fence handling,
-command/residency validation and preemption/TDR notification still need wiring.
+The `SubmitCommandVirtual` wrapper implements ordered rejection/recovery and
+snapshot admission. The render adapter is not registered; live OS dispatch and
+remaining command/residency/paging/IRQ integration are still required.
 Native tests cover multiple roots, ordering, immediate private-buffer reuse,
 partial submission/reset failure, restart admission and canceled notifications.
 [Dxgkrnl private-buffer contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgkarg_submitcommandvirtual)
@@ -947,6 +949,53 @@ synchronization failure and DISPATCH-level OOM recovery. This does not implement
 instruction-level preemption or the still-pending TDR reset/restart callbacks.
 Queue cancellation detaches one record under a short spin lock, then drops
 its reference and frees owned metadata at PASSIVE_LEVEL under DispatchGate.
+
+### Captured application command submission
+
+**.58 / ABI 30 (888 bytes)** adds shared `windows/submit_abi.h`: a 16-byte
+version/size/command-length/reserved header followed by up to 64 KiB of linear
+NVK push words. The original GPU VA/length remain the OS submission identity.
+[Dxgkrnl copies the UMD-private payload](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgkarg_submitcommandvirtual)
+into kernel storage; `command_snapshot.c` copies it into owned nonpaged memory
+and validates only that immutable copy before queue admission. No UMD pointers,
+physical addresses or privilege flags form part of this ABI. Malformed data
+uses the existing ordered-rejection contract; OOM enters recovery without a
+fake completion. Queue completion, prefix preemption and verified reset release
+the owned snapshot through the same lifetime gates as the context reference.
+
+`core/command_stream.c` decodes incrementing, nonincrementing, increment-once,
+immediate and NOP packets across every subchannel. It rejects truncated/empty
+packets, reserved/control-flow/subdevice headers, reserved address bits, method
+wrap and host methods other than object binding and WFI. Caller-issued
+`SET_REFERENCE` is rejected, including immediate and increment-span forms.
+Data words that resemble headers are not interpreted as new packets. This is
+a packet/host-method gate; **class-specific addresses/privileges, residency and
+the remaining WDDM paths are not completed by it**. Native-submit stays unset.
+
+Shared command backing grows from 16 to **80 KiB**: ring, completion packet,
+USERD and physical runlist retain their existing offsets/protection. The last
+64 KiB at reserved VA `Internal.Base+0x4000` is USER-readable/read-only so PB
+fetch can read it, with user-mode remapping disabled. The runlist stays unmapped,
+and GR backing remains separate/privileged. The serialized worker clears this
+entire staging region before copying each immutable snapshot, preventing stale
+commands from another context remaining readable. Only then can it submit the
+USER entry followed by the KERNEL completion entry. Borrowed OS private bytes
+and the originating application GPU VA are not fetched for this execution.
+
+**Physical Lite pass, 2026-11-09 08:02:33 Pacific:** 4 executed snapshots total
+**2,472 bytes**, 6 originating payload/GPU-source rewrites to reserved opcode 6,
+and 2 rejected attempts to write the completion Reference. In each draw's
+queued-prefix case the dispatcher mutex holds execution until after source
+corruption. Both clear/preempt/draw cycles around reset/restart still pass:
+**6 admissions / 4 completions / 2 preemptions**, reports `B46E73E6/4B918C19`,
+all **256 pixels / 768 guards**, image/code `F20AF985/FB041DD2`, GPU/CPU Reference
+**4/4**, generation 2 and final OS fence 6. GR `000FDA76` has VALID clear;
+faults, recovery, restore and retained resources are zero. Six controlled native
+models and 112 native JSON cases pass; SYS/CAT/all 11 catalogue members verify.
+No reboot or power-policy change was needed. The malformed-request test uses
+the diagnostic notification adapter; it does not model Windows putting an actual
+calling device into an error state. This remains **diagnostic GPU execution,
+not a registered WDDM adapter or Vulkan API draw**.
 
 ### Packed Windows backend diagnostic
 

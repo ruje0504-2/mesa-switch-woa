@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /* Packet and upload model only; no physical shader execution is simulated. */
 #include "../core/gr_draw.h"
+#include "../core/command_stream.h"
 #include "../core/gm20b_mmu.h"
 #include <assert.h>
 #include <stdio.h>
@@ -13,6 +14,7 @@ int main(void)
     for(unsigned i=0;i<TG_GPU_DRAW_MAX_WORDS+1;++i)p[i]=0xa5a5a5a5;
     assert(tg_gpu_build_draw_packet(p,TG_GPU_DRAW_MAX_WORDS,0x2a0000,0x12004,0x76543210,&words));
     assert(words<TG_GPU_DRAW_MAX_WORDS && p[words]==0xa5a5a5a5);
+    assert(tg_gpu_validate_command_stream(p,words*4));
     uint32_t regs[0x3000/4]={0};unsigned begins=0,draws=0,ends=0,reports=0;
     for(unsigned i=0;i<words;) {
         uint32_t h=p[i++],address=(h&0x1fff)*4,op=h>>29;

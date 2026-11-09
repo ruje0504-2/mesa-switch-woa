@@ -28,7 +28,7 @@ bool tg_gpu_prepare_submission(void *commands, size_t bytes, uint64_t physical,
      * Do not offer this privilege bit for an application-provided entry.
      */
     completion.high |= NVDEF(NVB06F,GP_ENTRY1,PRIV,KERNEL);
-    for (i=0;i<TG_GPU_COMMAND_BYTES/4;++i) ((uint32_t *)commands)[i]=0;
+    for (i=0;i<TG_GPU_COMMAND_CAPTURE/4;++i) ((uint32_t *)commands)[i]=0;
     for (i=0;i<64;++i) ramfc[i]=0; /* preserve PDB/VA-limit at words 128..131 */
     push=(uint32_t *)((uint8_t *)commands+TG_GPU_COMMAND_PUSH);
     userd=(uint32_t *)((uint8_t *)commands+TG_GPU_COMMAND_USERD);

@@ -47,7 +47,7 @@ mesa_includes = [mesa_src, mesa_src / "nouveau/headers",
                  mesa_src / "nouveau/headers/nvidia/classes"]
 encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
 core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c", root / "core/fault.c",
-        root / "core/execute.c", root / "core/submission.c", root / "core/channel.c",
+        root / "core/execute.c", root / "core/submission.c", root / "core/channel.c", root / "core/command_stream.c",
         root / "platform/t214_mmu.c", root / "platform/t214_frontend.c",
         root / "platform/t214_gr.c", root / "platform/t214_acr.c", root / "platform/t214_pmu.c",
         root / "core/gr_firmware.c", root / "core/acr_firmware.c", root / "core/gr_image.c",
@@ -60,6 +60,11 @@ subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(root / "tests/test_boot_bar1.c"),
                 "-o", str(host)], check=True)
 subprocess.run([str(host.resolve())], check=True)
+stream_test=args.out / "test-command-stream"
+subprocess.run([args.cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
+                *[f"-I{p}" for p in mesa_includes],str(root / "core/command_stream.c"),
+                str(root / "tests/test_command_stream.c"),"-o",str(stream_test)],check=True)
+subprocess.run([str(stream_test.resolve())],check=True)
 power = root / "platform/t214_power.c"
 power_test = args.out / "test-t214-power"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -126,13 +131,13 @@ subprocess.run([str(gr_image_test.resolve())],check=True)
 gr_clear_test = args.out / "test-gr-clear"
 subprocess.run([args.cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
                 *[f"-I{p}" for p in mesa_includes],
-                str(root / "core/gr_clear.c"),str(root / "core/report.c"),str(encoder),
+                str(root / "core/gr_clear.c"),str(root / "core/report.c"),str(root / "core/command_stream.c"),str(encoder),
                 str(root / "tests/test_gr_clear.c"),"-o",str(gr_clear_test)],check=True)
 subprocess.run([str(gr_clear_test.resolve())],check=True)
 gr_draw_test=args.out / "test-gr-draw"
 subprocess.run([args.cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
                 *[f"-I{p}" for p in mesa_includes],
-                str(root / "core/gr_draw.c"),str(root / "core/report.c"),str(encoder),
+                str(root / "core/gr_draw.c"),str(root / "core/report.c"),str(root / "core/command_stream.c"),str(encoder),
                 str(root / "tests/test_gr_draw.c"),"-o",str(gr_draw_test)],check=True)
 subprocess.run([str(gr_draw_test.resolve())],check=True)
 gr_context_test = args.out / "test-gr-context"
@@ -164,7 +169,7 @@ for source in [*core, power, clock, root / "windows/resources.c",
                root / "windows/graphics.c",root / "windows/hardware.c",
                root / "windows/work_queue.c", root / "windows/allocation.c",
                root / "windows/query.c", root / "windows/adapter.c",
-               root / "windows/submit_ddi.c",root / "windows/recovery.c",
+               root / "windows/submit_ddi.c",root / "windows/command_snapshot.c",root / "windows/recovery.c",
                root / "windows/platform_io.c",root / "windows/worker.c",
                root / "windows/platform_adapter.c",root / "windows/gr_firmware_io.c",
                root / "windows/reset_backend.c",root / "windows/adapter_reset.c"]:

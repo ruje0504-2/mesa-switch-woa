@@ -5,22 +5,23 @@ NTSTATUS TgGpuCreateInternalVa(const DXGKRNL_INTERFACE *dxgk, HANDLE process,
     const TG_GPU_PRIVATE_MEMORY *commands, TG_GPU_INTERNAL_VA *v)
 {
     DXGKARGCB_RESERVEGPUVIRTUALADDRESSRANGE reserve={0};
-    UINT64 entries[3], physical; NTSTATUS status; UINT i;
+    UINT64 entries[TG_GPU_COMMAND_BYTES/PAGE_SIZE]={0}, physical; NTSTATUS status; UINT i;
     if (!dxgk || !commands || !commands->Handle || !commands->CpuAddress ||
         commands->Bytes!=TG_GPU_COMMAND_BYTES || !v || v->Leaf.Handle ||
         !dxgk->DxgkCbReserveGpuVirtualAddressRange) return STATUS_INVALID_PARAMETER;
     physical=(UINT64)commands->SystemPhysicalAddress.QuadPart;
     if (physical<0x80000000 || physical>UINT64_C(0x100000000)-TG_GPU_COMMAND_BYTES)
         return STATUS_INVALID_ADDRESS;
-    for (i=0;i<3;++i) {
-        if (!tg_gpu_pte_4k(physical+(UINT64)i*PAGE_SIZE,i<2,true,&entries[i]))
+    for (i=0;i<TG_GPU_COMMAND_BYTES/PAGE_SIZE;++i) {
+        if(i==TG_GPU_COMMAND_RUNLIST/PAGE_SIZE)continue;
+        if (!tg_gpu_pte_4k(physical+(UINT64)i*PAGE_SIZE,i!=2,true,&entries[i]))
             return STATUS_INVALID_ADDRESS;
         /* GM20B's PB fetch reads the KERNEL entry's instructions as USER:
          * the physical .51 fault was READ/PRIV at Base+0x1000. Keep that
          * packet read-only but fetchable; ring and writable fence stay PRIV.
          * GP_ENTRY1.PRIV describes the entry's execution, not its PB mapping.
          */
-        if(i!=1)entries[i]|=2;
+        if(i==0 || i==2)entries[i]|=2;
     }
     reserve.hDxgkProcess=process;
     reserve.SizeInBytes=TG_GPU_INTERNAL_COVERAGE;
@@ -34,7 +35,7 @@ NTSTATUS TgGpuCreateInternalVa(const DXGKRNL_INTERFACE *dxgk, HANDLE process,
     status=TgGpuAllocatePrivateMemory(dxgk,TG_GPU_TABLE_BYTES,0x80000000,0xffffffff,&v->Leaf);
     if (!NT_SUCCESS(status)) return status; /* failed process creation drops its OS reservation */
     v->Base=reserve.StartVirtualAddress;
-    for (i=0;i<3;++i) ((volatile UINT64 *)v->Leaf.CpuAddress)[i]=entries[i];
+    for (i=0;i<TG_GPU_COMMAND_BYTES/PAGE_SIZE;++i) ((volatile UINT64 *)v->Leaf.CpuAddress)[i]=entries[i];
     /* Remaining entries and the physical runlist page stay unmapped. RAMIN
      * is a separate allocation and never appears in this GPU VA mapping.
      */
