@@ -283,7 +283,8 @@ static NTSTATUS test_virtual_paging(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT pattern)
     DXGKARG_SUBMITCOMMANDVIRTUAL submit={.hContext=b->PagingContext,.Flags.Paging=1,
         .DmaBufferVirtualAddress=build.DmaBufferGpuVirtualAddress,
         .DmaBufferSize=b->PagingPrivate.Paging.BuiltBytes,
-        .pDmaBufferPrivateData=&b->PagingPrivate,.DmaBufferPrivateDataSize=sizeof(b->PagingPrivate),
+        .pDmaBufferPrivateData=&b->PagingPrivate,
+        .DmaBufferPrivateDataSize=sizeof(b->PagingPrivate)-build.DmaBufferPrivateDataSize,
         .SubmissionFenceId=PAGING_FENCE};
     status=TgGpuDdiSubmitCommandVirtual(&b->Engine,&submit);
     if (status!=STATUS_SUCCESS) return status;

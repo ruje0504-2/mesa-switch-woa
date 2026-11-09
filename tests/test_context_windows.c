@@ -766,9 +766,11 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     a.UpdatePageTable.Flags.InitialUpdate=0;
     a.UpdatePageTable.PageTableAddress.CpuVirtual=leaf;
     a.pDmaBuffer=commands[0];a.DmaSize=sizeof(commands[0]);
+    a.pDmaBufferPrivateData=&priv[0];a.DmaBufferPrivateDataSize=sizeof(priv[0]);
     CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS);
     CHECK(leaf[0]==UINT64_C(0x100940201) && a.pDmaBuffer==commands[0] &&
-          a.DmaSize==sizeof(commands[0]) && !priv[0].Paging.Magic);
+          a.DmaSize==sizeof(commands[0]) && !priv[0].Paging.Magic &&
+          a.pDmaBufferPrivateData==&priv[0] && a.DmaBufferPrivateDataSize==sizeof(priv[0]));
     /* VidMm's aperture offsets must become the two distinct system PFNs. */
     struct { MDL Mdl; PFN_NUMBER Pages[3]; } backing={0};
     DXGKARG_BUILDPAGINGBUFFER aperture={.Operation=DXGK_OPERATION_MAP_APERTURE_SEGMENT};
@@ -799,7 +801,7 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     a.UpdatePageTable.PageTableLevel=0;a.UpdatePageTable.UpdateMode=DXGK_PAGETABLEUPDATE_GPU_PHYSICAL;
     a.UpdatePageTable.PageTableAddress.GpuPhysical=(D3DGPU_PHYSICAL_ADDRESS){1,0,TG_GPU_TABLE_BYTES};
     a.UpdatePageTable.StartIndex=7;a.UpdatePageTable.NumPageTableEntries=3;
-    a.pDmaBuffer=commands[0];a.DmaSize=72;a.pDmaBufferPrivateData=&priv[0];a.DmaBufferPrivateDataSize=sizeof(priv[0]);
+    a.DmaSize=64;
     a.DmaBufferGpuVirtualAddress=0x100000;
     fail_pool=TRUE;CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_NO_MEMORY);fail_pool=FALSE;
     a.hSystemContext=context.hContext;
@@ -808,14 +810,23 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_NOT_SUPPORTED && !priv[0].Paging.Magic);
     ptes[2].NoExecute=0;
     CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER);
-    CHECK(a.MultipassOffset==1 && !a.DmaSize && priv[0].Paging.BuiltBytes==72 && !leaf[7]);
-    a.pDmaBuffer=commands[1];a.DmaSize=sizeof(commands[1]);a.pDmaBufferPrivateData=&priv[1];a.DmaBufferGpuVirtualAddress=0x200000;
+    CHECK(!a.MultipassOffset && a.DmaSize==64 && a.pDmaBuffer==commands[0] &&
+          a.pDmaBufferPrivateData==&priv[0] && a.DmaBufferPrivateDataSize==sizeof(priv[0]));
+    a.DmaSize=72;
+    CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER);
+    CHECK(a.MultipassOffset==1 && !a.DmaSize && priv[0].Paging.BuiltBytes==72 && !leaf[7] &&
+          a.pDmaBufferPrivateData==&priv[0]+1 && !a.DmaBufferPrivateDataSize);
+    UINT private_used=sizeof(priv[0])-a.DmaBufferPrivateDataSize;
+    a.pDmaBuffer=commands[1];a.DmaSize=sizeof(commands[1]);
+    a.pDmaBufferPrivateData=&priv[1];a.DmaBufferPrivateDataSize=sizeof(priv[1]);
+    a.DmaBufferGpuVirtualAddress=0x200000;
     CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS && !a.MultipassOffset);
     CHECK(priv[1].Paging.BuiltBytes==80 && !leaf[8] && !leaf[9]);
     a.Operation=DXGK_OPERATION_FLUSH_TLB;a.DmaBufferWriteOffset=80;
     a.FlushTlb=(DXGK_BUILDPAGINGBUFFER_FLUSHTLB){.RootPageTableAddress={1,0,0},.hProcess=process.hKmdProcess};
     CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS);
-    CHECK(priv[1].Paging.BuiltBytes==144 && a.DmaSize==sizeof(commands[1])-144);
+    CHECK(priv[1].Paging.BuiltBytes==144 && a.DmaSize==sizeof(commands[1])-144 &&
+          a.pDmaBufferPrivateData==&priv[1]+1 && !a.DmaBufferPrivateDataSize);
     memset(ptes,0,sizeof(ptes)); /* builder retained no OS PTE array */
     memset(&hw,0,sizeof(hw));hw.mc=0x100;hw.pb=hw.map=hw.sched=1;hw.enable=0x41;hw.voltage=110;
     hw.expected_root=0x940000;hw.cpu_fence=(UINT32 *)((UCHAR *)e.Commands.CpuAddress+TG_GPU_COMMAND_FENCE);
@@ -823,11 +834,12 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     CHECK(TgGpuInitializeWorkQueue(&q,&e)==STATUS_SUCCESS);
     submit.hContext=context.hContext;CHECK(TgGpuQueueSubmit(&q,&submit)==STATUS_SUCCESS);
     submit.Flags.Paging=1;submit.hContext=NULL;submit.DmaBufferVirtualAddress=0x100000;submit.DmaBufferSize=72;
-    submit.pDmaBufferPrivateData=&priv[0];submit.SubmissionFenceId=101;
+    submit.pDmaBufferPrivateData=&priv[0];submit.DmaBufferPrivateDataSize=private_used;submit.SubmissionFenceId=101;
     submit.DmaBufferUmdPrivateDataSize=1;CHECK(TgGpuQueueSubmit(&q,&submit)==STATUS_INVALID_PARAMETER);
     submit.DmaBufferUmdPrivateDataSize=0;CHECK(TgGpuQueueSubmit(&q,&submit)==STATUS_SUCCESS);
     CHECK(TgGpuQueueSubmit(&q,&submit)==STATUS_DEVICE_BUSY);
     submit.DmaBufferVirtualAddress=0x200000;submit.DmaBufferSize=144;submit.pDmaBufferPrivateData=&priv[1];submit.SubmissionFenceId=102;
+    submit.DmaBufferPrivateDataSize=sizeof(priv[1])-a.DmaBufferPrivateDataSize;
     CHECK(TgGpuQueueSubmit(&q,&submit)==STATUS_SUCCESS);
     CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_PENDING && !leaf[7]);
     CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_PENDING && !leaf[7] && interrupts==before);
@@ -872,7 +884,7 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     /* Failed TLB invalidation must pin the paging slot and never notify its
      * fence. Full reset cancels it only after proving device isolation. */
     a.pDmaBuffer=commands[0];a.DmaSize=sizeof(commands[0]);a.DmaBufferWriteOffset=0;
-    a.pDmaBufferPrivateData=&priv[0];a.DmaBufferGpuVirtualAddress=0x100000;
+    a.pDmaBufferPrivateData=&priv[0];a.DmaBufferPrivateDataSize=sizeof(priv[0]);a.DmaBufferGpuVirtualAddress=0x100000;
     CHECK(ddi.DxgkDdiBuildPagingBuffer(&e,&a)==STATUS_SUCCESS);
     submit.Flags.Value=1;submit.pDmaBufferPrivateData=&priv[0];submit.DmaBufferPrivateDataSize=sizeof(priv[0]);
     submit.DmaBufferVirtualAddress=0x100000;submit.DmaBufferSize=64;submit.SubmissionFenceId=108;

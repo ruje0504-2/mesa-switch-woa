@@ -26,6 +26,7 @@ NTSTATUS APIENTRY TgGpuDdiBuildPagingBuffer(HANDLE adapter,DXGKARG_BUILDPAGINGBU
     TG_GPU_CONTEXT_ENGINE *e=adapter;TG_GPU_PROCESS *p;TG_GPU_ROOT_TABLE root={0};
     TG_GPU_PAGING_BUILD build={0};TG_GPU_QUEUE_ENTRY *entry;KIRQL irql;
     HANDLE owner=NULL;NTSTATUS status;UINT count=0,available,offset;PVOID before;
+    ULONG_PTR private_cursor;
     UINT64 *scratch=NULL;BOOLEAN immediate=FALSE,virtual_dma=FALSE;
     PAGED_CODE();
     if(!e || !a || !e->Tables)return STATUS_INVALID_PARAMETER;
@@ -94,13 +95,17 @@ NTSTATUS APIENTRY TgGpuDdiBuildPagingBuffer(HANDLE adapter,DXGKARG_BUILDPAGINGBU
         }
     }
     if(immediate) {status=TgGpuBuildPagingBuffer(a,&build);goto done;}
-    entry=a->pDmaBufferPrivateData;offset=a->DmaBufferWriteOffset;available=a->DmaSize;before=a->pDmaBuffer;
-    if(!entry || ((ULONG_PTR)entry&(TYPE_ALIGNMENT(TG_GPU_QUEUE_ENTRY)-1)) ||
-       a->DmaBufferPrivateDataSize<sizeof(*entry) || !before || ((ULONG_PTR)before&7) ||
+    offset=a->DmaBufferWriteOffset;available=a->DmaSize;before=a->pDmaBuffer;
+    private_cursor=(ULONG_PTR)a->pDmaBufferPrivateData;
+    /* Each paging buffer has one advertised private entry. VidMm carries
+     * the advanced cursor and the remaining size to subsequent builds. */
+    if(private_cursor<sizeof(*entry) || (private_cursor&(TYPE_ALIGNMENT(TG_GPU_QUEUE_ENTRY)-1)) ||
+       a->DmaBufferPrivateDataSize!=(offset?0:sizeof(*entry)) || !before || ((ULONG_PTR)before&7) ||
        (offset&7) || offset>TG_GPU_DMA_BUFFER_BYTES || available>TG_GPU_DMA_BUFFER_BYTES-offset ||
        (ULONG_PTR)before<offset || a->DmaBufferGpuVirtualAddress>TG_GPU_VA_LIMIT-TG_GPU_DMA_BUFFER_BYTES) {
         status=STATUS_INVALID_PARAMETER;goto done;
     }
+    entry=(TG_GPU_QUEUE_ENTRY *)(private_cursor-(offset?sizeof(*entry):0));
     if(offset && (entry->Paging.Magic!=TG_GPU_PAGING_BUFFER_MAGIC || entry->Paging.Engine!=e ||
         entry->Paging.CpuAddress!=(UCHAR *)before-offset || entry->Paging.GpuAddress!=a->DmaBufferGpuVirtualAddress ||
         entry->Paging.BuiltBytes!=offset || entry->Paging.Capacity!=offset+available ||
@@ -115,6 +120,8 @@ NTSTATUS APIENTRY TgGpuDdiBuildPagingBuffer(HANDLE adapter,DXGKARG_BUILDPAGINGBU
                 RtlZeroMemory(entry,sizeof(*entry));
                 entry->Paging=(TG_GPU_PAGING_BUFFER){.Engine=e,.CpuAddress=before,.GpuAddress=a->DmaBufferGpuVirtualAddress,
                     .Capacity=available,.Magic=TG_GPU_PAGING_BUFFER_MAGIC};
+                a->pDmaBufferPrivateData=entry+1;
+                a->DmaBufferPrivateDataSize-=sizeof(*entry);
             }
             if (virtual_dma) entry->Paging.SystemContext=a->hSystemContext;
             entry->Paging.BuiltBytes=offset+written;a->DmaSize=available-written;
