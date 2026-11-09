@@ -15,7 +15,7 @@
  * METHOD_BUFFERED, FILE_DEVICE_UNKNOWN. RUN requires write access; the
  * device grants write access only to administrators and SYSTEM.
  */
-#define TG_GPU_CONTROL_VERSION 28u
+#define TG_GPU_CONTROL_VERSION 29u
 #define TG_GPU_IOCTL_STATUS 0x00226400u
 #define TG_GPU_IOCTL_RUN    0x0022a404u
 #define TG_GPU_IOCTL_GR_RUN 0x0022a408u
@@ -85,6 +85,7 @@ struct tg_gpu_backend_status {
     uint32_t fence_observed, fence_expected, channel_stage;
     uint32_t fence_cpu;
     uint32_t preemptions, preemption_notifications, preemption_completed, cancelled_report;
+    uint32_t resets, restarts, reset_isolated, lost_context_rejected;
 };
 
 struct tg_gpu_status {

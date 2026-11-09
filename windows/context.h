@@ -69,7 +69,7 @@ struct _TG_GPU_CONTEXT_ENGINE {
     LUID AdapterLuid;
     BOOLEAN AdapterIdentityReady;
     NTSTATUS RecoveryStatus;
-    BOOLEAN RecoveryPending,RecoverySending,RecoveryNotified;
+    BOOLEAN RecoveryPending,RecoverySending,RecoveryNotified,Resetting;
 };
 /* The single physical execution slot is serialized; the number of software
  * contexts is limited only by allocation failures, not a fixed slot array.

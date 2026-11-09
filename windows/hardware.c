@@ -58,9 +58,9 @@ NTSTATUS TgGpuStartHardware(TG_GPU_HARDWARE *h,TG_GPU_CONTEXT_ENGINE *e,
     }
     KeReleaseSpinLock(&e->Lock,irql);return status;
 }
-NTSTATUS TgGpuStopHardware(TG_GPU_HARDWARE *h)
+NTSTATUS TgGpuIsolateHardware(TG_GPU_HARDWARE *h)
 {
-    TG_GPU_CONTEXT_ENGINE *e;KIRQL irql;NTSTATUS status;
+    TG_GPU_CONTEXT_ENGINE *e;KIRQL irql;
     enum tg_gpu_clock_result cr=TG_GPU_CLOCK_OK;
     enum tg_gpu_power_result pr;
     UINT32 clamp,reset;
@@ -106,6 +106,16 @@ NTSTATUS TgGpuStopHardware(TG_GPU_HARDWARE *h)
          */
         h->Clock.owned=h->Clock.running=false;h->Execution.owned=false;
     }
+    return h->Status.restore_result?STATUS_DEVICE_DATA_ERROR:STATUS_SUCCESS;
+}
+NTSTATUS TgGpuStopHardware(TG_GPU_HARDWARE *h)
+{
+    TG_GPU_CONTEXT_ENGINE *e;KIRQL irql;NTSTATUS status;
+    PAGED_CODE();
+    if(!h)return STATUS_INVALID_PARAMETER;
+    e=h->Engine;if(!e)return STATUS_SUCCESS;
+    status=TgGpuIsolateHardware(h);
+    if(!h->Isolated || (status!=STATUS_SUCCESS && status!=STATUS_DEVICE_DATA_ERROR))return status;
     status=TgGpuFreePrivateMemory(&e->Dxgk,&h->Work);
     if(!NT_SUCCESS(status))return status;
     status=TgGpuFreePrivateMemory(&e->Dxgk,&h->Boot);

@@ -166,7 +166,8 @@ for source in [*core, power, clock, root / "windows/resources.c",
                root / "windows/query.c", root / "windows/adapter.c",
                root / "windows/submit_ddi.c",root / "windows/recovery.c",
                root / "windows/platform_io.c",root / "windows/worker.c",
-               root / "windows/platform_adapter.c",root / "windows/gr_firmware_io.c"]:
+               root / "windows/platform_adapter.c",root / "windows/gr_firmware_io.c",
+               root / "windows/reset_backend.c",root / "windows/adapter_reset.c"]:
     obj = args.out / (source.stem + ".obj")
     subprocess.run([args.clang_cl, *flags, f"/Fo{obj}", "--", str(source)], check=True)
     objects.append(obj)
@@ -206,7 +207,7 @@ if args.windows_tests:
     subprocess.run([args.link,"/nologo","/machine:arm64","/subsystem:console,10.0","/entry:start",
                     "/include:_load_config_used","/nodefaultlib","/release","/opt:ref","/timestamp:0",
                     f"/out:{args.out / 'test-hardware.exe'}",str(hardware_test),str(args.out / "hardware.obj"),
-                    str(args.out / "private_memory.obj"),str(sdk_lib)],check=True)
+                    str(args.out / "reset_backend.obj"),str(args.out / "private_memory.obj"),str(sdk_lib)],check=True)
     platform_test=args.out / "test_platform_windows.obj"
     subprocess.run([args.clang_cl,*flags,"/clang:-funwind-tables",f"/Fo{platform_test}","--",
                     str(root / "tests/test_platform_windows.c")],check=True)

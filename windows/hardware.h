@@ -23,6 +23,9 @@ typedef struct _TG_GPU_HARDWARE {
  */
 NTSTATUS TgGpuStartHardware(TG_GPU_HARDWARE *,TG_GPU_CONTEXT_ENGINE *,
     const struct tg_gpu_power_io *,UCHAR PmicAddress,const struct tg_gpu_gr_payload *);
+/* Same quiescence/isolation gate as StopHardware, but retains all private
+ * backing and the hardware owner through the OS's TDR cleanup interval. */
+NTSTATUS TgGpuIsolateHardware(TG_GPU_HARDWARE *);
 /* Stop/detach the queue first; live work must retire/reset before this call.
  * Failure retains private memory and the engine owner, including failures
  * after power isolation when a Dxgkrnl free needs retry.

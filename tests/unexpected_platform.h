@@ -2,6 +2,9 @@
 /* Fail-fast native fixture imports: the resource-only adapter must never
  * reach live file I/O, scheduling or delays. The other fixtures cover those
  * paths with their own explicit substitutes. */
+#include "../windows/gr_firmware_io.h"
+NTSTATUS TgGpuFirmwareLoad(TG_GPU_FIRMWARE *f){(void)f;CHECK(FALSE);return STATUS_UNSUCCESSFUL;}
+VOID TgGpuFirmwareFree(TG_GPU_FIRMWARE *f){(void)f;CHECK(FALSE);}
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
 static NTSTATUS UnexpectedThread(PHANDLE h,ULONG access,POBJECT_ATTRIBUTES a,HANDLE p,

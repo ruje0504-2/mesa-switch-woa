@@ -345,8 +345,9 @@ down. Explicit clamp/reset readback proves isolation before any backing is
 freed. Drain, reset or allocation-free failures retain tracking for retry;
 an isolated retry performs no more GPU MMIO. A clock-restore error is reported
 even when reset safely retires DMA. Full stop advances the graphics generation.
-The initial hardware-start API requires a fresh engine/template; live TDR
-restart and miniport registration remain open.
+The cold-start API requires no existing template; the global reset/restart
+path below frees the old template only after isolation, preserves the epoch
+and cold-starts again. Live OS TDR and miniport registration remain unverified.
 `test-hardware.exe` covers startup stages, OOM, queue ownership, isolation,
 clock errors and free retry with **explicit GPU/OS substitutes**. It does not
 authenticate firmware or access physical GPU registers.
@@ -834,6 +835,35 @@ Faults, restoration errors and owned resources are zero; no reboot was needed.
 All five native fixtures and signed catalogue checks pass. The kernel worker
 and complete platform-adapter startup remain library/model evidence only.
 
+### Global reset and restart
+
+`adapter_reset.c` supplies the global `ResetFromTimeout` / `RestartFromTimeout`
+library DDIs through the shared `reset_backend.c` owner. The
+[Windows TDR cleanup interval](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/thread-synchronization-and-tdr)
+separates hardware reset from resumed rendering. Reset closes admission,
+suppresses late recovery notifications, joins the worker without holding its
+dispatcher mutex, cancels the queue without completing its fences, and
+detaches execution. `TgGpuIsolateHardware` stops fetch/Falcons, drains MC,
+restores clocks, powers down, and checks clamp/reset. It retains boot/work,
+commands and the golden template through cleanup; no GPU accesses follow a
+successful reset until restart. Existing roots are invalid and saved contexts
+keep their lost graphics generation.
+
+Restart releases the isolated private boot/work/template, zeroes reusable
+commands without manufacturing a completion, performs a full cold firmware
+boot and recreates the worker. Admission opens only after thread creation.
+Graphics generations remain monotonic, so an old context cannot accidentally
+become current again. New contexts must be created after device loss; actual
+fences/markers and OS identity are preserved. Failed join/reset/free/thread
+creation retain ownership and closed admission for retry. The adapter's
+platform wrapper loads firmware and preflights only in the restart phase.
+
+Controlled native tests cover phase ordering, retained backing, invalid roots,
+lost epochs and failures. These global callbacks do not implement per-engine
+reset/resubmission and do not advertise that capability. Remaining paging/IRQ,
+command/residency validation and the unregistered miniport still prevent a
+claim of live OS TDR or Vulkan recovery.
+
 ### DMA-buffer-boundary preemption
 
 The library now registers `TgGpuDdiPreemptCommand`. The
@@ -936,6 +966,22 @@ reports `3A5917D1/C5A6E82E`, three admissions/two completions, one preemption
 with last-completed 1, canceled report DEADBEEF, two GR saves/restores and the
 same complete image/code checks. Faults/restore/owned remain zero. The .55
 ABI-28 tool and its unchanged 104 JSON fixtures remain matched. No reboot.
+
+**Physical reset/restart pass, 2026-11-09 07:06:05 Pacific:** .57 / ABI 29
+(872 bytes) runs two complete clear/preempt/draw cycles around the shared
+global reset backend. Reset joins/detaches execution, proves isolation and
+retains private boot/work/template/commands. Restart cold-boots again, rejects
+the lost context, and draws through a new generation-2 context. The first
+cycle's image/code/reports are checked before reset; fresh sentinels and a new
+report seed are used afterward. Totals are **6 admissions / 4 DMA completions /
+2 preemptions / 1 reset / 1 restart**, with no recovery request. Final reports
+`7A123E0A/85EDC1F5`, all **256 pixels and 768 guards**, image/code hashes
+`F20AF985/FB041DD2`, GPU/CPU Reference **4/4** and last submission fence **6**
+match. The canceled report remains DEADBEEF, the new context saves/restores
+twice, and faults/restore/retained allocations are zero. Six controlled native
+fixtures and 108 JSON cases pass; SYS/CAT/all 11 members verify, without reboot.
+This proves the shared reset/restart hardware path through diagnostic adapters,
+not an OS-triggered TDR, per-engine resubmission, registered WDDM or Vulkan API.
 
 The owner-selected WDDM/NVK UMA budget is a **512 MiB maximum GPU working
 set**, allocated dynamically within VidMm's actual budget. The earlier 1 GiB

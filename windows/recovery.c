@@ -21,7 +21,7 @@ NTSTATUS TgGpuRequestEngineRecovery(TG_GPU_CONTEXT_ENGINE *e,NTSTATUS reason)
     q=e->QueueOwner;
     if(q){KeAcquireSpinLock(&q->Lock,&queue_irql);q->Paused=TRUE;}
     KeAcquireSpinLock(&e->Lock,&irql);
-    if(e->Stopping)status=STATUS_DEVICE_NOT_READY;
+    if(e->Stopping || e->Resetting)status=STATUS_DEVICE_NOT_READY;
     else if(e->RecoveryNotified)status=STATUS_SUCCESS;
     else if(e->RecoverySending)status=STATUS_PENDING;
     else {

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "../windows/hardware.h"
+#include "../windows/reset_backend.h"
 #include <ntimage.h>
 static ULONG_PTR image_cookie=0x00002b992ddfa232ULL;
 const IMAGE_LOAD_CONFIG_DIRECTORY64 _load_config_used={
@@ -27,6 +28,26 @@ static struct {
     BOOLEAN fail_drain,fail_down,fail_isolation,fail_clock_stop,clock_started,execute_stopped,mapped;
 } model;
 static KIRQL level;
+static TG_GPU_WORK_QUEUE queue;
+static TG_GPU_WORKER worker;
+static BOOLEAN fail_join,fail_queue,fail_thread;
+static UINT gate_depth;
+static NTSTATUS NTAPI Wait(PVOID object,KWAIT_REASON reason,KPROCESSOR_MODE mode,BOOLEAN alertable,PLARGE_INTEGER timeout)
+{CHECK(object==&queue.DispatchGate && reason==Executive && mode==KernelMode && !alertable && !timeout && level==PASSIVE_LEVEL);++gate_depth;return STATUS_SUCCESS;}
+static LONG NTAPI Release(PRKMUTEX mutex,BOOLEAN wait)
+{CHECK(mutex==&queue.DispatchGate && !wait && gate_depth && level==PASSIVE_LEVEL);--gate_depth;return 0;}
+NTSTATUS (NTAPI * const __imp_KeWaitForSingleObject)(PVOID,KWAIT_REASON,KPROCESSOR_MODE,BOOLEAN,PLARGE_INTEGER)=Wait;
+LONG (NTAPI * const __imp_KeReleaseMutex)(PRKMUTEX,BOOLEAN)=Release;
+NTSTATUS TgGpuInitializeWorkQueue(TG_GPU_WORK_QUEUE *q,TG_GPU_CONTEXT_ENGINE *e)
+{CHECK(q==&queue && e==&engine && !e->QueueOwner && !q->Engine && !gate_depth);memset(q,0,sizeof(*q));q->Engine=e;e->QueueOwner=q;return STATUS_SUCCESS;}
+NTSTATUS TgGpuResetWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io *i,struct tg_gpu_power *p,struct tg_gpu_clock *c)
+{(void)i;(void)p;(void)c;CHECK(q==&queue && q->Paused && gate_depth && !worker.Thread);return fail_queue?STATUS_IO_TIMEOUT:STATUS_SUCCESS;}
+NTSTATUS TgGpuStopWorkQueue(TG_GPU_WORK_QUEUE *q)
+{CHECK(q==&queue && gate_depth);engine.QueueOwner=NULL;q->Engine=NULL;return STATUS_SUCCESS;}
+NTSTATUS TgGpuStartWorker(TG_GPU_WORKER *w,TG_GPU_WORK_QUEUE *q,TG_GPU_HARDWARE *h)
+{CHECK(w==&worker && q==&queue && h==&hardware && h->Ready && !w->Thread);if(engine.Resetting)CHECK(gate_depth && engine.RecoveryPending);if(fail_thread)return STATUS_NO_MEMORY;w->Thread=(HANDLE)1;w->Queue=q;w->Hardware=h;return STATUS_SUCCESS;}
+NTSTATUS TgGpuStopWorker(TG_GPU_WORKER *w)
+{CHECK(w==&worker && !gate_depth);if(fail_join)return STATUS_UNSUCCESSFUL;w->Thread=NULL;w->Queue=NULL;w->Hardware=NULL;return STATUS_SUCCESS;}
 static KIRQL NTAPI Lock(PKSPIN_LOCK l){KIRQL old=level;CHECK(!*l);*l=1;level=DISPATCH_LEVEL;return old;}
 static VOID NTAPI Unlock(PKSPIN_LOCK l,KIRQL old){CHECK(*l && level==DISPATCH_LEVEL);*l=0;level=old;}
 KIRQL (NTAPI * const __imp_KeAcquireSpinLockRaiseToDpc)(PKSPIN_LOCK)=Lock;
@@ -135,12 +156,14 @@ NTSTATUS TgGpuInitializeGraphicsTemplate(TG_GPU_CONTEXT_ENGINE *e,
     CHECK(e==&engine && w->cpu==memory[1] && s->stage==9 && model.mapped && level==PASSIVE_LEVEL);
     if(model.fail_stage==FailTemplate)return STATUS_DEVICE_DATA_ERROR;
     NTSTATUS status=TgGpuAllocatePrivateMemory(&e->Dxgk,TG_GPU_GR_IMAGE_MAX_BYTES,0x80000000,0xffffffff,&e->Graphics.Memory);
-    if(NT_SUCCESS(status)){e->Graphics.ImageBytes=s->context_bytes;e->GraphicsGeneration=1;}return status;
+    if(NT_SUCCESS(status)){e->Graphics.ImageBytes=s->context_bytes;if(!e->GraphicsGeneration)e->GraphicsGeneration=1;}return status;
 }
 static void Setup(void)
 {
     for(UINT i=0;i<3;++i)CHECK(!used[i]);
     memset(&engine,0,sizeof(engine));memset(&hardware,0,sizeof(hardware));memset(&model,0,sizeof(model));
+    memset(&queue,0,sizeof(queue));memset(&worker,0,sizeof(worker));
+    InitializeListHead(&engine.Contexts);fail_join=fail_queue=fail_thread=FALSE;CHECK(!gate_depth);
     model.fail_after=UINT32_MAX;
     engine.Dxgk.Version=DXGKDDI_INTERFACE_VERSION_WDDM2_4;engine.Dxgk.DeviceHandle=(HANDLE)1;
     engine.Dxgk.DxgkCbAllocateContiguousMemory=Allocate;engine.Dxgk.DxgkCbFreeContiguousMemory=Free;
@@ -153,10 +176,51 @@ static void Finish(void)
     CHECK(NT_SUCCESS(TgGpuFreePrivateMemory(&engine.Dxgk,&engine.Graphics.Memory)));
     for(UINT i=0;i<3;++i)CHECK(!used[i]);
 }
+static void TestReset(void)
+{
+    struct tg_gpu_gr_payload firmware={0};TG_GPU_CONTEXT lost={0};UINT before;
+    for(UINT failure=0;failure<7;++failure) {
+        Setup();CHECK(TgGpuStartHardware(&hardware,&engine,&io,0x33,&firmware)==STATUS_SUCCESS);
+        CHECK(TgGpuInitializeWorkQueue(&queue,&engine)==STATUS_SUCCESS);
+        CHECK(TgGpuStartWorker(&worker,&queue,&hardware)==STATUS_SUCCESS);
+        lost.GraphicsGeneration=1;lost.Root.Valid=TRUE;InsertTailList(&engine.Contexts,&lost.Link);
+        engine.LastCompletedFence=7;engine.Marker=2;memset(commands,0xa5,sizeof(commands));
+        if(failure==1)fail_join=TRUE;
+        if(failure==2)fail_queue=TRUE;
+        if(failure==3)model.fail_drain=TRUE;
+        NTSTATUS status=TgGpuResetBackend(&engine,&queue,&hardware,&worker);
+        if(failure>=1 && failure<=3) {
+            CHECK(!NT_SUCCESS(status) && !model.frees && engine.Resetting && engine.RecoveryPending);
+            fail_join=fail_queue=FALSE;model.fail_drain=FALSE;
+            CHECK(TgGpuResetBackend(&engine,&queue,&hardware,&worker)==STATUS_SUCCESS);
+        } else CHECK(status==STATUS_SUCCESS);
+        CHECK(hardware.Isolated && hardware.Engine==&engine && !hardware.Power.owned && !worker.Thread);
+        CHECK(!queue.Engine && !engine.QueueOwner && !lost.Root.Valid && lost.GraphicsGeneration==1);
+        CHECK(engine.GraphicsGeneration==2 && engine.LastCompletedFence==7 && engine.Marker==2 && !model.frees);
+        CHECK(used[0] && used[1] && used[2] && commands[0]==0xa5);
+        before=model.reads+model.drains+model.downs+model.clock_stops;
+        CHECK(TgGpuResetBackend(&engine,&queue,&hardware,&worker)==STATUS_SUCCESS);
+        CHECK(before==model.reads+model.drains+model.downs+model.clock_stops);
+        if(failure==4)model.fail_free=(HANDLE)2;
+        if(failure==5)model.fail_free=(HANDLE)3;
+        if(failure==6)fail_thread=TRUE;
+        status=TgGpuRestartBackend(&engine,&queue,&hardware,&worker,&hardware.Io,0x33,&firmware);
+        if(failure>=4) {
+            CHECK(!NT_SUCCESS(status) && engine.Resetting && engine.RecoveryPending && !worker.Thread);
+            model.fail_free=NULL;fail_thread=FALSE;
+            CHECK(TgGpuRestartBackend(&engine,&queue,&hardware,&worker,&io,0x33,&firmware)==STATUS_SUCCESS);
+        } else CHECK(status==STATUS_SUCCESS);
+        CHECK(!engine.Resetting && !engine.RecoveryPending && hardware.Ready && worker.Thread && queue.Engine==&engine);
+        CHECK(engine.GraphicsGeneration>=2 && lost.GraphicsGeneration!=engine.GraphicsGeneration && !lost.Root.Valid);
+        CHECK(engine.LastCompletedFence==7 && engine.Marker==2 && commands[0]==0 && !gate_depth);
+        CHECK(TgGpuResetBackend(&engine,&queue,&hardware,&worker)==STATUS_SUCCESS);
+        CHECK(TgGpuStopHardware(&hardware)==STATUS_SUCCESS);RemoveEntryList(&lost.Link);Finish();
+    }
+}
 void start(void)
 {
     struct tg_gpu_gr_payload firmware={0};ULONG written;UINT before;
-    static const char pass[]="PASS: cold hardware ownership, BAR1/template hookup, partial startup and isolation/free retry (controlled substitutes; no GPU or live WDDM pass)\r\n";
+    static const char pass[]="PASS: cold hardware/isolation and two-phase global reset/restart, retained backing, lost epochs and failed join/free/thread retry (controlled substitutes)\r\n";
     for(UINT n=0;n<3;++n) {
         Setup();model.fail_after=n;
         CHECK(TgGpuStartHardware(&hardware,&engine,&io,0x33,&firmware)==STATUS_INSUFFICIENT_RESOURCES);
@@ -191,5 +255,6 @@ void start(void)
     model.fail_clock_stop=TRUE;
     CHECK(TgGpuStopHardware(&hardware)==STATUS_DEVICE_DATA_ERROR && hardware.Isolated && !hardware.Clock.owned);
     CHECK(hardware.Status.restore_result && !hardware.Engine);Finish();
+    TestReset();
     WriteFile(GetStdHandle((ULONG)-11),pass,sizeof(pass)-1,&written,NULL);ExitProcess(0);
 }

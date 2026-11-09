@@ -59,7 +59,7 @@ NTSTATUS TgGpuInitializeGraphicsTemplate(TG_GPU_CONTEXT_ENGINE *e,
     status=TgGpuCreateGraphicsTemplate(&e->Dxgk,work,golden,&next);
     KeAcquireSpinLock(&e->Lock,&irql);--e->Creating;
     if(NT_SUCCESS(status)) {
-        e->Graphics=next;e->GraphicsGeneration=1;
+        e->Graphics=next;if(!e->GraphicsGeneration)e->GraphicsGeneration=1;
         /* Stop may have closed admission while allocation slept. Retain the
          * successful allocation in the engine so its stop retry can free it.
          */
@@ -256,7 +256,7 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
         !tg_gpu_build_gpfifo(a->DmaBufferVirtualAddress,a->DmaBufferSize/4,false,&packet))
         return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql); c=find_context(e,a->hContext);
-    if (e->Stopping) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_NOT_READY; }
+    if (e->Stopping || e->Resetting || e->RecoveryPending) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_NOT_READY; }
     if(e->Active==w || e->Notification==w) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_BUSY; }
     if (!c || c->Closing || !c->Device->Process || !c->Flags.VirtualAddressing) {
         KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER;

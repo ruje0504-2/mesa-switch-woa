@@ -897,6 +897,8 @@ static __declspec(noinline) VOID TestPreemption(const DXGKRNL_INTERFACE *dxgk)
     e.UserdBar1Ready=TRUE;e.UserdBar1Offset=0x13000;e.LastCompletedFence=17;
     notify_engine=&e;notify_context=c;notify_references=0;
     TgGpuRegisterAdapterDdis(&ddi);CHECK(ddi.DxgkDdiPreemptCommand==TgGpuDdiPreemptCommand);
+    CHECK(ddi.DxgkDdiResetFromTimeout==TgGpuDdiResetFromTimeout &&
+        ddi.DxgkDdiRestartFromTimeout==TgGpuDdiRestartFromTimeout && !ddi.DxgkDdiResetEngine);
     expected_preemption=500;expected_preempt_completed=17;RequestPreempt(&e,500);
     CHECK(q.Preemptions==1 && PoolsInUse()==pools+1 && preemption_interrupts==events);
     CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_SUCCESS && preemption_interrupts==events+1);
@@ -960,6 +962,9 @@ static __declspec(noinline) VOID TestPreemption(const DXGKRNL_INTERFACE *dxgk)
     CHECK(e.RecoveryPending && e.RecoveryNotified && e.RecoveryStatus==STATUS_NO_MEMORY && q.Paused);
     CHECK(recovery_interrupts==faults+1 && preemption_interrupts==events+6 && e.LastCompletedFence==204);
     CHECK(hw.reads+hw.writes==accesses && PoolsInUse()==pools);
+    e.Resetting=TRUE;
+    CHECK(TgGpuRequestEngineRecovery(&e,STATUS_DEVICE_DATA_ERROR)==STATUS_DEVICE_NOT_READY);
+    CHECK(recovery_interrupts==faults+1 && e.RecoveryStatus==STATUS_NO_MEMORY);e.Resetting=FALSE;
     CHECK(TgGpuStopWorkQueue(&q)==STATUS_SUCCESS);e.HardwareOwner=NULL;
     notify_engine=NULL;notify_context=NULL;
     CHECK(TgGpuDdiDestroyContext(c)==STATUS_SUCCESS && TgGpuDdiDestroyDevice(device.hDevice)==STATUS_SUCCESS);

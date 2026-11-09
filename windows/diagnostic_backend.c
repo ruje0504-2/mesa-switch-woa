@@ -2,6 +2,7 @@
 #include "diagnostic_backend.h"
 #include "worker.h"
 #include "submit_ddi.h"
+#include "reset_backend.h"
 #include "../core/fault.h"
 #include "../platform/t214_resources.h"
 
@@ -31,6 +32,7 @@ struct _TG_GPU_DIAGNOSTIC_BACKEND {
     KSPIN_LOCK NotifyLock;
     struct tg_gpu_backend_status Progress;
     LONG Allocations;
+    UINT Cycle;
     BOOLEAN EngineInitialized,QueueInitialized;
 };
 typedef struct _DIAGNOSTIC_MEMORY {
@@ -73,15 +75,15 @@ static NTSTATUS NTAPI synchronize(HANDLE device,PKSYNCHRONIZE_ROUTINE routine,
 }
 static VOID NTAPI notification(HANDLE device,DXGKARGCB_NOTIFY_INTERRUPT_DATA *a)
 {
-    TG_GPU_DIAGNOSTIC_BACKEND *b=device;
+    TG_GPU_DIAGNOSTIC_BACKEND *b=device;UINT n=b->Progress.notifications,p=b->Progress.preemption_notifications;
     if(a->InterruptType==DXGK_INTERRUPT_DMA_COMPLETED &&
        !a->DmaCompleted.NodeOrdinal && !a->DmaCompleted.EngineOrdinal &&
-       a->DmaCompleted.SubmissionFenceId==(b->Progress.notifications?3u:1u))
+       n<4 && a->DmaCompleted.SubmissionFenceId==(n/2)*3+(n%2?3u:1u))
         InterlockedIncrement((volatile LONG *)&b->Progress.notifications);
     else if(a->InterruptType==DXGK_INTERRUPT_DMA_PREEMPTED &&
         !a->DmaPreempted.NodeOrdinal && !a->DmaPreempted.EngineOrdinal &&
-        a->DmaPreempted.PreemptionFenceId==PREEMPT_FENCE &&
-        a->DmaPreempted.LastCompletedFenceId==1 && !b->Progress.preemption_notifications) {
+        p<2 && a->DmaPreempted.PreemptionFenceId==PREEMPT_FENCE+p &&
+        a->DmaPreempted.LastCompletedFenceId==p*3+1) {
         b->Progress.preemption_completed=a->DmaPreempted.LastCompletedFenceId;
         InterlockedIncrement((volatile LONG *)&b->Progress.preemption_notifications);
     }
@@ -123,7 +125,7 @@ static NTSTATUS enqueue(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT index,UINT offset,UINT
 {
     DXGKARG_SUBMITCOMMANDVIRTUAL a={0};NTSTATUS status;
     a.hContext=b->Context;a.DmaBufferVirtualAddress=USER_VA+offset;a.DmaBufferSize=words*4;
-    a.SubmissionFenceId=index+1;a.pDmaBufferPrivateData=&b->Private[index];
+    a.SubmissionFenceId=b->Cycle*3+index+1;a.pDmaBufferPrivateData=&b->Private[index];
     a.DmaBufferPrivateDataSize=sizeof(b->Private[index]);
     KeMemoryBarrier();status=TgGpuDdiSubmitCommandVirtual(&b->Engine,&a);
     if(status!=STATUS_SUCCESS)return status;
@@ -156,7 +158,7 @@ static NTSTATUS wait_completed(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT completed)
 }
 static NTSTATUS preempt_then_draw(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT seed)
 {
-    DXGKARG_PREEMPTCOMMAND a={.PreemptionFenceId=PREEMPT_FENCE};KIRQL irql;
+    DXGKARG_PREEMPTCOMMAND a={.PreemptionFenceId=PREEMPT_FENCE+b->Cycle};KIRQL irql;
     UINT draw_words;NTSTATUS status;
     UINT32 *decoy=(UINT32 *)((UCHAR *)b->Data.CpuAddress+DECOY_OFFSET);
     if(!tg_gpu_build_gr_engine_packet(decoy,(PAGE_SIZE-DECOY_OFFSET)/4,
@@ -176,8 +178,28 @@ static NTSTATUS preempt_then_draw(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT seed)
         if(NT_SUCCESS(status))status=enqueue(b,2,0,draw_words);
     }
     (VOID)KeReleaseMutex(&b->Queue.DispatchGate,FALSE);
-    if(NT_SUCCESS(status))status=wait_completed(b,2);
+    if(NT_SUCCESS(status))status=wait_completed(b,(b->Cycle+1)*2);
     return status;
+}
+static NTSTATUS draw_cycle(TG_GPU_DIAGNOSTIC_BACKEND *b,UINT seed,struct tg_gpu_status *s)
+{
+    UINT words,i;NTSTATUS status;
+    const volatile UINT32 *reports=(const volatile UINT32 *)((UCHAR *)b->Data.CpuAddress+REPORT_OFFSET);
+    s->expected[0]=seed;s->expected[1]=~seed;
+    for(i=0;i<3;++i)((UINT32 *)((UCHAR *)b->Data.CpuAddress+REPORT_OFFSET))[i]=TG_GPU_CLEAR_SENTINEL;
+    for(i=0;i<TG_GPU_CLEAR_BYTES/4;++i)((UINT32 *)((UCHAR *)b->Data.CpuAddress+PIXEL_OFFSET))[i]=TG_GPU_CLEAR_SENTINEL;
+    if(!tg_gpu_prepare_draw_code((UCHAR *)b->Data.CpuAddress+CODE_OFFSET,TG_GPU_DRAW_BYTES,&s->draw) ||
+       !tg_gpu_build_clear_packet(b->Data.CpuAddress,PAGE_SIZE/4,USER_VA+PIXEL_OFFSET,
+        USER_VA+REPORT_OFFSET,seed,true,&words))return STATUS_INVALID_PARAMETER;
+    b->Progress.stage=5;status=enqueue(b,0,0,words);
+    if(NT_SUCCESS(status))status=wait_completed(b,b->Cycle*2+1);if(!NT_SUCCESS(status))return status;
+    b->Progress.stage=6;status=preempt_then_draw(b,seed);if(!NT_SUCCESS(status))return status;
+    b->Progress.stage=7;
+    s->draw.checked=tg_gpu_check_draw_code((const volatile UINT32 *)((UCHAR *)b->Data.CpuAddress+CODE_OFFSET),TG_GPU_DRAW_BYTES);
+    if(!tg_gpu_check_clear_pixels((const volatile UINT32 *)((UCHAR *)b->Data.CpuAddress+PIXEL_OFFSET),
+        TG_GPU_CLEAR_BYTES,&s->clear) || !s->draw.checked || reports[0]!=seed || reports[1]!=~seed ||
+        reports[2]!=TG_GPU_CLEAR_SENTINEL)return STATUS_DATA_ERROR;
+    return STATUS_SUCCESS;
 }
 static VOID snapshot(TG_GPU_DIAGNOSTIC_BACKEND *b,struct tg_gpu_status *s)
 {
@@ -279,8 +301,9 @@ NTSTATUS TgGpuRunDiagnosticBackend(TG_GPU_DIAGNOSTIC_BACKEND **state,
     const struct tg_gpu_power_io *io,UCHAR address,const struct tg_gpu_gr_payload *firmware,
     UINT seed,struct tg_gpu_status *s)
 {
-    TG_GPU_DIAGNOSTIC_BACKEND *b;NTSTATUS status,cleanup;UINT words,i;
+    TG_GPU_DIAGNOSTIC_BACKEND *b;NTSTATUS status,cleanup;TG_GPU_CONTEXT_WORK lost={0};
     DXGKARG_CREATEPROCESS process={0};DXGKARG_CREATEDEVICE device={0};DXGKARG_CREATECONTEXT context={0};
+    DXGKARG_SUBMITCOMMANDVIRTUAL old_submit={0};
     PAGED_CODE();
     if(!state || *state || !io || !firmware || !s)return STATUS_INVALID_PARAMETER;
     b=ExAllocatePool2(POOL_FLAG_NON_PAGED,sizeof(*b),TAG);if(!b)return STATUS_NO_MEMORY;
@@ -307,24 +330,35 @@ NTSTATUS TgGpuRunDiagnosticBackend(TG_GPU_DIAGNOSTIC_BACKEND **state,
     status=TgGpuAllocatePrivateMemory(&b->Dxgk,DATA_BYTES,0x80000000,0xffffffff,&b->Data);
     if(!NT_SUCCESS(status))goto done;
     status=map_data(b);if(!NT_SUCCESS(status))goto done;
-    for(i=0;i<3;++i)((UINT32 *)((UCHAR *)b->Data.CpuAddress+REPORT_OFFSET))[i]=TG_GPU_CLEAR_SENTINEL;
-    for(i=0;i<TG_GPU_CLEAR_BYTES/4;++i)((UINT32 *)((UCHAR *)b->Data.CpuAddress+PIXEL_OFFSET))[i]=TG_GPU_CLEAR_SENTINEL;
-    if(!tg_gpu_prepare_draw_code((UCHAR *)b->Data.CpuAddress+CODE_OFFSET,TG_GPU_DRAW_BYTES,&s->draw)) {
-        status=STATUS_INVALID_PARAMETER;goto done;
-    }
     b->Progress.stage=4;status=TgGpuInitializeWorkQueue(&b->Queue,&b->Engine);
     if(!NT_SUCCESS(status))goto done;b->QueueInitialized=TRUE;
     status=TgGpuStartWorker(&b->Worker,&b->Queue,&b->Hardware);
     if(!NT_SUCCESS(status))goto done;b->Progress.worker_started=1;
-    if(!tg_gpu_build_clear_packet(b->Data.CpuAddress,PAGE_SIZE/4,USER_VA+PIXEL_OFFSET,
-        USER_VA+REPORT_OFFSET,seed,true,&words)){status=STATUS_INVALID_PARAMETER;goto done;}
-    b->Progress.stage=5;status=enqueue(b,0,0,words);
-    if(NT_SUCCESS(status))status=wait_completed(b,1);if(!NT_SUCCESS(status))goto done;
-    b->Progress.stage=6;status=preempt_then_draw(b,seed);if(!NT_SUCCESS(status))goto done;
-    b->Progress.stage=7;
-    s->draw.checked=tg_gpu_check_draw_code((const volatile UINT32 *)((UCHAR *)b->Data.CpuAddress+CODE_OFFSET),TG_GPU_DRAW_BYTES);
-    if(!tg_gpu_check_clear_pixels((const volatile UINT32 *)((UCHAR *)b->Data.CpuAddress+PIXEL_OFFSET),
-        TG_GPU_CLEAR_BYTES,&s->clear) || !s->draw.checked)status=STATUS_DATA_ERROR;
+    status=draw_cycle(b,seed,s);if(!NT_SUCCESS(status))goto done;
+    b->Progress.stage=8;status=TgGpuResetBackend(&b->Engine,&b->Queue,&b->Hardware,&b->Worker);
+    b->QueueInitialized=b->Queue.Engine==&b->Engine;if(!NT_SUCCESS(status))goto done;
+    ++b->Progress.resets;
+    if(!b->Hardware.Isolated || b->Hardware.Power.owned || b->Worker.Thread || b->QueueInitialized ||
+       b->Engine.UserdBar1Ready || !b->Hardware.Boot.Handle || !b->Hardware.Work.Handle ||
+       !b->Engine.Graphics.Memory.Handle || !b->Engine.Commands.Handle) {status=STATUS_DEVICE_DATA_ERROR;goto done;}
+    b->Progress.reset_isolated=1;
+    b->Progress.stage=9;
+    status=TgGpuRestartBackend(&b->Engine,&b->Queue,&b->Hardware,&b->Worker,io,address,firmware);
+    b->QueueInitialized=b->Queue.Engine==&b->Engine;if(!NT_SUCCESS(status))goto done;
+    ++b->Progress.restarts;
+    old_submit.hContext=b->Context;old_submit.DmaBufferVirtualAddress=USER_VA;old_submit.DmaBufferSize=4;
+    status=TgGpuCaptureContextWork(&b->Engine,&old_submit,&lost);
+    if(status!=STATUS_DEVICE_NOT_READY) {
+        if(status==STATUS_SUCCESS)(VOID)TgGpuCancelCapturedWork(&b->Engine,&lost);
+        status=STATUS_DEVICE_DATA_ERROR;goto done;
+    }
+    b->Progress.lost_context_rejected=1;
+    status=TgGpuDdiDestroyContext(b->Context);if(!NT_SUCCESS(status))goto done;b->Context=NULL;
+    status=TgGpuDdiCreateContext(b->Device,&context);if(!NT_SUCCESS(status))goto done;b->Context=context.hContext;
+    status=map_data(b);if(!NT_SUCCESS(status))goto done;
+    *s=b->Hardware.Status;s->tested=1;b->Cycle=1;
+    seed^=0x70801021u;if(seed==TG_GPU_CLEAR_SENTINEL || ~seed==TG_GPU_CLEAR_SENTINEL)seed^=0x1000;
+    status=draw_cycle(b,seed,s);
 done:
     /* Join before sampling/final cleanup: no concurrent work or callbacks. */
     cleanup=TgGpuStopWorker(&b->Worker);if(!NT_SUCCESS(cleanup) && NT_SUCCESS(status))status=cleanup;

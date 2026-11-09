@@ -13,7 +13,7 @@
  * VidMm suballocates this segment. This is not the 512 MiB application budget.
  */
 #define TG_GPU_ADAPTER_TABLE_BYTES (16u*TG_GPU_TABLE_BYTES)
-enum tg_gpu_adapter_state { TgGpuAdapterAdded,TgGpuAdapterStarting,TgGpuAdapterReady,TgGpuAdapterStopping };
+enum tg_gpu_adapter_state { TgGpuAdapterAdded,TgGpuAdapterStarting,TgGpuAdapterReady,TgGpuAdapterStopping,TgGpuAdapterResetting };
 typedef struct _TG_GPU_ADAPTER {
     /* All implemented allocation/context/query DDIs accept this same handle. */
     TG_GPU_CONTEXT_ENGINE Engine;
@@ -33,6 +33,9 @@ DXGKDDI_ADD_DEVICE TgGpuDdiAddDevice;
 DXGKDDI_START_DEVICE TgGpuDdiStartDevice;
 DXGKDDI_STOP_DEVICE TgGpuDdiStopDevice;
 DXGKDDI_REMOVE_DEVICE TgGpuDdiRemoveDevice;
+DXGKDDI_RESETFROMTIMEOUT TgGpuDdiResetFromTimeout;
+DXGKDDI_RESTARTFROMTIMEOUT TgGpuDdiRestartFromTimeout;
+void TgGpuRegisterResetDdis(DRIVER_INITIALIZATION_DATA *);
 /* Library hookup for the platform provider. StartDevice has already acquired
  * resources/engine/queue; no DriverEntry exposes this unfinished adapter. */
 NTSTATUS TgGpuStartAdapterHardware(TG_GPU_ADAPTER *,const struct tg_gpu_power_io *,

@@ -23,7 +23,8 @@ NTSTATUS APIENTRY TgGpuDdiSubmitCommandVirtual(HANDLE adapter,const DXGKARG_SUBM
     reserved=ExAllocatePool2(POOL_FLAG_NON_PAGED,sizeof(*reserved),TG_GPU_QUEUE_TAG);
     h=e->HardwareOwner;
     if(!reserved)status=STATUS_NO_MEMORY;
-    else if(!q || q->Engine!=e || !h || h->Engine!=e || !h->Ready || !h->Power.owned || !h->Power.ready)
+    else if(e->Resetting || e->RecoveryPending || !q || q->Engine!=e ||
+       !h || h->Engine!=e || !h->Ready || !h->Power.owned || !h->Power.ready)
         status=STATUS_DEVICE_NOT_READY;
     else status=TgGpuQueueSubmitOrReject(q,a,reserved,&used);
     if(reserved && !used)ExFreePoolWithTag(reserved,TG_GPU_QUEUE_TAG);

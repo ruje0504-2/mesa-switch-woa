@@ -138,4 +138,5 @@ void TgGpuRegisterAdapterDdis(DRIVER_INITIALIZATION_DATA *d)
     d->DxgkDdiStopDevice=TgGpuDdiStopDevice;d->DxgkDdiRemoveDevice=TgGpuDdiRemoveDevice;
     TgGpuRegisterContextDdis(d);TgGpuRegisterAllocationDdis(d);TgGpuRegisterQueryDdi(d);
     TgGpuRegisterSubmissionDdi(d);
+    TgGpuRegisterResetDdis(d);
 }
