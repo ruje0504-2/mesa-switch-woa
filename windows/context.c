@@ -42,6 +42,29 @@ NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *e,
     InitializeListHead(&e->Processes); InitializeListHead(&e->Devices); InitializeListHead(&e->Contexts);
     return TgGpuAllocatePrivateMemory(dxgk,TG_GPU_COMMAND_BYTES,0x80000000,0xffffffff,&e->Commands);
 }
+NTSTATUS TgGpuInitializeGraphicsTemplate(TG_GPU_CONTEXT_ENGINE *e,
+    const struct tg_gpu_gr_work *work,const struct tg_gpu_gr_context_status *golden)
+{
+    TG_GPU_GRAPHICS_TEMPLATE next={0};NTSTATUS status;KIRQL irql;
+    PAGED_CODE();
+    if(!e || !e->Commands.Handle)return STATUS_INVALID_PARAMETER;
+    KeAcquireSpinLock(&e->Lock,&irql);
+    if(e->Stopping || e->Graphics.Memory.Handle || e->Creating || e->Active || e->Notification ||
+       e->Channel.referenced) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_DEVICE_STATE;
+    }
+    ++e->Creating;KeReleaseSpinLock(&e->Lock,irql);
+    status=TgGpuCreateGraphicsTemplate(&e->Dxgk,work,golden,&next);
+    KeAcquireSpinLock(&e->Lock,&irql);--e->Creating;
+    if(NT_SUCCESS(status)) {
+        e->Graphics=next;e->GraphicsGeneration=1;
+        /* Stop may have closed admission while allocation slept. Retain the
+         * successful allocation in the engine so its stop retry can free it.
+         */
+        if(e->Stopping)status=STATUS_DEVICE_NOT_READY;
+    }
+    KeReleaseSpinLock(&e->Lock,irql);return status;
+}
 NTSTATUS TgGpuStopContextEngine(TG_GPU_CONTEXT_ENGINE *e)
 {
     KIRQL irql; NTSTATUS status;
@@ -52,7 +75,9 @@ NTSTATUS TgGpuStopContextEngine(TG_GPU_CONTEXT_ENGINE *e)
         !IsListEmpty(&e->Processes) ? STATUS_DEVICE_BUSY : STATUS_SUCCESS;
     KeReleaseSpinLock(&e->Lock,irql);
     if (!NT_SUCCESS(status)) return status;
-    return TgGpuFreePrivateMemory(&e->Dxgk,&e->Commands);
+    status=TgGpuFreePrivateMemory(&e->Dxgk,&e->Commands);
+    if(!NT_SUCCESS(status))return status;
+    return TgGpuFreePrivateMemory(&e->Dxgk,&e->Graphics.Memory);
 }
 NTSTATUS APIENTRY TgGpuDdiCreateProcess(HANDLE adapter, DXGKARG_CREATEPROCESS *a)
 {
@@ -124,10 +149,15 @@ NTSTATUS APIENTRY TgGpuDdiCreateContext(HANDLE device, DXGKARG_CREATECONTEXT *a)
     c->Device=d; c->Runtime=a->hContext; c->Flags=a->Flags; c->RootStatus=STATUS_DEVICE_NOT_READY;
     KeAcquireSpinLock(&e->Lock,&irql);
     if (e->Stopping) { KeReleaseSpinLock(&e->Lock,irql); ExFreePoolWithTag(c,TAG); return STATUS_DEVICE_NOT_READY; }
-    ++d->Contexts; /* reserve the parent while allocation may sleep */
+    ++d->Contexts;++e->Creating; /* reserve the parent while allocation may sleep */
+    if(d->Process) {
+        if(!++e->ContextSerial)++e->ContextSerial;
+        c->ContextId=e->ContextSerial;
+    }
     KeReleaseSpinLock(&e->Lock,irql);
-    status=TgGpuAllocatePrivateMemory(&e->Dxgk,PAGE_SIZE,0x80000000,0xffffffff,&c->Instance);
-    KeAcquireSpinLock(&e->Lock,&irql);
+    status=TgGpuAllocatePrivateMemory(&e->Dxgk,d->Process?TG_GPU_CONTEXT_PRIVATE_BYTES:PAGE_SIZE,
+                                     0x80000000,0xffffffff,&c->Instance);
+    KeAcquireSpinLock(&e->Lock,&irql);--e->Creating;
     if (!NT_SUCCESS(status)) {
         --d->Contexts; KeReleaseSpinLock(&e->Lock,irql); ExFreePoolWithTag(c,TAG); return status;
     }
@@ -147,7 +177,9 @@ NTSTATUS APIENTRY TgGpuDdiDestroyContext(HANDLE context)
     if (!c) return STATUS_INVALID_PARAMETER;
     e=c->Device->Engine; KeAcquireSpinLock(&e->Lock,&irql);
     if (c->References || c->Closing) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_BUSY; }
-    c->Closing=TRUE; KeReleaseSpinLock(&e->Lock,irql);
+    c->Closing=TRUE;
+    if(c->Device->Process)TgGpuUnmapContextGraphics(&c->Device->Process->Internal,&c->Instance);
+    KeReleaseSpinLock(&e->Lock,irql);
     status=TgGpuFreePrivateMemory(&e->Dxgk,&c->Instance);
     KeAcquireSpinLock(&e->Lock,&irql);
     if (!NT_SUCCESS(status)) {
@@ -220,6 +252,9 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
         a->DmaBufferSize>c->Root.VaLimit-a->DmaBufferVirtualAddress) {
         KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER;
     }
+    if(!e->Graphics.Memory.Handle || (c->GraphicsGeneration && c->GraphicsGeneration!=e->GraphicsGeneration)) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
+    }
     if (a->DmaBufferVirtualAddress<c->Device->Process->Internal.Base+TG_GPU_INTERNAL_COVERAGE &&
         a->DmaBufferVirtualAddress+a->DmaBufferSize>c->Device->Process->Internal.Base) {
         KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER;
@@ -242,6 +277,10 @@ NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
     }
     if(e->Active || e->Notification || e->Channel.referenced) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_BUSY; }
+    if(!e->Graphics.Memory.Handle || (w->Context->GraphicsGeneration &&
+       w->Context->GraphicsGeneration!=e->GraphicsGeneration)) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
+    }
     status=TgGpuWriteRootInstance(&w->Root,&w->Context->Instance,TRUE);
     if(!NT_SUCCESS(status)) { KeReleaseSpinLock(&e->Lock,irql);return status; }
     marker=++e->Marker;
@@ -280,18 +319,35 @@ NTSTATUS TgGpuAcquireContextWork(TG_GPU_CONTEXT_ENGINE *e,
 }
 NTSTATUS TgGpuPrepareContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w)
 {
-    KIRQL irql;NTSTATUS status;TG_GPU_CONTEXT *c;
+    KIRQL irql;NTSTATUS status=STATUS_SUCCESS;TG_GPU_CONTEXT *c;
+    BOOLEAN build;UINT generation;
     if (!e || !w) return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);c=w->Context;
     if (e->Active!=w || !c || w->Prepared || w->Signaling || w->Notified || w->HardwareBusy || w->Attempted) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_DEVICE_STATE;
     }
-    status=TgGpuInstallInternalRoot(e->Tables,&w->Root,&c->Device->Process->Internal);
+    if(!e->Graphics.Memory.Handle || (c->GraphicsGeneration && c->GraphicsGeneration!=e->GraphicsGeneration)) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
+    }
+    build=!c->GraphicsGeneration;generation=e->GraphicsGeneration;
+    w->HardwareBusy=TRUE;KeReleaseSpinLock(&e->Lock,irql);
+    /* The first immutable clone/whitelist is large. Keep its uncached CPU
+     * initialization outside the spin lock, with work/context ownership held.
+     * Later submissions preserve the GPU-saved image and global buffers.
+     */
+    if(build)status=TgGpuBuildContextGraphics(&e->Graphics,&c->Instance,w->InternalVa,c->ContextId);
+    KeAcquireSpinLock(&e->Lock,&irql);
+    if(NT_SUCCESS(status)) {
+        if(build)c->GraphicsGeneration=generation;
+        status=TgGpuInstallInternalRoot(e->Tables,&w->Root,&c->Device->Process->Internal);
+    }
+    if(NT_SUCCESS(status))status=TgGpuMapContextGraphics(&c->Device->Process->Internal,&c->Instance);
     if (NT_SUCCESS(status) && !tg_gpu_prepare_submission(e->Commands.CpuAddress,e->Commands.Bytes,
         (UINT64)e->Commands.SystemPhysicalAddress.QuadPart,w->InternalVa,
         c->Instance.CpuAddress,c->Instance.Bytes,(UINT64)c->Instance.SystemPhysicalAddress.QuadPart,
         w->DmaAddress,w->DmaBytes,w->Expected)) status=STATUS_INVALID_PARAMETER;
     if (NT_SUCCESS(status)) { KeMemoryBarrier();w->Prepared=TRUE; }
+    w->HardwareBusy=FALSE;
     KeReleaseSpinLock(&e->Lock,irql);return status;
 }
 static BOOLEAN NotifyFence(PVOID context)

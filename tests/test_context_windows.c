@@ -24,7 +24,10 @@ void *memcpy(void *p,const void *source,size_t n)
  * here allocates through live Dxgkrnl or proves physical GPU completion.
  */
 static _Alignas(PAGE_SIZE) UCHAR pools[64][PAGE_SIZE], memory[64][TG_GPU_TABLE_BYTES];
+static _Alignas(PAGE_SIZE) UCHAR graphics_memory[4][TG_GPU_CONTEXT_PRIVATE_BYTES];
+static BOOLEAN graphics_used[4];
 static BOOLEAN pool_used[64], memory_used[64], fail_pool, fail_allocate, fail_free;
+static HANDLE fail_memory_handle;
 static UINT pool_fail_after=UINT32_MAX,memory_fail_after=UINT32_MAX;
 static _Alignas(PAGE_SIZE) UCHAR adapter_table[TG_GPU_ADAPTER_TABLE_BYTES];
 static BOOLEAN adapter_table_used,adapter_table_fail_free;
@@ -78,7 +81,12 @@ static PHYSICAL_ADDRESS NTAPI Physical(PVOID address)
     ULONG_PTR offset=(ULONG_PTR)address-(ULONG_PTR)memory;
     PHYSICAL_ADDRESS p;
     ULONG_PTR table_offset=(ULONG_PTR)address-(ULONG_PTR)adapter_table;
+    ULONG_PTR graphics_offset=(ULONG_PTR)address-(ULONG_PTR)graphics_memory;
     if(table_offset<sizeof(adapter_table)){p.QuadPart=0x92000000+table_offset;return p;}
+    if(graphics_offset<sizeof(graphics_memory)) {
+        p.QuadPart=0x93000000+(graphics_offset/TG_GPU_CONTEXT_PRIVATE_BYTES)*0x100000+
+            graphics_offset%TG_GPU_CONTEXT_PRIVATE_BYTES;return p;
+    }
     CHECK(offset<sizeof(memory));p.QuadPart=0x91000000+offset;return p;
 }
 PHYSICAL_ADDRESS (NTAPI * const __imp_MmGetPhysicalAddress)(PVOID)=Physical;
@@ -86,10 +94,18 @@ static NTSTATUS NTAPI Allocate(HANDLE device,DXGKARGCB_ALLOCATECONTIGUOUSMEMORY 
 {
     UINT i;CHECK(device==(HANDLE)1 && level==PASSIVE_LEVEL);
     CHECK((a->NumberOfBytes==PAGE_SIZE || a->NumberOfBytes==TG_GPU_COMMAND_BYTES ||
-           a->NumberOfBytes==TG_GPU_TABLE_BYTES || a->NumberOfBytes==TG_GPU_ADAPTER_TABLE_BYTES) && a->CacheType==DXGK_MEMORY_CACHING_TYPE_NON_CACHED);
+           a->NumberOfBytes==TG_GPU_TABLE_BYTES || a->NumberOfBytes==TG_GPU_ADAPTER_TABLE_BYTES ||
+           a->NumberOfBytes==TG_GPU_CONTEXT_PRIVATE_BYTES) && a->CacheType==DXGK_MEMORY_CACHING_TYPE_NON_CACHED);
     CHECK(a->LowestAcceptableAddress.QuadPart==0x80000000 && a->HighestAcceptableAddress.QuadPart==0xffffffff);
     if(fail_allocate) return STATUS_INSUFFICIENT_RESOURCES;
     if(memory_fail_after!=UINT32_MAX){if(!memory_fail_after)return STATUS_INSUFFICIENT_RESOURCES;--memory_fail_after;}
+    if(a->NumberOfBytes==TG_GPU_CONTEXT_PRIVATE_BYTES) {
+        for(i=0;i<4;++i)if(!graphics_used[i]) {
+            graphics_used[i]=TRUE;a->hMemoryHandle=(HANDLE)(ULONG_PTR)(512+i);
+            a->pMemory=graphics_memory[i];return STATUS_SUCCESS;
+        }
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
     if(a->NumberOfBytes==TG_GPU_ADAPTER_TABLE_BYTES){
         CHECK(!adapter_table_used);adapter_table_used=TRUE;
         a->hMemoryHandle=(HANDLE)256;a->pMemory=adapter_table;return STATUS_SUCCESS;
@@ -102,13 +118,19 @@ static NTSTATUS NTAPI Allocate(HANDLE device,DXGKARGCB_ALLOCATECONTIGUOUSMEMORY 
 static NTSTATUS NTAPI Free(HANDLE device,const DXGKARGCB_FREECONTIGUOUSMEMORY *a)
 {
     UINT i=(UINT)(ULONG_PTR)a->hMemoryHandle-1;
+    if((ULONG_PTR)a->hMemoryHandle>=512 && (ULONG_PTR)a->hMemoryHandle<516) {
+        i=(UINT)(ULONG_PTR)a->hMemoryHandle-512;
+        CHECK(device==(HANDLE)1 && level==PASSIVE_LEVEL && graphics_used[i]);
+        if(fail_free)return STATUS_UNSUCCESSFUL;
+        graphics_used[i]=FALSE;++frees;return STATUS_SUCCESS;
+    }
     if(a->hMemoryHandle==(HANDLE)256){
         CHECK(device==(HANDLE)1 && level==PASSIVE_LEVEL && adapter_table_used);
         if(fail_free || adapter_table_fail_free)return STATUS_UNSUCCESSFUL;
         adapter_table_used=FALSE;++frees;return STATUS_SUCCESS;
     }
     CHECK(device==(HANDLE)1 && level==PASSIVE_LEVEL && i<64 && memory_used[i]);
-    if(fail_free) return STATUS_UNSUCCESSFUL;
+    if(fail_free || a->hMemoryHandle==fail_memory_handle) return STATUS_UNSUCCESSFUL;
     memory_used[i]=FALSE;++frees;return STATUS_SUCCESS;
 }
 static NTSTATUS NTAPI Synchronize(HANDLE device,PKSYNCHRONIZE_ROUTINE routine,
@@ -501,6 +523,72 @@ static __declspec(noinline) void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRI
     CHECK(d->DxgkDdiQueryAdapterInfo(e,NULL)==STATUS_INVALID_PARAMETER);
 }
 
+static void TestGraphicsTemplate(TG_GPU_CONTEXT_ENGINE *e)
+{
+    static _Alignas(PAGE_SIZE) UCHAR source[TG_GPU_GR_GOLD_OFFSET+TG_GPU_GR_IMAGE_MAX_BYTES];
+    struct tg_gpu_gr_work work={source,0x94000000,sizeof(source)};
+    struct tg_gpu_gr_context_status golden={.stage=9,.context_bytes=512,.gpcs=1,.tpcs=2,.zculls=4,
+        .image_magic=0x600dc0de,.image_changed_words=64};
+    UINT32 *image=(UINT32 *)(source+TG_GPU_GR_GOLD_OFFSET);
+    memset(image,0xa5,512);image[0xfc/4]=0x600dc0de;
+    golden.result=1;
+    CHECK(TgGpuInitializeGraphicsTemplate(e,&work,&golden)==STATUS_INVALID_PARAMETER);
+    CHECK(!e->Graphics.Memory.Handle && !e->Creating);golden.result=0;
+    golden.tpcs=1;
+    CHECK(TgGpuInitializeGraphicsTemplate(e,&work,&golden)==STATUS_INVALID_PARAMETER);
+    golden.tpcs=2;
+    image[0xfc/4]=0;
+    CHECK(TgGpuInitializeGraphicsTemplate(e,&work,&golden)==STATUS_DEVICE_DATA_ERROR);
+    image[0xfc/4]=0x600dc0de;fail_allocate=TRUE;
+    CHECK(TgGpuInitializeGraphicsTemplate(e,&work,&golden)==STATUS_INSUFFICIENT_RESOURCES);
+    CHECK(!e->Graphics.Memory.Handle && !e->Creating);fail_allocate=FALSE;
+    CHECK(NT_SUCCESS(TgGpuInitializeGraphicsTemplate(e,&work,&golden)));
+    CHECK(e->Graphics.Memory.Handle && e->Graphics.ImageBytes==512 && e->GraphicsGeneration==1);
+    CHECK(((UINT32 *)e->Graphics.Memory.CpuAddress)[0xfc/4]==0x600dc0de);
+    CHECK(((UINT32 *)e->Graphics.Memory.CpuAddress)[0x100/4]==0xa5a5a5a5);
+    CHECK(TgGpuInitializeGraphicsTemplate(e,&work,&golden)==STATUS_INVALID_DEVICE_STATE);
+    memset(source,0,sizeof(source)); /* The engine owns an independent immutable copy. */
+    CHECK(((UINT32 *)e->Graphics.Memory.CpuAddress)[0xfc/4]==0x600dc0de);
+}
+static void TestGraphicsImage(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT *c,TG_GPU_INTERNAL_VA *v)
+{
+    UINT32 *instance=c->Instance.CpuAddress;
+    UINT32 *image=(UINT32 *)((UCHAR *)instance+TG_GPU_CONTEXT_GR_OFFSET);
+    UINT32 *patch=(UINT32 *)((UCHAR *)image+TG_GPU_CONTEXT_PATCH_OFFSET);
+    UINT64 base=v->Base+TG_GPU_CONTEXT_GR_VA_OFFSET;
+    UINT64 physical=(UINT64)c->Instance.SystemPhysicalAddress.QuadPart+TG_GPU_CONTEXT_GR_OFFSET;
+    UINT64 *leaf=v->Leaf.CpuAddress;
+    CHECK(c->Instance.Bytes==TG_GPU_CONTEXT_PRIVATE_BYTES && c->GraphicsGeneration==e->GraphicsGeneration);
+    CHECK(instance[132]==((UINT32)base|4) && instance[133]==(UINT32)(base>>32));
+    CHECK(image[0xfc/4]==0x600dc0de && image[0xf0/4]==c->ContextId && !image[0xf4/4] && !image[0xf8/4]);
+    CHECK(image[0x10/4]==21 && image[0x14/4]==(UINT32)(base+TG_GPU_CONTEXT_PATCH_OFFSET));
+    CHECK(image[0x18/4]==(UINT32)((base+TG_GPU_CONTEXT_PATCH_OFFSET)>>32));
+    CHECK(image[0xa0/4]==2 && image[0xa4/4]==(UINT32)(base+TG_GPU_CONTEXT_ACCESS_OFFSET));
+    CHECK(image[0xa8/4]==(UINT32)((base+TG_GPU_CONTEXT_ACCESS_OFFSET)>>32));
+    CHECK(patch[0]==0x40800c && patch[1]==(UINT32)((base+TG_GPU_CONTEXT_PAGEPOOL_OFFSET)>>8));
+    CHECK(patch[12]==0x408004 && patch[13]==(UINT32)((base+TG_GPU_CONTEXT_BUNDLE_OFFSET)>>8));
+    CHECK(leaf[0]==UINT64_C(0x100910007) && leaf[1]==UINT64_C(0x100910017));
+    CHECK(leaf[2]==UINT64_C(0x100910023) && !leaf[3]);
+    for(UINT i=0;i<TG_GPU_CONTEXT_GR_BYTES/PAGE_SIZE;++i) {
+        UINT64 pte=leaf[TG_GPU_CONTEXT_GR_VA_OFFSET/PAGE_SIZE+i];
+        CHECK(((pte>>4)&0xffffff)==(physical>>12)+i && (pte&3)==3 && (pte&(UINT64_C(1)<<32)));
+        CHECK(!!(pte&4)==(i*PAGE_SIZE>=TG_GPU_CONTEXT_ACCESS_OFFSET));
+    }
+    CHECK(v->GraphicsPhysical==physical && !leaf[TG_GPU_CONTEXT_GR_VA_OFFSET/PAGE_SIZE-1]);
+    CHECK(!leaf[(TG_GPU_CONTEXT_GR_VA_OFFSET+TG_GPU_CONTEXT_GR_BYTES)/PAGE_SIZE] && !leaf[TG_GPU_TABLE_ENTRIES-1]);
+}
+static TG_GPU_CONTEXT *RecreateContext(DRIVER_INITIALIZATION_DATA *ddi,TG_GPU_DEVICE *device,
+    TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT *old,DXGKARG_SETROOTPAGETABLE *root)
+{
+    DXGKARG_CREATECONTEXT create={.hContext=(HANDLE)104,.EngineAffinity=1};
+    create.Flags.VirtualAddressing=1;
+    CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyContext(old)));
+    CHECK(NT_SUCCESS(ddi->DxgkDdiCreateContext(device,&create)));
+    root->hContext=create.hContext;root->Address.SegmentOffset=0;root->NumEntries=2;
+    ddi->DxgkDdiSetRootPageTable(e,root);
+    CHECK(((TG_GPU_CONTEXT *)create.hContext)->Root.Valid);
+    return create.hContext;
+}
 static __declspec(noinline) void TestAdapterLifecycle(const DXGKRNL_INTERFACE *callbacks)
 {
     DXGKRNL_INTERFACE dxgk=*callbacks;DRIVER_INITIALIZATION_DATA d={0};
@@ -589,7 +677,7 @@ void start(void)
         .read_pmic=ReadPmic,.write_pmic=WritePmic};
     UINT32 *instance,*fence;UINT i,before;ULONG written;UINT64 pde;
     struct tg_gpu_channel rejected={0};
-    static const char pass[]="PASS: WDK adapter lifecycle/LUID/512MiB ABI, BAR1 notifications, allocation rollback, ordered queue and retirement (controlled substitutes; no live WDDM or GPU pass)\r\n";
+    static const char pass[]="PASS: WDK private GR images/mappings/reset epochs, adapter/LUID/512MiB ABI and ordered queue (controlled substitutes; no live WDDM or GPU pass)\r\n";
     hw.fifo_fault=0x100;before=hw.writes;
     CHECK(tg_gpu_channel_submit(&io,&power,0x90000000,0x91004000,0x91003000,0x13000,&e,&rejected)==TG_GPU_CHANNEL_FAULT);
     CHECK(!rejected.referenced && hw.writes==before && rejected.fifo_interrupt==0x100);
@@ -602,6 +690,7 @@ void start(void)
     dxgk.DxgkCbAcquireHandleData=AcquireHandle;dxgk.DxgkCbReleaseHandleData=ReleaseHandle;
     CHECK(NT_SUCCESS(TgGpuInitializeContextEngine(&e,&dxgk,&tables)));
     CHECK(NT_SUCCESS(TgGpuInitializeContextEngine(&other,&dxgk,&tables)));
+    TestGraphicsTemplate(&e);
     TgGpuRegisterContextDdis(&ddi);
     TestAdapterQueries(&e,&ddi);
     fail_pool=TRUE;CHECK(ddi.DxgkDdiCreateProcess(&e,&failed)==STATUS_NO_MEMORY && !failed.hKmdProcess);fail_pool=FALSE;
@@ -623,6 +712,14 @@ void start(void)
     CHECK(ddi.DxgkDdiCreateContext(device.hDevice,&create)==STATUS_INSUFFICIENT_RESOURCES);
     CHECK(((TG_GPU_DEVICE *)device.hDevice)->Contexts==0);fail_allocate=FALSE;
     CHECK(NT_SUCCESS(ddi.DxgkDdiCreateContext(device.hDevice,&create)));c=create.hContext;
+    /* Exercise packed GR address rebasing above 4 GiB before the first work.
+     * Preparation will build the real reserved-base image because generation
+     * is still zero. This is CPU format validation, never a GPU write.
+     */
+    CHECK(NT_SUCCESS(TgGpuBuildContextGraphics(&e.Graphics,&c->Instance,UINT64_C(0x140000000),1234)));
+    instance=c->Instance.CpuAddress;
+    CHECK(instance[132]==0x40100004 && instance[133]==1);
+    CHECK(((UINT32 *)((UCHAR *)instance+TG_GPU_CONTEXT_GR_OFFSET))[0xa8/4]==1);
     CHECK(create.ContextInfo.Caps.NoPatchingRequired && !create.ContextInfo.Caps.DriverManagesResidency);
     CHECK(create.ContextInfo.DmaBufferPrivateDataSize==sizeof(TG_GPU_QUEUE_ENTRY));
     create.hContext=(HANDLE)103;CHECK(NT_SUCCESS(ddi.DxgkDdiCreateContext(device.hDevice,&create)));c2=create.hContext;
@@ -638,6 +735,7 @@ void start(void)
     CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY);
     ((UINT64 *)table)[1]=0; /* VidMm made the reserved root entry invalid */
     CHECK(NT_SUCCESS(TgGpuPrepareContextWork(&e,&work)));
+    TestGraphicsImage(&e,c,&((TG_GPU_PROCESS *)process.hKmdProcess)->Internal);
     CHECK(tg_gpu_pde_small((UINT64)((TG_GPU_PROCESS *)process.hKmdProcess)->Internal.Leaf.SystemPhysicalAddress.QuadPart,&pde));
     CHECK(((UINT64 *)table)[1]==pde && ((UINT64 *)table)[0]==0);
     CHECK(work.Prepared && instance[128]==0x90000804 && instance[130]==0x07fff000);
@@ -712,6 +810,9 @@ void start(void)
     CHECK(!e.Channel.referenced && !c->References && !work.Context && !power.owned && !e.UserdBar1Ready);
     CHECK(hw.enable==0x40 && hw.voltage==50 && (hw.reset&0x01000000));
     CHECK(e.LastCompletedFence==7 && interrupts==1);
+    CHECK(c->GraphicsGeneration!=e.GraphicsGeneration);
+    CHECK(TgGpuAcquireContextWork(&e,&submit,&work)==STATUS_DEVICE_NOT_READY);
+    c=RecreateContext(&ddi,device.hDevice,&e,c,&root);submit.hContext=c;instance=c->Instance.CpuAddress;
     /* Cancellation before any hardware attempt performs no MMIO and does not
      * manufacture a completed submission fence either.
      */
@@ -743,6 +844,7 @@ void start(void)
     CHECK(TgGpuAcquireContextWork(&e,&submit,&blocked)==STATUS_DEVICE_BUSY);
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_PENDING);
     CHECK(queue.Current.Context==c && queue.Current.SubmissionFence==10 && *fence==~queue.Current.Expected);
+    ((UINT32 *)((UCHAR *)c->Instance.CpuAddress+TG_GPU_CONTEXT_GR_OFFSET))[0x100/4]=0x12345678; /* simulated saved state */
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_PENDING && interrupts==1);
     *fence=queue.Current.Expected;expected_fence=10;notify_context=c;notify_references=1;
     reuse_private=&entries[0];
@@ -751,12 +853,19 @@ void start(void)
     CHECK(((UCHAR *)&entries[0])[sizeof(entries[0])-1]==0xa5);
     hw.expected_root=0x900010;
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_PENDING && queue.Current.Context==c2);
+    {
+        TG_GPU_INTERNAL_VA *v=&((TG_GPU_PROCESS *)process.hKmdProcess)->Internal;
+        UINT64 owner=v->GraphicsPhysical;
+        TgGpuUnmapContextGraphics(v,&c->Instance); /* preserve the other context's mapping */
+        CHECK(v->GraphicsPhysical==owner && owner==(UINT64)c2->Instance.SystemPhysicalAddress.QuadPart+TG_GPU_CONTEXT_GR_OFFSET);
+    }
     *fence=queue.Current.Expected;expected_fence=11;notify_context=c2;notify_references=1;
     reuse_private=&entries[1];
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_SUCCESS && !reuse_private);
     CHECK(c->References==1 && c2->References==1 && e.LastCompletedFence==11);
     hw.expected_root=0x900000;hw.fail_tlb=TRUE;
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_IO_TIMEOUT);
+    CHECK(((UINT32 *)((UCHAR *)c->Instance.CpuAddress+TG_GPU_CONTEXT_GR_OFFSET))[0x100/4]==0x12345678);
     CHECK(queue.Failure==STATUS_IO_TIMEOUT && e.Channel.referenced && queue.Current.Context==c);
     CHECK(TgGpuServiceWorkQueue(&queue,&io,&power)==STATUS_IO_TIMEOUT && c2->References==1);
     hw.fail_tlb=FALSE;hw.fail_reset=TRUE;
@@ -766,6 +875,9 @@ void start(void)
     CHECK(NT_SUCCESS(TgGpuResetWorkQueue(&queue,&io,&power,&clock)));
     CHECK(!c->References && !c2->References && !queue.Current.Context && IsListEmpty(&queue.Pending));
     CHECK(e.LastCompletedFence==11 && interrupts==3 && !e.Active && !e.Notification);
+    submit.hContext=c;
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
+    c=RecreateContext(&ddi,device.hDevice,&e,c,&root);submit.hContext=c;
     CHECK(TgGpuResumeWorkQueue(&queue,&power)==STATUS_DEVICE_NOT_READY);
     power.owned=power.ready=true;
     CHECK(!e.UserdBar1Ready && TgGpuResumeWorkQueue(&queue,&power)==STATUS_DEVICE_NOT_READY);
@@ -789,15 +901,20 @@ void start(void)
     notify_context=NULL;
     before=frees;fail_free=TRUE;CHECK(ddi.DxgkDdiDestroyContext(c)==STATUS_UNSUCCESSFUL);
     CHECK(c->Instance.Handle && frees==before && !c->Closing);fail_free=FALSE;
+    CHECK(!((TG_GPU_PROCESS *)process.hKmdProcess)->Internal.GraphicsPhysical);
     CHECK(NT_SUCCESS(ddi.DxgkDdiDestroyContext(c)));
     CHECK(TgGpuStopContextEngine(&e)==STATUS_DEVICE_BUSY);
     CHECK(ddi.DxgkDdiCreateProcess(&e,&failed)==STATUS_DEVICE_NOT_READY);
     CHECK(NT_SUCCESS(ddi.DxgkDdiDestroyContext(c2)));
     CHECK(NT_SUCCESS(ddi.DxgkDdiDestroyDevice(device.hDevice)));
     CHECK(NT_SUCCESS(ddi.DxgkDdiDestroyProcess(&e,process.hKmdProcess)));
+    fail_memory_handle=e.Graphics.Memory.Handle;
+    CHECK(TgGpuStopContextEngine(&e)==STATUS_UNSUCCESSFUL && !e.Commands.Handle && e.Graphics.Memory.Handle);
+    fail_memory_handle=NULL;
     CHECK(NT_SUCCESS(TgGpuStopContextEngine(&e)));
     CHECK(NT_SUCCESS(TgGpuStopContextEngine(&other)));
     for(i=0;i<64;++i) CHECK(!pool_used[i] && !memory_used[i]);
+    for(i=0;i<4;++i)CHECK(!graphics_used[i]);
     TestAdapterLifecycle(&dxgk);
     WriteFile(GetStdHandle((ULONG)-11),pass,sizeof(pass)-1,&written,NULL);ExitProcess(0);
 }

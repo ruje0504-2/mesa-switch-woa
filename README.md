@@ -300,12 +300,49 @@ described below; this lifecycle module still has no live adapter hookup.
 `windows/context.c` supplies the process/device/context creation and destruction
 DDIs, root-table DDIs, completed-fence query and DPC callback. Its registration
 helper fills those entries in the caller's initialization table; it does not
-register a display adapter alone. Each context owns an uncached RAMIN page
-allocated through Dxgkrnl. Parent references prevent teardown during pending
+register a display adapter alone. Each ordinary context owns one uncached
+**976 KiB allocation** through Dxgkrnl: a RAMIN page followed by its packed GR
+image/global buffers/permission map/patch data. System contexts retain a RAMIN
+page without an application graphics mapping. Parent references prevent teardown during pending
 work; failed frees preserve the context for retry. Software contexts are
 dynamically allocated, while hardware work uses one serialized execution slot.
 Root changes cannot rewrite an active instance, and failed changes prevent
 future submission with a stale binding.
+
+`windows/graphics.c` owns the WDDM graphics format and mapping path. After the
+cold backend obtains a successful **1 GPC / 2 TPC / 4 ZCULL** golden save,
+`TgGpuInitializeGraphicsTemplate` takes an independent immutable 128 KiB-capacity
+copy. A context's first preparation clones the image, rebases its 21 global
+patches and creates the restricted 30-register access map. It runs the large
+uncached initialization outside the object spin lock while the work reference
+prevents reset/destruction. Repeated submissions preserve the GPU-saved image
+and global buffers. The parent allocation has one owning handle; no per-context
+golden copy or second allocation needs a partially failing construction unwind.
+
+The packed payload contains a 128 KiB context image, 8 KiB bundle, 32 KiB
+pagepool, 288 KiB attribute buffer, 512 KiB access map and 4 KiB patch page.
+Its 243 privileged PTEs occupy the process reservation at **base + 1 MiB**;
+access-map/patch pages are GPU read-only. Full 40-bit virtual addresses are
+retained in RAMIN and image pointers. Only the active context's backing is
+mapped, after the previous hardware channel/GR context has retired. An owner
+physical address prevents destruction of an idle context from removing another
+context's mapping. RAMIN is never included in these PTEs. Destruction clears
+its own stale mapping before freeing, and a failed free retains the object.
+
+Verified full reset advances the graphics generation. Existing initialized
+contexts are rejected on capture/activation; the UMD must recreate them after
+device loss. Unsubmitted, uninitialized contexts can still be prepared from the
+immutable template. Stop releases the template after context teardown; a failed
+template free retains its owning handle for retry.
+
+Full ARM64 compilation and native controlled WDK tests pass for topology/source
+rejection, independent golden ownership, packed headers/global pointers above
+4 GiB, PTE privilege/permissions/bounds, mapping replacement, preserved saved
+state, failed-free retry and reset generations. **These tests use synthetic
+golden data and substituted OS/GPU callbacks.** The packed allocation, privilege
+enforcement and WDDM dispatch have no physical GPU pass yet. The cold backend
+still needs to provide the template and shared command-page BAR1 mapping; the
+adapter/ICD path remains unregistered. The installed .44 probe is unchanged.
 
 The submission-worker helpers capture a bounded context/root snapshot separately
 from activation. Only activation writes the complement of the private fence
@@ -377,9 +414,10 @@ its allowed return values differ from the worker's internal failure statuses.
 
 `windows/internal_va.c` reserves one leaf-table coverage range (64 MiB) through
 `DxgkCbReserveGpuVirtualAddressRange` inside process creation, with user-mode
-mapping disabled. A private 128 KiB leaf maps only the engine's command ring,
-completion packet and USERD/fence pages, all using GM20B privileged PTEs. Ring
-and packet mappings are read-only; RAMIN and the physical runlist are not mapped.
+mapping disabled. A private 128 KiB leaf maps the engine's command ring,
+completion packet and USERD/fence pages, plus the current context's packed GR
+payload, all using GM20B privileged PTEs. Ring/packet and GR permission/patch
+mappings are read-only; RAMIN and the physical runlist are not mapped.
 VidMm owns the reservation lifetime, while the driver owns the leaf and shared
 command backing. The reserved PDE is restored before context preparation because
 VidMm may invalidate it when the root becomes resident again. Hardware submission

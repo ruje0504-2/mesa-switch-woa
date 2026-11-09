@@ -6,6 +6,7 @@
 #include "../core/channel.h"
 #include "../platform/t214_clock.h"
 #include "adapter_abi.h"
+#include "graphics.h"
 
 typedef struct _TG_GPU_CONTEXT_ENGINE TG_GPU_CONTEXT_ENGINE;
 typedef struct _TG_GPU_PROCESS TG_GPU_PROCESS;
@@ -39,6 +40,7 @@ struct _TG_GPU_CONTEXT {
     DXGK_CREATECONTEXTFLAGS Flags;
     NTSTATUS RootStatus;
     UINT References;
+    UINT GraphicsGeneration,ContextId;
     BOOLEAN Closing;
 };
 struct _TG_GPU_CONTEXT_ENGINE {
@@ -50,6 +52,8 @@ struct _TG_GPU_CONTEXT_ENGINE {
     TG_GPU_CONTEXT_WORK *Notification;
     PVOID QueueOwner;
     TG_GPU_PRIVATE_MEMORY Commands;
+    TG_GPU_GRAPHICS_TEMPLATE Graphics;
+    UINT GraphicsGeneration,ContextSerial;
     /* The cold backend must map Commands' USERD page into its retained BAR1
      * root and program FIFO_BAR1_BASE before making this mapping ready. */
     UINT32 UserdBar1Offset;
@@ -78,6 +82,11 @@ struct _TG_GPU_CONTEXT_WORK {
 
 NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *, const DXGKRNL_INTERFACE *,
                                      const TG_GPU_TABLE_SEGMENT *);
+/* Install the trusted cold backend's immutable golden copy once. Submission
+ * remains unavailable until both this template and the BAR1 mapping exist.
+ */
+NTSTATUS TgGpuInitializeGraphicsTemplate(TG_GPU_CONTEXT_ENGINE *,
+    const struct tg_gpu_gr_work *,const struct tg_gpu_gr_context_status *);
 /* Stops admission; fails until contexts/devices/processes and work retire. */
 NTSTATUS TgGpuStopContextEngine(TG_GPU_CONTEXT_ENGINE *);
 /* Populate only these implemented entries in a caller-owned initialization

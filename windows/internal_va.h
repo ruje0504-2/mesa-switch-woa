@@ -7,6 +7,7 @@
 typedef struct _TG_GPU_INTERNAL_VA {
     UINT64 Base;
     TG_GPU_PRIVATE_MEMORY Leaf;
+    UINT64 GraphicsPhysical;
 } TG_GPU_INTERNAL_VA;
 
 /* Call only within CreateProcess. VidMm owns the VA reservation lifetime;

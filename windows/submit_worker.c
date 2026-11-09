@@ -106,6 +106,11 @@ NTSTATUS TgGpuResetContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
     clock->running=false;
     KeAcquireSpinLock(&e->Lock,&irql);
     e->UserdBar1Ready=FALSE;
+    /* Existing graphics images belong to the lost hardware epoch. Vulkan
+     * must recreate those contexts; never silently replay a possibly damaged
+     * saved image after full reset. The immutable cold template is retained.
+     */
+    if(!++e->GraphicsGeneration)++e->GraphicsGeneration;
     RtlZeroMemory(&e->Channel,sizeof(e->Channel));drop_work(e,w);
     KeReleaseSpinLock(&e->Lock,irql);
     if(cr!=TG_GPU_CLOCK_OK) status=STATUS_DEVICE_DATA_ERROR;
