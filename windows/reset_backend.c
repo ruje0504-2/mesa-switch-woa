@@ -1,17 +1,22 @@
 /* SPDX-License-Identifier: MIT */
 #include "reset_backend.h"
 
-NTSTATUS TgGpuResetBackend(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_WORK_QUEUE *q,
-    TG_GPU_HARDWARE *h,TG_GPU_WORKER *w)
+static NTSTATUS isolate_backend(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_WORK_QUEUE *q,
+    TG_GPU_HARDWARE *h,TG_GPU_WORKER *w,BOOLEAN reset)
 {
     KIRQL irql,engine_irql;NTSTATUS status;LIST_ENTRY *link;
     PAGED_CODE();
     if(!e || !q || !h || !w || !e->Commands.Handle ||
        (h->Engine && h->Engine!=e) || (q->Engine && q->Engine!=e) ||
        (w->Thread && (w->Queue!=q || w->Hardware!=h)))return STATUS_INVALID_PARAMETER;
-    KeAcquireSpinLock(&q->Lock,&irql);q->Paused=TRUE;
+    KeAcquireSpinLock(&q->Lock,&irql);
+    if(!reset && q->Engine && (q->Current.Engine || !IsListEmpty(&q->Pending))) {
+        KeReleaseSpinLock(&q->Lock,irql);
+        return STATUS_DEVICE_BUSY;
+    }
+    q->Paused=TRUE;
     KeAcquireSpinLock(&e->Lock,&engine_irql);e->Resetting=TRUE;
-    if(!e->RecoveryPending){e->RecoveryPending=TRUE;e->RecoveryStatus=STATUS_IO_TIMEOUT;}
+    if(reset && !e->RecoveryPending){e->RecoveryPending=TRUE;e->RecoveryStatus=STATUS_IO_TIMEOUT;}
     KeReleaseSpinLock(&e->Lock,engine_irql);KeReleaseSpinLock(&q->Lock,irql);
     /* Never join while holding DispatchGate: a waking worker may be waiting
      * for it. Resetting also suppresses a late worker recovery notification. */
@@ -26,14 +31,31 @@ NTSTATUS TgGpuResetBackend(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_WORK_QUEUE *q,
     }
     if(!h->Engine)return h->Isolated?STATUS_SUCCESS:STATUS_DEVICE_NOT_READY;
     status=TgGpuIsolateHardware(h);if(!NT_SUCCESS(status))return status;
-    /* No lost VidMm root or saved image may be reused after the OS cleanup
-     * interval. Keep object ownership, identity, markers and actual fences. */
     KeAcquireSpinLock(&e->Lock,&irql);
     for(link=e->Contexts.Flink;link!=&e->Contexts;link=link->Flink) {
         TG_GPU_CONTEXT *c=CONTAINING_RECORD(link,TG_GPU_CONTEXT,Link);
-        c->Root.Valid=FALSE;c->RootStatus=STATUS_DEVICE_NOT_READY;
+        if(reset) {
+            /* VidMm can evict the roots during TDR cleanup. */
+            c->Root.Valid=FALSE;c->RootStatus=STATUS_DEVICE_NOT_READY;
+        } else {
+            /* Paging-only contexts have no application state to restore. */
+            c->GraphicsGeneration=0;
+        }
     }
     KeReleaseSpinLock(&e->Lock,irql);return STATUS_SUCCESS;
+}
+
+NTSTATUS TgGpuResetBackend(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_WORK_QUEUE *q,
+    TG_GPU_HARDWARE *h,TG_GPU_WORKER *w)
+{
+    return isolate_backend(e,q,h,w,TRUE);
+}
+
+NTSTATUS TgGpuSuspendBackend(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_WORK_QUEUE *q,
+    TG_GPU_HARDWARE *h,TG_GPU_WORKER *w)
+{
+    if (!e || !e->PagingOnly) return STATUS_NOT_SUPPORTED;
+    return isolate_backend(e,q,h,w,FALSE);
 }
 NTSTATUS TgGpuRestartBackend(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_WORK_QUEUE *q,
     TG_GPU_HARDWARE *h,TG_GPU_WORKER *w,const struct tg_gpu_power_io *io,

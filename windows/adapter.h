@@ -13,7 +13,8 @@
  * VidMm suballocates this segment. This is not the 512 MiB application budget.
  */
 #define TG_GPU_ADAPTER_TABLE_BYTES (16u*TG_GPU_TABLE_BYTES)
-enum tg_gpu_adapter_state { TgGpuAdapterAdded,TgGpuAdapterStarting,TgGpuAdapterReady,TgGpuAdapterStopping,TgGpuAdapterResetting };
+enum tg_gpu_adapter_state { TgGpuAdapterAdded,TgGpuAdapterStarting,TgGpuAdapterReady,
+    TgGpuAdapterStopping,TgGpuAdapterResetting,TgGpuAdapterSuspended };
 typedef struct _TG_GPU_ADAPTER {
     /* All implemented allocation/context/query DDIs accept this same handle. */
     TG_GPU_CONTEXT_ENGINE Engine;
@@ -35,17 +36,13 @@ DXGKDDI_STOP_DEVICE TgGpuDdiStopDevice;
 DXGKDDI_REMOVE_DEVICE TgGpuDdiRemoveDevice;
 DXGKDDI_RESETFROMTIMEOUT TgGpuDdiResetFromTimeout;
 DXGKDDI_RESTARTFROMTIMEOUT TgGpuDdiRestartFromTimeout;
+NTSTATUS TgGpuRestartAdapterHardware(TG_GPU_ADAPTER *);
 void TgGpuRegisterResetDdis(DRIVER_INITIALIZATION_DATA *);
-/* Library hookup for the platform provider. StartDevice has already acquired
- * resources/engine/queue; no DriverEntry exposes this unfinished adapter. */
+/* The platform provider starts after StartDevice acquires resources. */
 NTSTATUS TgGpuStartAdapterHardware(TG_GPU_ADAPTER *,const struct tg_gpu_power_io *,
     UCHAR PmicAddress,const struct tg_gpu_gr_payload *);
-/* Explicit full platform/firmware/worker hookup after resource-only start.
- * Still library-only: no entry point registers the unfinished miniport. */
+/* Platform, firmware and worker hookup after resource acquisition. */
 NTSTATUS TgGpuStartPlatformAdapter(TG_GPU_ADAPTER *);
-/* Populate implemented library callbacks, including paging/submission entries.
- * No DriverEntry or INF exposes this partial adapter. Physical privilege and
- * residency validation, IRQ, remaining paging, DRIVERCAPS and TDR are pending.
- */
+/* Populate shared callbacks. The miniport adds render-only lifecycle DDIs. */
 void TgGpuRegisterAdapterDdis(DRIVER_INITIALIZATION_DATA *);
 #endif

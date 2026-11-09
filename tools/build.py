@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: MIT
 """Build the ARM64 GPU backend objects and run its host format tests.
 
-This produces a static library, not an installable WDDM driver or Vulkan ICD.
+Builds the static backend and optional render-only or KMDF probe packages.
 Use LLVM, an external mesa-switch checkout and official WDK/SDK Include roots.
 """
 import argparse
 from pathlib import Path
+import shutil
 import subprocess
 
 MESA_REVISION = "0ff52079ca9e9e837ed27eb95a8d239f439a1864"
@@ -22,21 +23,23 @@ parser.add_argument("--lib", default="llvm-lib")
 parser.add_argument("--link", default="lld-link")
 parser.add_argument("--dlltool", default="llvm-dlltool")
 parser.add_argument("--probe", action="store_true", help="also build the opt-in KMDF probe and its SwitchFan bridge")
-parser.add_argument("--gr-firmware", type=Path, help="external NVIDIA tegra21x NETB_img.bin/fecs.bin/gpccs.bin directory (required for --probe)")
-parser.add_argument("--acr-firmware", type=Path, help="external NVIDIA 32.7.6 ACR/PMU/FECS files; required for the secure T214 probe")
+parser.add_argument("--render", action="store_true", help="build the opt-in WDDM render-only package")
+parser.add_argument("--gr-firmware", type=Path, help="external NVIDIA tegra21x NETB_img.bin/fecs.bin/gpccs.bin directory")
+parser.add_argument("--acr-firmware", type=Path, help="external NVIDIA 32.7.6 ACR/PMU/FECS files")
 parser.add_argument("--keep-fan", action="store_true", help="with --probe, preserve the existing signed SwitchFan package")
 parser.add_argument("--windows-tests", action="store_true", help="build the real-WDK paging test executable for ARM64 Windows")
 args = parser.parse_args()
 if args.keep_fan and not args.probe:
     parser.error("--keep-fan requires --probe")
-if args.probe and (not args.gr_firmware or
-    any(not (args.gr_firmware / n).is_file() for n in ("NETB_img.bin", "fecs.bin", "gpccs.bin"))):
-    parser.error("--probe requires --gr-firmware with the three external NVIDIA GR files")
+gr_names=("NETB_img.bin", "fecs.bin", "gpccs.bin")
+if (args.probe or args.render) and (not args.gr_firmware or
+    any(not (args.gr_firmware / n).is_file() for n in gr_names)):
+    parser.error("--probe and --render require --gr-firmware with the three external NVIDIA GR files")
 acr_names=("nv_acr_ucode_prod.bin", "pmu_bl.bin", "gpmu_ucode_image.bin",
            "gpmu_ucode_desc.bin", "pmu_sig.bin", "fecs_sig.bin")
-if args.probe and (not args.acr_firmware or
+if (args.probe or args.render) and (not args.acr_firmware or
     any(not (args.acr_firmware / n).is_file() for n in acr_names)):
-    parser.error("--probe requires --acr-firmware with all six external NVIDIA ACR files")
+    parser.error("--probe and --render require --acr-firmware with all six external NVIDIA ACR files")
 revision = subprocess.check_output(
     ["git", "-C", str(args.mesa), "rev-parse", "HEAD"], text=True).strip()
 if revision != MESA_REVISION:
@@ -158,7 +161,7 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
          "-Wno-ignored-pragma-intrinsic", "-Wno-nonportable-include-path",
          "/D_ARM64_", "/DARM64", "/D_WIN64", "/D_WIN32_WINNT=0x0A00",
          "/DNTDDI_VERSION=0x0A00000C", "/DNDEBUG",
-         "/DDXGKDDI_INTERFACE_VERSION=DXGKDDI_INTERFACE_VERSION_WDDM2_4",
+         "/DDXGKDDI_INTERFACE_VERSION=DXGKDDI_INTERFACE_VERSION_WDDM2_6",
          *[f"/I{p}" for p in mesa_includes], *[f"/imsvc{p}" for p in includes]]
 objects = []
 for source in [*core, power, clock, root / "windows/resources.c",
@@ -236,8 +239,43 @@ if args.windows_tests:
                     "/include:_load_config_used","/nodefaultlib","/release","/opt:ref","/timestamp:0",
                     f"/out:{args.out / 'test-diagnostic.exe'}",str(diagnostic_test),str(sdk_lib)],check=True)
 
+def copy_firmware(dest):
+    for filename in gr_names:
+        shutil.copyfile(args.gr_firmware / filename, dest / filename)
+    for filename in acr_names:
+        shutil.copyfile(args.acr_firmware / filename, dest / filename)
+
+if args.render:
+    dest = args.out / "kit/tegragpurender"
+    dest.mkdir(parents=True, exist_ok=True)
+    obj = args.out / "render_miniport.obj"
+    km_lib = args.wdk_include.parent.parent / "Lib" / args.wdk_include.name / "km/ARM64"
+    subprocess.run([args.clang_cl, *flags, "/GS", f"/Fo{obj}", "--",
+                    str(root / "windows/render_miniport.c")], check=True)
+    subprocess.run([args.link, "/nologo", "/driver", "/subsystem:native,10.0", "/machine:arm64",
+                    "/entry:GsDriverEntry", "/include:_load_config_used", "/nodefaultlib", "/release",
+                    "/opt:ref", "/tsaware:no", "/section:.text,ERP", "/section:.rdata,RP",
+                    "/section:.data,RWP", "/section:.pdata,RP", "/section:INIT,ERD", "/timestamp:0",
+                    f"/out:{dest / 'tegragpurender.sys'}", str(obj), str(library),
+                    *[str(km_lib / name) for name in ("displib.lib", "ntoskrnl.lib", "hal.lib",
+                                                    "bufferoverflowfastfailk.lib", "libcntpr.lib")]], check=True)
+    umd = args.out / "no_d3d.obj"
+    umd_includes = [args.sdk_include / "um", args.wdk_include / "km/crt",
+                    args.wdk_include / "shared", args.sdk_include / "shared",
+                    args.sdk_include / "ucrt"]
+    subprocess.run([args.clang_cl, "--target=aarch64-pc-windows-msvc", "/nologo", "/c",
+                    "/O2", "/GS-", "/Zl", "/W4", "/WX", "/std:c11",
+                    "-Wno-nonportable-include-path", "/D_ARM64_",
+                    *[f"/imsvc{p}" for p in umd_includes],
+                    f"/Fo{umd}", "--", str(root / "windows/no_d3d.c")], check=True)
+    subprocess.run([args.link, "/nologo", "/dll", "/noentry", "/machine:arm64", "/nodefaultlib",
+                    "/release", "/opt:ref", "/timestamp:0", f"/out:{dest / 'tegragpuno3d.dll'}",
+                    f"/implib:{args.out / 'tegragpuno3d.lib'}", str(umd)], check=True)
+    shutil.copyfile(root / "windows/tegragpurender.inf", dest / "tegragpurender.inf")
+    copy_firmware(dest)
+    print(f"Unsigned MCDM package: {dest}; requires catalog generation and signing.")
+
 if args.probe:
-    import shutil
     kit = args.out / "kit"
     wdk_root = args.wdk_include.parent.parent
     wdf_inc = args.wdk_include.parent / "wdf/kmdf/1.15"
@@ -267,10 +305,7 @@ if args.probe:
                             str(root / "windows/diagnostic_backend.c")], check=True)
             libs.append(diagnostic)
             libs.append(library)
-            for filename in ("NETB_img.bin", "fecs.bin", "gpccs.bin"):
-                shutil.copyfile(args.gr_firmware / filename, dest / filename)
-            for filename in acr_names:
-                shutil.copyfile(args.acr_firmware / filename, dest / filename)
+            copy_firmware(dest)
         subprocess.run([args.link, "/nologo", "/driver", "/subsystem:native,10.0", "/machine:arm64",
                         "/entry:FxDriverEntry", "/nodefaultlib", "/release", "/opt:ref", "/opt:icf",
                         "/tsaware:no", "/section:.text,ERP", "/section:.rdata,RP",

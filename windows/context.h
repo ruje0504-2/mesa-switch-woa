@@ -69,7 +69,7 @@ struct _TG_GPU_CONTEXT_ENGINE {
     UINT64 AllocationBytes;
     BOOLEAN Stopping;
     LUID AdapterLuid;
-    BOOLEAN AdapterIdentityReady;
+    BOOLEAN AdapterIdentityReady, PagingOnly;
     NTSTATUS RecoveryStatus;
     BOOLEAN RecoveryPending,RecoverySending,RecoveryNotified,Resetting;
 };

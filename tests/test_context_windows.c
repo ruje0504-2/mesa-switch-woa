@@ -560,8 +560,15 @@ static __declspec(noinline) void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRI
     a.Flags.Value=1;CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_NOT_SUPPORTED);a.Flags.Value=0;
     a.Type=DXGKQAITYPE_DRIVERCAPS;
     memset(&physical,0xa5,sizeof(physical));
-    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_NOT_SUPPORTED);
+    CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_BUFFER_TOO_SMALL);
     for(i=0;i<sizeof(physical);++i) CHECK(((UCHAR *)&physical)[i]==0xa5);
+    DXGK_DRIVERCAPS driver={0};
+    a.pOutputData=&driver;a.OutputDataSize=sizeof(driver);
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
+    CHECK(driver.WDDMVersion==DXGKDDI_WDDMv2_6 && driver.MiscCaps.ComputeOnly &&
+          driver.GpuEngineTopology.NbAsymetricProcessingNodes==1);
+    CHECK(driver.MemoryManagementCaps.GpuMmuSupported && driver.SchedulingCaps.PreemptionAware);
+    CHECK(driver.SupportPerEngineTDR);
     struct {struct tg_gpu_adapter_info info;UCHAR guard[16];} abi;
     struct tg_gpu_adapter_info request={.version=TG_GPU_ADAPTER_ABI,.size=sizeof(request)};
     memset(&abi,0xa5,sizeof(abi));
@@ -678,6 +685,8 @@ static __declspec(noinline) void TestAdapterLifecycle(const DXGKRNL_INTERFACE *c
     TgGpuRegisterAdapterDdis(&d);
     CHECK(d.DxgkDdiAddDevice==TgGpuDdiAddDevice && d.DxgkDdiStartDevice==TgGpuDdiStartDevice);
     CHECK(d.DxgkDdiStopDevice==TgGpuDdiStopDevice && d.DxgkDdiRemoveDevice==TgGpuDdiRemoveDevice);
+    CHECK(d.DxgkDdiResetEngine && d.DxgkDdiQueryEngineStatus &&
+          d.DxgkDdiQueryDependentEngineGroup && d.DxgkDdiCollectDbgInfo);
     CHECK(d.DxgkDdiSubmitCommandVirtual==TgGpuDdiSubmitCommandVirtual && d.DxgkDdiInterruptRoutine==NULL);
     CHECK(d.DxgkDdiAddDevice(NULL,(PVOID *)&a)==STATUS_INVALID_PARAMETER && !a);
     fail_pool=TRUE;
@@ -685,6 +694,16 @@ static __declspec(noinline) void TestAdapterLifecycle(const DXGKRNL_INTERFACE *c
     fail_pool=FALSE;
     CHECK(NT_SUCCESS(d.DxgkDdiAddDevice((PDEVICE_OBJECT)1,(PVOID *)&a)));
     CHECK(a && a->PhysicalDevice==(PDEVICE_OBJECT)1 && a->State==TgGpuAdapterAdded);
+    const DXGK_WDDMDEVICECAPSIN caps_in={.DxgkrnlInterfaceVersion=DXGKDDI_INTERFACE_VERSION};
+    DXGK_WDDMDEVICECAPS caps={0};
+    DXGKARG_QUERYADAPTERINFO query={
+        .Type=DXGKQAITYPE_WDDMDEVICECAPS,.pInputData=(PVOID)&caps_in,
+        .InputDataSize=sizeof(caps_in),.pOutputData=&caps,.OutputDataSize=sizeof(caps)-1
+    };
+    CHECK(!a->Engine.Dxgk.DeviceHandle && !a->Engine.Tables);
+    CHECK(d.DxgkDdiQueryAdapterInfo(a,&query)==STATUS_BUFFER_TOO_SMALL);
+    query.OutputDataSize=sizeof(caps);
+    CHECK(NT_SUCCESS(d.DxgkDdiQueryAdapterInfo(a,&query)) && caps.WDDMVersion==DXGKDDI_WDDMv2_6);
     CHECK(NT_SUCCESS(d.DxgkDdiStopDevice(a)));
     --dxgk.Size;
     CHECK(d.DxgkDdiStartDevice(a,&start,&dxgk,&sources,&children)==STATUS_INVALID_PARAMETER);
@@ -1002,7 +1021,7 @@ static __declspec(noinline) VOID TestPreemption(const DXGKRNL_INTERFACE *dxgk)
     notify_engine=&e;notify_context=c;notify_references=0;
     TgGpuRegisterAdapterDdis(&ddi);CHECK(ddi.DxgkDdiPreemptCommand==TgGpuDdiPreemptCommand);
     CHECK(ddi.DxgkDdiResetFromTimeout==TgGpuDdiResetFromTimeout &&
-        ddi.DxgkDdiRestartFromTimeout==TgGpuDdiRestartFromTimeout && !ddi.DxgkDdiResetEngine);
+        ddi.DxgkDdiRestartFromTimeout==TgGpuDdiRestartFromTimeout);
     expected_preemption=500;expected_preempt_completed=17;RequestPreempt(&e,500);
     CHECK(q.Preemptions==1 && PoolsInUse()==pools+1 && preemption_interrupts==events);
     CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_SUCCESS && preemption_interrupts==events+1);

@@ -2,6 +2,8 @@
 #include "query.h"
 #include "work_queue.h"
 
+static const DXGK_WDDMVERSION wddm_version=DXGKDDI_WDDMv2_6;
+
 static NTSTATUS buffers(const DXGKARG_QUERYADAPTERINFO *a, UINT input, UINT output)
 {
     if (a->InputDataSize < input || a->OutputDataSize < output)
@@ -18,12 +20,23 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
     NTSTATUS status;
     if (!e || !a) return STATUS_INVALID_PARAMETER;
     if (a->Flags.Value) return STATUS_NOT_SUPPORTED; /* no GPU virtualization */
+    if (a->Type==DXGKQAITYPE_WDDMDEVICECAPS) {
+        /* DxgKrnl asks before StartDevice has installed callbacks or tables. */
+        const DXGK_WDDMDEVICECAPS caps={.WDDMVersion=wddm_version};
+        status=buffers(a,sizeof(DXGK_WDDMDEVICECAPSIN),sizeof(caps));
+        if (!NT_SUCCESS(status)) return status;
+        RtlCopyMemory(a->pOutputData,&caps,sizeof(caps));
+        return STATUS_SUCCESS;
+    }
     switch (a->Type) {
+    case DXGKQAITYPE_DRIVERCAPS:
     case DXGKQAITYPE_UMDRIVERPRIVATE:
     case DXGKQAITYPE_QUERYSEGMENT4:
     case DXGKQAITYPE_GPUMMUCAPS:
     case DXGKQAITYPE_PAGETABLELEVELDESC:
     case DXGKQAITYPE_PHYSICALADAPTERCAPS:
+    case DXGKQAITYPE_NUMPOWERCOMPONENTS:
+    case DXGKQAITYPE_HISTORYBUFFERPRECISION:
         break;
     default:
         return STATUS_NOT_SUPPORTED;
@@ -36,8 +49,44 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
     if (!NT_SUCCESS(status)) return status;
 
     switch (a->Type) {
+    case DXGKQAITYPE_DRIVERCAPS: {
+        DXGK_DRIVERCAPS caps={0};
+        status=buffers(a,0,sizeof(caps));
+        if (!NT_SUCCESS(status)) return status;
+        caps.HighestAcceptableAddress.QuadPart=TG_GPU_VA_LIMIT-1;
+        caps.InterruptMessageNumber=0; /* line-based */
+        caps.WDDMVersion=wddm_version;
+        caps.MiscCaps.ComputeOnly=1; /* Vulkan ICD, no Direct3D or scanout UMD */
+        caps.GpuEngineTopology.NbAsymetricProcessingNodes=1;
+        caps.SchedulingCaps.MultiEngineAware=1;
+        caps.SchedulingCaps.PreemptionAware=1;
+        caps.SchedulingCaps.LowIrqlPreemptCommand=1;
+        caps.MemoryManagementCaps.VirtualAddressingSupported=1;
+        caps.MemoryManagementCaps.GpuMmuSupported=1;
+        caps.PreemptionCaps.GraphicsPreemptionGranularity=D3DKMDT_GRAPHICS_PREEMPTION_DMA_BUFFER_BOUNDARY;
+        caps.PreemptionCaps.ComputePreemptionGranularity=D3DKMDT_COMPUTE_PREEMPTION_DMA_BUFFER_BOUNDARY;
+        /* The single GR/CE runlist escalates active engine timeouts to the
+         * adapter-wide reset rather than discarding unrelated state. */
+        caps.SupportPerEngineTDR=TRUE;
+        RtlCopyMemory(a->pOutputData,&caps,sizeof(caps));
+        return STATUS_SUCCESS;
+    }
+    case DXGKQAITYPE_NUMPOWERCOMPONENTS: {
+        const UINT components=0;
+        status=buffers(a,0,sizeof(components));
+        if (!NT_SUCCESS(status)) return status;
+        RtlCopyMemory(a->pOutputData,&components,sizeof(components));
+        return STATUS_SUCCESS;
+    }
+    case DXGKQAITYPE_HISTORYBUFFERPRECISION: {
+        /* Paging-only mode does not produce any GPU history timestamps. */
+        const DXGKARG_HISTORYBUFFERPRECISION precision={0};
+        status=buffers(a,0,sizeof(precision));
+        if (!NT_SUCCESS(status)) return status;
+        RtlCopyMemory(a->pOutputData,&precision,sizeof(precision));
+        return STATUS_SUCCESS;
+    }
     case DXGKQAITYPE_UMDRIVERPRIVATE: {
-        struct tg_gpu_adapter_query request;
         struct tg_gpu_adapter_info info={.version=TG_GPU_ADAPTER_ABI,.size=sizeof(info),
             .memory_budget_bytes=TG_GPU_MEMORY_BUDGET_BYTES,.vendor=0x10de,
             .chipset=0x12e,.sm=53,.gr_class=0xb197};
@@ -55,7 +104,7 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
             info.flags=TG_GPU_ADAPTER_LUID_VALID;
             info.luid_low=e->AdapterLuid.LowPart;info.luid_high=e->AdapterLuid.HighPart;
         }
-        /* NATIVE_SUBMIT stays unset: this library has no live WDDM worker yet. */
+        /* NATIVE_SUBMIT stays unset until application command validation. */
         RtlCopyMemory(a->pOutputData,&info,sizeof(info));
         return STATUS_SUCCESS;
     }
@@ -78,7 +127,7 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
         desc.CommitLimit=table.CommitLimit;
         desc.SystemMemoryEndAddress=table.SystemMemoryEndAddress;
         desc.CpuTranslatedAddress=table.CpuTranslatedAddress;
-        /* Only our known descriptor bytes belong to this WDDM 2.4 driver;
+        /* Only our known descriptor bytes belong to this WDDM 2.6 driver;
          * preserve a larger OS stride and its extension bytes.
          */
         RtlCopyMemory(out->pSegmentDescriptor,&desc,sizeof(desc));
