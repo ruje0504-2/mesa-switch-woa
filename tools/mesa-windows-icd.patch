@@ -435,3 +435,17 @@
           assert(dyn->rs.conservative_mode == VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT);
        } else if (dyn->rs.conservative_mode == VK_CONSERVATIVE_RASTERIZATION_MODE_DISABLED_EXT) {
           P_IMMD(p, NVB197, SET_CONSERVATIVE_RASTER, ENABLE_FALSE);
+--- a/src/nouveau/vulkan/nvk_cmd_buffer.c
++++ b/src/nouveau/vulkan/nvk_cmd_buffer.c
+@@ -1143,6 +1143,11 @@
+          P_NVC86F_MEM_OP_C(p, { .membar_type = 0 });
+          P_NVC86F_MEM_OP_D(p, { .operation = OPERATION_MEMBAR });
+       } else {
++#ifdef _WIN32
++         /* USERD.Reference belongs to the KMD's retirement packet. */
++         __push_immd(p, last_subchannel, NVB06F_WFI, NVB06F_WFI_SCOPE_ALL);
++#else
+          __push_immd(p, last_subchannel, NV906F_SET_REFERENCE, 0);
++#endif
+       }
+    }
