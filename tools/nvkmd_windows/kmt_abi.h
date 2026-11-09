@@ -16,12 +16,13 @@ struct tg_kmt_adapter {
    uint32_t sources;
    int32_t precise_present_regions;
 };
-struct tg_kmt_enum { uint32_t count; struct tg_kmt_adapter *adapters; };
+struct tg_kmt_enum { uint64_t filter; uint32_t count; struct tg_kmt_adapter *adapters; };
 struct tg_kmt_query { uint32_t handle, type; void *data; uint32_t bytes; };
 struct tg_kmt_close { uint32_t handle; };
+#define TG_KMT_INCLUDE_COMPUTE_ONLY UINT64_C(1)
 #define TG_KMT_UMDRIVERPRIVATE 0u
 _Static_assert(sizeof(void *) == 8, "ARM64 KMT only");
 _Static_assert(sizeof(struct tg_kmt_adapter) == 20, "KMT adapter ABI");
-_Static_assert(sizeof(struct tg_kmt_enum) == 16, "KMT enum ABI");
+_Static_assert(sizeof(struct tg_kmt_enum) == 24, "KMT enum ABI");
 _Static_assert(sizeof(struct tg_kmt_query) == 24, "KMT query ABI");
 #endif

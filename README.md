@@ -179,10 +179,9 @@ prove a GPU execution pass. [Platform policy](https://github.com/CTCaer/switch-l
 
 `windows/allocation.c` implements the real-WDK create/destroy/open/close
 allocation callbacks. ABI 1 describes opaque GPU storage with a byte count and
-optional CPU visibility; it carries no physical address. The adapter exposes
-one explicit page-table segment, so ordinary buffers select VidMm's appended
-implicit system-memory segment (ID 2). VidMm owns backing pages and GPU VA;
-the KMD allocates only metadata, not a second heap or global handle table.
+optional CPU visibility. Ordinary GPUVA buffers currently select aperture
+segment 2 with `AccessedPhysically` clear. VidMm owns backing pages and GPU VA.
+The KMD keeps allocation metadata.
 Sizes are rounded to 4 KiB, CPU-visible memory starts write-combined, and no
 physical-access, cached/coherent, protected or scanout capability is implied.
 Bulk validation/allocation failures unwind every new object while preserving
@@ -213,18 +212,20 @@ clear, reports `PopulatedFromSystemMemory` for correct accounting, and
 publishes no cache-coherence or sleep-retention capability.
 The paging builder decodes VidMm's 4 KiB page numbers before calling
 `TgGpuResolveVidMmPage`. PTE segment zero selects a resident system page,
-and the nonzero table segment uses the decoded byte offset. The implicit
-system allocation preference uses ID 2. Ordinary physical pages above
-4 GiB are preserved; addresses carrying Tegra's bit-34 IOMMU tag are rejected
-by this WDDM 2.4 physical path. The resolver does not pin memory or translate
-logical DMA addresses. Native tests mix system and table pages in one queued
-update, retain high address bits/read-only flags, and reject a bad trailing
-page before emitting a partial DMA buffer.
+and table segment 1 uses the decoded byte offset. The 1 MiB paging aperture
+in segment 2 resolves offsets through the PFNs supplied in VidMm's MDL.
+The window consumes address space and the PFN map. Ordinary physical pages
+above 4 GiB are preserved up to Tegra's bit-34 IOMMU tag. Native tests cover
+mixed system and table pages, aperture PTEs for discontiguous backing, and
+rejection of invalid trailing pages before publishing an update.
 VidMm remains responsible for allocations within the segment; there is no
 second suballocator. The adapter must finish GPU work/drain/reset and stop
 paging before destroying the segment. Failed frees retain the tracking handle.
 Do not use the pool's own CPU VA to validate a different VidMm CPU mapping.
-WDDM registration and GPU page walks through live VidMm tables remain open.
+On the Lite, .77 selected aperture 2 for the paging pool and reached
+`SetRootPageTable` after six live VidMm updates. KMT created a device, virtual
+context and paging queue. Application allocation and GPU execution through
+those objects still need verification. [WDDM aperture contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/linear-aperture-space-segments)
 The CPU-update helper is valid for initialization/test-owned mappings; do not
 advertise `CPU_VIRTUAL` updates for the dedicated memory segment without
 resolving the documented local-segment restriction.

@@ -8,6 +8,7 @@ static LONG WINAPI enumerate(const struct tg_kmt_enum *in)
 {
    struct tg_kmt_enum *e = (void *)in;
    calls++;
+   assert(e->filter == TG_KMT_INCLUDE_COMPUTE_ONLY);
    if (mode == 20) { e->count = UINT32_MAX; return (LONG)0xc0000001; }
    if (!e->adapters) { e->count = mode == 21 ? 0 : 3; return 0; }
    assert(e->count == 3);

@@ -28,8 +28,8 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
     default:
         return STATUS_NOT_SUPPORTED;
     }
-    /* Segment 1 backs page tables. Segment 2 gives VidMm a pageable window
-     * into system memory for its DMA pool. */
+    /* Segment 1 backs page tables. Segment 2 gives VidMm a window into
+     * system memory for its DMA pool. */
     if (e->Stopping || !e->Dxgk.DeviceHandle || !e->Tables || e->Tables->SegmentId!=1)
         return STATUS_DEVICE_NOT_READY;
     status=TgGpuDescribeTableSegment(e->Tables,&table);
@@ -41,12 +41,16 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
         struct tg_gpu_adapter_info info={.version=TG_GPU_ADAPTER_ABI,.size=sizeof(info),
             .memory_budget_bytes=TG_GPU_MEMORY_BUDGET_BYTES,.vendor=0x10de,
             .chipset=0x12e,.sm=53,.gr_class=0xb197};
-        status=buffers(a,sizeof(info),sizeof(info));
+        /* The public KMT call can reach the miniport with output only. */
+        status=buffers(a,a->InputDataSize?sizeof(info):0,sizeof(info));
         if(!NT_SUCCESS(status))return status;
-        /* Snapshot the request before writing: D3DKMT may alias both buffers. */
-        RtlCopyMemory(&request,a->pInputData,sizeof(request));
-        if(request.version!=TG_GPU_ADAPTER_ABI || request.size!=sizeof(info))
-            return STATUS_GRAPHICS_DRIVER_MISMATCH;
+        if(a->InputDataSize) {
+            struct tg_gpu_adapter_query request;
+            /* Snapshot a supplied header before writing a possibly aliased reply. */
+            RtlCopyMemory(&request,a->pInputData,sizeof(request));
+            if(request.version!=TG_GPU_ADAPTER_ABI || request.size!=sizeof(info))
+                return STATUS_GRAPHICS_DRIVER_MISMATCH;
+        }
         if(e->AdapterIdentityReady) {
             info.flags=TG_GPU_ADAPTER_LUID_VALID;
             info.luid_low=e->AdapterLuid.LowPart;info.luid_high=e->AdapterLuid.HighPart;

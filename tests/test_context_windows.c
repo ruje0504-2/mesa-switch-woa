@@ -576,12 +576,21 @@ static __declspec(noinline) void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRI
     --request.version;--request.size;
     CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_GRAPHICS_DRIVER_MISMATCH);
     ++request.size;
-    /* Actual KMT in/out shape: the request header aliases the reply. */
+    /* Retain the in/out form where the request header aliases the reply. */
     abi.info=request;a.pInputData=&abi.info;
     CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
     CHECK(abi.info.memory_budget_bytes==UINT64_C(536870912));
     CHECK(d->DxgkDdiQueryAdapterInfo(NULL,&a)==STATUS_INVALID_PARAMETER);
     CHECK(d->DxgkDdiQueryAdapterInfo(e,NULL)==STATUS_INVALID_PARAMETER);
+    /* The Lite's public KMT entry supplies a 48-byte output and no input. */
+    memset(&abi,0xa5,sizeof(abi));
+    a.pInputData=NULL;a.InputDataSize=0;a.OutputDataSize=sizeof(abi.info);
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
+    CHECK(abi.info.version==TG_GPU_ADAPTER_ABI && abi.info.size==sizeof(abi.info) &&
+          abi.info.memory_budget_bytes==TG_GPU_MEMORY_BUDGET_BYTES);
+    CHECK(abi.info.luid_low==(e->AdapterIdentityReady?e->AdapterLuid.LowPart:0u) &&
+          abi.info.luid_high==(e->AdapterIdentityReady?e->AdapterLuid.HighPart:0));
+    for(i=0;i<sizeof(abi.guard);++i)CHECK(abi.guard[i]==0xa5);
 }
 
 static void TestGraphicsTemplate(TG_GPU_CONTEXT_ENGINE *e)

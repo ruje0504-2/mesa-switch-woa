@@ -10,9 +10,8 @@
 #define TG_GPU_ADAPTER_ABI 1u
 #define TG_GPU_ADAPTER_LUID_VALID 1u
 #define TG_GPU_ADAPTER_NATIVE_SUBMIT 2u
-/* KMTQAITYPE_UMDRIVERPRIVATE uses an in/out adapter-info buffer. Initialize
- * its first two fields before querying; input and output may be the same VA.
- */
+/* KMTQAITYPE_UMDRIVERPRIVATE returns adapter info. Callers initialize the
+ * header for Windows paths that forward input to the miniport. */
 struct tg_gpu_adapter_query {uint32_t version,size;};
 struct tg_gpu_adapter_info {
     uint32_t version, size, flags, reserved;

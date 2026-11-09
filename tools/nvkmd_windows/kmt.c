@@ -26,7 +26,7 @@ tg_gpu_kmt_scan(const struct tg_kmt_api *api, struct tg_kmt_scan *out)
    if (!out || !api || !api->enumerate || !api->query || !api->close)
       return TG_STATUS_INVALID_PARAMETER;
    memset(out, 0, sizeof(*out));
-   struct tg_kmt_enum e = {0};
+   struct tg_kmt_enum e = { .filter = TG_KMT_INCLUDE_COMPUTE_ONLY };
    LONG status = api->enumerate(&e);
    if (status < 0 || !e.count)
       return status;
@@ -86,7 +86,7 @@ tg_gpu_kmt_scan_system(struct tg_kmt_scan *out)
    if (!gdi)
       return TG_STATUS_NOT_SUPPORTED;
    struct tg_kmt_api api = {
-      .enumerate = (void *)GetProcAddress(gdi, "D3DKMTEnumAdapters2"),
+      .enumerate = (void *)GetProcAddress(gdi, "D3DKMTEnumAdapters3"),
       .query = (void *)GetProcAddress(gdi, "D3DKMTQueryAdapterInfo"),
       .close = (void *)GetProcAddress(gdi, "D3DKMTCloseAdapter"),
    };
