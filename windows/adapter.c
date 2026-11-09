@@ -38,7 +38,11 @@ NTSTATUS APIENTRY TgGpuDdiStopDevice(PVOID context)
         a->Engine.Stopping=TRUE;a->Engine.AdapterIdentityReady=FALSE;
         KeReleaseSpinLock(&a->Engine.Lock,irql);
     }
+    status=TgGpuStopWorker(&a->Worker);
+    if(!NT_SUCCESS(status))return status;
     if(a->QueueReady) {
+        status=TgGpuResetWorkQueue(&a->Queue,&a->Hardware.Io,&a->Hardware.Power,&a->Hardware.Clock);
+        if(!NT_SUCCESS(status))return status;
         status=TgGpuStopWorkQueue(&a->Queue);
         if(!NT_SUCCESS(status))return status;
         a->QueueReady=FALSE;
@@ -47,6 +51,8 @@ NTSTATUS APIENTRY TgGpuDdiStopDevice(PVOID context)
         status=TgGpuStopHardware(&a->Hardware);
         if(!NT_SUCCESS(status))return status;
     }
+    status=TgGpuClosePlatform(&a->Platform);
+    if(!NT_SUCCESS(status))return status;
     if(a->EngineReady) {
         status=TgGpuStopContextEngine(&a->Engine);
         if(!NT_SUCCESS(status))return status;
@@ -75,7 +81,8 @@ NTSTATUS APIENTRY TgGpuDdiStartDevice(PVOID context,DXGK_START_INFO *start,
        !dxgk->DxgkCbReserveGpuVirtualAddressRange ||
        !dxgk->DxgkCbAcquireHandleData || !dxgk->DxgkCbReleaseHandleData)
         return STATUS_INVALID_PARAMETER;
-    if(a->State!=TgGpuAdapterAdded || a->EngineReady || a->QueueReady ||
+    if(a->State!=TgGpuAdapterAdded || a->EngineReady || a->QueueReady || a->Hardware.Engine ||
+       a->Worker.Thread || a->Platform.Bridge || a->Platform.Resources ||
        a->Tables.Memory.Handle || mapped(a))return STATUS_INVALID_DEVICE_STATE;
     *sources=*children=0; /* Render only; retain the existing POST display. */
     a->State=TgGpuAdapterStarting;a->Engine.Dxgk=*dxgk;
@@ -107,6 +114,7 @@ NTSTATUS APIENTRY TgGpuDdiRemoveDevice(PVOID context)
     PAGED_CODE();
     if(!a)return STATUS_INVALID_PARAMETER;
     if(a->State!=TgGpuAdapterAdded || a->EngineReady || a->QueueReady ||
+       a->Worker.Thread || a->Platform.Bridge || a->Platform.Resources ||
        a->Hardware.Engine || a->Tables.Memory.Handle || mapped(a))return STATUS_DEVICE_BUSY;
     ExFreePoolWithTag(a,TAG);return STATUS_SUCCESS;
 }

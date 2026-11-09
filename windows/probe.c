@@ -7,7 +7,7 @@
 #include <wdf.h>
 #include <ntstrsafe.h>
 #include "control.h"
-#include "pmic.h"
+#include "platform_io.h"
 #include "../platform/t214_resources.h"
 #include "../platform/t214_clock.h"
 #include "../core/execute.h"
@@ -25,12 +25,12 @@ static const struct gpu_map map_profile[] = {
 
 typedef struct _GPU_DEVICE {
     struct gpu_map maps[T214_GPU_RESOURCE_COUNT];
-    WDFIOTARGET platform;
+    TG_GPU_RESOURCES resources; /* borrowed view of the mappings below */
+    TG_GPU_PLATFORM platform;
     struct tg_gpu_power power;
     struct tg_gpu_clock clock;
     struct tg_gpu_execution execution;
     struct tg_gpu_status last;
-    NTSTATUS io_status;
     PVOID arena;
     PHYSICAL_ADDRESS arena_address;
     struct tg_gpu_gr_work graphics;
@@ -51,110 +51,14 @@ EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL GpuControl;
 EVT_WDF_INTERRUPT_ISR GpuInterrupt;
 EVT_WDF_DPC GpuInterruptDpc;
 
-static NTSTATUS GpuPlatform(GPU_DEVICE *d, struct tg_gpu_pmic_request *op)
-{
-    WDF_MEMORY_DESCRIPTOR in, out;
-    WDF_REQUEST_SEND_OPTIONS options;
-    ULONG_PTR bytes = 0;
-    NTSTATUS status;
-    WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&in, op, sizeof(*op));
-    WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&out, op, sizeof(*op));
-    WDF_REQUEST_SEND_OPTIONS_INIT(&options, WDF_REQUEST_SEND_OPTION_TIMEOUT);
-    options.Timeout = WDF_REL_TIMEOUT_IN_MS(500);
-    status = WdfIoTargetSendIoctlSynchronously(d->platform, NULL, TG_GPU_IOCTL_PMIC,
-                                              &in, &out, &options, &bytes);
-    if (NT_SUCCESS(status) && bytes != sizeof(*op)) status = STATUS_DEVICE_PROTOCOL_ERROR;
-    if (!NT_SUCCESS(status)) d->io_status = status;
-    return status;
-}
 static NTSTATUS GpuOpenPlatform(WDFDEVICE device)
 {
     GPU_DEVICE *d = GpuContext(device);
-    WDF_IO_TARGET_OPEN_PARAMS open;
-    DECLARE_CONST_UNICODE_STRING(name, L"\\Device\\SwitchBacklight");
-    NTSTATUS status;
-    if (d->platform) return STATUS_SUCCESS;
-    status = WdfIoTargetCreate(device, WDF_NO_OBJECT_ATTRIBUTES, &d->platform);
-    if (!NT_SUCCESS(status)) return status;
-    WDF_IO_TARGET_OPEN_PARAMS_INIT_OPEN_BY_NAME(&open, &name, GENERIC_READ | GENERIC_WRITE);
-    open.ShareAccess = FILE_SHARE_READ | FILE_SHARE_WRITE;
-    status = WdfIoTargetOpen(d->platform, &open);
-    if (!NT_SUCCESS(status)) { WdfObjectDelete(d->platform); d->platform = NULL; }
-    return status;
-}
-static VOID GpuClosePlatform(GPU_DEVICE *d)
-{
-    if (d->platform) { WdfIoTargetClose(d->platform); WdfObjectDelete(d->platform); d->platform = NULL; }
-}
-static uint32_t GpuRead(void *context, uint32_t address)
-{
-    GPU_DEVICE *d = context;
-    ULONG i;
-    if(d->lic && address>=T214_GPU_LIC_BASE && address-T214_GPU_LIC_BASE<=T214_GPU_LIC_SIZE-4)
-        return READ_REGISTER_ULONG((PULONG)((PUCHAR)d->lic+address-T214_GPU_LIC_BASE));
-    if (address == 0x600060a0) {
-        struct tg_gpu_pmic_request op = {0, TG_GPU_PMIC_QUERY_PLLP, 0, 0};
-        return NT_SUCCESS(GpuPlatform(d, &op)) ? op.value : 0;
-    }
-    for (i = 0; i < T214_GPU_RESOURCE_COUNT; ++i) {
-        const struct gpu_map *m = &d->maps[i];
-        if (address >= m->base && address - m->base <= m->size - 4 && m->va)
-            return READ_REGISTER_ULONG((PULONG)(m->va + address - m->base));
-    }
-    d->io_status = STATUS_DEVICE_CONFIGURATION_ERROR;
-    return UINT32_MAX;
-}
-static void GpuWrite(void *context, uint32_t address, uint32_t value)
-{
-    GPU_DEVICE *d = context;
-    ULONG i;
-    if(d->lic && address>=T214_GPU_LIC_BASE && address-T214_GPU_LIC_BASE<=T214_GPU_LIC_SIZE-4) {
-        WRITE_REGISTER_ULONG((PULONG)((PUCHAR)d->lic+address-T214_GPU_LIC_BASE),value);
-        return;
-    }
-    /* Retain the old ACPI resource layout, but never write global SMMU ASIDs.
-     * Direct physical probe buffers do not use the bit-34 translation tag.
-     */
-    if (address == 0x70019aa8 || address == 0x70019aac) {
-        d->io_status = STATUS_DEVICE_CONFIGURATION_ERROR;
-        return;
-    }
-    /* The last three resources are read-only identity/calibration fuses. */
-    for (i = 0; i < T214_GPU_RESOURCE_COUNT - 3; ++i) {
-        const struct gpu_map *m = &d->maps[i];
-        if (address >= m->base && address - m->base <= m->size - 4 && m->va) {
-            KeMemoryBarrier();
-            WRITE_REGISTER_ULONG((PULONG)(m->va + address - m->base), value);
-            KeMemoryBarrier();
-            return;
-        }
-    }
-    d->io_status = STATUS_DEVICE_CONFIGURATION_ERROR;
-}
-static bool GpuReadPmic(void *context, uint8_t address, uint8_t reg, uint8_t *value)
-{
-    struct tg_gpu_pmic_request op = {address, reg, 0, 0};
-    if (!NT_SUCCESS(GpuPlatform(context, &op))) return false;
-    *value = (uint8_t)op.value;
-    return true;
-}
-static bool GpuWritePmic(void *context, uint8_t address, uint8_t reg, uint8_t value)
-{
-    struct tg_gpu_pmic_request op = {address, reg, 1, value};
-    return NT_SUCCESS(GpuPlatform(context, &op));
-}
-static void GpuDelay(void *context, uint32_t us)
-{
-    LARGE_INTEGER interval;
-    UNREFERENCED_PARAMETER(context);
-    if (us < 1000) { KeStallExecutionProcessor(us); return; }
-    interval.QuadPart = -(LONGLONG)us * 10;
-    (VOID)KeDelayExecutionThread(KernelMode, FALSE, &interval);
+    return d->platform.Bridge?STATUS_SUCCESS:TgGpuOpenPlatform(&d->platform,&d->resources);
 }
 static struct tg_gpu_power_io GpuIo(GPU_DEVICE *d)
 {
-    struct tg_gpu_power_io io = {d, GpuRead, GpuWrite, GpuReadPmic, GpuWritePmic, GpuDelay};
-    return io;
+    return TgGpuPlatformIo(&d->platform);
 }
 
 BOOLEAN GpuInterrupt(WDFINTERRUPT interrupt,ULONG message)
@@ -290,7 +194,6 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target, BOOLEAN graphics,BOOLEAN 
 {
     GPU_DEVICE *d = GpuContext(device);
     struct tg_gpu_power_io io = GpuIo(d);
-    struct tg_gpu_pmic_request op = {0, TG_GPU_PMIC_QUERY_ADDRESS, 0, 0};
     PHYSICAL_ADDRESS low = {0}, high, boundary = {0};
     TG_GPU_FIRMWARE firmware = {0};
     NTSTATUS status;
@@ -306,20 +209,15 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target, BOOLEAN graphics,BOOLEAN 
     RtlZeroMemory(&d->execution, sizeof(d->execution));
     status = GpuOpenPlatform(device);
     if (!NT_SUCCESS(status)) return status;
-    status = GpuPlatform(d, &op);
+    status = TgGpuPlatformPreflight(&d->platform,&address);
     if (!NT_SUCCESS(status)) goto early;
-    address = (uint8_t)op.value;
-    op.reg = TG_GPU_PMIC_QUERY_TEMP;
-    status = GpuPlatform(d, &op);
-    if (!NT_SUCCESS(status)) goto early;
-    if (op.value >= 80) { status = STATUS_DEVICE_NOT_READY; goto early; }
     RtlZeroMemory(&d->last, sizeof(d->last));
     InterlockedExchange(&d->irq_dpcs,0);
     d->last.version = TG_GPU_CONTROL_VERSION;
     d->last.tested = 1;
     d->last.target_khz = target;
     d->last.clock_result = d->last.execution_result = UINT32_MAX;
-    d->io_status = STATUS_SUCCESS;
+    d->platform.IoStatus = STATUS_SUCCESS;
     seed = 0x13579bdfu ^ (ULONG)KeQueryInterruptTime();
     if (seed == 0xdeadbeef || ~seed == 0xdeadbeef) seed ^= 0x1000;
     d->last.expected[0] = seed; d->last.expected[1] = ~seed;
@@ -349,7 +247,7 @@ static NTSTATUS GpuRun(WDFDEVICE device, ULONG target, BOOLEAN graphics,BOOLEAN 
     d->last.power_result = tg_gpu_power_up(&io, address, &d->power);
     d->last.stage = 100 + d->power.stage;
     if (d->last.power_result != TG_GPU_POWER_OK) goto done;
-    d->last.boot0 = GpuRead(d, T214_GPU_REG_BASE);
+    d->last.boot0 = io.read32(io.context,T214_GPU_REG_BASE);
     if (tg_gpu_frontend_start(&io, &d->power, &d->last.frontend) != TG_GPU_FE_OK) {
         d->last.execution_result = TG_GPU_EXEC_FRONTEND;
         d->last.stage = 150;
@@ -382,12 +280,14 @@ done:
     if (d->execution.fifo_ready && d->last.execution_result != TG_GPU_EXEC_OK)
         tg_gpu_execute_snapshot(&io, &d->execution, &d->last);
     GpuCleanup(d);
-    if (!d->power.owned) GpuClosePlatform(d);
+    if (!d->power.owned && !d->irq.saved) (VOID)TgGpuClosePlatform(&d->platform);
     GpuSaveResult(device);
-    return d->io_status;
+    return d->platform.IoStatus;
 early:
-    GpuClosePlatform(d);
-    return status;
+    {
+    NTSTATUS close=TgGpuClosePlatform(&d->platform);
+    return NT_SUCCESS(close)?status:close;
+    }
 }
 
 VOID GpuControl(WDFQUEUE queue, WDFREQUEST request, size_t out_size, size_t in_size, ULONG code)
@@ -437,6 +337,7 @@ NTSTATUS GpuPrepare(WDFDEVICE device, WDFCMRESLIST raw, WDFCMRESLIST translated)
             if(d->lic) goto fail;
             d->lic=MmMapIoSpace(r->u.Memory.Start,r->u.Memory.Length,MmNonCached);
             if(!d->lic) goto fail;
+            d->resources.Lic=*r;d->resources.LicMapping=d->lic;
             continue;
         }
         for (n = 0; n < T214_GPU_RESOURCE_COUNT; ++n)
@@ -444,6 +345,7 @@ NTSTATUS GpuPrepare(WDFDEVICE device, WDFCMRESLIST raw, WDFCMRESLIST translated)
         if (n == T214_GPU_RESOURCE_COUNT || d->maps[n].va) goto fail;
         d->maps[n].va = MmMapIoSpace(r->u.Memory.Start, r->u.Memory.Length, MmNonCached);
         if (!d->maps[n].va) goto fail;
+        d->resources.Memory[n]=*r;d->resources.Mapping[n]=(PVOID)d->maps[n].va;
         ++found;
     }
     if(found!=T214_GPU_RESOURCE_COUNT) goto fail;
@@ -461,6 +363,7 @@ fail:
     if(d->lic) { MmUnmapIoSpace(d->lic,T214_GPU_LIC_SIZE);d->lic=NULL; }
     for (n = 0; n < T214_GPU_RESOURCE_COUNT; ++n)
         if (d->maps[n].va) { MmUnmapIoSpace((PVOID)d->maps[n].va, d->maps[n].size); d->maps[n].va = NULL; }
+    RtlZeroMemory(&d->resources,sizeof(d->resources));
     return status;
 }
 NTSTATUS GpuD0Exit(WDFDEVICE device, WDF_POWER_DEVICE_STATE target)
@@ -468,8 +371,8 @@ NTSTATUS GpuD0Exit(WDFDEVICE device, WDF_POWER_DEVICE_STATE target)
     GPU_DEVICE *d = GpuContext(device);
     UNREFERENCED_PARAMETER(target);
     if (d->power.owned || d->execution.owned || d->arena || d->irq.saved) GpuCleanup(d);
-    if (!d->power.owned && !d->irq.saved) GpuClosePlatform(d);
-    return d->power.owned || d->irq.saved ? STATUS_DEVICE_BUSY : STATUS_SUCCESS;
+    if(d->power.owned || d->irq.saved)return STATUS_DEVICE_BUSY;
+    return TgGpuClosePlatform(&d->platform);
 }
 NTSTATUS GpuRelease(WDFDEVICE device, WDFCMRESLIST resources)
 {
@@ -478,11 +381,13 @@ NTSTATUS GpuRelease(WDFDEVICE device, WDFCMRESLIST resources)
     UNREFERENCED_PARAMETER(resources);
     if (d->power.owned || d->execution.owned || d->arena || d->irq.saved) GpuCleanup(d);
     if(d->power.owned || d->irq.saved) return STATUS_DEVICE_BUSY;
+    NTSTATUS status=TgGpuClosePlatform(&d->platform);
+    if(!NT_SUCCESS(status))return status;
     if(d->interrupt) { WdfObjectDelete(d->interrupt);d->interrupt=NULL; }
     if(d->lic) { MmUnmapIoSpace(d->lic,T214_GPU_LIC_SIZE);d->lic=NULL; }
-    GpuClosePlatform(d);
     for (i = 0; i < T214_GPU_RESOURCE_COUNT; ++i)
         if (d->maps[i].va) { MmUnmapIoSpace((PVOID)d->maps[i].va, d->maps[i].size); d->maps[i].va = NULL; }
+    RtlZeroMemory(&d->resources,sizeof(d->resources));
     return d->power.owned ? STATUS_DEVICE_BUSY : STATUS_SUCCESS;
 }
 NTSTATUS GpuDeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT init)

@@ -5,6 +5,8 @@
 #include "work_queue.h"
 #include "resources.h"
 #include "hardware.h"
+#include "platform_io.h"
+#include "worker.h"
 
 /* Enough dedicated table backing for the initial single-process Vulkan
  * triangle; application storage remains dynamically allocated system memory.
@@ -20,6 +22,8 @@ typedef struct _TG_GPU_ADAPTER {
     TG_GPU_TABLE_SEGMENT Tables;
     TG_GPU_WORK_QUEUE Queue;
     TG_GPU_HARDWARE Hardware;
+    TG_GPU_PLATFORM Platform;
+    TG_GPU_WORKER Worker;
     enum tg_gpu_adapter_state State;
     BOOLEAN EngineReady,QueueReady;
 } TG_GPU_ADAPTER;
@@ -33,6 +37,9 @@ DXGKDDI_REMOVE_DEVICE TgGpuDdiRemoveDevice;
  * resources/engine/queue; no DriverEntry exposes this unfinished adapter. */
 NTSTATUS TgGpuStartAdapterHardware(TG_GPU_ADAPTER *,const struct tg_gpu_power_io *,
     UCHAR PmicAddress,const struct tg_gpu_gr_payload *);
+/* Explicit full platform/firmware/worker hookup after resource-only start.
+ * Still library-only: no entry point registers the unfinished miniport. */
+NTSTATUS TgGpuStartPlatformAdapter(TG_GPU_ADAPTER *);
 /* Populate implemented lifecycle/context/allocation/query callbacks only.
  * No DriverEntry or INF exposes this partial adapter. Submission, interrupt,
  * paging dispatch, DRIVERCAPS and TDR must be connected before registration.

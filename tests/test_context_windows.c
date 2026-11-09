@@ -46,6 +46,13 @@ static LONG NTAPI SetEvent(PRKEVENT event,KPRIORITY priority,BOOLEAN wait)
 { CHECK(event && !priority && !wait);event->Header.SignalState=1;return 0; }
 VOID (NTAPI * const __imp_KeInitializeEvent)(PRKEVENT,EVENT_TYPE,BOOLEAN)=InitializeEvent;
 LONG (NTAPI * const __imp_KeSetEvent)(PRKEVENT,KPRIORITY,BOOLEAN)=SetEvent;
+/* Resource-only adapter tests must never open a bridge or start a thread. */
+static NTSTATUS NTAPI UnexpectedClose(HANDLE h){(void)h;CHECK(FALSE);return STATUS_UNSUCCESSFUL;}
+static NTSTATUS NTAPI UnexpectedJoin(HANDLE h,BOOLEAN a,PLARGE_INTEGER t)
+{(void)h;(void)a;(void)t;CHECK(FALSE);return STATUS_UNSUCCESSFUL;}
+NTSTATUS (NTAPI * const __imp_ZwClose)(HANDLE)=UnexpectedClose;
+NTSTATUS (NTAPI * const __imp_ZwWaitForSingleObject)(HANDLE,BOOLEAN,PLARGE_INTEGER)=UnexpectedJoin;
+#include "unexpected_platform.h"
 static PVOID NTAPI Pool(POOL_FLAGS flags,SIZE_T bytes,ULONG tag)
 {
     UINT i;

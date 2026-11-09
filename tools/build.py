@@ -162,7 +162,9 @@ for source in [*core, power, clock, root / "windows/resources.c",
                root / "windows/internal_va.c", root / "windows/submit_worker.c",
                root / "windows/graphics.c",root / "windows/hardware.c",
                root / "windows/work_queue.c", root / "windows/allocation.c",
-               root / "windows/query.c", root / "windows/adapter.c"]:
+               root / "windows/query.c", root / "windows/adapter.c",
+               root / "windows/platform_io.c",root / "windows/worker.c",
+               root / "windows/platform_adapter.c",root / "windows/gr_firmware_io.c"]:
     obj = args.out / (source.stem + ".obj")
     subprocess.run([args.clang_cl, *flags, f"/Fo{obj}", "--", str(source)], check=True)
     objects.append(obj)
@@ -203,6 +205,20 @@ if args.windows_tests:
                     "/include:_load_config_used","/nodefaultlib","/release","/opt:ref","/timestamp:0",
                     f"/out:{args.out / 'test-hardware.exe'}",str(hardware_test),str(args.out / "hardware.obj"),
                     str(args.out / "private_memory.obj"),str(sdk_lib)],check=True)
+    platform_test=args.out / "test_platform_windows.obj"
+    subprocess.run([args.clang_cl,*flags,"/clang:-funwind-tables",f"/Fo{platform_test}","--",
+                    str(root / "tests/test_platform_windows.c")],check=True)
+    subprocess.run([args.link,"/nologo","/machine:arm64","/subsystem:console,10.0","/entry:start",
+                    "/include:_load_config_used","/nodefaultlib","/release","/opt:ref","/timestamp:0",
+                    f"/out:{args.out / 'test-platform.exe'}",str(platform_test),
+                    str(args.out / "platform_io.obj"),str(sdk_lib)],check=True)
+    worker_test=args.out / "test_worker_windows.obj"
+    subprocess.run([args.clang_cl,*flags,"/clang:-funwind-tables",f"/Fo{worker_test}","--",
+                    str(root / "tests/test_worker_windows.c")],check=True)
+    subprocess.run([args.link,"/nologo","/machine:arm64","/subsystem:console,10.0","/entry:start",
+                    "/include:_load_config_used","/nodefaultlib","/release","/opt:ref","/timestamp:0",
+                    f"/out:{args.out / 'test-worker.exe'}",str(worker_test),
+                    str(args.out / "worker.obj"),str(sdk_lib)],check=True)
 
 if args.probe:
     import shutil
@@ -218,8 +234,6 @@ if args.probe:
               f"/imsvc{wdf_inc}", f"/imsvc{args.wdk_include / 'km/spb/1.0'}"]
     support = args.out / "kmdf_support.obj"
     subprocess.run([args.clang_cl, *kflags, f"/Fo{support}", "--", str(repo / "tools/kmdf_support.c")], check=True)
-    firmware_io = args.out / "gr_firmware_io.obj"
-    subprocess.run([args.clang_cl, *kflags, f"/Fo{firmware_io}", "--", str(root / "windows/gr_firmware_io.c")], check=True)
     packages = [("tegragpuprobe", root / "windows/probe.c", root / "windows/tegragpuprobe.inf")]
     if not args.keep_fan:
         packages.append(("switchfan", repo / "drivers/SwitchFan/src/switchfan.c", repo / "drivers/SwitchFan/switchfan.inf"))
@@ -232,7 +246,7 @@ if args.probe:
                 km_lib / "ntoskrnl.lib", km_lib / "hal.lib", km_lib / "ntstrsafe.lib",
                 km_lib / "bufferoverflowfastfailk.lib"]
         if name == "tegragpuprobe":
-            libs.extend([firmware_io, library])
+            libs.append(library)
             for filename in ("NETB_img.bin", "fecs.bin", "gpccs.bin"):
                 shutil.copyfile(args.gr_firmware / filename, dest / filename)
             for filename in acr_names:

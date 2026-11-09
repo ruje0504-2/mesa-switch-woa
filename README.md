@@ -285,9 +285,9 @@ It reports zero video-present sources/children and does not acquire the POST
 display. These table/command bytes are separate from the application budget;
 no 512 MiB physical carve-out is allocated.
 
-Stop closes admission before releasing the queue, optional hardware state,
-engine, table backing and
-MMIO mappings in order. Live objects, failed frees or failed unmaps retain their
+Stop closes admission, joins the optional worker, cancels/resets queue work,
+retires hardware, closes the platform bridge, and then releases the engine,
+table backing and MMIO mappings in order. Live objects, failed frees or failed unmaps retain their
 tracking state for recovery/retry; Remove cannot free an adapter with retained
 ownership. A failed start uses the same cleanup path. Controlled native ARM64
 tests exercise missing LIC, partial map/unmap failure, each allocation failure,
@@ -295,7 +295,7 @@ live-device stop, cleanup retry and stop/start cycles; the resource-only
 lifecycle test asserts that it performs **zero GPU MMIO**. This is library integration only:
 there is still no miniport DriverEntry/INF registration, live DRIVERCAPS,
 SubmitCommandVirtual/paging dispatch, IRQ completion or TDR adapter hookup.
-The installed .46 probe uses the shared cold-bootstrap, BAR1 remap and hot channel helpers
+The probe uses the shared cold-bootstrap, BAR1 remap and hot channel helpers
 described below; this lifecycle module still has no live adapter hookup.
 
 `TgGpuStartAdapterHardware` explicitly connects an already initialized adapter
@@ -318,10 +318,32 @@ freed. Drain, reset or allocation-free failures retain tracking for retry;
 an isolated retry performs no more GPU MMIO. A clock-restore error is reported
 even when reset safely retires DMA. Full stop advances the graphics generation.
 The initial hardware-start API requires a fresh engine/template; live TDR
-restart, platform-provider/worker hookup and miniport registration are open.
+restart and miniport registration remain open.
 `test-hardware.exe` covers startup stages, OOM, queue ownership, isolation,
 clock errors and free retry with **explicit GPU/OS substitutes**. It does not
 authenticate firmware or access physical GPU registers.
+
+`windows/platform_io.c` supplies borrowed, declared-resource MMIO and a kernel
+file handle to the existing `\\Device\\SwitchBacklight` PMIC owner. It opens no
+second SPB target and never writes global MC ASIDs, identity fuses or CPU PLLP.
+The PLLP query and GPU-rail operations use the owner's existing kernel-only
+IOCTL; temperature/address preflight precedes power acquisition. Bridge lifetime
+is serialized at PASSIVE with special kernel APCs enabled. Aligned mapped
+register access also serves the ISR; PMIC/PLLP queries and sleeping delays stay
+on PASSIVE paths. Failed close retains the handle and borrowed resources.
+The probe uses this same provider, retaining it through partial IRQ restoration.
+`test-platform.exe` covers the bridge protocol, MMIO bounds, read-only ownership,
+thermal refusal and close retry with explicit OS substitutes.
+
+`TgGpuStartPlatformAdapter` composes bridge/preflight, trusted firmware loading,
+cold hardware initialization and `windows/worker.c`. The kernel thread waits on
+stop/queue events; only pending work uses a 1 ms polling timeout. Faults pause
+admission and retain references for recovery without reporting canceled fences
+complete. Stop joins the thread before queue reset or releasing any I/O backing;
+failed join/close preserves tracking for retry. `test-worker.exe` exercises these
+states with a controlled dispatcher/thread substitute, **not an actual kernel
+thread**. Full platform-adapter startup and queue execution still have no live
+WDDM evidence; paging/IRQ/TDR dispatch and registration remain unfinished.
 
 `windows/context.c` supplies the process/device/context creation and destruction
 DDIs, root-table DDIs, completed-fence query and DPC callback. Its registration
@@ -368,7 +390,7 @@ state, failed-free retry and reset generations. **These tests use synthetic
 golden data and substituted OS/GPU callbacks.** The packed allocation, privilege
 enforcement and WDDM dispatch have no physical GPU pass yet. The explicit
 hardware API now composes the template and command-page BAR1 mapping, but its
-platform provider, worker and adapter/ICD registration remain unfinished.
+complete adapter dispatch and adapter/ICD registration remain unfinished.
 
 The submission-worker helpers capture a bounded context/root snapshot separately
 from activation. Only activation writes the complement of the private fence
@@ -397,8 +419,8 @@ if Windows immediately reuses it. Pending work does not touch shared RAMIN or
 command/fence memory. A failed operation stops the queue; reset retains affected
 references until isolation succeeds, then cancels pending work without reporting
 its fences complete. Admission resumes only explicitly after recovery. Wake is
-a synchronization event for the future adapter worker, which must wait on an IRQ
-or timer while the active result is pending rather than busy-looping.
+a synchronization event consumed by the adapter worker; pending work waits on
+that event, stop, or a polling timeout rather than busy-looping.
 The queue and channel helpers are compiled backend components, not an exposed
 `SubmitCommandVirtual` DDI: adapter dispatch, malformed-buffer fence handling,
 command/residency validation and preemption/TDR notification still need wiring.
@@ -736,6 +758,15 @@ hardware/context/paging fixtures and SYS/CAT/all 11 memberships pass; no reboot
 was needed. This proves the shared remap with a distinct physical USERD page
 in the private diagnostic. The complete WDDM startup/queue and packed context
 path still have controlled-model evidence only; no Vulkan API pass is implied.
+
+**Physical platform-provider pass, 2026-11-09 04:27:04 Pacific:** .47/oem75
+uses the shared WDM bridge/MMIO provider above, with no KMDF I/O target.
+The separate IRQ run receives **2 ISR / 2 DPC** on GSI 190. The subsequent
+draw matches all **256 pixels and 768 guards**, reports `A1F83223/5E07CDDC`,
+and retains the .46 hashes, phase 7, GP_GET/PUT 2/2 and retired context.
+Faults, restoration errors and owned resources are zero; no reboot was needed.
+All five native fixtures and signed catalogue checks pass. The kernel worker
+and complete platform-adapter startup remain library/model evidence only.
 
 The owner-selected WDDM/NVK UMA budget is a **512 MiB maximum GPU working
 set**, allocated dynamically within VidMm's actual budget. The earlier 1 GiB
