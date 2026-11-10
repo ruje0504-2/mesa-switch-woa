@@ -44,6 +44,7 @@ struct _TG_GPU_CONTEXT {
     UINT References;
     UINT GraphicsGeneration,ContextId;
     UINT64 Cb0End;
+    UINT64 ProgramEnd[TG_GPU_PROGRAM_ENGINES];
     BOOLEAN Closing,MmeInitialized;
 };
 struct _TG_GPU_CONTEXT_ENGINE {

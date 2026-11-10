@@ -388,6 +388,111 @@ static size_t read_3d_word(const uint32_t *words, size_t remaining,
     return 2;
 }
 
+static bool program_region_span(uint32_t first, uint32_t last)
+{
+    /* B197 and B1C0 use the same methods for the program region. */
+    return first <= NVB197_SET_PROGRAM_REGION_B && last >= NVB197_SET_PROGRAM_REGION_A;
+}
+
+#define PROGRAM_REGION_BYTES (UINT64_C(1) << 32)
+
+static size_t program_region(uint32_t engine, uint32_t count, const uint32_t *args,
+                             size_t remaining, const struct tg_gpu_command_va *va,
+                             struct tg_gpu_command_info *info)
+{
+    uint32_t low;
+    size_t used = 2;
+    if (count == 2) {
+        low = args[1];
+    } else if (count == 1 && engine == TG_GPU_PROGRAM_3D) {
+        /* The private draw diagnostic writes A and B in separate packets. */
+        used = read_3d_word(args + 1, remaining - 1, NVB197_SET_PROGRAM_REGION_B, &low);
+        if (!used)
+            return 0;
+        used++;
+    } else {
+        return 0;
+    }
+    uint64_t end = 0;
+    if (!word_span(va, args[0], low, PROGRAM_REGION_BYTES, 1u << TG_GPU_PAGE_SHIFT, &end))
+        return 0;
+    info->program_end[engine] = end;
+    if (end > info->va_end)
+        info->va_end = end;
+    return used;
+}
+
+static void require_program(struct tg_gpu_command_info *info, uint32_t engine)
+{
+    if (!info->program_end[engine])
+        info->requires_program |= 1u << engine;
+}
+
+static uint32_t pipeline_program_in_span(uint32_t first, uint32_t last)
+{
+    const uint32_t base = NVB197_SET_PIPELINE_PROGRAM(0);
+    const uint32_t stride = NVB197_SET_PIPELINE_PROGRAM(1) - base;
+    const uint32_t offset = first > base ? first - base : 0;
+    const uint32_t method = base + ((offset + stride - 1) / stride) * stride;
+    return method <= last && method <= NVB197_SET_PIPELINE_PROGRAM(5) ? method : 0;
+}
+
+static bool pipeline_program_offset(uint32_t offset)
+{
+    /* NVK places the 80-byte SPH immediately before 128-byte-aligned
+     * instructions. Leave room in the region for the initial fetch and
+     * the 2 KiB I-cache guard used by its shader arena.
+     */
+    const uint32_t header_bytes = 80, instruction_alignment = 128;
+    const uint64_t entry = (uint64_t)offset + header_bytes;
+    return entry % instruction_alignment == 0 &&
+           entry + instruction_alignment + 2048 <= PROGRAM_REGION_BYTES;
+}
+
+static bool shader_local_memory_span(uint32_t engine, uint32_t first, uint32_t last)
+{
+    if (engine == TG_GPU_PROGRAM_3D)
+        return first <= NVB197_SET_SHADER_LOCAL_MEMORY_E && last >= NVB197_SET_SHADER_LOCAL_MEMORY_A;
+    return (first <= NVB1C0_SET_SHADER_LOCAL_MEMORY_B && last >= NVB1C0_SET_SHADER_LOCAL_MEMORY_A) ||
+           (first <= NVB1C0_SET_SHADER_LOCAL_MEMORY_THROTTLED_C &&
+            last >= NVB1C0_SET_SHADER_LOCAL_MEMORY_NON_THROTTLED_A);
+}
+
+static size_t shader_local_memory(uint32_t engine, uint32_t count, const uint32_t *args,
+                                  size_t remaining, const struct tg_gpu_command_va *va,
+                                  uint64_t *max_end)
+{
+    /* The Windows GM20B profile has two TPCs with 64 warps each. */
+    const uint32_t tpcs = 2, warps_per_tpc = 64;
+    const uint32_t tpc_alignment = 0x8000, warp_alignment = 0x200;
+    uint64_t bytes;
+    size_t used;
+    if (engine == TG_GPU_PROGRAM_3D) {
+        if (count != 5 || args[2] > DRF_MASK(NVB197_SET_SHADER_LOCAL_MEMORY_C_SIZE_UPPER) ||
+            args[4] > DRF_MASK(NVB197_SET_SHADER_LOCAL_MEMORY_E_DEFAULT_SIZE_PER_WARP) ||
+            !args[4] || args[4] % warp_alignment)
+            return 0;
+        bytes = ((uint64_t)args[2] << 32) | args[3];
+        if (bytes % 0x20000 || bytes < (uint64_t)args[4] * warps_per_tpc * tpcs)
+            return 0;
+        used = 5;
+    } else {
+        const uint32_t header = NVDEF(NVB06F, DMA_INCR, OPCODE, VALUE) |
+                                NVVAL(NVB06F, DMA_INCR, SUBCHANNEL, 1) |
+                                NVVAL(NVB06F, DMA_INCR, COUNT, 3);
+        if (count != 2 || remaining < 10 ||
+            args[2] != (header | (NVB1C0_SET_SHADER_LOCAL_MEMORY_NON_THROTTLED_A >> 2)) ||
+            args[6] != (header | (NVB1C0_SET_SHADER_LOCAL_MEMORY_THROTTLED_A >> 2)) ||
+            args[3] > UINT8_MAX || args[4] % tpc_alignment || args[5] != 0xff ||
+            args[7] != args[3] || args[8] != args[4] || args[9] != args[5])
+            return 0;
+        const uint64_t per_tpc = ((uint64_t)args[3] << 32) | args[4];
+        bytes = per_tpc * tpcs;
+        used = 10;
+    }
+    return word_span(va, args[0], args[1], bytes, 1u << TG_GPU_PAGE_SHIFT, max_end) ? used : 0;
+}
+
 static size_t color_target_setup(uint32_t method, uint32_t count, const uint32_t *args,
                                   size_t remaining, const struct tg_gpu_command_va *va,
                                   uint64_t *max_end)
@@ -567,10 +672,17 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
                     return false;
                 stream.requires_cb0 |= (value & DRF_SMASK(NVB197_BIND_GROUP_CONSTANT_BUFFER_VALID)) && !stream.cb0_end;
             }
-            if (subchannel <= 1 && (inline_upload_span(method, method) ||
+            if (subchannel <= TG_GPU_PROGRAM_COMPUTE && (inline_upload_span(method, method) ||
                                     report_span(method, method) ||
-                                    texture_pool_index_mask(method, method)))
+                                    texture_pool_index_mask(method, method) ||
+                                    program_region_span(method, method) ||
+                                    shader_local_memory_span(subchannel, method, method)))
                 return false;
+            if (subchannel == TG_GPU_PROGRAM_3D && pipeline_program_in_span(method, method)) {
+                if (!pipeline_program_offset(NVVAL_GET(header, NVB06F, DMA_IMMD, DATA)))
+                    return false;
+                require_program(&stream, TG_GPU_PROGRAM_3D);
+            }
             if (subchannel == 1 && pcas_span(method, method))
                 return false;
             if (subchannel == 4 && method >= 0x100 &&
@@ -625,16 +737,43 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
                            descriptor_bytes, &stream.va_end))
                 return false;
         }
+        if (subchannel <= TG_GPU_PROGRAM_COMPUTE && program_region_span(method, last)) {
+            if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB197_SET_PROGRAM_REGION_A)
+                return false;
+            const size_t used = program_region(subchannel, count, words + n, word_count - n, va, &stream);
+            if (!used)
+                return false;
+            n += used;
+            continue;
+        }
+        if (subchannel <= TG_GPU_PROGRAM_COMPUTE && shader_local_memory_span(subchannel, method, last)) {
+            if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB197_SET_SHADER_LOCAL_MEMORY_A)
+                return false;
+            const size_t used = shader_local_memory(subchannel, count, words + n, word_count - n,
+                                                    va, &stream.va_end);
+            if (!used)
+                return false;
+            n += used;
+            continue;
+        }
         if (subchannel == 1 && pcas_span(method, last)) {
             if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB1C0_SEND_PCAS_A || count != 1)
                 return false;
             const size_t used = compute_dispatch(words + n, word_count - n, va, &stream.va_end);
             if (!used)
                 return false;
+            require_program(&stream, TG_GPU_PROGRAM_COMPUTE);
             n += used;
             continue;
         }
         if (subchannel == 0) {
+            const uint32_t program = pipeline_program_in_span(method, last);
+            if (program) {
+                if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != program || count != 1 ||
+                    !pipeline_program_offset(words[n]))
+                    return false;
+                require_program(&stream, TG_GPU_PROGRAM_3D);
+            }
             if (color_target_span(method, last)) {
                 const uint32_t base = NVB197_SET_COLOR_TARGET_A(0);
                 const uint32_t stride = NVB197_SET_COLOR_TARGET_A(1) - base;
@@ -721,6 +860,8 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
             if (slot == NVK_MME_SELECT_CB0 || slot == NVK_MME_SET_ANTI_ALIAS ||
                 slot == NVK_MME_DRAW || slot == NVK_MME_DRAW_INDEXED)
                 stream.requires_cb0 |= !stream.cb0_end;
+            if (slot == NVK_MME_DRAW || slot == NVK_MME_DRAW_INDEXED)
+                require_program(&stream, TG_GPU_PROGRAM_3D);
             stream.requires_mme |= !stream.uploads_mme;
         }
         if (subchannel == 4) {

@@ -492,6 +492,71 @@ static void test_constant_buffers(void)
     assert(!tg_gpu_inspect_command_stream(init, sizeof(init), &va, &info));
 }
 
+static void test_program_regions(void)
+{
+    const struct tg_gpu_command_va va = {0x200040000, 0x100020000, 0x100030000};
+    struct tg_gpu_command_info info;
+    uint32_t shader[] = {
+        INCR(0, NVB197_SET_PROGRAM_REGION_A, 2), 1, 0x40000,
+        IMMD(0, NVB197_SET_PIPELINE_PROGRAM(1), 0x30),
+        INCR(0, NVB197_SET_PIPELINE_PROGRAM(5), 1), 0x1030,
+    };
+    assert(tg_gpu_inspect_command_stream(shader, sizeof(shader), &va, &info));
+    assert(info.va_end == va.limit && info.program_end[TG_GPU_PROGRAM_3D] == va.limit);
+    assert(!info.requires_program && !info.program_end[TG_GPU_PROGRAM_COMPUTE]);
+    assert(tg_gpu_inspect_command_stream(shader + 3, sizeof(shader) - 3 * sizeof(uint32_t), &va, &info));
+    assert(info.requires_program == (1u << TG_GPU_PROGRAM_3D));
+    shader[2] += 4096;
+    assert(!tg_gpu_inspect_command_stream(shader, sizeof(shader), &va, &info));
+    shader[2] = 0x10000;
+    assert(!tg_gpu_inspect_command_stream(shader, sizeof(shader), &va, &info));
+    shader[2] = 0x40000;
+    shader[5] = 0xffffffb0;
+    assert(!tg_gpu_validate_command_stream(shader, sizeof(shader)));
+    shader[5] = 0x1040;
+    assert(!tg_gpu_validate_command_stream(shader, sizeof(shader)));
+
+    const uint32_t region_only[] = {INCR(1, NVB1C0_SET_PROGRAM_REGION_B, 1), 0x40000};
+    assert(!tg_gpu_validate_command_stream(region_only, sizeof(region_only)));
+    const uint32_t dispatch[] = {
+        INCR(1, NVB1C0_SET_PROGRAM_REGION_A, 2), 1, 0x40000,
+        INCR(1, NVB1C0_SEND_PCAS_A, 1), 0x1000400,
+        IMMD(1, NVB1C0_SEND_SIGNALING_PCAS_B, 3),
+    };
+    assert(tg_gpu_inspect_command_stream(dispatch, sizeof(dispatch), &va, &info));
+    assert(info.program_end[TG_GPU_PROGRAM_COMPUTE] == va.limit && !info.requires_program);
+    assert(tg_gpu_inspect_command_stream(dispatch + 3, sizeof(dispatch) - 3 * sizeof(uint32_t), &va, &info));
+    assert(info.requires_program == (1u << TG_GPU_PROGRAM_COMPUTE));
+}
+
+static void test_shader_local_memory(void)
+{
+    const struct tg_gpu_command_va va = {0x100080000, 0x100020000, 0x100030000};
+    struct tg_gpu_command_info info;
+    uint32_t gfx[] = {
+        INCR(0, NVB197_SET_SHADER_LOCAL_MEMORY_A, 5), 1, 0x60000, 0, 0x20000, 0x400,
+    };
+    assert(tg_gpu_inspect_command_stream(gfx, sizeof(gfx), &va, &info));
+    assert(info.va_end == va.limit);
+    gfx[5] += 0x200;
+    assert(!tg_gpu_validate_command_stream(gfx, sizeof(gfx)));
+
+    uint32_t compute[] = {
+        INCR(1, NVB1C0_SET_SHADER_LOCAL_MEMORY_A, 2), 1, 0x60000,
+        INCR(1, NVB1C0_SET_SHADER_LOCAL_MEMORY_NON_THROTTLED_A, 3), 0, 0x10000, 0xff,
+        INCR(1, NVB1C0_SET_SHADER_LOCAL_MEMORY_THROTTLED_A, 3), 0, 0x10000, 0xff,
+    };
+    assert(tg_gpu_inspect_command_stream(compute, sizeof(compute), &va, &info));
+    assert(info.va_end == va.limit);
+    assert(!tg_gpu_validate_command_stream(compute, sizeof(compute) - 4 * sizeof(uint32_t)));
+    assert(!tg_gpu_validate_command_stream(compute + 3, 4 * sizeof(uint32_t)));
+    compute[9] += 0x8000;
+    assert(!tg_gpu_validate_command_stream(compute, sizeof(compute)));
+    compute[9] -= 0x8000;
+    compute[2] = 0x1f000;
+    assert(!tg_gpu_inspect_command_stream(compute, sizeof(compute), &va, &info));
+}
+
 int main(void)
 {
     uint32_t w[16]={0x20010000,0xb197,0x20020100,0x20010014,0xdeadbeef,0};
@@ -543,5 +608,7 @@ int main(void)
     test_color_targets();
     test_depth_targets();
     test_constant_buffers();
+    test_program_regions();
+    test_shader_local_memory();
     puts("B06F packets, GM20B MME and command address ranges passed");return 0;
 }

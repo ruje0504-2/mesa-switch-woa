@@ -864,10 +864,18 @@ pool as a complete base and inclusive maximum index. The KMD checks the full
 range of 32-byte entries. B1C0 direct dispatch pairs a QMD address with NVK's
 invalidate-and-schedule operation, with either immediate or incrementing
 encoding. The checked address range covers the complete 256-byte QMD 0.6.
-Validation of GPU-resident descriptor contents, shader and other engine state
-remains required for general WDDM application submission.
 [NVIDIA Maxwell compute class](https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/compute/clb1c0.h)
 [QMD layout](https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/compute/clb1c0qmd.h)
+
+B197 and B1C0 program bases cover NVK's 4 GiB shader VA reservation. A
+completed submission makes its program region available to later work on
+that context. On Windows, NVK waits for the initialization push to retire
+on its combined graphics and compute queue. B197 pipeline offsets must
+align the first instruction and leave room for the initial fetch and NVK's
+prefetch padding. Local memory setup covers the size programmed for both
+TPCs and checks both compute throttle modes together. VidMm manages backing
+pages. General application submission still requires validation of
+GPU-resident shader and descriptor contents and the remaining engine methods.
 
 The .83 one-boot test exercised the new KMT bridge on the Lite, including
 aligned and fixed VA reservations, residency, event waits and GPU B0B5 copy.

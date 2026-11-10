@@ -10,9 +10,17 @@ struct tg_gpu_command_va {
     uint64_t reserved_base, reserved_end;
 };
 
+enum tg_gpu_program_engine {
+    TG_GPU_PROGRAM_3D,
+    TG_GPU_PROGRAM_COMPUTE,
+    TG_GPU_PROGRAM_ENGINES,
+};
+
 struct tg_gpu_command_info {
     uint64_t va_end;
     uint64_t reserved_base;
+    uint64_t program_end[TG_GPU_PROGRAM_ENGINES];
+    uint32_t requires_program; /* Engines using a previously set program region. */
     bool uploads_mme;
     bool requires_mme; /* A call precedes any upload in this stream. */
     bool requires_cb0; /* Uses the CB0 selected by a preceding submission. */

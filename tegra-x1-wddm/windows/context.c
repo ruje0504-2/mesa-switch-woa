@@ -322,6 +322,16 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
         (info->requires_cb0 && c->Cb0End>c->Root.VaLimit))) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
     }
+    if (info) {
+        for (UINT engine=0;engine<TG_GPU_PROGRAM_ENGINES;engine++) {
+            if (!(info->requires_program & (1u << engine)))
+                continue;
+            if (!c->ProgramEnd[engine] || c->ProgramEnd[engine]>c->Root.VaLimit) {
+                status=c->ProgramEnd[engine] ? STATUS_DEVICE_NOT_READY : STATUS_INVALID_PARAMETER;
+                KeReleaseSpinLock(&e->Lock,irql);return status;
+            }
+        }
+    }
     RtlZeroMemory(w,sizeof(*w));
     w->Engine=e;w->Context=c; w->Root=c->Root; w->DmaAddress=a->DmaBufferVirtualAddress;
     w->DmaBytes=a->DmaBufferSize; w->SubmissionFence=w->CompletionFence=a->SubmissionFenceId;
@@ -500,8 +510,14 @@ NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w
         }
         if (w->UploadsMme)
             w->Context->MmeInitialized=TRUE;
-        if (info && info->cb0_end)
-            w->Context->Cb0End=info->cb0_end;
+        if (info) {
+            if (info->cb0_end)
+                w->Context->Cb0End=info->cb0_end;
+            for (UINT engine=0;engine<TG_GPU_PROGRAM_ENGINES;engine++) {
+                if (info->program_end[engine])
+                    w->Context->ProgramEnd[engine]=info->program_end[engine];
+            }
+        }
         /* Retirement has already removed hardware references. Do not make
          * Dxgkrnl retry DestroyContext because our CPU reference lingers after
          * completion. Notification thereafter uses only this engine snapshot.
