@@ -780,6 +780,24 @@ static __declspec(noinline) void TestAdapterLifecycle(const DXGKRNL_INTERFACE *c
     CHECK(d.DxgkDdiQueryAdapterInfo(a,&query)==STATUS_BUFFER_TOO_SMALL);
     query.OutputDataSize=sizeof(caps);
     CHECK(NT_SUCCESS(d.DxgkDdiQueryAdapterInfo(a,&query)) && caps.WDDMVersion==DXGKDDI_WDDMv2_6);
+    UINT physical_index=0;
+    struct { DXGK_GPUVERSION info; UCHAR guard[8]; } gpu_version;
+    const WCHAR architecture[]=L"Maxwell GM20B";
+    memset(&gpu_version,0xa5,sizeof(gpu_version));
+    DXGKARG_QUERYADAPTERINFO version_query={
+        .Type=DXGKQAITYPE_GPUVERSION,.pInputData=&physical_index,.InputDataSize=sizeof(physical_index),
+        .pOutputData=&gpu_version.info,.OutputDataSize=sizeof(gpu_version),
+    };
+    CHECK(NT_SUCCESS(d.DxgkDdiQueryAdapterInfo(a,&version_query)));
+    CHECK(!gpu_version.info.BiosVersion[0]);
+    for (UINT i=0;i<sizeof(architecture)/sizeof(architecture[0]);++i)
+        CHECK(gpu_version.info.GpuArchitecture[i]==architecture[i]);
+    for (UINT i=0;i<sizeof(gpu_version.guard);++i)
+        CHECK(gpu_version.guard[i]==0xa5);
+    physical_index=1;
+    CHECK(d.DxgkDdiQueryAdapterInfo(a,&version_query)==STATUS_INVALID_PARAMETER);
+    physical_index=0;version_query.OutputDataSize=sizeof(gpu_version.info)-1;
+    CHECK(d.DxgkDdiQueryAdapterInfo(a,&version_query)==STATUS_BUFFER_TOO_SMALL);
     CHECK(NT_SUCCESS(d.DxgkDdiStopDevice(a)));
     --dxgk.Size;
     CHECK(d.DxgkDdiStartDevice(a,&start,&dxgk,&sources,&children)==STATUS_INVALID_PARAMETER);

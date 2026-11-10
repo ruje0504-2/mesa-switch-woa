@@ -28,6 +28,17 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
         RtlCopyMemory(a->pOutputData,&caps,sizeof(caps));
         return STATUS_SUCCESS;
     }
+    if (a->Type==DXGKQAITYPE_GPUVERSION) {
+        /* GM20B is integrated and has no separate GPU VBIOS. */
+        const DXGK_GPUVERSION version={.GpuArchitecture=L"Maxwell GM20B"};
+        UINT index;
+        status=buffers(a,sizeof(index),sizeof(version));
+        if (!NT_SUCCESS(status)) return status;
+        RtlCopyMemory(&index,a->pInputData,sizeof(index));
+        if (index) return STATUS_INVALID_PARAMETER;
+        RtlCopyMemory(a->pOutputData,&version,sizeof(version));
+        return STATUS_SUCCESS;
+    }
     switch (a->Type) {
     case DXGKQAITYPE_DRIVERCAPS:
     case DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION:
