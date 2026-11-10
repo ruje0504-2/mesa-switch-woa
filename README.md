@@ -17,6 +17,7 @@ memory under VidMm with a **512 MiB** adapter ceiling.
 - [Windows NVK backend](src/nouveau/vulkan/nvkmd/windows/) and its ARM64 build.
 - [Tegra X1 WDDM source and board integration](tegra-x1-wddm/).
 - [Build and porting guide](tegra-x1-wddm/docs/PORTING.md) and [hardware status](tegra-x1-wddm/docs/STATUS.md).
+- [RADV `wddm2` reference and compatibility notes](tegra-x1-wddm/docs/PORTING.md#radv-windows-reference) for WDDM, Win32 presentation, Direct3D and Zink.
 - [Upstream and downstream](tegra-x1-wddm/UPSTREAM.md) and [license map](tegra-x1-wddm/LICENSE.md).
 - [Horizon OS documentation from mesa-switch](README.rst).
 
