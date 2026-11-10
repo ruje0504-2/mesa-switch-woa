@@ -102,6 +102,36 @@ while keeping GM20B resource metadata and submission on the Tegra ABI.
   GM20B capabilities and verify with targeted Vulkan CTS cases.
   [NVK features](../../src/nouveau/vulkan/nvk_physical_device.c) · [RADV external memory](https://gitlab.freedesktop.org/lfrb/mesa/-/commit/b286bc76ca5bddf68cd9962e98484d02b9c26b5d)
 
+### Desktop, Direct3D and Zink
+
+- **Native WDDM and DWM.** The RADV reference covers the user-mode Vulkan
+  path over AMD's KMD. For the Tegra desktop, reuse the resource, fence and
+  LUID patterns alongside the Windows DDI contracts. Mesa's `d3d10umd` is
+  a software DDI example for `OpenAdapter10`, resource callbacks and
+  DXGI present. GM20B needs hardware allocation, submission and present
+  behind those entry points.
+  [Mesa DDI example](../../src/gallium/targets/d3d10umd/README.md)
+- **Direct3D 9, 10 and 11.** Check the chosen DXVK version against the
+  live ICD. Its current requirements include `VK_EXT_depth_clip_enable`,
+  `VK_KHR_maintenance5`, `VK_KHR_maintenance6`, `VK_KHR_load_store_op_none`,
+  `VK_EXT_robustness2` and `VK_EXT_transform_feedback`. The common NVK
+  source already advertises these names. Wire Win32 into NVK's platform gate
+  and verify the features, surface and swapchain on GM20B for each tested
+  process architecture. `VK_KHR_present_wait`, `VK_KHR_swapchain_maintenance1`
+  and `VK_EXT_attachment_feedback_loop_layout` are separate compatibility
+  checks. Compare the RADV WSI and synchronization paths for this work.
+  [DXVK driver support](https://github.com/doitsujin/dxvk/wiki/Driver-support) · [NVK platform gate](../../src/nouveau/vulkan/nvk_physical_device.h)
+- **Zink.** Run Mesa's `zink_check_requirements` against the live Windows
+  NVK driver to identify the OpenGL levels it can support. Check window
+  presentation separately using the same Win32 WSI work.
+  [Zink profiles and checker](https://docs.mesa3d.org/drivers/zink.html)
+- **Direct3D 12.** The reference branch's Dozen changes use D3D12 as a
+  backend for Vulkan. For D3D12 on Vulkan, compare the target vkd3d-proton
+  build against live descriptor indexing and update-after-bind limits,
+  robustness2 and push descriptors. Check actual allocations within the
+  512 MiB ceiling and verify resource sharing and present on Windows ARM64.
+  [Dozen change](https://gitlab.freedesktop.org/lfrb/mesa/-/commit/db23c10d7b5509a7479f168b32396bdb293c6470) · [vkd3d-proton requirements](https://github.com/HansKristian-Work/vkd3d-proton#drivers)
+
 ## Switch Lite integration
 
 Apply the [WinX GPU patch](../integration/switch-lite/winx-gpu.patch) to
