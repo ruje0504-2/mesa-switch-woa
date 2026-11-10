@@ -4,9 +4,9 @@
 #include "context.h"
 #include "allocation_abi.h"
 
-/* This adapter has one explicit segment (page tables). VidMm appends its
- * implicit system-memory segment at ID 2, as in Microsoft's GPUVA sample.
- * These callbacks allocate metadata only; VidMm owns pages and GPU VA.
+/* Page tables use segment 1, the paging aperture uses segment 2, and display
+ * mode adds scanout segment 3. VidMm appends the implicit system-memory
+ * segment. These callbacks allocate metadata only; VidMm owns pages and VA.
  */
 #define TG_GPU_EXPLICIT_TABLE_SEGMENT 1u
 
@@ -19,6 +19,14 @@ typedef struct _TG_GPU_PRIMARY_ALLOCATION_REQUEST {
     D3DDDI_RATIONAL RefreshRate;
     UINT Reserved;
 } TG_GPU_PRIMARY_ALLOCATION_REQUEST;
+
+/* Linear cross-adapter surfaces use their own geometry, not the fixed panel's
+ * primary layout. Raw standard heaps keep the 16-byte buffer description. */
+typedef struct _TG_GPU_LINEAR_ALLOCATION_REQUEST {
+    struct tg_gpu_allocation_request Buffer;
+    D3DDDIFORMAT Format;
+    UINT Width, Height, Pitch;
+} TG_GPU_LINEAR_ALLOCATION_REQUEST;
 
 void TgGpuRegisterAllocationDdis(DRIVER_INITIALIZATION_DATA *);
 /* OS-supplied KMD handle, held alive by VidMm for this paging call. */

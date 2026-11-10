@@ -84,6 +84,9 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
         caps.SchedulingCaps.LowIrqlPreemptCommand=1;
         caps.MemoryManagementCaps.VirtualAddressingSupported=1;
         caps.MemoryManagementCaps.GpuMmuSupported=1;
+        /* Linear system-memory resources support copy; no cross-adapter
+         * texturing or scanout tier is declared. */
+        caps.MemoryManagementCaps.CrossAdapterResource=1;
         caps.PreemptionCaps.GraphicsPreemptionGranularity=D3DKMDT_GRAPHICS_PREEMPTION_DMA_BUFFER_BOUNDARY;
         caps.PreemptionCaps.ComputePreemptionGranularity=D3DKMDT_COMPUTE_PREEMPTION_DMA_BUFFER_BOUNDARY;
         /* The single GR/CE runlist escalates active engine timeouts to the

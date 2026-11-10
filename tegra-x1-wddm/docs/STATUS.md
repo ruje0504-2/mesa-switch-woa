@@ -3,20 +3,20 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Current work: D3D UMD/DWM.** The Windows KMT backend now implements
-NT-handle sharing for opaque storage. Its ARM64 controlled fixture passes.
-The .130 physical trial creates and imports a resource on two GM20B
-devices and maps both GPU addresses, but importing-device `D3DKMTLock2`
-returns `c000000d`, including before producer release. CPU readback and
-shared-surface composition remain unverified. See the
-[shared-storage result](SHARED_STORAGE_RESULT.md).
-The device is back on .59 Code 0 with its original ACPI table and power
-settings; the test permit and scheduled tasks have been removed.
-DXVK remains a compatibility and code-reuse candidate; the native Direct3D
-device and DWM contracts still need implementation.
+**Current work: D3D UMD/DWM.** The .132 trial passes 16 KiB NT-handle
+storage sharing between two KMT devices on GM20B, including CPU readback
+after releasing the producer and closing the exported handle. Both device
+budgets return to zero. The matched adapter/active VidPN LUID is `949ff`.
+D3D UMD device creation, shared-image rendering/synchronization and DWM
+composition remain pending. DXVK remains a compatibility and code-reuse
+candidate. See the [shared-storage result](SHARED_STORAGE_RESULT.md).
+After testing, .59 Code 0, the original ACPI/driver hashes and unchanged
+AC/DC display/sleep settings were verified. The start permit and test tasks
+have been removed.
 
 | Driver | Result | Remaining work |
 | --- | --- | --- |
+| 0.1.0.132 | Code 0, LUID `949ff`, successful section-backed shared storage and 4,096 matching data words before/after producer release and NT-handle closure. GDI fence 23 completed with proof mask 7. | Cross-device GPU rendering/completion, native D3D UMD/DWM, and Win32 `vkcube`. The storage probe submits no drawing work. |
 | 0.1.0.130 | Code 0, GM20B LUID `8e7d4`, matching active VidPN, completed GDI copies, successful MPO3 and native scanout at `fb9c7000`. Pixel readback and the user confirm visible RGB bars on the internal panel. | DWM exits with `MILERR_NO_HARDWARE_DEVICE`; D3D11 device creation on GM20B returns `DXGI_ERROR_UNSUPPORTED`, while WARP succeeds. Continuous desktop refresh remains unresolved. See [native startup result](NATIVE_STARTUP_RESULT.md). |
 | 0.1.0.121 | The timing callback returned link success with a nonzero change ID. GM20B LUID `962ec` reached 720x1280, 60 Hz mode setup and successful shared-primary allocation creation. | Windows restarted later. The normal journal filled before the first failure; the next boot was gated to Code 43. Stable native presentation remains open. See [display timing result](DISPLAY_TIMING_RESULT.md). |
 | 0.1.0.120 | GDI DMA now uses aperture segment 2. The live adapter stayed Code 0 through the test, progressed to GPU-virtual paging submissions, and exposed GM20B LUID `8ec5d`. | The interactive probe found zero active display paths and the panel was black while SSH responded. Native desktop presentation remains unverified. See [GDI DMA pool investigation](GDI_DMA_POOL.md). |

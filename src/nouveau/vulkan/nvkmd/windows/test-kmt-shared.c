@@ -15,6 +15,7 @@ static struct {
 static UINT next_allocation, opens, destroys, residents;
 static struct tg_gpu_allocation_request shared_request;
 static HANDLE shared_handle;
+static HANDLE last_section;
 static LONG create_status, open_status, resident_status, destroy_status;
 static bool bad_query, bad_descriptor;
 
@@ -34,14 +35,36 @@ D3DKMTCreateAllocation2(D3DKMT_CREATEALLOCATION *args)
 {
    CHECK(args->NumAllocations == 1 && args->pAllocationInfo2 &&
          !args->PrivateRuntimeDataSize && !args->PrivateDriverDataSize);
+   const bool shared = args->Flags.CreateShared != 0;
    const D3DDDI_ALLOCATIONINFO2 *info = args->pAllocationInfo2;
-   CHECK(info->PrivateDriverDataSize == sizeof(shared_request));
-   const struct tg_gpu_allocation_request *request = info->pPrivateDriverData;
+   struct tg_gpu_allocation_request section_request = {0};
+   const struct tg_gpu_allocation_request *request;
+   if (args->Flags.StandardAllocation) {
+      CHECK(shared && args->Flags.ExistingSection && args->Flags.CrossAdapter &&
+            !args->Flags.ExistingSysMem && !args->Flags.CreateCached &&
+            !args->Flags.CreateWriteCombined && !info->PrivateDriverDataSize &&
+            !info->pPrivateDriverData && info->hSection &&
+            args->pStandardAllocation->Type == D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP);
+      void *view = MapViewOfFile(info->hSection, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0);
+      MEMORY_BASIC_INFORMATION memory;
+      CHECK(view && VirtualQuery(view, &memory, sizeof(memory)) == sizeof(memory) &&
+            (memory.Protect & PAGE_WRITECOMBINE));
+      CHECK(UnmapViewOfFile(view));
+      last_section = info->hSection;
+      section_request = (struct tg_gpu_allocation_request) {
+         TG_GPU_ALLOCATION_ABI, TG_GPU_ALLOCATION_CPU_VISIBLE,
+         args->pStandardAllocation->ExistingHeapData.Size,
+      };
+      request = &section_request;
+   } else {
+      CHECK(!shared && !args->Flags.ExistingSection && !args->Flags.CrossAdapter);
+      CHECK(info->PrivateDriverDataSize == sizeof(shared_request));
+      request = info->pPrivateDriverData;
+   }
    CHECK(request->version == TG_GPU_ALLOCATION_ABI && request->bytes == 8192 &&
          request->flags == TG_GPU_ALLOCATION_CPU_VISIBLE);
    if (create_status)
       return create_status;
-   const bool shared = args->Flags.CreateShared != 0;
    CHECK(args->Flags.CreateResource == shared && args->Flags.NtSecuritySharing == shared);
    args->pAllocationInfo2->hAllocation = new_allocation(args->hDevice, shared);
    if (shared) {
@@ -155,10 +178,12 @@ int main(void)
    CHECK(tg_kmt_allocate_shared(&producer, UINT64_MAX, true, &original) == TG_KMT_NO_VIDEO_MEMORY);
    create_status = TG_KMT_NO_MEMORY;
    CHECK(tg_kmt_allocate_shared(&producer, 4097, true, &original) == create_status);
-   CHECK(!producer.allocated && !original.handle);
+   CHECK(!producer.allocated && !original.handle && last_section &&
+         !GetHandleInformation(last_section, &flags));
    create_status = 0;
    CHECK(tg_kmt_allocate_shared(&producer, 4097, true, &original) == 0);
-   CHECK(original.resource && original.flags == TG_GPU_ALLOCATION_CPU_VISIBLE);
+   CHECK(original.resource && original.flags == TG_GPU_ALLOCATION_CPU_VISIBLE &&
+         !GetHandleInformation(last_section, &flags));
    CHECK(tg_kmt_export_memory(&original, &handle) == 0 && GetHandleInformation(handle, &flags));
    CHECK(tg_kmt_import_memory(&consumer, handle, &imported) == 0);
    CHECK(tg_kmt_import_memory(&consumer, handle, &second) == 0);

@@ -2,101 +2,113 @@
 
 2026-11-10, Switch Lite HDH-001, Windows 11 ARM64 23H2 (22631.2861).
 
-NT resource export/import, residency and GPU VA mapping pass on GM20B.
-The complete storage/readback test fails: `D3DKMTLock2` on the imported
-allocation returns `c000000d` (`STATUS_INVALID_PARAMETER`). This is a
-prerequisite investigation for D3D UMD/DWM, not a desktop acceleration or
-Vulkan external-memory extension pass.
+**.132 passes NT-handle storage sharing and CPU readback** on GM20B LUID
+`00000000000949ff`. A 16 KiB allocation remains readable by the importing
+KMT device after the producer releases its allocation and after the
+exported NT handle is closed. All 4,096 words match at each ownership stage.
+Cleanup succeeds and both device budget counters return to zero.
 
-## Implementation and local checks
+This probe uses two devices in one process on the same GM20B adapter. It
+maps both GPU addresses but submits no drawing commands. Cross-process
+sharing, GPU access to the imported storage, shared images, Vulkan Win32
+external-memory entry points and D3D UMD/DWM composition remain pending.
 
-The Windows KMT transport creates an NT-shareable resource with one Tegra
-storage allocation, exports it with `D3DKMTShareObjects`, and imports it
-with `D3DKMTQueryResourceInfoFromNtHandle` and `D3DKMTOpenResourceFromNtHandle`.
-Imports validate ABI, size and flags, charge the device's budget, and wait
-for residency. Each local resource is released independently; the caller
-owns the exported NT handle. Resource destruction and budget accounting
-also cover partially failed imports. NVK's internal shared-storage flag
-uses this allocation path. No Win32 external-memory extension is enabled.
+## Physical checks
 
-The full Windows ARM64 NVK ICD builds. The SDK-backed controlled fixture
-passes in ARM64 WinPE and on the Switch's .59 baseline. It covers repeated
-imports, resource ownership, budget rejection and failed-residency cleanup.
-The fixture substitutes KMT operations and is not hardware rendering proof.
-
-## Physical evidence
-
-The live test uses the existing signed .130 KMD, not a newly built KMD.
-Its startup permit is consumed once. The active VidPN and queried GM20B
-adapter both report LUID `0000000000090adc`; the budget is 536,870,912 bytes.
-The test selects this exact LUID and submits no drawing commands.
-
-| Operation | Result |
+| Check | .132 observation |
 | --- | --- |
-| Two KMT devices, paging queues and virtual contexts | Success |
-| 16 KiB CPU-visible shared resource creation and residency | Success |
-| Producer GPU VA reservation/mapping, CPU lock, pattern write and unlock | Success |
-| NT handle export and consumer import/residency | Success |
-| Consumer GPU VA reservation and mapping | Success |
-| Consumer CPU lock after producer release and NT-handle close | `c000000d` in the first run |
-| Consumer CPU lock while producer and NT handle remain alive | `c000000d` in the second run |
-| VA, allocation, context and device cleanup | All reported success; both local budget counters returned to zero |
+| Driver and identity | Code 0; KMT and active VidPN source/target use LUID `949ff` |
+| Budget | 536,870,912 bytes, unchanged |
+| Device setup | Two KMT devices, paging queues and virtual contexts succeed |
+| Storage | Section-backed standard allocation, export, import and residency succeed |
+| Addressing | Producer and consumer GPU VA reservations/mappings succeed |
+| Readback before producer release | 4,096 matching words |
+| Readback after producer release | 4,096 matching words |
+| Readback after exported-handle closure | 4,096 matching words |
+| Cleanup | All calls succeed; both local budgets return to zero; native exit code 0 |
+| Independent KMD records | Standard GDI byte buffer: width 16,384, private data 16 bytes; creation and description succeed; description is `UNKNOWN`, width 16,384, height 1 |
+| Separate GDI execution | Fence 23, Reference 5, completion/CPU fence readback/retirement mask 7 |
 
-The second run reports distinct producer/consumer allocation and resource
-handles and exits with code 3. It fails before reading any imported word.
-The first PowerShell wrapper recorded a null process exit code; its explicit
-failure log is retained, and the second wrapper records the native exit
-code through `cmd.exe`. The failure cannot be attributed to producer or
-NT-handle closure because the second run fails before either operation.
-The underlying CPU-mapping rejection is still unidentified.
+The separate GDI record covers the merged command-validation path. This
+round does not repeat the .130 visible-pixel capture or establish continuous
+DWM refresh. The exported ETL contains 93,873 records; its count and every
+record boundary match the export header.
 
-The ETL was exported after stopping the trace. All 111,016 exported records
-match the count and boundaries in its export header. The retained paging
-and Lock events do not explain the failed imported lock; an absent event
-is not treated as proof that a particular kernel operation did not run.
+## Contract and implementation
 
-## Recovery
+On the tested Windows kernel, the GPU-MMU-only adapter's imported ordinary
+shared allocation is rejected before VidMm's CPU lock. The existing-section
+path retains CPU access across the import. Read-only analysis used the
+installed `dxgkrnl.sys` and matching public symbols, with device/local SHA256
+`99d425e1c997eae32909fa4f37d6c8e2e846a5374c602295546c8be2547aa5e6`.
+The implementation uses public SDK calls and does not access private kernel
+structures or advertise system-IOMMU support.
 
-The 12-minute rollback remained armed during both tests and was started
-early after evidence capture. At 15:40:52 UTC, SSH confirmed .59 Code 0,
-the original driver and ACPI hashes, no test permit and no remaining test
-tasks. The saved before/after power-setting reports are byte-identical;
-AC/DC display and sleep timeouts remain zero. Windows restarted directly
-into Windows. Firmware and Hekate configuration were not changed.
+CPU-visible shared allocations now create a write-combined section and
+pass it through `D3DKMTCreateAllocation2` as a standard `EXISTINGHEAP`, with
+`ExistingSection`, `CrossAdapter` and NT security sharing. The temporary
+section handle closes after creation; VidMm owns the backing reference.
+Ordinary allocations and GPU-only shared allocations retain their existing
+private-allocation path. Import still validates the raw storage metadata
+and uses separate local resource handles and per-device budget accounting.
+[Allocation creation flags](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/ns-d3dkmthk-_d3dkmt_createallocationflags)
+[Standard allocation](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/ns-d3dkmthk-_d3dkmt_createstandardallocation)
 
-## Contract references and remaining work
+The KMD supplies the standard raw-buffer descriptor and describes it in
+bytes when Windows queries the cross-adapter allocation. It also validates
+linear surface geometry, 128-byte pitch and four-row height alignment,
+separately from the fixed-panel primary format. The memory caps declare
+cross-adapter copy support; texturing and scanout tiers remain unset.
+Linear image formats have model coverage; the physical shared-storage test
+uses only the untyped buffer case. Both display and MCDM entry points route
+standard-allocation requests to the common handler; only the display
+profile was physically tested in this round.
+[Cross-adapter layouts](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/using-cross-adapter-resources-in-a-hybrid-system)
+[Capability tiers](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/supporting-caso)
 
-The exported access mask is `STANDARD_RIGHTS_READ | SHARED_ALLOCATION_WRITE`,
-as documented for readable/writable shared resources. Windows describes
-CPU-visible system-memory allocations as lockable; the failed import needs
-an explanation before claiming usable host-visible external memory.
-[Shared-resource access](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtshareobjects)
-[Lock2 and residency requirements](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/allocation-usage-tracking)
+## Validation and preceding trials
+
+The full Windows ARM64 NVK ICD builds. The SDK-controlled KMT fixture passes
+on the .59 baseline, checking write-combined section mappings, handle
+release, repeated imports, budget rejection and failed-residency cleanup.
+The WDK fixture passes with the standard-buffer, surface-layout, buffer
+description and fixed-primary regression checks. The host models also pass.
+These fixtures substitute GPU/KMT operations and are distinct from the live
+storage result above.
+
+| Trial | Finding |
+| --- | --- |
+| .130 | Ordinary shared storage exports/imports and maps GPU VA, but imported CPU lock returns `c000000d`, including before producer release. The second run exits 3; the first wrapper's exit field was null. |
+| .131 | Section-backed creation returns `c00000bb`. Code 0 and GDI fence 14/mask 7 still pass. The normal journal fills, so it does not identify the failing storage callback. |
+| .132 | Adds the missing raw-buffer description and dedicated sharing callback records. The complete storage/readback test exits 0. |
 
 The lfrb `wddm2` reference at `801c9763c6043f0de8408e905a5324eea06d81d7`
-also opens NT resources, maps GPU VA, makes allocations resident and uses
-`D3DKMTLock2`. Its AMD private allocation metadata is not the Tegra ABI;
-its implementation is a reference, not proof that this path works here.
-[RADV WDDM2 resource transport](https://gitlab.freedesktop.org/lfrb/mesa/-/blob/801c9763c6043f0de8408e905a5324eea06d81d7/src/amd/vulkan/winsys/wddm2/radv_wddm2_bo.c)
+provides useful KMT resource-opening and residency sequences. Its AMD
+metadata and CPU-access assumptions are not substituted for Tegra's ABI.
+[RADV WDDM2 transport](https://gitlab.freedesktop.org/lfrb/mesa/-/blob/801c9763c6043f0de8408e905a5324eea06d81d7/src/amd/vulkan/winsys/wddm2/radv_wddm2_bo.c)
 
-Next, resolve imported CPU access, then validate cross-device GPU access
-and completion. D3D texture layout/runtime metadata, UMD adapter/device
-negotiation, rendering and presentation callbacks, and sustained DWM
-composition remain separate required work. DXVK can inform compatibility
-and translation work; it does not supply those native UMD contracts.
+## Recovery and evidence
 
-## Evidence
+Each trial uses one desktop-start grant and a 12-minute rollback. The
+rollback was started early after the .132 evidence was downloaded. The
+16:31:27 UTC check confirms .59 Code 0, the original driver and ACPI hashes,
+no start permit and no remaining test tasks. Before/after power reports are
+byte-identical: AC/DC display and sleep timeouts remain zero. Windows
+restarted directly into Windows; firmware and Hekate configuration were
+not changed.
 
-The run is staged under
-`C:\ProgramData\SwitchWOA\GpuUpdate\shared130-20261110`.
-Local builds and captures are under
-`/private/tmp/t214-gpu-round/nvk-shared.qj2IaJ/`.
-All 28 downloaded test records and five recovery records were verified
-against device SHA256 and length. See `physical/verified.json`,
-`physical/verified-recovery.json` and `physical/returned/` under that path.
+Local .132 artifacts are under
+`/private/tmp/t214-gpu-round/shared-section132.vy36c52p/`;
+.131 artifacts are under `shared-section.bkpxtak7/` in the same parent,
+and .130 sharing artifacts under `nvk-shared.qj2IaJ/`.
+The 22 downloaded .132 test records and five recovery records match the
+device SHA256 and lengths in `physical/verified.json` and
+`physical/verified-recovery.json`. `physical/returned/` retains the native
+logs, startup record, ETL export, identity and recovery records.
 
-| Artifact | Device SHA256 |
+| Artifact | SHA256 |
 | --- | --- |
-| Signed .130 KMD | `2a5381079bab0553f09507d6f2a8fb1b539bad398f0c3673d3b5e7d53290bb85` |
-| Second live test log | `f85322c222949626a07938df6e19a1a4f4e80d206b6ee10d6a153f83851445c5` |
-| ETL export | `49ee8dab546ae4fe2dc78e5dd57c44162546ce4a4183858d670798009e9920d1` |
+| .132 signed KMD | `8bdfbf9dc2de6c6bae09a40a5c148e9c6bb3213fe6f366c58f826b37acdf1270` |
+| .132 live storage log | `3a67aa572884eaaaf5977e3b5870bce9dadefe6b14a93ca8eca08ae508a976fd` |
+| .132 startup record | `3c467759362e3065b350c586a7861a3fc9579c684dfa32e44842d22239c390b8` |
+| .132 ETL export | `735a5bef7a853aa9e735aadd91a0be76d3f265e98e1e9beb2c4a097cd244a22d` |

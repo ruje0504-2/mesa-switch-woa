@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "adapter.h"
+#include "allocation.h"
 #include "reset_backend.h"
 #include "submit_ddi.h"
 
@@ -120,10 +121,7 @@ static NTSTATUS query_interface(PVOID context,PQUERY_INTERFACE request)
 
 static NTSTATUS APIENTRY standard_allocation(HANDLE adapter,DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA *args)
 {
-    UNREFERENCED_PARAMETER(adapter);
-    UNREFERENCED_PARAMETER(args);
-    /* No standard display, GDI or virtual GPU surfaces. */
-    return STATUS_NOT_SUPPORTED;
+    return TgGpuDdiGetStandardAllocationDriverData(adapter,args);
 }
 
 static NTSTATUS APIENTRY calibrate_clock(HANDLE adapter,UINT32 node,UINT32 engine,

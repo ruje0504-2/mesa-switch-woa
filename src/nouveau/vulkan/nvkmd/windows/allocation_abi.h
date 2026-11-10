@@ -6,8 +6,9 @@
 #define TG_GPU_ALLOCATION_ABI 1u
 #define TG_GPU_ALLOCATION_CPU_VISIBLE 1u
 #define TG_GPU_ALLOCATION_DISPLAY_PRIMARY 2u
+#define TG_GPU_ALLOCATION_LINEAR_SURFACE 4u
 /* Shared KMD/UMD description of GPU storage. DISPLAY_PRIMARY selects the
- * fixed native scanout format and contiguous VidMm segment. Neither request
+ * fixed native scanout format and contiguous VidMm segment. No request
  * supplies an address. GPU VA alignment is chosen when mapping the allocation.
  * Host-visible backing is initially write-combined; cached/coherent memory
  * types are not advertised by this request.

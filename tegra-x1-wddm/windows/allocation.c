@@ -13,10 +13,15 @@ typedef struct _TG_GPU_RESOURCE {
     TG_GPU_CONTEXT_ENGINE *Engine;
     UINT Allocations,Builders;
 } TG_GPU_RESOURCE;
+typedef union _TG_GPU_ALLOCATION_DESC {
+    struct tg_gpu_allocation_request Buffer;
+    TG_GPU_PRIMARY_ALLOCATION_REQUEST Primary;
+    TG_GPU_LINEAR_ALLOCATION_REQUEST Linear;
+} TG_GPU_ALLOCATION_DESC;
 typedef struct _TG_GPU_ALLOCATION {
     TG_GPU_CONTEXT_ENGINE *Engine;
     TG_GPU_RESOURCE *Resource;
-    TG_GPU_PRIMARY_ALLOCATION_REQUEST Desc;
+    TG_GPU_ALLOCATION_DESC Desc;
     SIZE_T Bytes;
     UINT Opens;
 } TG_GPU_ALLOCATION;
@@ -26,21 +31,59 @@ typedef struct _TG_GPU_OPEN_ALLOCATION {
     BOOLEAN ReadOnly;
 } TG_GPU_OPEN_ALLOCATION;
 
-static NTSTATUS request(const DXGK_ALLOCATIONINFO *info,TG_GPU_PRIMARY_ALLOCATION_REQUEST *desc)
+static NTSTATUS linear_layout(UINT width,UINT height,D3DDDIFORMAT format,UINT *pitch,UINT64 *bytes)
+{
+    UINT bpp;
+    if(!width || !height)return STATUS_INVALID_PARAMETER;
+    switch(format) {
+    case D3DDDIFMT_UNKNOWN:
+        /* ExistingHeap is delivered as an untyped one-row byte buffer. */
+        if(height!=1 || (width&(PAGE_SIZE-1)))return STATUS_INVALID_PARAMETER;
+        *pitch=width;*bytes=width;
+        return width<=TG_GPU_MEMORY_BUDGET_BYTES?STATUS_SUCCESS:STATUS_GRAPHICS_NO_VIDEO_MEMORY;
+    case D3DDDIFMT_A8R8G8B8:case D3DDDIFMT_X8R8G8B8:
+    case D3DDDIFMT_A8B8G8R8:case D3DDDIFMT_X8B8G8R8:
+    case D3DDDIFMT_A2R10G10B10:case D3DDDIFMT_A2B10G10R10:
+        bpp=4;break;
+    case D3DDDIFMT_A16B16G16R16F:bpp=8;break;
+    default:return STATUS_NOT_SUPPORTED;
+    }
+    const UINT64 row=((UINT64)width*bpp+127)&~127ull;
+    const UINT64 rows=((UINT64)height+3)&~3ull;
+    if(row>TG_GPU_MEMORY_BUDGET_BYTES || rows>TG_GPU_MEMORY_BUDGET_BYTES/row)
+        return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
+    *pitch=(UINT)row;
+    *bytes=(row*rows+PAGE_SIZE-1)&~(UINT64)(PAGE_SIZE-1);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS request(const DXGK_ALLOCATIONINFO *info,TG_GPU_ALLOCATION_DESC *desc)
 {
     const UINT size=info->PrivateDriverDataSize;
     const struct tg_gpu_allocation_request *r=&desc->Buffer;
     if(!info->pPrivateDriverData || (size!=sizeof(*r) && size!=sizeof(*desc)))
         return STATUS_GRAPHICS_DRIVER_MISMATCH;
+    RtlZeroMemory(desc,sizeof(*desc));
     RtlCopyMemory(desc,info->pPrivateDriverData,size);
     if(info->FlagsWddm2.CreateInVpr) return STATUS_INVALID_PARAMETER;
     if(r->version!=TG_GPU_ALLOCATION_ABI) return STATUS_GRAPHICS_DRIVER_MISMATCH;
-    if((r->flags&~(TG_GPU_ALLOCATION_CPU_VISIBLE|TG_GPU_ALLOCATION_DISPLAY_PRIMARY)) ||
+    if((r->flags&~(TG_GPU_ALLOCATION_CPU_VISIBLE|TG_GPU_ALLOCATION_DISPLAY_PRIMARY|
+                   TG_GPU_ALLOCATION_LINEAR_SURFACE)) ||
         !r->bytes || r->bytes>TG_GPU_VA_LIMIT)
         return STATUS_INVALID_PARAMETER;
+    if(r->flags&TG_GPU_ALLOCATION_LINEAR_SURFACE) {
+        UINT pitch;UINT64 bytes;
+        if(size!=sizeof(desc->Linear) || r->flags!=(TG_GPU_ALLOCATION_CPU_VISIBLE|
+            TG_GPU_ALLOCATION_LINEAR_SURFACE) || desc->Linear.Format==D3DDDIFMT_UNKNOWN)
+            return STATUS_INVALID_PARAMETER;
+        NTSTATUS status=linear_layout(desc->Linear.Width,desc->Linear.Height,
+                                     desc->Linear.Format,&pitch,&bytes);
+        if(!NT_SUCCESS(status))return status;
+        return pitch==desc->Linear.Pitch && bytes==r->bytes?STATUS_SUCCESS:STATUS_INVALID_PARAMETER;
+    }
     if(size==sizeof(*desc) && (!(r->flags&TG_GPU_ALLOCATION_CPU_VISIBLE) ||
-        r->bytes!=T214_GPU_POST_FB_SIZE || desc->Reserved ||
-        (desc->Format!=D3DDDIFMT_X8R8G8B8 && desc->Format!=D3DDDIFMT_A8R8G8B8)))
+        r->bytes!=T214_GPU_POST_FB_SIZE || desc->Primary.Reserved ||
+        (desc->Primary.Format!=D3DDDIFMT_X8R8G8B8 && desc->Primary.Format!=D3DDDIFMT_A8R8G8B8)))
         return STATUS_INVALID_PARAMETER;
     return STATUS_SUCCESS;
 }
@@ -52,7 +95,7 @@ static UINT64 allocation_size(UINT64 bytes)
 NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATION *a)
 {
     TG_GPU_CONTEXT_ENGINE *e=adapter;TG_GPU_RESOURCE *r=NULL;
-    TG_GPU_PRIMARY_ALLOCATION_REQUEST desc;TG_GPU_ALLOCATION *allocation;
+    TG_GPU_ALLOCATION_DESC desc;TG_GPU_ALLOCATION *allocation;
     NTSTATUS status;KIRQL irql;UINT i,created=0;BOOLEAN new_resource=FALSE;
     UINT64 bytes=0, limit;
     if(!e || !a || !e->Tables || e->Tables->SegmentId!=TG_GPU_EXPLICIT_TABLE_SEGMENT ||
@@ -152,16 +195,22 @@ static NTSTATUS APIENTRY describe_allocation(HANDLE adapter,DXGKARG_DESCRIBEALLO
     /* Dxgkrnl holds the KMD allocation alive for this call. */
     const TG_GPU_ALLOCATION *allocation=args->hAllocation;
     if(allocation->Engine!=adapter) return STATUS_INVALID_PARAMETER;
-    const TG_GPU_PRIMARY_ALLOCATION_REQUEST *desc=&allocation->Desc;
-    /* Opaque buffers and legacy primaries have no recorded mode. */
-    if(desc->Format==D3DDDIFMT_UNKNOWN) return STATUS_NOT_SUPPORTED;
+    const TG_GPU_PRIMARY_ALLOCATION_REQUEST *desc=&allocation->Desc.Primary;
+    const BOOLEAN linear=(desc->Buffer.flags&TG_GPU_ALLOCATION_LINEAR_SURFACE)!=0;
+    const BOOLEAN buffer=desc->Format==D3DDDIFMT_UNKNOWN;
+    /* ExistingHeap's cross-adapter creation also asks DescribeAllocation.
+     * Describe an untyped buffer in bytes, without inventing a display mode.
+     * A legacy primary still requires its actual panel format. */
+    if(buffer && ((desc->Buffer.flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY) ||
+        args->Flags.CheckDisplayMode || desc->Buffer.bytes>UINT32_MAX))
+        return STATUS_NOT_SUPPORTED;
     *args=(DXGKARG_DESCRIBEALLOCATION){
         .hAllocation=args->hAllocation,
-        .Width=T214_DC_PANEL_WIDTH,
-        .Height=T214_DC_PANEL_HEIGHT,
+        .Width=buffer?(UINT)desc->Buffer.bytes:linear?allocation->Desc.Linear.Width:T214_DC_PANEL_WIDTH,
+        .Height=buffer?1:linear?allocation->Desc.Linear.Height:T214_DC_PANEL_HEIGHT,
         .Format=desc->Format,
         .MultisampleMethod={.NumSamples=1},
-        .RefreshRate=desc->RefreshRate,
+        .RefreshRate=(linear||buffer)?(D3DDDI_RATIONAL){0}:desc->RefreshRate,
         .Flags=args->Flags,
     };
     return STATUS_SUCCESS;
@@ -303,8 +352,9 @@ NTSTATUS TgGpuGetPresentSurface(TG_GPU_DEVICE *d,HANDLE handle,BOOLEAN write,
     NTSTATUS status=TgGpuValidateOpenAllocationRange(d,handle,0,T214_GPU_POST_FB_SIZE,write);
     if(!NT_SUCCESS(status) || !desc)return NT_SUCCESS(status)?STATUS_INVALID_PARAMETER:status;
     const TG_GPU_OPEN_ALLOCATION *open=handle;
-    *desc=open->Allocation->Desc;
-    if(desc->Buffer.bytes!=T214_GPU_POST_FB_SIZE ||
+    *desc=open->Allocation->Desc.Primary;
+    if((desc->Buffer.flags&TG_GPU_ALLOCATION_LINEAR_SURFACE) ||
+       desc->Buffer.bytes!=T214_GPU_POST_FB_SIZE ||
        (desc->Format!=D3DDDIFMT_X8R8G8B8 && desc->Format!=D3DDDIFMT_A8R8G8B8))
         return STATUS_NOT_SUPPORTED;
     return STATUS_SUCCESS;
@@ -326,6 +376,26 @@ NTSTATUS APIENTRY TgGpuDdiGetStandardAllocationDriverData(HANDLE context,
     PAGED_CODE();
     if (!adapter || !args || args->PhysicalAdapterIndex)
         return STATUS_INVALID_PARAMETER;
+    if(args->StandardAllocationType==D3DKMDT_STANDARDALLOCATION_GDISURFACE) {
+        D3DKMDT_GDISURFACEDATA *gdi=args->pCreateGdiSurfaceData;
+        if(!gdi || gdi->Flags.Value)return STATUS_INVALID_PARAMETER;
+        if(gdi->Type!=D3DKMDT_GDISURFACE_TEXTURE_CROSSADAPTER &&
+           gdi->Type!=D3DKMDT_GDISURFACE_TEXTURE_CPUVISIBLE_CROSSADAPTER)
+            return STATUS_NOT_SUPPORTED;
+        TG_GPU_LINEAR_ALLOCATION_REQUEST desc={
+            .Buffer={TG_GPU_ALLOCATION_ABI,TG_GPU_ALLOCATION_CPU_VISIBLE,0},
+            .Format=gdi->Format,.Width=gdi->Width,.Height=gdi->Height,
+        };
+        NTSTATUS status=linear_layout(gdi->Width,gdi->Height,gdi->Format,&desc.Pitch,&desc.Buffer.bytes);
+        if(!NT_SUCCESS(status))return status;
+        const UINT bytes=gdi->Format==D3DDDIFMT_UNKNOWN?sizeof(desc.Buffer):sizeof(desc);
+        if(gdi->Format!=D3DDDIFMT_UNKNOWN)desc.Buffer.flags|=TG_GPU_ALLOCATION_LINEAR_SURFACE;
+        gdi->Pitch=desc.Pitch;
+        args->AllocationPrivateDriverDataSize=bytes;
+        args->ResourcePrivateDriverDataSize=0;
+        if(args->pAllocationPrivateDriverData)RtlCopyMemory(args->pAllocationPrivateDriverData,&desc,bytes);
+        return STATUS_SUCCESS;
+    }
     if (!adapter->Panel.Dc.owned)
         return STATUS_DEVICE_NOT_READY;
     const BOOLEAN primary = args->StandardAllocationType == D3DKMDT_STANDARDALLOCATION_SHAREDPRIMARYSURFACE;

@@ -341,6 +341,69 @@ __declspec(noinline) static void TestGdiPresent(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_
     CHECK(!e->AllocationBytes && PoolsInUse()==before && !device->OpenAllocations);
 }
 
+__declspec(noinline) static void TestLinearAllocations(TG_GPU_CONTEXT_ENGINE *e,
+                                                      DRIVER_INITIALIZATION_DATA *ddi)
+{
+    static TG_GPU_ADAPTER adapter;
+    D3DKMDT_GDISURFACEDATA gdi={.Width=16384,.Height=1,.Format=D3DDDIFMT_UNKNOWN,
+        .Type=D3DKMDT_GDISURFACE_TEXTURE_CROSSADAPTER};
+    DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA standard={
+        .StandardAllocationType=D3DKMDT_STANDARDALLOCATION_GDISURFACE,.pCreateGdiSurfaceData=&gdi};
+    TG_GPU_LINEAR_ALLOCATION_REQUEST desc;
+    const UINT before=PoolsInUse();
+    CHECK(!adapter.Panel.Dc.owned);
+    CHECK(TgGpuDdiGetStandardAllocationDriverData(&adapter,&standard)==STATUS_SUCCESS);
+    CHECK(standard.AllocationPrivateDriverDataSize==sizeof(desc.Buffer) &&
+          !standard.ResourcePrivateDriverDataSize && gdi.Pitch==16384);
+    standard.pAllocationPrivateDriverData=&desc;
+    CHECK(TgGpuDdiGetStandardAllocationDriverData(&adapter,&standard)==STATUS_SUCCESS);
+    CHECK(desc.Buffer.version==TG_GPU_ALLOCATION_ABI &&
+          desc.Buffer.flags==TG_GPU_ALLOCATION_CPU_VISIBLE && desc.Buffer.bytes==16384);
+    DXGK_ALLOCATIONINFO info={.pPrivateDriverData=&desc,.PrivateDriverDataSize=sizeof(desc.Buffer)};
+    DXGKARG_CREATEALLOCATION create={.NumAllocations=1,.pAllocationInfo=&info};
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_SUCCESS && info.Size==16384);
+    CHECK(info.FlagsWddm2.CpuVisible && !info.FlagsWddm2.AccessedPhysically &&
+          info.PreferredSegment.SegmentId0==TG_GPU_PAGING_APERTURE_SEGMENT);
+    DXGKARG_DESCRIBEALLOCATION describe={.hAllocation=info.hAllocation};
+    CHECK(ddi->DxgkDdiDescribeAllocation(e,&describe)==STATUS_SUCCESS &&
+          describe.Width==16384 && describe.Height==1 && describe.Format==D3DDDIFMT_UNKNOWN &&
+          describe.MultisampleMethod.NumSamples==1);
+    describe.Flags.CheckDisplayMode=1;
+    CHECK(ddi->DxgkDdiDescribeAllocation(e,&describe)==STATUS_NOT_SUPPORTED);
+    DXGKARG_DESTROYALLOCATION destroy={.NumAllocations=1,.pAllocationList=&info.hAllocation};
+    CHECK(ddi->DxgkDdiDestroyAllocation(e,&destroy)==STATUS_SUCCESS);
+
+    gdi=(D3DKMDT_GDISURFACEDATA){.Width=17,.Height=5,.Format=D3DDDIFMT_A8R8G8B8,
+        .Type=D3DKMDT_GDISURFACE_TEXTURE_CPUVISIBLE_CROSSADAPTER};
+    CHECK(TgGpuDdiGetStandardAllocationDriverData(&adapter,&standard)==STATUS_SUCCESS);
+    CHECK(standard.AllocationPrivateDriverDataSize==sizeof(desc) && gdi.Pitch==128 &&
+          desc.Width==17 && desc.Height==5 && desc.Buffer.bytes==PAGE_SIZE);
+    info.PrivateDriverDataSize=sizeof(desc);
+    desc.Pitch=64;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    desc.Pitch=128;desc.Buffer.flags|=TG_GPU_ALLOCATION_DISPLAY_PRIMARY;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    desc.Buffer.flags&=~TG_GPU_ALLOCATION_DISPLAY_PRIMARY;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_SUCCESS);
+    describe=(DXGKARG_DESCRIBEALLOCATION){.hAllocation=info.hAllocation};
+    CHECK(ddi->DxgkDdiDescribeAllocation(e,&describe)==STATUS_SUCCESS &&
+          describe.Width==17 && describe.Height==5 && describe.Format==D3DDDIFMT_A8R8G8B8 &&
+          !describe.RefreshRate.Numerator && !describe.RefreshRate.Denominator);
+    CHECK(ddi->DxgkDdiDestroyAllocation(e,&destroy)==STATUS_SUCCESS);
+    gdi.Format=D3DDDIFMT_A16B16G16R16F;
+    CHECK(TgGpuDdiGetStandardAllocationDriverData(&adapter,&standard)==STATUS_SUCCESS &&
+          gdi.Pitch==256 && desc.Buffer.bytes==PAGE_SIZE);
+    gdi.Width=gdi.Height=UINT32_MAX;
+    CHECK(TgGpuDdiGetStandardAllocationDriverData(&adapter,&standard)==STATUS_GRAPHICS_NO_VIDEO_MEMORY);
+    gdi.Width=16384;gdi.Height=2;gdi.Format=D3DDDIFMT_UNKNOWN;
+    CHECK(TgGpuDdiGetStandardAllocationDriverData(&adapter,&standard)==STATUS_INVALID_PARAMETER);
+    gdi.Height=1;gdi.Flags.Value=1;
+    CHECK(TgGpuDdiGetStandardAllocationDriverData(&adapter,&standard)==STATUS_INVALID_PARAMETER);
+    gdi.Flags.Value=0;gdi.Type=D3DKMDT_GDISURFACE_TEXTURE;
+    CHECK(TgGpuDdiGetStandardAllocationDriverData(&adapter,&standard)==STATUS_NOT_SUPPORTED);
+    CHECK(!e->AllocationBytes && PoolsInUse()==before);
+}
+
 __declspec(noinline) static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *other,
                             DRIVER_INITIALIZATION_DATA *ddi,TG_GPU_DEVICE *device)
 {
@@ -526,6 +589,7 @@ __declspec(noinline) static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU
     desc[0].flags=0;desc[0].bytes=TG_GPU_MEMORY_BUDGET_BYTES-TG_GPU_SCANOUT_SEGMENT_BYTES+1;
     CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_GRAPHICS_NO_VIDEO_MEMORY);
     RtlZeroMemory(&e->Tables->Scanout,sizeof(e->Tables->Scanout));
+    TestLinearAllocations(e,ddi);
     CHECK(handle_acquires==handle_releases);
     CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyDevice(second.hDevice)));
     CHECK(PoolsInUse()==before-1);
@@ -759,7 +823,8 @@ static __declspec(noinline) void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRI
           driver.GpuEngineTopology.NbAsymetricProcessingNodes==1);
     CHECK(!driver.SupportNonVGA && !driver.FlipCaps.FlipOnVSyncMmIo);
     CHECK(!driver.PresentationCaps.Value);
-    CHECK(driver.MemoryManagementCaps.GpuMmuSupported && driver.SchedulingCaps.PreemptionAware);
+    CHECK(driver.MemoryManagementCaps.GpuMmuSupported && driver.SchedulingCaps.PreemptionAware &&
+          driver.MemoryManagementCaps.CrossAdapterResource && !driver.MemoryManagementCaps.IoMmuSupported);
     CHECK(driver.SupportPerEngineTDR);
     e->Tables->Scanout=scanout;
     CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));

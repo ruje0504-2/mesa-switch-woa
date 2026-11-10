@@ -172,17 +172,47 @@ allocate_memory(struct tg_kmt_device *dev, uint64_t size, bool cpu_visible,
       .hDevice = dev->handle, .NumAllocations = 1, .pAllocationInfo2 = &info,
       .Flags = {.CreateResource = shared, .CreateShared = shared, .NtSecuritySharing = shared},
    };
-   LONG status = D3DKMTCreateAllocation2(&args);
-   if (status < 0) {
-      AcquireSRWLockExclusive(&dev->memory_lock);
-      dev->allocated -= size;
-      ReleaseSRWLockExclusive(&dev->memory_lock);
-      return status;
-   }
-   *allocation = (struct tg_kmt_allocation){
-      .handle = info.hAllocation, .size = size, .resource = args.hResource, .flags = request.flags,
+   HANDLE section = NULL;
+   D3DKMT_CREATESTANDARDALLOCATION standard = {
+      .Type = D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP,
+      .ExistingHeapData.Size = size,
    };
-   return make_resident(dev, allocation);
+   LONG status;
+   if (shared && cpu_visible) {
+      /* On GM20B's GpuMmu-only path, an imported ordinary shared allocation
+       * cannot be CPU-locked. Give VidMm an existing section to retain and share.
+       * Use write combining to avoid a cached host alias on Tegra.
+       */
+      section = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL,
+         PAGE_READWRITE | SEC_COMMIT | SEC_WRITECOMBINE,
+         (DWORD)(size >> 32), (DWORD)size, NULL);
+      if (!section) {
+         status = GetLastError() == ERROR_INVALID_PARAMETER ?
+                  TG_KMT_INVALID_PARAMETER : TG_KMT_NO_MEMORY;
+         goto fail_charge;
+      }
+      info.hSection = section;
+      info.pPrivateDriverData = NULL;
+      info.PrivateDriverDataSize = 0;
+      args.pStandardAllocation = &standard;
+      args.Flags.StandardAllocation = true;
+      args.Flags.ExistingSection = true;
+      args.Flags.CrossAdapter = true;
+   }
+   status = D3DKMTCreateAllocation2(&args);
+   if (section)
+      CloseHandle(section);
+   if (status >= 0) {
+      *allocation = (struct tg_kmt_allocation){
+         .handle = info.hAllocation, .size = size, .resource = args.hResource, .flags = request.flags,
+      };
+      return make_resident(dev, allocation);
+   }
+fail_charge:
+   AcquireSRWLockExclusive(&dev->memory_lock);
+   dev->allocated -= size;
+   ReleaseSRWLockExclusive(&dev->memory_lock);
+   return status;
 }
 
 LONG

@@ -97,9 +97,12 @@ budget and waits for residency. Each open has a separate resource handle,
 and the caller owns the NT handle. NVK shared storage allocations use this
 resource path. Vulkan Win32 external-memory entry points, shared-image
 layout metadata and cross-device synchronization remain to be connected.
-The .130 physical test passes creation, import, residency and GPU VA
-mapping, but the imported CPU lock fails with `c000000d`, including before
-releasing the producer. Shared CPU readback is still open.
+CPU-visible shared storage uses a write-combined section and the standard
+ExistingHeap allocation path. The KMD handles the standard raw-buffer
+description and linear surface metadata. The .132 physical trial passes
+CPU readback at three ownership stages, including after producer release
+and NT-handle closure. This test uses two devices in one process on GM20B;
+cross-process sharing and GPU access to the imported storage are pending.
 [Physical shared-storage result](SHARED_STORAGE_RESULT.md)
 [KMT resource sharing](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtshareobjects)
 
