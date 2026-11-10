@@ -5,7 +5,7 @@
 
 | Driver | Result | Remaining work |
 | --- | --- | --- |
-| 0.1.0.114 | Windows reached the BasicDisplay desktop. Both `StartDevice` calls in that boot stopped at the test gate and the disk permit remained at 1. | Aligning the boot timestamps suggests the second call followed PnP's return and grant cleanup. The GDI allocation-list fix awaits a live WDDM start. |
+| 0.1.0.114 | Holding the grant until consumption let the same driver start from the BasicDisplay desktop. GPU and panel initialization and the system paging root succeeded. The live GDI context returned `AllocationListSize=256`. | Windows restarted. The durable record contains no GDI root setup, Present or VidPN commit. The next start was gated and BasicDisplay resumed. |
 | 0.1.0.113 | The permitted start installed the 16,384-entry system paging root in segment 1. The GDI device and virtual-addressed GDI context were created after mode enumeration. | The callback record contains no GDI root setup, Present or VidPN commit. The second start was denied by the test budget. |
 | 0.1.0.112 | One permitted start initialized the panel and completed the first CPU page-table update. After five successful mode enumerations, Windows created a GDI device and virtual-addressed GDI context. | No VidPN commit or timing submission appears in the callback record. The next start was denied by the test budget and the desktop used BasicDisplay. |
 | 0.1.0.110 / .111 | Both permitted starts in each trial initialized the panel and completed five mode enumerations. The .111 ETLs retained successful StartDevice results. | The callback records show no entry into the hardware capability query, POST release or VidPN submission. The next start was denied by the test budget and the desktop used BasicDisplay. |
@@ -25,11 +25,14 @@ of its first two ETLs retained StartDevice and three diagnostics with
 diagnostics do not identify the callback.
 The .112 and .113 admitted-boot ETLs retained GPU VA events and still had
 unfinalized headers. The .112 mode-switch events were in the fallback boot.
+The .114 desktop-start ETL retained the Tegra StartDevice entry in an
+unfinalized trace. Its mode-switch events and those in the finalized
+fallback trace belong to BasicDisplay. The restart interrupted demand-script
+logging.
 [AutoLogger file rotation](https://learn.microsoft.com/en-us/windows/win32/etw/configuring-and-starting-an-autologger-session)
 
-The GDI context allocation list now has 256 entries. The ARM64 fixture
-verified this output on the Lite under the .59 baseline. The .113 driver
-package predates the allocation-list change.
+The .113 package predates the GDI allocation-list change. The first .114
+demand request left the permit unused.
 [WDK context requirements](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_contextinfo)
 
 ## Development order
