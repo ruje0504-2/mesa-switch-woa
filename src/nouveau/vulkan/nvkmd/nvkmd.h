@@ -61,6 +61,9 @@ enum nvkmd_mem_flags {
     * CPU/GPU snooping may also require this for coherent host memory.
     */
    NVKMD_MEM_GPU_UNCACHED = 1 << 6,
+
+   /** Restrict GPU mappings to reads while allowing CPU uploads. */
+   NVKMD_MEM_GPU_READ_ONLY = 1 << 7,
 };
 
 #define NVKMD_MEM_PLACEMENT_FLAGS \

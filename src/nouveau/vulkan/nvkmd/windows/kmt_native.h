@@ -54,7 +54,7 @@ LONG tg_kmt_reserve(const struct tg_kmt_device *dev, uint64_t size,
 LONG tg_kmt_free_va(const struct tg_kmt_device *dev, struct tg_kmt_va *va);
 LONG tg_kmt_map(const struct tg_kmt_device *dev, const struct tg_kmt_va *va,
                 uint64_t va_offset, const struct tg_kmt_allocation *allocation,
-                uint64_t offset, uint64_t size, uint8_t kind);
+                uint64_t offset, uint64_t size, uint8_t kind, bool read_only);
 LONG tg_kmt_create_fence(const struct tg_kmt_device *dev, uint64_t initial,
                          struct tg_kmt_fence *fence);
 LONG tg_kmt_destroy_fence(struct tg_kmt_fence *fence);

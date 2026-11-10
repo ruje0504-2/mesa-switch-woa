@@ -862,13 +862,18 @@ enabled with its base, block size, format and layer state in the same push.
 NVK's B197 and B1C0 queue-state updates supply each texture header or sampler
 pool as a complete base and inclusive maximum index. The KMD checks the full
 range of 32-byte entries and records each engine's binding at retirement.
+On Windows, CPU-written descriptor tables and CPU-mapped shader heaps use
+read-only GPU mappings. The allocation VA and each arena alias inherit
+that permission. VidMm's read-only leaf entries map to GM20B's read-only
+PTE bit. CPU uploads use the allocation's CPU mapping.
+[WDDM GPUVA protection](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dukmdt/ns-d3dukmdt-_d3dddigpuvirtualaddress_protection_type)
+
 NVK draw macros and captured B1C0 dispatches check earlier pool bindings
 against the context's root limit at activation. B1C0 direct dispatch pairs
 a QMD address with NVK's invalidate-and-schedule operation, with either
 immediate or incrementing encoding. Windows NVK carries the 256-byte QMD 0.6
-in a no-op payload before
-the launch. The KMD checks the descriptor's program offset, work-group
-dimensions, memory fields and constant-buffer ranges. It aligns the QMD
+in a no-op payload before the launch. The KMD checks the program offset,
+work-group dimensions, memory fields and constant-buffer ranges. It aligns the QMD
 inside the read-only command snapshot and patches PCAS to that GPU VA.
 The payload reserves space for alignment within the existing 64 KiB limit.
 [NVIDIA Maxwell compute class](https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/compute/clb1c0.h)

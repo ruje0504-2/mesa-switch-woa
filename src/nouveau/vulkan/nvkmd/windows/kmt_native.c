@@ -251,7 +251,7 @@ tg_kmt_free_va(const struct tg_kmt_device *dev, struct tg_kmt_va *va)
 LONG
 tg_kmt_map(const struct tg_kmt_device *dev, const struct tg_kmt_va *va, uint64_t va_offset,
            const struct tg_kmt_allocation *allocation, uint64_t offset, uint64_t size,
-           uint8_t kind)
+           uint8_t kind, bool read_only)
 {
    if (!size || ((va_offset | offset | size) & (TG_KMT_PAGE_SIZE - 1)) ||
        va_offset > va->size || size > va->size - va_offset ||
@@ -261,7 +261,7 @@ tg_kmt_map(const struct tg_kmt_device *dev, const struct tg_kmt_va *va, uint64_t
       .hPagingQueue = dev->paging_queue, .BaseAddress = va->address + va_offset,
       .hAllocation = allocation->handle,
       .OffsetInPages = offset / TG_KMT_PAGE_SIZE, .SizeInPages = size / TG_KMT_PAGE_SIZE,
-      .Protection.Write = 1, .DriverProtection = kind,
+      .Protection.Write = !read_only, .DriverProtection = kind,
    };
    LONG status = D3DKMTMapGpuVirtualAddress(&args);
    if (status < 0)

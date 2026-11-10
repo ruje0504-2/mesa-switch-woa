@@ -62,8 +62,9 @@ win_bind_mem(struct nvkmd_va *base, struct vk_object_base *log, uint64_t va_offs
 {
    struct nvkmd_windows_va *va = container_of(base, struct nvkmd_windows_va, base);
    struct nvkmd_windows_mem *memory = container_of(mem, struct nvkmd_windows_mem, base);
+   const bool read_only = mem->flags & NVKMD_MEM_GPU_READ_ONLY;
    LONG status = tg_kmt_map(&nvkmd_windows_dev(base->dev)->kmt, &va->va, va_offset,
-                            &memory->allocation, mem_offset, size, base->pte_kind);
+                            &memory->allocation, mem_offset, size, base->pte_kind, read_only);
    return nvkmd_windows_status(log, "D3DKMTMapGpuVirtualAddress", status,
                                VK_ERROR_OUT_OF_DEVICE_MEMORY);
 }

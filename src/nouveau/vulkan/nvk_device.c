@@ -450,8 +450,13 @@ nvk_CreateDevice(VkPhysicalDevice physicalDevice,
       enum nvkmd_mem_map_flags shader_map_flags = 0;
       if (pdev->info.bar_size_B >= pdev->info.vram_size_B)
          shader_map_flags = NVKMD_MEM_MAP_WR;
+      enum nvkmd_mem_flags shader_mem_flags = NVKMD_MEM_LOCAL;
+#ifdef _WIN32
+      if (shader_map_flags)
+         shader_mem_flags |= NVKMD_MEM_GPU_READ_ONLY;
+#endif
       result = nvk_heap_init(dev, &dev->shader_heap,
-                             NVKMD_MEM_LOCAL, shader_map_flags,
+                             shader_mem_flags, shader_map_flags,
                              2048 /* overalloc */,
                              pdev->info.cls_eng3d < VOLTA_A);
       if (result != VK_SUCCESS)
