@@ -5,6 +5,7 @@
 
 | Driver | Result | Remaining work |
 | --- | --- | --- |
+| 0.1.0.118 | The write-through scheduler journal retained the writer's ready marker and the successful GDI return with 256 allocation entries. | Windows restarted to BasicDisplay. The journal has no submit, preempt, recovery or reset record, and the first internal failure remains unidentified. |
 | 0.1.0.117 | Tegra StartDevice returned success with one source and one child. The GDI context returned 232 bytes of DMA private data and 256 allocation entries. | Windows restarted to BasicDisplay. The callback record contains no Tegra VidPN commit. |
 | 0.1.0.116 | The live `GPUVERSION` query returned 128 bytes with `Maxwell GM20B`. Tegra StartDevice succeeded and GDI again reported 256 allocation entries. | Windows restarted and BasicDisplay resumed. The GDI callback record is the last retained Tegra startup milestone. |
 | 0.1.0.115 | The desktop demand start returned success with one source and one child. DxgKrnl recorded a LUID for `SWOA0F01`. The driver again reached GDI with 256 allocation entries. | Windows restarted and BasicDisplay resumed. The callback record contains no Tegra VidPN commit. |
@@ -17,7 +18,7 @@
 | 0.1.0.105 / .106 | The DSI link callback succeeded on hardware. The .106 trace recorded the first start and five successful VidPN enumeration calls. | A later driver load was denied by the test gate. The interactive probe saw Code 43 and the fallback display path. |
 | 0.1.0.87 | Khronos ARM64 loader and NVK submitted a Vulkan triangle through the GM20B LUID. GPU fence 27 completed. Readback matched 300 red pixels, 724 blue pixels and 128 guards. The separate Win32 GDI preview displayed the verified pixels. | Native Win32 swapchain presentation. |
 | 0.1.0.101 | `ACPI\SWOA0F01\0` appeared as **Tegra X1 (GM20B)** in the **Display** class with **OK / Code 0**. The GPU initialized, the miniport acquired the POST scanout, and the display core accepted the callbacks. | The internal adapter startup later reported `STATUS_NOT_SUPPORTED` after monitor-mode queries. The capture had no active VidPN mode commit or WDDM flip. |
-| 0.1.0.59 | After the .117 test, the Lite returned to the diagnostic driver with Code 0 and the baseline ACPI table. | The experimental display miniport remains an opt-in test. |
+| 0.1.0.59 | After the .118 test, the Lite returned to the diagnostic driver with Code 0 and the baseline ACPI table. | The experimental display miniport remains an opt-in test. |
 
 The test decrements and flushes the start budget before GPU initialization.
 The .109, .110 and .111 callback records were identical.
@@ -47,6 +48,10 @@ successful flushes in the 779 ms following the PnP request. Both loss
 counters were zero throughout the sampled window. The first internal
 failure remains unidentified.
 [ETW session counters](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/ns-evntrace-event_trace_properties)
+
+The .118 journal's GDI marker was about 37 ms after the final ETW flush
+sample by the boot-relative counters. Mode-switch events in both traces
+match BasicDisplay. The fallback trace records Tegra's denied start.
 
 The .113 package predates the GDI allocation-list change. The first .114
 demand request left the permit unused.
