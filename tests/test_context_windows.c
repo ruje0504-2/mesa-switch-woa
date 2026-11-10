@@ -722,6 +722,21 @@ static __declspec(noinline) void TestAdapterLifecycle(const DXGKRNL_INTERFACE *c
     CHECK(d.DxgkDdiResetEngine && d.DxgkDdiQueryEngineStatus &&
           d.DxgkDdiQueryDependentEngineGroup && d.DxgkDdiCollectDbgInfo);
     CHECK(d.DxgkDdiSubmitCommandVirtual==TgGpuDdiSubmitCommandVirtual && d.DxgkDdiInterruptRoutine==NULL);
+    CHECK(!d.DxgkDdiRender && !d.DxgkDdiPatch && !d.DxgkDdiSubmitCommand && !d.DxgkDdiPresent);
+    TgGpuRegisterDisplaySubmissionDdis(&d);
+    CHECK(d.DxgkDdiRender && d.DxgkDdiPatch && d.DxgkDdiSubmitCommand && d.DxgkDdiPresent &&
+          d.DxgkDdiSubmitCommandVirtual==TgGpuDdiSubmitCommandVirtual &&
+          d.DxgkDdiQueryCurrentFence==TgGpuDdiQueryCurrentFence);
+    DXGKARG_PRESENT flip={.Flags.Flip=1};
+    CHECK(d.DxgkDdiPresent((HANDLE)1,&flip)==STATUS_SUCCESS);
+    flip.pDmaBuffer=(PVOID)1;
+    CHECK(d.DxgkDdiPresent((HANDLE)1,&flip)==STATUS_NOT_SUPPORTED);
+    flip.pDmaBuffer=NULL;flip.Flags.Rotate=1;
+    CHECK(d.DxgkDdiPresent((HANDLE)1,&flip)==STATUS_NOT_SUPPORTED);
+    DXGKARG_PATCH patch={0};
+    CHECK(d.DxgkDdiPatch((HANDLE)1,&patch)==STATUS_SUCCESS);
+    patch.PatchLocationListSubmissionLength=1;
+    CHECK(d.DxgkDdiPatch((HANDLE)1,&patch)==STATUS_SUCCESS);
     CHECK(d.DxgkDdiAddDevice(NULL,(PVOID *)&a)==STATUS_INVALID_PARAMETER && !a);
     fail_pool=TRUE;
     CHECK(d.DxgkDdiAddDevice((PDEVICE_OBJECT)1,(PVOID *)&a)==STATUS_NO_MEMORY && !a);

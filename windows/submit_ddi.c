@@ -74,3 +74,56 @@ void TgGpuRegisterSubmissionDdi(DRIVER_INITIALIZATION_DATA *d)
     d->DxgkDdiSubmitCommandVirtual=TgGpuDdiSubmitCommandVirtual;
     d->DxgkDdiPreemptCommand=TgGpuDdiPreemptCommand;
 }
+
+static NTSTATUS APIENTRY render_legacy(HANDLE context, DXGKARG_RENDER *args)
+{
+    PAGED_CODE();
+    if (!context || !args)
+        return STATUS_INVALID_PARAMETER;
+    /* GM20B command submission uses VidMm GPU VAs and the virtual queue. */
+    return STATUS_NOT_SUPPORTED;
+}
+
+static NTSTATUS APIENTRY patch_legacy(HANDLE adapter, const DXGKARG_PATCH *args)
+{
+    UNREFERENCED_PARAMETER(adapter);
+    UNREFERENCED_PARAMETER(args);
+    PAGED_CODE();
+    /* The virtual path emits no physical relocations. SubmitCommand contains
+     * any unexpected physical work before it can reach the hardware.
+     */
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS APIENTRY submit_legacy(HANDLE adapter, const DXGKARG_SUBMITCOMMAND *args)
+{
+    UNREFERENCED_PARAMETER(args);
+    /* This DISPATCH_LEVEL DDI has no failure return. An unexpected physical
+     * submission enters the existing recovery path without retiring a fence.
+     */
+    (VOID)TgGpuRequestEngineRecovery(adapter, STATUS_NOT_SUPPORTED);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS APIENTRY present_mmio(HANDLE context, DXGKARG_PRESENT *args)
+{
+    PAGED_CODE();
+    if (!context || !args)
+        return STATUS_INVALID_PARAMETER;
+    const DXGK_PRESENTFLAGS supported = {
+        .Flip = 1, .FlipWithMultiPlaneOverlay = 1, .RedirectedFlip = 1
+    };
+    if (!args->Flags.Flip || (args->Flags.Value & ~supported.Value) ||
+        args->pDmaBuffer || args->MultipassOffset)
+        return STATUS_NOT_SUPPORTED;
+    /* DxgKrnl schedules the MMIO flip separately through the panel DDIs. */
+    return STATUS_SUCCESS;
+}
+
+void TgGpuRegisterDisplaySubmissionDdis(DRIVER_INITIALIZATION_DATA *d)
+{
+    d->DxgkDdiRender = render_legacy;
+    d->DxgkDdiPatch = patch_legacy;
+    d->DxgkDdiSubmitCommand = submit_legacy;
+    d->DxgkDdiPresent = present_mmio;
+}

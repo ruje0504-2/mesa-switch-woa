@@ -234,11 +234,36 @@ static NTSTATUS APIENTRY get_scanline(HANDLE context, DXGKARG_GETSCANLINE *args)
     return STATUS_NOT_SUPPORTED;
 }
 
+/* With zero hardware pointer caps, Windows composites the software cursor.
+ * Keep the display DDI pair available for a hardware-pointer hide request.
+ */
+static NTSTATUS APIENTRY set_pointer_position(HANDLE context, const DXGKARG_SETPOINTERPOSITION *args)
+{
+    PAGED_CODE();
+    if (!context || !args)
+        return STATUS_INVALID_PARAMETER;
+    if (args->VidPnSourceId != 0)
+        return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
+    return args->Flags.Visible ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
+}
+
+static NTSTATUS APIENTRY set_pointer_shape(HANDLE context, const DXGKARG_SETPOINTERSHAPE *args)
+{
+    PAGED_CODE();
+    if (!context || !args)
+        return STATUS_INVALID_PARAMETER;
+    if (args->VidPnSourceId != 0)
+        return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
+    return STATUS_NOT_IMPLEMENTED;
+}
+
 void TgGpuRegisterPanelScanout(DRIVER_INITIALIZATION_DATA *ddis)
 {
     ddis->DxgkDdiInterruptRoutine = panel_interrupt;
     ddis->DxgkDdiControlInterrupt = control_interrupt;
     ddis->DxgkDdiGetScanLine = get_scanline;
+    ddis->DxgkDdiSetPointerPosition = set_pointer_position;
+    ddis->DxgkDdiSetPointerShape = set_pointer_shape;
     ddis->DxgkDdiSetVidPnSourceAddress = set_primary;
     ddis->DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3 = set_primary_mpo;
     ddis->DxgkDdiCheckMultiPlaneOverlaySupport3 = check_mpo;

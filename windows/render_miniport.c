@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "adapter.h"
 #include "reset_backend.h"
+#include "submit_ddi.h"
 
 static VOID record_status(PCWSTR name, NTSTATUS status)
 {
@@ -184,7 +185,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT object,PUNICODE_STRING path)
     d.DxgkDdiDispatchIoRequest=dispatch_io;
     d.DxgkDdiQueryInterface=query_interface;
     d.DxgkDdiUnload=unload;
-    d.DxgkDdiQueryCurrentFence=NULL; /* MCDM uses scheduler fence notifications. */
     d.DxgkDdiDescribeAllocation=describe_allocation;
     d.DxgkDdiGetStandardAllocationDriverData=standard_allocation;
     d.DxgkDdiCalibrateGpuClock=calibrate_clock;
@@ -193,6 +193,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT object,PUNICODE_STRING path)
     d.DxgkDdiSetVirtualMachineData=set_vm_data;
 #ifdef TG_GPU_PANEL_WDDM
     TgGpuRegisterPanelLifecycle(&d);
+    TgGpuRegisterDisplaySubmissionDdis(&d);
+#else
+    d.DxgkDdiQueryCurrentFence=NULL; /* MCDM uses scheduler fence notifications. */
 #endif
     NTSTATUS status=DxgkInitialize(object,path,&d);
     record_status(L"InitializeStatus",status);
