@@ -88,9 +88,15 @@ hardware results. The D3D UMD and DWM work below is an intermediate milestone.
 
 Autonomously analyze the WDDM contracts and the Mesa/NVK, Microsoft driver
 samples, lfrb/mesa `wddm2` and deko3D sources, and implement the required changes
-in the relevant upstream and downstream code. Keep the GPU project in
-`mesa-switch-woa`, preserve upstream attribution and licensing, and update
-the published status as implementation and evidence advance.
+in the relevant upstream and downstream code. The GPU development and
+publication repository is `ruje0504-2/mesa-switch-woa`, branch `main`.
+Preserve upstream attribution and licensing, and update the published
+status as implementation and evidence advance.
+[Canonical GPU repository](https://github.com/ruje0504-2/mesa-switch-woa/tree/main)
+
+WinX and Windows-for-Switch-Drivers remain companion firmware and board
+integration repositories. Their GPU integration references this project.
+[Repository relationships](../UPSTREAM.md)
 
 Keep the 512 MiB dynamically allocated GPU budget and the existing
 AC/DC display and sleep settings. Black-screen investigation belongs to

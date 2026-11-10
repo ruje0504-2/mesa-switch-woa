@@ -10,7 +10,9 @@
   [the NVK Windows backend](../src/nouveau/vulkan/nvkmd/windows/). The original Windows GPU driver
   history was extracted from `drivers/TegraGpu` at
   `8c835b6151f948c290b6f1be1f6aae577f1e3ee9`. The Lite integration came from
-  WinX at `c5fba1a4735e6cfdb563a023d15ceae0af90af93`.
+  WinX at `c5fba1a4735e6cfdb563a023d15ceae0af90af93`. GPU development and
+  publication use the `main` branch of this standalone project.
+  [Windows ARM64 source](https://github.com/ruje0504-2/mesa-switch-woa/tree/main)
 - **WinX** and **Windows-for-Switch-Drivers** are the companion firmware and
   board-driver projects. They remain the source of the standard Lite boot
   chain, battery, power button and other platform drivers. The optional GPU
