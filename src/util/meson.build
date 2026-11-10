@@ -449,6 +449,14 @@ idep_parson = declare_dependency(
 )
 
 if with_tests
+  barrier_lifetime_test = executable(
+    'barrier_lifetime_test',
+    files('tests/barrier_lifetime_test.c'),
+    dependencies : [idep_mesautil],
+  )
+  test('barrier_serial_return', barrier_lifetime_test, args : ['serial'], suite : ['util'])
+  test('queue_finish_lifetime', barrier_lifetime_test, args : ['queue'], suite : ['util'])
+
   # DRI_CONF macros use designated initializers (required for union
   # initializaiton), so we need c++2a since gtest forces us to use c++
   if host_machine.system() != 'windows' and cpp.has_argument('-std=c++2a')
