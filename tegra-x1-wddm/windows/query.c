@@ -52,13 +52,15 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
     switch (a->Type) {
     case DXGKQAITYPE_DRIVERCAPS: {
         DXGK_DRIVERCAPS caps={0};
+        const BOOLEAN display=e->Tables->Scanout.Handle!=NULL;
         status=buffers(a,0,sizeof(caps));
         if (!NT_SUCCESS(status)) return status;
         caps.HighestAcceptableAddress.QuadPart=TG_GPU_VA_LIMIT-1;
         caps.InterruptMessageNumber=0; /* line-based */
         caps.WDDMVersion=wddm_version;
-        caps.MiscCaps.ComputeOnly=e->Tables->Scanout.Handle==NULL;
-        caps.FlipCaps.FlipOnVSyncMmIo=e->Tables->Scanout.Handle!=NULL;
+        caps.MiscCaps.ComputeOnly=!display;
+        caps.FlipCaps.FlipOnVSyncMmIo=display;
+        caps.SupportNonVGA=display; /* The panel DDIs release POST ownership. */
         caps.GpuEngineTopology.NbAsymetricProcessingNodes=1;
         caps.SchedulingCaps.MultiEngineAware=1;
         caps.SchedulingCaps.PreemptionAware=1;

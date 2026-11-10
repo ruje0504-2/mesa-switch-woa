@@ -542,8 +542,9 @@ static __declspec(noinline) void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRI
     a.OutputDataSize=sizeof(segment);a.pOutputData=NULL;
     CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_INVALID_PARAMETER);
 
-    e->Tables->Scanout=(TG_GPU_PRIVATE_MEMORY){(HANDLE)8,e->Tables->Memory.CpuAddress,
+    const TG_GPU_PRIVATE_MEMORY scanout={(HANDLE)8,e->Tables->Memory.CpuAddress,
         {.QuadPart=0x98000000},TG_GPU_SCANOUT_SEGMENT_BYTES};
+    e->Tables->Scanout=scanout;
     a.pOutputData=&segment;segment.NbSegment=0;
     CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)) && segment.NbSegment==3);
     CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
@@ -601,8 +602,13 @@ static __declspec(noinline) void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRI
     CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
     CHECK(driver.WDDMVersion==DXGKDDI_WDDMv2_6 && driver.MiscCaps.ComputeOnly &&
           driver.GpuEngineTopology.NbAsymetricProcessingNodes==1);
+    CHECK(!driver.SupportNonVGA && !driver.FlipCaps.FlipOnVSyncMmIo);
     CHECK(driver.MemoryManagementCaps.GpuMmuSupported && driver.SchedulingCaps.PreemptionAware);
     CHECK(driver.SupportPerEngineTDR);
+    e->Tables->Scanout=scanout;
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
+    CHECK(driver.SupportNonVGA && driver.FlipCaps.FlipOnVSyncMmIo && !driver.MiscCaps.ComputeOnly);
+    RtlZeroMemory(&e->Tables->Scanout,sizeof(e->Tables->Scanout));
     struct {struct tg_gpu_adapter_info info;UCHAR guard[16];} abi;
     struct tg_gpu_adapter_info request={.version=TG_GPU_ADAPTER_ABI,.size=sizeof(request)};
     memset(&abi,0xa5,sizeof(abi));
