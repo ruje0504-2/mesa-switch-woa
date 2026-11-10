@@ -100,6 +100,16 @@ acceptance requires its own device, shared-surface and continuous
 composition evidence.
 [DXVK upstream](https://github.com/doitsujin/dxvk)
 
+## deko3D Maxwell reference
+
+Consult deko3D alongside Mesa/NVK for GM20B command encoding, texture and
+sampler descriptors, graphics state, synchronization and cache operations.
+Relate those hardware sequences to the Windows KMD's VidMm mappings,
+residency and scheduler completion contract. Reused source retains deko3D's
+zlib notice and identifies local changes.
+[Source](https://github.com/devkitPro/deko3d)
+[License](https://github.com/devkitPro/deko3d/blob/master/LICENSE)
+
 ## RADV Windows reference
 
 Collabora's experimental `wddm2` branch pairs a Mesa Vulkan ICD with AMD's

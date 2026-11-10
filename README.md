@@ -4,6 +4,10 @@ Mesa NVK and a Windows 11 WDDM driver for the Tegra X1 (GM20B), based on
 the Mesa Switch port. The current hardware validation was performed on
 Nintendo Switch Lite (HDH-001).
 
+The long-term goal is a complete native Vulkan implementation, verified
+with version-appropriate VK-GL-CTS coverage and physical GM20B tests.
+Windows desktop GPU acceleration is the current development milestone.
+
 | Area | Status |
 | --- | --- |
 | Native Vulkan | NVK rendered an offscreen triangle and read back the expected pixels and guards with driver **0.1.0.87**. A Win32 preview showed that readback. |

@@ -74,6 +74,34 @@ The ARM64 NVK build now includes Win32 surface and swapchain support.
 Mesa's GDI presentation waits for the GPU copy fence before reading the
 image. On-screen `vkcube` validation is pending.
 
+## Long-term objective
+
+Deliver a complete native Vulkan driver for Windows 11 ARM64 on GM20B.
+The .87 offscreen draw/readback and .130 native scanout passes are the
+hardware baselines. Complete the Vulkan core functionality, supported
+extensions, memory and synchronization contracts, and Win32 presentation,
+with explicit API-version and feature reporting. Validate each claimed
+version and extension with the corresponding VK-GL-CTS coverage and
+physical rendering, readback and sustained-presentation tests. Track
+outstanding conformance failures and distinguish local fixtures from
+hardware results. The D3D UMD and DWM work below is an intermediate milestone.
+
+Autonomously analyze the WDDM contracts and the Mesa/NVK, Microsoft driver
+samples, lfrb/mesa `wddm2` and deko3D sources, and implement the required changes
+in the relevant upstream and downstream code. Keep the GPU project in
+`mesa-switch-woa`, preserve upstream attribution and licensing, and update
+the published status as implementation and evidence advance.
+
+Keep the 512 MiB dynamically allocated GPU budget and the existing
+AC/DC display and sleep settings. Black-screen investigation belongs to
+the separate task.
+
+Use deko3D when comparing Maxwell command encoding, descriptors, graphics
+state, synchronization and cache operations. Preserve its zlib notice and
+identify adaptations when reusing source.
+[deko3D upstream](https://github.com/devkitPro/deko3d)
+[License](https://github.com/devkitPro/deko3d/blob/master/LICENSE)
+
 ## Development order
 
 1. Windows desktop hardware acceleration. Build the Direct3D UMD device,
