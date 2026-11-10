@@ -58,8 +58,6 @@ static void test_mme_calls(void)
     assert(check_mme_call(NVK_MME_CLEAR, 2, 2047u << 10, 1));
     assert(!check_mme_call(NVK_MME_CLEAR, 1, 0x3c, 0));
     assert(!check_mme_call(NVK_MME_CLEAR, 2, 2047u << 10, 2));
-    assert(check_mme_call(NVK_MME_BIND_VB, 4, 31, 0));
-    assert(!check_mme_call(NVK_MME_BIND_VB, 4, 32, 0));
     assert(check_mme_call(NVK_MME_SET_WRITE_MASK, 2, 8, 0));
     assert(!check_mme_call(NVK_MME_SET_WRITE_MASK, 2, 9, 0));
     assert(check_mme_call(NVK_MME_SET_VIEWPORT_MIN_MAX_Z, 3, 15, 0));
@@ -308,6 +306,61 @@ static void test_compute_dispatch(void)
     assert(!tg_gpu_validate_command_stream(other_pcas, sizeof(other_pcas)));
 }
 
+static void test_input_bindings(void)
+{
+    const struct tg_gpu_command_va va = {0x100050000, 0x100020000, 0x100030000};
+    struct tg_gpu_command_info info;
+    uint32_t vb[] = {ONEINCR(0, NVB197_CALL_MME_MACRO(NVK_MME_BIND_VB), 4),
+                     31, 1, 0x4ff00, 0x100};
+    assert(tg_gpu_inspect_command_stream(vb, sizeof(vb), &va, &info));
+    assert(info.va_end == va.limit && info.requires_mme);
+    vb[4]++;
+    assert(!tg_gpu_inspect_command_stream(vb, sizeof(vb), &va, &info));
+    vb[4]--;
+    vb[1] = 32;
+    assert(!tg_gpu_inspect_command_stream(vb, sizeof(vb), &va, &info));
+
+    uint32_t ib[] = {ONEINCR(0, NVB197_CALL_MME_MACRO(NVK_MME_BIND_IB), 4),
+                     1, 0x1fffc, 4, 0};
+    assert(tg_gpu_inspect_command_stream(ib, sizeof(ib), &va, &info));
+    assert(info.va_end == va.reserved_base);
+    ib[3] += 2;
+    assert(!tg_gpu_inspect_command_stream(ib, sizeof(ib), &va, &info));
+
+    uint32_t empty[] = {
+        INCR(0, TG_GPU_NVK_MME_ZERO_ADDR_HI, 2), 1, 0x4f000,
+        ONEINCR(0, NVB197_CALL_MME_MACRO(NVK_MME_BIND_IB), 4), 0, 0, 128, 0,
+        ONEINCR(0, NVB197_CALL_MME_MACRO(NVK_MME_BIND_VB), 4), 31, 1, 0x10000, 0,
+    };
+    assert(tg_gpu_inspect_command_stream(empty, sizeof(empty), &va, &info));
+    assert(info.va_end == va.limit);
+    assert(!tg_gpu_validate_command_stream(empty + 3, sizeof(empty) - 3 * sizeof(uint32_t)));
+    empty[2] = 0x20000;
+    assert(!tg_gpu_inspect_command_stream(empty, sizeof(empty), &va, &info));
+    empty[2] = 0x4f000;
+    empty[0] = INCR(0, NVB197_SET_VERTEX_STREAM_SUBSTITUTE_A, 2);
+    assert(tg_gpu_inspect_command_stream(empty, 3 * sizeof(uint32_t), &va, &info));
+    assert(info.va_end == va.limit);
+    assert(!tg_gpu_validate_command_stream(empty, sizeof(empty))); /* MME reads its scratch pair. */
+    empty[2] += 4;
+    assert(!tg_gpu_validate_command_stream(empty, 3 * sizeof(uint32_t)));
+
+    const uint32_t scratch_lo = IMMD(0, TG_GPU_NVK_MME_ZERO_ADDR_LO, 0);
+    const uint32_t index_limit = IMMD(0, NVB197_SET_INDEX_BUFFER_D, 0);
+    const uint32_t last_vb_limit[] = {INCR(0, NVB197_SET_VERTEX_STREAM_LIMIT_B_B(15), 1), 0};
+    const uint32_t includes_location[] = {INCR(0, NVB197_SET_VERTEX_STREAM_A_FORMAT(3), 2), 0, 0};
+    assert(!tg_gpu_validate_command_stream(&scratch_lo, sizeof(scratch_lo)));
+    assert(!tg_gpu_validate_command_stream(&index_limit, sizeof(index_limit)));
+    assert(!tg_gpu_validate_command_stream(last_vb_limit, sizeof(last_vb_limit)));
+    assert(!tg_gpu_validate_command_stream(includes_location, sizeof(includes_location)));
+    const uint32_t format_and_frequency[] = {
+        IMMD(0, NVB197_SET_VERTEX_STREAM_A_FORMAT(0), 0),
+        IMMD(0, NVB197_SET_VERTEX_STREAM_A_FREQUENCY(15), 1),
+        INCR(0, NVB197_SET_VERTEX_STREAM_A_FREQUENCY(30), 2), 1, 0,
+    };
+    assert(tg_gpu_validate_command_stream(format_and_frequency, sizeof(format_and_frequency)));
+}
+
 int main(void)
 {
     uint32_t w[16]={0x20010000,0xb197,0x20020100,0x20010014,0xdeadbeef,0};
@@ -355,5 +408,6 @@ int main(void)
     test_report_and_acquire();
     test_texture_pools();
     test_compute_dispatch();
+    test_input_bindings();
     puts("B06F packets, GM20B MME and command address ranges passed");return 0;
 }

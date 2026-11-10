@@ -45,8 +45,12 @@ emit_gm20b_windows_mme(void)
         " */\n"
         "#ifndef TG_GPU_NVK_MME_PROGRAMS_H\n"
         "#define TG_GPU_NVK_MME_PROGRAMS_H\n"
-        "#include <stdint.h>\n\n"
-        "static const uint32_t tg_gpu_nvk_mme_init[] = {");
+        "#include <stdint.h>\n");
+   printf("#define TG_GPU_NVK_MME_ZERO_ADDR_HI 0x%04xu\n",
+          (unsigned)NVK_SET_MME_SCRATCH(ZERO_ADDR_HI));
+   printf("#define TG_GPU_NVK_MME_ZERO_ADDR_LO 0x%04xu\n\n",
+          (unsigned)NVK_SET_MME_SCRATCH(ZERO_ADDR_LO));
+   puts("static const uint32_t tg_gpu_nvk_mme_init[] = {");
    const size_t count = nv_push_dw_count(&push);
    for (size_t i = 0; i < count; i++) {
       if (i % 6 == 0)

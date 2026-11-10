@@ -214,9 +214,49 @@ static bool mme_upload_span(uint32_t subchannel, uint32_t first, uint32_t last)
            last >= NVB197_LOAD_MME_INSTRUCTION_RAM_POINTER;
 }
 
+static uint32_t vertex_fallback_pair(uint32_t first, uint32_t last)
+{
+    if (first <= NVB197_SET_VERTEX_STREAM_SUBSTITUTE_B && last >= NVB197_SET_VERTEX_STREAM_SUBSTITUTE_A)
+        return NVB197_SET_VERTEX_STREAM_SUBSTITUTE_A;
+    if (first <= TG_GPU_NVK_MME_ZERO_ADDR_LO && last >= TG_GPU_NVK_MME_ZERO_ADDR_HI)
+        return TG_GPU_NVK_MME_ZERO_ADDR_HI;
+    return 0;
+}
+
+static bool direct_input_binding_span(uint32_t first, uint32_t last)
+{
+    if (first <= NVB197_SET_INDEX_BUFFER_E && last >= NVB197_SET_INDEX_BUFFER_A)
+        return true;
+    if (first <= NVB197_SET_VERTEX_STREAM_LIMIT_B_B(15) && last >= NVB197_SET_VERTEX_STREAM_LIMIT_A_A(0))
+        return true;
+
+    /* Format and frequency writes remain separate from the address pair
+     * in each vertex stream's register block.
+     */
+    const uint32_t base = NVB197_SET_VERTEX_STREAM_A_FORMAT(0);
+    const uint32_t stride = NVB197_SET_VERTEX_STREAM_A_FORMAT(1) - base;
+    if (last < base || first > NVB197_SET_VERTEX_STREAM_B_LOCATION_B(15))
+        return false;
+    uint32_t index = first > base ? (first - base) / stride : 0;
+    if (first > NVB197_SET_VERTEX_STREAM_A_LOCATION_B(index))
+        index++;
+    return last >= NVB197_SET_VERTEX_STREAM_A_LOCATION_A(index);
+}
+
+static bool input_binding_range(const uint32_t *args, const struct tg_gpu_command_va *va,
+                                bool zero_addr_ready, uint64_t *max_end)
+{
+    /* The pre-Turing macros substitute the scratch address for an empty
+     * range and encode the inclusive limit as that address minus one.
+     */
+    if (!args[2] || (!args[0] && !args[1]))
+        return zero_addr_ready;
+    return word_span(va, args[0], args[1], args[2], 1, max_end);
+}
+
 static bool mme_call_allowed(uint32_t op, uint32_t method, uint32_t count,
                              const uint32_t *args, const struct tg_gpu_command_va *va,
-                             uint64_t *max_end)
+                             bool zero_addr_ready, uint64_t *max_end)
 {
     const uint32_t base = NVB197_CALL_MME_MACRO(0);
     if (op != NVB06F_DMA_ONEINCR_OPCODE_VALUE || method < base)
@@ -232,8 +272,10 @@ static bool mme_call_allowed(uint32_t op, uint32_t method, uint32_t count,
         const uint32_t max_layers = 2048;
         return base_layer < max_layers && args[1] && args[1] <= max_layers - base_layer;
     }
+    case NVK_MME_BIND_IB:
+        return input_binding_range(args, va, zero_addr_ready, max_end);
     case NVK_MME_BIND_VB:
-        return args[0] < 32;
+        return args[0] < 32 && input_binding_range(args + 1, va, zero_addr_ready, max_end);
     case NVK_MME_SET_WRITE_MASK:
         return args[0] <= 8;
     case NVK_MME_SET_VIEWPORT_MIN_MAX_Z:
@@ -252,6 +294,7 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
 {
     struct tg_gpu_command_info stream = {.reserved_base = va ? va->reserved_base : 0};
     struct tg_gpu_copy_state copy = {0};
+    bool zero_addr_ready = false;
     if(!words || !bytes || (bytes&3) || ((uintptr_t)words&3))return false;
     if (va && (!va->limit || va->limit > TG_GPU_VA_LIMIT ||
                va->reserved_base > va->reserved_end || va->reserved_end > va->limit))
@@ -268,7 +311,9 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
         if(op==NVB06F_DMA_IMMD_OPCODE_VALUE) {
             if(!method_allowed(method) || method==NVB06F_SET_OBJECT ||
                mme_upload_span(subchannel, method, method) ||
-               (subchannel == 0 && method >= NVB197_CALL_MME_MACRO(0)))return false;
+               (subchannel == 0 && (method >= NVB197_CALL_MME_MACRO(0) ||
+                                    direct_input_binding_span(method, method) ||
+                                    vertex_fallback_pair(method, method))))return false;
             if (subchannel <= 1 && (inline_upload_span(method, method) ||
                                     report_span(method, method) ||
                                     texture_pool_index_mask(method, method)))
@@ -336,6 +381,18 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
             n += used;
             continue;
         }
+        if (subchannel == 0) {
+            if (direct_input_binding_span(method, last))
+                return false;
+            const uint32_t pair = vertex_fallback_pair(method, last);
+            if (pair) {
+                const uint32_t page_bytes = 1u << TG_GPU_PAGE_SHIFT;
+                if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != pair || count != 2 ||
+                    !word_span(va, words[n], words[n + 1], page_bytes, page_bytes, &stream.va_end))
+                    return false;
+                zero_addr_ready |= pair == TG_GPU_NVK_MME_ZERO_ADDR_HI;
+            }
+        }
         if (mme_upload_span(subchannel, method, last)) {
             /* NVK uploads its programs and their slot bindings together. */
             const size_t mme_words = sizeof(tg_gpu_nvk_mme_init) / sizeof(*words);
@@ -350,7 +407,7 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
             continue;
         }
         if (subchannel == 0 && last >= NVB197_CALL_MME_MACRO(0)) {
-            if (!mme_call_allowed(op, method, count, words + n, va, &stream.va_end))
+            if (!mme_call_allowed(op, method, count, words + n, va, zero_addr_ready, &stream.va_end))
                 return false;
             stream.requires_mme |= !stream.uploads_mme;
         }

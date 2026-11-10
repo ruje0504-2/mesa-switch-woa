@@ -7,6 +7,9 @@
 #define TG_GPU_NVK_MME_PROGRAMS_H
 #include <stdint.h>
 
+#define TG_GPU_NVK_MME_ZERO_ADDR_HI 0x3470u
+#define TG_GPU_NVK_MME_ZERO_ADDR_LO 0x3474u
+
 static const uint32_t tg_gpu_nvk_mme_init[] = {
     0x20020047u, 0x00000000u, 0x00000000u, 0xa0090045u, 0x00000000u, 0x03468215u,
     0x0346c315u, 0x06380021u, 0x02000441u, 0x00001040u, 0x00001840u, 0x00000090u,

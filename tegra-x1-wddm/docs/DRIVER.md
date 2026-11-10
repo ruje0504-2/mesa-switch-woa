@@ -809,6 +809,13 @@ layers, vertex binding, viewport and render target arguments. NVK always
 supplies two clear parameters, including for multiview. GPU-fed parameter
 continuations require a separate submit path.
 
+Vertex and index binding macros supply the base and byte length used to
+calculate GM20B's inclusive fetch limits. The KMD checks the entire GPUVA
+range and accepts location and limit changes through those macros. An empty
+binding on Windows sets the zero-page scratch address in the same push as the
+call. The KMD checks the full fallback page and the vertex substitute page
+against the submission's process bounds.
+
 A macro call before the upload in its packet requires an initialized graphics
 context. The KMD records initialization for that context after GPU completion,
 GR retirement and CPU fence readback. Canceled work cannot publish that state,

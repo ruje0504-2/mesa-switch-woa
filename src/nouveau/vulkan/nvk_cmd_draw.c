@@ -141,6 +141,14 @@ nvk_mme_select_cb0(struct mme_builder *b)
 
 static uint32_t nvk_mme_anti_alias_init(void);
 
+static void
+nvk_push_mme_zero_addr(struct nv_push *p, uint64_t addr)
+{
+   P_MTHD(p, NV9097, SET_MME_SHADOW_SCRATCH(NVK_MME_SCRATCH_ZERO_ADDR_HI));
+   P_NV9097_SET_MME_SHADOW_SCRATCH(p, NVK_MME_SCRATCH_ZERO_ADDR_HI, addr >> 32);
+   P_NV9097_SET_MME_SHADOW_SCRATCH(p, NVK_MME_SCRATCH_ZERO_ADDR_LO, addr);
+}
+
 VkResult
 nvk_push_draw_state_init(struct nvk_queue *queue, struct nv_push *p)
 {
@@ -691,9 +699,7 @@ nvk_push_draw_state_init(struct nvk_queue *queue, struct nv_push *p)
    P_NV9097_SET_MME_SHADOW_SCRATCH(p, NVK_MME_SCRATCH_CB0_ADDR_LO, cb0_addr);
 
    /* Store the address to the zero page in a pair of state registers */
-   P_MTHD(p, NV9097, SET_MME_SHADOW_SCRATCH(NVK_MME_SCRATCH_ZERO_ADDR_HI));
-   P_NV9097_SET_MME_SHADOW_SCRATCH(p, NVK_MME_SCRATCH_ZERO_ADDR_HI, zero_addr >> 32);
-   P_NV9097_SET_MME_SHADOW_SCRATCH(p, NVK_MME_SCRATCH_ZERO_ADDR_LO, zero_addr);
+   nvk_push_mme_zero_addr(p, zero_addr);
 
    /* We leave CB0 selected by default */
    P_1INC(p, NV9097, CALL_MME_MACRO(NVK_MME_SELECT_CB0));
@@ -4565,6 +4571,20 @@ nvk_mme_bind_ib(struct mme_builder *b)
    mme_emit(b, index_type);
 }
 
+static struct nv_push *
+nvk_push_vertex_binding(struct nvk_cmd_buffer *cmd, VkDeviceAddressRangeKHR range)
+{
+   /* GM20B uses the scratch address for empty bindings. Keep its setup in
+    * the same push on Windows so the KMD can validate the fallback.
+    */
+   const bool zero_addr = DETECT_OS_WINDOWS && (!range.address || !range.size) &&
+                         nvk_cmd_buffer_3d_cls(cmd) < TURING_A;
+   struct nv_push *p = nvk_cmd_buffer_push(cmd, zero_addr ? 8 : 5);
+   if (zero_addr)
+      nvk_push_mme_zero_addr(p, nvk_cmd_buffer_device(cmd)->zero_page->va->addr);
+   return p;
+}
+
 VKAPI_ATTR void VKAPI_CALL
 nvk_CmdBindIndexBuffer3KHR(VkCommandBuffer commandBuffer,
                            const VkBindIndexBuffer3InfoKHR* pInfo)
@@ -4572,7 +4592,7 @@ nvk_CmdBindIndexBuffer3KHR(VkCommandBuffer commandBuffer,
    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
    const VkDeviceAddressRangeKHR addr_range = pInfo->addressRange;
 
-   struct nv_push *p = nvk_cmd_buffer_push(cmd, 5);
+   struct nv_push *p = nvk_push_vertex_binding(cmd, addr_range);
    P_1INC(p, NV9097, CALL_MME_MACRO(NVK_MME_BIND_IB));
    P_INLINE_DATA(p, addr_range.address >> 32);
    P_INLINE_DATA(p, addr_range.address);
@@ -4693,7 +4713,7 @@ nvk_cmd_bind_vertex_buffer(struct nvk_cmd_buffer *cmd, uint32_t vb_idx,
    if (vb_idx == 0)
       cmd->state.gfx.vb0 = addr_range;
 
-   struct nv_push *p = nvk_cmd_buffer_push(cmd, 5);
+   struct nv_push *p = nvk_push_vertex_binding(cmd, addr_range);
    P_1INC(p, NV9097, CALL_MME_MACRO(NVK_MME_BIND_VB));
    P_INLINE_DATA(p, vb_idx);
    P_INLINE_DATA(p, addr_range.address >> 32);
