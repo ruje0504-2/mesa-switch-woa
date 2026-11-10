@@ -20,37 +20,9 @@ _Static_assert(TgGpuApertureCount == T214_GPU_RESOURCE_COUNT, "GPU resource coun
 _Static_assert(T214_DC_WIN_A_ADDR_HI * sizeof(ULONG) < T214_GPU_DC_SIZE, "Display A aperture");
 _Static_assert(T214_DC_PANEL_PITCH * T214_DC_PANEL_HEIGHT == T214_GPU_POST_FB_SIZE, "POST size");
 
-static BOOLEAN
-matches_boot_scanout(PULONG registers)
+static uint32_t read_dc_register(void *registers, uint32_t word)
 {
-    const ULONG pending = T214_DC_GENERAL_ACT_REQ | T214_DC_WIN_A_ACT_REQ;
-    /* The firmware leaves the controller in continuous mode. Read the
-     * selected bank without changing the mux, and reject a pending latch.
-     */
-    return !(READ_REGISTER_ULONG(registers + T214_DC_STATE_CONTROL) & pending) &&
-        (READ_REGISTER_ULONG(registers + T214_DC_COMMAND) & T214_DC_MODE_MASK) ==
-            T214_DC_MODE_CONTINUOUS &&
-        (READ_REGISTER_ULONG(registers + T214_DC_OUTPUT_OPTIONS) & T214_DC_DSI_ENABLE) &&
-        READ_REGISTER_ULONG(registers + T214_DC_ACTIVE_SIZE) == T214_DC_PANEL_ACTIVE &&
-        READ_REGISTER_ULONG(registers + T214_DC_SYNC_WIDTH) == T214_DC_PANEL_SYNC &&
-        READ_REGISTER_ULONG(registers + T214_DC_BACK_PORCH) == T214_DC_PANEL_BACK &&
-        READ_REGISTER_ULONG(registers + T214_DC_FRONT_PORCH) == T214_DC_PANEL_FRONT &&
-        READ_REGISTER_ULONG(registers + T214_DC_WIN_A_OPTIONS) == T214_DC_WIN_ENABLE &&
-        READ_REGISTER_ULONG(registers + T214_DC_WIN_A_BYTE_SWAP) == 0 &&
-        READ_REGISTER_ULONG(registers + T214_DC_WIN_A_BUFFER) == 0 &&
-        READ_REGISTER_ULONG(registers + T214_DC_WIN_A_COLOR) == T214_DC_COLOR_BGRA8888 &&
-        READ_REGISTER_ULONG(registers + T214_DC_WIN_A_POSITION) == 0 &&
-        READ_REGISTER_ULONG(registers + T214_DC_WIN_A_SIZE) == T214_DC_PANEL_ACTIVE &&
-        READ_REGISTER_ULONG(registers + T214_DC_WIN_A_PRESCALED) == T214_DC_PANEL_PRESCALED &&
-        READ_REGISTER_ULONG(registers + T214_DC_WIN_A_DDA) == T214_DC_DDA_IDENTITY &&
-        (READ_REGISTER_ULONG(registers + T214_DC_WIN_A_STRIDE) & 0xffff) ==
-            T214_DC_PANEL_PITCH &&
-        READ_REGISTER_ULONG(registers + T214_DC_WIN_A_ADDR) == T214_GPU_POST_FB_BASE &&
-        READ_REGISTER_ULONG(registers + T214_DC_WIN_A_ADDR_HI) == 0 &&
-        READ_REGISTER_ULONG(registers + T214_DC_WIN_A_H_OFFSET) == 0 &&
-        READ_REGISTER_ULONG(registers + T214_DC_WIN_A_V_OFFSET) == 0 &&
-        READ_REGISTER_ULONG(registers + T214_DC_WIN_A_SURFACE_KIND) == 0 &&
-        !(READ_REGISTER_ULONG(registers + T214_DC_STATE_CONTROL) & pending);
+    return READ_REGISTER_ULONG((PULONG)registers + word);
 }
 
 NTSTATUS
@@ -149,18 +121,23 @@ TgGpuAcquireResources(const DXGKRNL_INTERFACE *Dxgk,
             Resources->Memory[aperture] = *resource;
             memoryMask |= 1u << aperture;
         } else if (resource->Type == CmResourceTypeInterrupt) {
-            if (interruptCount == 2 ||
+            if (interruptCount == 3 ||
                 (resource->Flags & (CM_RESOURCE_INTERRUPT_LATCHED |
                                     CM_RESOURCE_INTERRUPT_MESSAGE)) != 0)
                 return STATUS_DEVICE_CONFIGURATION_ERROR;
-            /* Preserve translated Windows vectors, levels and affinity.
-             * They are not the raw GSI values from _CRS. Order is stall then
-             * nonstall, as emitted by the shared firmware resource profile.
+            /* _CRS orders the GPU stall and nonstall lines before Display A.
+             * Keep the translated GPU vectors, levels and affinity.
              */
-            Resources->Interrupt[interruptCount++] = *resource;
+            if (interruptCount < 2)
+                Resources->Interrupt[interruptCount] = *resource;
+            else if (resource->ShareDisposition != CmResourceShareDeviceExclusive)
+                return STATUS_DEVICE_CONFIGURATION_ERROR;
+            ++interruptCount;
         }
     }
-    if (memoryMask != (1u << TgGpuApertureCount) - 1u || interruptCount != 2)
+    if (memoryMask != (1u << TgGpuApertureCount) - 1u || interruptCount < 2 ||
+        (interruptCount == 3 && (!hasPostFramebuffer || !display ||
+                               (display->Flags & CM_RESOURCE_MEMORY_READ_ONLY))))
         return STATUS_DEVICE_CONFIGURATION_ERROR;
 
     for (i = 0; i < TgGpuApertureCount; ++i) {
@@ -183,8 +160,11 @@ TgGpuAcquireResources(const DXGKRNL_INTERFACE *Dxgk,
     if (display) {
         status = Dxgk->DxgkCbMapMemory(Dxgk->DeviceHandle, display->u.Memory.Start,
             T214_GPU_DC_SIZE, FALSE, FALSE, MmNonCached, &Resources->DisplayRegisters);
-        if (NT_SUCCESS(status) && !matches_boot_scanout(Resources->DisplayRegisters))
-            status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        if (NT_SUCCESS(status)) {
+            const struct tg_t214_dc_io io = {Resources->DisplayRegisters, read_dc_register, NULL};
+            if (!tg_t214_dc_has_boot_mode(&io))
+                status = STATUS_DEVICE_CONFIGURATION_ERROR;
+        }
         if (!NT_SUCCESS(status)) {
             NTSTATUS cleanup = TgGpuReleaseResources(Dxgk, Resources);
             return NT_SUCCESS(cleanup) ? status : cleanup;

@@ -164,7 +164,7 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
          "/DDXGKDDI_INTERFACE_VERSION=DXGKDDI_INTERFACE_VERSION_WDDM2_6",
          *[f"/I{p}" for p in mesa_includes], *[f"/imsvc{p}" for p in includes]]
 objects = []
-for source in [*core, power, clock, root / "windows/resources.c",
+for source in [*core, power, clock, root / "platform/t214_dc.c", root / "windows/resources.c",
                root / "windows/private_memory.c", root / "windows/paging.c",
                root / "windows/table_segment.c", root / "windows/root_table.c",
                root / "windows/paging_buffer.c",root / "windows/paging_dispatch.c",
@@ -202,7 +202,7 @@ if args.windows_tests:
                     str(args.out / "table_segment.obj"), str(args.out / "private_memory.obj"),
                     str(args.out / "root_table.obj"), str(args.out / "t214_mmu.obj"),
                     str(args.out / "paging_buffer.obj"), str(args.out / "paging_dma.obj"),
-                    str(args.out / "resources.obj"),
+                    str(args.out / "resources.obj"), str(args.out / "t214_dc.obj"),
                     str(sdk_lib)], check=True)
     context_test = args.out / "test_context_windows.obj"
     subprocess.run([args.clang_cl, *flags, "/clang:-funwind-tables", f"/Fo{context_test}", "--",

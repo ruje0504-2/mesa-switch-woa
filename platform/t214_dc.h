@@ -2,13 +2,21 @@
 #ifndef TG_GPU_T214_DC_H
 #define TG_GPU_T214_DC_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 /* Tegra210 display A word indices. The direct Window A blocks at 0xb80
  * and 0xbc0 avoid changes to the indexed window selector.
  * Register layout: Linux v6.12 drivers/gpu/drm/tegra/{dc.c,dc.h}.
  * The mode constants describe Hekate bdk/display/di{.c,.inl}.
  */
 #define T214_DC_COMMAND            0x032
+#define T214_DC_INT_STATUS         0x037
+#define T214_DC_INT_MASK           0x038
+#define T214_DC_INT_ENABLE         0x039
+#define T214_DC_STATE_ACCESS       0x040
 #define T214_DC_STATE_CONTROL      0x041
+#define T214_DC_REG_ACT_CONTROL    0x043
 #define T214_DC_OUTPUT_OPTIONS     0x402
 #define T214_DC_SYNC_WIDTH         0x407
 #define T214_DC_BACK_PORCH         0x408
@@ -31,8 +39,11 @@
 
 #define T214_DC_MODE_MASK          (3u << 5)
 #define T214_DC_MODE_CONTINUOUS    (1u << 5)
+#define T214_DC_VBLANK_INT         (1u << 2)
+#define T214_DC_READ_ACTIVE        (1u << 0)
 #define T214_DC_GENERAL_ACT_REQ    (1u << 0)
 #define T214_DC_WIN_A_ACT_REQ      (1u << 1)
+#define T214_DC_WIN_A_HCOUNTER     (1u << 2)
 #define T214_DC_DSI_ENABLE         (1u << 29)
 #define T214_DC_WIN_ENABLE         (1u << 30)
 #define T214_DC_COLOR_BGRA8888     12u
@@ -47,5 +58,46 @@
 #define T214_DC_PANEL_FRONT        T214_DC_PACK(136u, 10u)
 #define T214_DC_PANEL_PRESCALED    T214_DC_PACK(T214_DC_PANEL_PITCH, T214_DC_PANEL_HEIGHT)
 #define T214_DC_DDA_IDENTITY       T214_DC_PACK(0x1000u, 0x1000u)
+
+struct tg_t214_dc_io {
+    void *context;
+    uint32_t (*read32)(void *context, uint32_t word);
+    void (*write32)(void *context, uint32_t word, uint32_t value);
+};
+
+struct tg_t214_dc {
+    struct tg_t214_dc_io io;
+    bool owned;
+    bool vblank;
+    bool boot_hcounter;
+};
+
+enum tg_t214_dc_result {
+    TG_T214_DC_OK,
+    TG_T214_DC_INVALID,
+    TG_T214_DC_BUSY,
+    TG_T214_DC_MODE_MISMATCH
+};
+
+/* Read the selected register bank without changing the controller. */
+bool tg_t214_dc_has_boot_mode(const struct tg_t214_dc_io *io);
+
+/* Zero-initialize state. The caller owns the writable Display A resource
+ * and serializes all access, including its interrupt handler. These calls
+ * do not sleep. Keep every queued or active scanout allocation pinned.
+ */
+enum tg_t214_dc_result tg_t214_dc_acquire(struct tg_t214_dc *dc,
+    const struct tg_t214_dc_io *io);
+void tg_t214_dc_set_vblank(struct tg_t214_dc *dc, bool enabled);
+bool tg_t214_dc_ack_vblank(struct tg_t214_dc *dc);
+uint64_t tg_t214_dc_active_address(struct tg_t214_dc *dc);
+/* This fixed-mode path scans a contiguous, page-aligned native surface
+ * entirely below 4 GiB. The caller owns its backing and cache visibility.
+ */
+enum tg_t214_dc_result tg_t214_dc_queue_flip(struct tg_t214_dc *dc, uint64_t address);
+/* Queue and confirm the original POST address first. Retry BUSY until
+ * the restore activation completes before unmapping or freeing scanout.
+ */
+enum tg_t214_dc_result tg_t214_dc_release(struct tg_t214_dc *dc);
 
 #endif

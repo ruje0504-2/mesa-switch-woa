@@ -5,6 +5,7 @@
 #include "../windows/root_table.h"
 #include "../windows/paging_buffer.h"
 #include "../windows/resources.h"
+#include "../platform/t214_dc.h"
 #include "../platform/t214_resources.h"
 #include <ntimage.h>
 
@@ -95,6 +96,115 @@ static void TestDisplayResources(void)
     boot_display[0xb8a] -= 4;
     CHECK(TgGpuAcquireResources(&dxgk, &resources) == STATUS_DEVICE_CONFIGURATION_ERROR);
     CHECK(!resources.DisplayRegisters && !resource_live && resource_unmaps == resource_maps);
+    boot_display[0xb8a] += 4;
+
+    CM_PARTIAL_RESOURCE_DESCRIPTOR irq = {0};
+    irq.Type = CmResourceTypeInterrupt;
+    irq.ShareDisposition = CmResourceShareDeviceExclusive;
+    irq.u.Interrupt.Vector = 0x904; /* Translated, as seen on Lite. */
+    list = ResourceList(TRUE);
+    list->PartialDescriptors[list->Count++] = display;
+    list->PartialDescriptors[list->Count++] = irq;
+    CHECK(TgGpuAcquireResources(&dxgk, &resources) == STATUS_DEVICE_CONFIGURATION_ERROR);
+    CHECK(!resource_maps);
+
+    CM_PARTIAL_RESOURCE_DESCRIPTOR post = {0};
+    post.Type = CmResourceTypeMemory;
+    post.ShareDisposition = CmResourceShareDeviceExclusive;
+    post.u.Memory.Start.QuadPart = T214_GPU_POST_FB_BASE;
+    post.u.Memory.Length = T214_GPU_POST_FB_SIZE;
+    display.Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+    list = ResourceList(TRUE);
+    list->PartialDescriptors[list->Count++] = post;
+    list->PartialDescriptors[list->Count++] = display;
+    list->PartialDescriptors[list->Count++] = irq;
+    CHECK(TgGpuAcquireResources(&dxgk, &resources) == STATUS_SUCCESS);
+    CHECK(resources.Interrupt[0].u.Interrupt.Vector == 0x200 &&
+          resources.Interrupt[1].u.Interrupt.Vector == 0x201);
+    CHECK(TgGpuReleaseResources(&dxgk, &resources) == STATUS_SUCCESS && !resource_live);
+}
+
+struct display_model {
+    ULONG regs[T214_GPU_DC_SIZE / sizeof(ULONG)];
+    ULONG update, armed_address, active_address;
+};
+
+static uint32_t DisplayRead(void *context, uint32_t word)
+{
+    struct display_model *model = context;
+    if (word == 0xbc0 && (model->regs[0x040] & 1))
+        return model->active_address;
+    return model->regs[word];
+}
+
+static void DisplayWrite(void *context, uint32_t word, uint32_t value)
+{
+    struct display_model *model = context;
+    if (word == 0x037) {
+        CHECK(value == 4); /* Acknowledge only the VBlank W1C bit. */
+        model->regs[word] &= ~value;
+    } else if (word == 0x041) {
+        if (value == 0x100 || value == 0x200) {
+            model->update = value >> 8;
+            model->armed_address = model->regs[0xbc0];
+        } else {
+            CHECK(value == model->update && (value == 1 || value == 2));
+            model->regs[word] |= value;
+            model->update = 0;
+        }
+    } else {
+        CHECK(word == 0x038 || word == 0x039 || word == 0x040 || word == 0x043 || word == 0xbc0);
+        model->regs[word] = value;
+    }
+}
+
+static void DisplayFrame(struct display_model *model)
+{
+    if (model->regs[0x041] & 2)
+        model->active_address = model->armed_address;
+    model->regs[0x041] = 0;
+    model->regs[0x037] |= model->regs[0x039] & 4;
+}
+
+static void TestDisplayFlip(void)
+{
+    static struct display_model model;
+    RtlCopyMemory(model.regs, boot_display, sizeof(model.regs));
+    model.regs[0x043] = 0x454;
+    model.regs[0x039] = 1; /* Masked context-switch source stays intact. */
+    model.regs[0x037] = 1;
+    model.active_address = T214_GPU_POST_FB_BASE;
+    const struct tg_t214_dc_io io = {&model, DisplayRead, DisplayWrite};
+    struct tg_t214_dc dc = {0};
+
+    CHECK(tg_t214_dc_acquire(&dc, &io) == TG_T214_DC_OK);
+    CHECK(model.regs[0x043] == 0x450 && model.regs[0x040] == 0);
+    CHECK(tg_t214_dc_queue_flip(&dc, 0xc1000000) == TG_T214_DC_BUSY);
+    tg_t214_dc_set_vblank(&dc, true);
+    CHECK(model.regs[0x038] == 4 && model.regs[0x039] == 5);
+    CHECK(!tg_t214_dc_ack_vblank(&dc));
+    DisplayFrame(&model);
+    CHECK(tg_t214_dc_ack_vblank(&dc) && model.regs[0x037] == 1);
+    CHECK(tg_t214_dc_queue_flip(&dc, 0xc1000004) == TG_T214_DC_INVALID);
+    CHECK(tg_t214_dc_queue_flip(&dc, 0xfff00000) == TG_T214_DC_INVALID);
+
+    CHECK(tg_t214_dc_queue_flip(&dc, 0xc1000000) == TG_T214_DC_OK);
+    CHECK(tg_t214_dc_active_address(&dc) == T214_GPU_POST_FB_BASE);
+    CHECK(tg_t214_dc_queue_flip(&dc, T214_GPU_POST_FB_BASE) == TG_T214_DC_BUSY);
+    DisplayFrame(&model);
+    CHECK(tg_t214_dc_ack_vblank(&dc));
+    CHECK(tg_t214_dc_active_address(&dc) == 0xc1000000);
+    CHECK(tg_t214_dc_release(&dc) == TG_T214_DC_BUSY);
+
+    CHECK(tg_t214_dc_queue_flip(&dc, T214_GPU_POST_FB_BASE) == TG_T214_DC_OK);
+    DisplayFrame(&model);
+    CHECK(tg_t214_dc_ack_vblank(&dc));
+    CHECK(tg_t214_dc_release(&dc) == TG_T214_DC_BUSY);
+    DisplayFrame(&model);
+    CHECK(tg_t214_dc_release(&dc) == TG_T214_DC_OK);
+    CHECK(!dc.owned && !dc.vblank && model.active_address == T214_GPU_POST_FB_BASE);
+    CHECK(model.regs[0x043] == 0x454 && model.regs[0x040] == 0);
+    CHECK(model.regs[0x038] == 0 && model.regs[0x039] == 1 && model.regs[0x037] == 1);
 }
 
 static void TestResources(void)
@@ -531,6 +641,7 @@ void start(void)
     static const char message[] = "PASS: WDK physical system/table PTEs, multipass ordering, alias bounds and TLB failures\r\n";
     TestResources();
     TestDisplayResources();
+    TestDisplayFlip();
     TestSegment();
     TestRoot();
     TestPagingBuffer();

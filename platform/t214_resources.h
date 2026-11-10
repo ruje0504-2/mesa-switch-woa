@@ -26,6 +26,7 @@
 /* Display A, including its direct Window A registers. */
 #define T214_GPU_DC_BASE          0x54200000
 #define T214_GPU_DC_SIZE          0x00004000
+#define T214_GPU_DC_GSI           105
 
 /* Narrow GPU power/clock registers, excluding the fan owner's CPU CAR
  * block. PLLP is read through that owner; PMIC access uses its SPB target.
