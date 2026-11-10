@@ -142,10 +142,15 @@ static NTSTATUS add_source(const DXGK_VIDPN_INTERFACE *api, D3DKMDT_HVIDPN vidpn
         if (!NT_SUCCESS(status))
             (VOID)modes->pfnReleaseModeInfo(set, mode);
     }
-    if (NT_SUCCESS(status))
+    if (NT_SUCCESS(status)) {
         status = api->pfnAssignSourceModeSet(vidpn, 0, set);
-    if (!NT_SUCCESS(status))
-        (VOID)api->pfnReleaseSourceModeSet(vidpn, set);
+        /* Assign consumes the set after validating its arguments. */
+        if (status != STATUS_GRAPHICS_INVALID_VIDPN &&
+            status != STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE &&
+            status != STATUS_GRAPHICS_INVALID_VIDPN_SOURCEMODESET)
+            return status;
+    }
+    (VOID)api->pfnReleaseSourceModeSet(vidpn, set);
     return status;
 }
 
@@ -167,10 +172,14 @@ static NTSTATUS add_target(const DXGK_VIDPN_INTERFACE *api, D3DKMDT_HVIDPN vidpn
         if (!NT_SUCCESS(status))
             (VOID)modes->pfnReleaseModeInfo(set, mode);
     }
-    if (NT_SUCCESS(status))
+    if (NT_SUCCESS(status)) {
         status = api->pfnAssignTargetModeSet(vidpn, target, set);
-    if (!NT_SUCCESS(status))
-        (VOID)api->pfnReleaseTargetModeSet(vidpn, set);
+        if (status != STATUS_GRAPHICS_INVALID_VIDPN &&
+            status != STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_TARGET &&
+            status != STATUS_GRAPHICS_INVALID_VIDPN_TARGETMODESET)
+            return status;
+    }
+    (VOID)api->pfnReleaseTargetModeSet(vidpn, set);
     return status;
 }
 
@@ -204,6 +213,23 @@ static NTSTATUS APIENTRY is_supported(HANDLE context, DXGKARG_ISSUPPORTEDVIDPN *
     }
     NTSTATUS release = path.Topology->pfnReleasePathInfo(path.Handle, path.Path);
     return NT_SUCCESS(status) ? release : status;
+}
+
+static NTSTATUS APIENTRY query_hardware_capability(HANDLE context, DXGKARG_QUERYVIDPNHWCAPABILITY *args)
+{
+    const TG_GPU_ADAPTER *adapter = context;
+    PAGED_CODE();
+    if (!adapter || !args || !args->hFunctionalVidPn)
+        return STATUS_INVALID_PARAMETER;
+    if (!adapter->Panel.Dc.owned)
+        return STATUS_DEVICE_NOT_READY;
+    if (args->SourceId != 0)
+        return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
+    if (args->TargetId != adapter->Panel.Boot.TargetId)
+        return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_TARGET;
+    /* The fixed panel path needs no driver-side transforms. */
+    args->VidPnHWCaps = (D3DKMDT_VIDPN_HW_CAPABILITY){0};
+    return STATUS_SUCCESS;
 }
 
 static NTSTATUS APIENTRY enumerate_modes(HANDLE context, const DXGKARG_ENUMVIDPNCOFUNCMODALITY *args)
@@ -392,6 +418,7 @@ static NTSTATUS APIENTRY update_active_path(HANDLE context,
 void TgGpuRegisterPanelVidPn(DRIVER_INITIALIZATION_DATA *ddis)
 {
     ddis->DxgkDdiIsSupportedVidPn = is_supported;
+    ddis->DxgkDdiQueryVidPnHWCapability = query_hardware_capability;
     ddis->DxgkDdiEnumVidPnCofuncModality = enumerate_modes;
     ddis->DxgkDdiRecommendFunctionalVidPn = recommend_functional;
     ddis->DxgkDdiCommitVidPn = commit_vidpn;
