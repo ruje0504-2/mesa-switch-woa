@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "adapter.h"
+#include "allocation_abi.h"
 #include "../platform/t214_resources.h"
 
 const D3DKMDT_VIDEO_SIGNAL_INFO TgGpuPanelSignal = {
@@ -61,8 +62,11 @@ NTSTATUS TgGpuPanelStart(TG_GPU_ADAPTER *adapter)
     if (!dxgk->DeviceHandle || !dxgk->DxgkCbAcquirePostDisplayOwnership ||
         !dxgk->DxgkCbSynchronizeExecution)
         return STATUS_INVALID_DEVICE_STATE;
+    NTSTATUS status = TgGpuCreateScanoutSegment(dxgk, &adapter->Tables);
+    if (!NT_SUCCESS(status))
+        return status;
     DXGK_DISPLAY_INFORMATION boot = {0};
-    NTSTATUS status = dxgk->DxgkCbAcquirePostDisplayOwnership(dxgk->DeviceHandle, &boot);
+    status = dxgk->DxgkCbAcquirePostDisplayOwnership(dxgk->DeviceHandle, &boot);
     if (!NT_SUCCESS(status))
         return status;
     if (boot.Width != T214_DC_PANEL_WIDTH || boot.Height != T214_DC_PANEL_HEIGHT ||
@@ -201,6 +205,34 @@ static NTSTATUS APIENTRY recommend_monitor_modes(HANDLE context, const DXGKARG_R
     return status == STATUS_GRAPHICS_MODE_ALREADY_IN_MODESET ? STATUS_SUCCESS : status;
 }
 
+static NTSTATUS APIENTRY standard_allocation(HANDLE context,
+    DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA *args)
+{
+    TG_GPU_ADAPTER *adapter = context;
+    PAGED_CODE();
+    if (!adapter || !args || args->PhysicalAdapterIndex)
+        return STATUS_INVALID_PARAMETER;
+    if (!adapter->Panel.Dc.owned)
+        return STATUS_DEVICE_NOT_READY;
+    if (args->StandardAllocationType != D3DKMDT_STANDARDALLOCATION_SHAREDPRIMARYSURFACE)
+        return STATUS_NOT_SUPPORTED;
+    const D3DKMDT_SHAREDPRIMARYSURFACEDATA *surface = args->pCreateSharedPrimarySurfaceData;
+    if (!surface || surface->VidPnSourceId != 0 ||
+        surface->Width != T214_DC_PANEL_WIDTH || surface->Height != T214_DC_PANEL_HEIGHT ||
+        (surface->Format != D3DDDIFMT_X8R8G8B8 && surface->Format != D3DDDIFMT_A8R8G8B8))
+        return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE_MODE;
+    const struct tg_gpu_allocation_request request = {
+        TG_GPU_ALLOCATION_ABI,
+        TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_DISPLAY_PRIMARY,
+        T214_GPU_POST_FB_SIZE,
+    };
+    args->AllocationPrivateDriverDataSize = sizeof(request);
+    args->ResourcePrivateDriverDataSize = 0;
+    if (args->pAllocationPrivateDriverData)
+        RtlCopyMemory(args->pAllocationPrivateDriverData, &request, sizeof(request));
+    return STATUS_SUCCESS;
+}
+
 void TgGpuRegisterPanelLifecycle(DRIVER_INITIALIZATION_DATA *ddis)
 {
     ddis->DxgkDdiStopDevice = stop_device;
@@ -209,5 +241,6 @@ void TgGpuRegisterPanelLifecycle(DRIVER_INITIALIZATION_DATA *ddis)
     ddis->DxgkDdiQueryChildRelations = query_children;
     ddis->DxgkDdiQueryChildStatus = query_child_status;
     ddis->DxgkDdiRecommendMonitorModes = recommend_monitor_modes;
+    ddis->DxgkDdiGetStandardAllocationDriverData = standard_allocation;
     TgGpuRegisterPanelVidPn(ddis);
 }

@@ -115,12 +115,15 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
         status=buffers(a,sizeof(*in),sizeof(*out));
         if (!NT_SUCCESS(status)) return status;
         if (in->PhysicalAdapterIndex) return STATUS_INVALID_PARAMETER;
+        const UINT segments=e->Tables->Scanout.Handle ? TG_GPU_SCANOUT_SEGMENT :
+            TG_GPU_PAGING_APERTURE_SEGMENT;
         /* WDDM's first call permits accessing only NbSegment. The other
          * members are not valid inputs until the second call.
          */
-        if (!out->NbSegment) { out->NbSegment=2;return STATUS_SUCCESS; }
-        if (out->NbSegment!=2 || !out->pSegmentDescriptor ||
-            out->SegmentDescriptorStride<sizeof(desc)) return STATUS_INVALID_PARAMETER;
+        if (!out->NbSegment) { out->NbSegment=segments;return STATUS_SUCCESS; }
+        if (out->NbSegment!=segments || !out->pSegmentDescriptor ||
+            out->SegmentDescriptorStride<sizeof(desc) ||
+            out->SegmentDescriptorStride>SIZE_MAX/segments) return STATUS_INVALID_PARAMETER;
         desc.Flags=table.Flags;
         desc.BaseAddress=table.BaseAddress;
         desc.Size=table.Size;
@@ -135,6 +138,12 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
         aperture.Size=aperture.CommitLimit=TG_GPU_PAGING_APERTURE_BYTES;
         RtlCopyMemory(out->pSegmentDescriptor+out->SegmentDescriptorStride,
                       &aperture,sizeof(aperture));
+        if (segments==TG_GPU_SCANOUT_SEGMENT) {
+            status=TgGpuDescribeScanoutSegment(e->Tables,&desc);
+            if (!NT_SUCCESS(status)) return status;
+            RtlCopyMemory(out->pSegmentDescriptor+2*out->SegmentDescriptorStride,
+                          &desc,sizeof(desc));
+        }
         out->PagingBufferSegmentId=TG_GPU_PAGING_APERTURE_SEGMENT;
         out->PagingBufferSize=TG_GPU_DMA_BUFFER_BYTES;
         out->PagingBufferPrivateDataSize=TG_GPU_PAGING_PRIVATE_BYTES;

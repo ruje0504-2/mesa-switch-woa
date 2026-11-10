@@ -356,6 +356,24 @@ static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *othe
     CHECK(!e->AllocationBytes && NT_SUCCESS(ddi->DxgkDdiCreateAllocation(e,&create)));
     destroy.pAllocationList=&info[0].hAllocation;
     CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)) && !e->AllocationBytes);
+
+    /* VidMm can place a native primary only in the dedicated segment.
+     * Its backing is already reserved against the opaque allocation budget.
+     */
+    desc[0].flags=TG_GPU_ALLOCATION_CPU_VISIBLE|TG_GPU_ALLOCATION_DISPLAY_PRIMARY;
+    desc[0].bytes=T214_GPU_POST_FB_SIZE;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    e->Tables->Scanout=(TG_GPU_PRIVATE_MEMORY){(HANDLE)8,e->Tables->Memory.CpuAddress,
+        {.QuadPart=0x98000000},TG_GPU_SCANOUT_SEGMENT_BYTES};
+    CHECK(NT_SUCCESS(ddi->DxgkDdiCreateAllocation(e,&create)));
+    CHECK(info[0].Size==T214_GPU_POST_FB_SIZE && info[0].FlagsWddm2.AccessedPhysically &&
+          info[0].FlagsWddm2.CpuVisible && info[0].PreferredSegment.SegmentId0==TG_GPU_SCANOUT_SEGMENT);
+    CHECK(info[0].SupportedReadSegmentSet==(1u<<(TG_GPU_SCANOUT_SEGMENT-1)) &&
+          info[0].SupportedWriteSegmentSet==info[0].SupportedReadSegmentSet && !e->AllocationBytes);
+    CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)) && !e->AllocationBytes);
+    desc[0].flags=0;desc[0].bytes=TG_GPU_MEMORY_BUDGET_BYTES-TG_GPU_SCANOUT_SEGMENT_BYTES+1;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_GRAPHICS_NO_VIDEO_MEMORY);
+    RtlZeroMemory(&e->Tables->Scanout,sizeof(e->Tables->Scanout));
     CHECK(handle_acquires==handle_releases);
     CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyDevice(second.hDevice)));
     CHECK(PoolsInUse()==before-1);
@@ -479,7 +497,7 @@ static __declspec(noinline) void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRI
     DXGKARG_QUERYADAPTERINFO a={0};
     DXGK_QUERYSEGMENTIN4 input={0};
     DXGK_QUERYSEGMENTOUT4 segment,before;
-    struct { DXGK_SEGMENTDESCRIPTOR4 desc;UCHAR extension[32]; } output[2];
+    struct { DXGK_SEGMENTDESCRIPTOR4 desc;UCHAR extension[32]; } output[3];
     DXGK_GPUMMUCAPS mmu;
     DXGK_QUERYPAGETABLELEVELDESCIN level={0};
     DXGK_PAGE_TABLE_LEVEL_DESC desc;
@@ -523,6 +541,22 @@ static __declspec(noinline) void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRI
     CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_BUFFER_TOO_SMALL);
     a.OutputDataSize=sizeof(segment);a.pOutputData=NULL;
     CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_INVALID_PARAMETER);
+
+    e->Tables->Scanout=(TG_GPU_PRIVATE_MEMORY){(HANDLE)8,e->Tables->Memory.CpuAddress,
+        {.QuadPart=0x98000000},TG_GPU_SCANOUT_SEGMENT_BYTES};
+    a.pOutputData=&segment;segment.NbSegment=0;
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)) && segment.NbSegment==3);
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
+    CHECK(output[2].desc.BaseAddress.QuadPart==0x98000000 &&
+          output[2].desc.CpuTranslatedAddress.QuadPart==0x98000000 &&
+          output[2].desc.Size==TG_GPU_SCANOUT_SEGMENT_BYTES &&
+          output[2].desc.Flags.CpuVisible && !output[2].desc.Flags.Aperture);
+    for(i=0;i<sizeof(output[2].extension);++i) CHECK(output[2].extension[i]==0xa5);
+    CHECK(NT_SUCCESS(TgGpuResolveVidMmPage(e->Tables,TG_GPU_SCANOUT_SEGMENT,PAGE_SIZE,PAGE_SIZE,&address)));
+    CHECK(address==0x98001000);
+    CHECK(TgGpuResolveScanoutSegment(e->Tables,TG_GPU_SCANOUT_SEGMENT_BYTES-PAGE_SIZE,
+          T214_GPU_POST_FB_SIZE,&address)==STATUS_INVALID_ADDRESS && address==0x98001000);
+    RtlZeroMemory(&e->Tables->Scanout,sizeof(e->Tables->Scanout));
 
     a.Type=DXGKQAITYPE_GPUMMUCAPS;a.pOutputData=&mmu;a.OutputDataSize=sizeof(mmu);
     memset(&mmu,0xa5,sizeof(mmu));

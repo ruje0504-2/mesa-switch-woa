@@ -5,8 +5,10 @@
 
 #define TG_GPU_ALLOCATION_ABI 1u
 #define TG_GPU_ALLOCATION_CPU_VISIBLE 1u
-/* Shared KMD/UMD description of opaque GPU storage, not a physical address or
- * a scanout-surface description. GPU VA alignment is chosen when mapping it.
+#define TG_GPU_ALLOCATION_DISPLAY_PRIMARY 2u
+/* Shared KMD/UMD description of GPU storage. DISPLAY_PRIMARY selects the
+ * fixed native scanout format and contiguous VidMm segment. Neither request
+ * supplies an address. GPU VA alignment is chosen when mapping the allocation.
  * Host-visible backing is initially write-combined; cached/coherent memory
  * types are not advertised by this request.
  */

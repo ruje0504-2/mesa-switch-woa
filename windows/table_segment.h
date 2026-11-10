@@ -6,6 +6,8 @@
 
 #define TG_GPU_PAGING_APERTURE_SEGMENT 2u
 #define TG_GPU_PAGING_APERTURE_BYTES (1024u * 1024u)
+#define TG_GPU_SCANOUT_SEGMENT 3u
+#define TG_GPU_SCANOUT_SEGMENT_BYTES (16u * 1024u * 1024u)
 
 /* VidMm owns allocation/residency within this CPU-visible memory segment.
  * The adapter owns its contiguous, uncached backing until StopDevice. This
@@ -14,6 +16,7 @@
  */
 typedef struct _TG_GPU_TABLE_SEGMENT {
     TG_GPU_PRIVATE_MEMORY Memory;
+    TG_GPU_PRIVATE_MEMORY Scanout;
     UINT SegmentId;
     volatile LONG AperturePfns[TG_GPU_PAGING_APERTURE_BYTES / PAGE_SIZE];
 } TG_GPU_TABLE_SEGMENT;
@@ -33,6 +36,15 @@ NTSTATUS TgGpuDestroyTableSegment(const DXGKRNL_INTERFACE *Dxgk,
 
 NTSTATUS TgGpuDescribeTableSegment(const TG_GPU_TABLE_SEGMENT *Segment,
     DXGK_SEGMENTDESCRIPTOR3 *Description);
+
+/* Optional contiguous backing for the fixed-mode panel's VidMm primaries. */
+_IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS TgGpuCreateScanoutSegment(const DXGKRNL_INTERFACE *Dxgk,
+    TG_GPU_TABLE_SEGMENT *Segment);
+NTSTATUS TgGpuDescribeScanoutSegment(const TG_GPU_TABLE_SEGMENT *Segment,
+    DXGK_SEGMENTDESCRIPTOR4 *Description);
+NTSTATUS TgGpuResolveScanoutSegment(const TG_GPU_TABLE_SEGMENT *Segment,
+    UINT64 ByteOffset, SIZE_T Bytes, UINT64 *DeviceAddress);
 
 /* BuildPagingBuffer serializes changes with the adapter lock. VidMm owns
  * the MDL and retains residency while a mapping is used to build GPU PTEs.

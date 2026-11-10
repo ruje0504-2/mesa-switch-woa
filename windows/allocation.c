@@ -4,6 +4,7 @@
  */
 #include "allocation.h"
 #include "adapter_abi.h"
+#include "../platform/t214_resources.h"
 
 #define TAG 0x41674754u
 typedef struct _TG_GPU_RESOURCE {
@@ -30,7 +31,8 @@ static NTSTATUS request(const DXGK_ALLOCATIONINFO *info,struct tg_gpu_allocation
     RtlCopyMemory(r,info->pPrivateDriverData,sizeof(*r));
     if(info->FlagsWddm2.CreateInVpr) return STATUS_INVALID_PARAMETER;
     if(r->version!=TG_GPU_ALLOCATION_ABI) return STATUS_GRAPHICS_DRIVER_MISMATCH;
-    if((r->flags&~TG_GPU_ALLOCATION_CPU_VISIBLE) || !r->bytes || r->bytes>TG_GPU_VA_LIMIT)
+    if((r->flags&~(TG_GPU_ALLOCATION_CPU_VISIBLE|TG_GPU_ALLOCATION_DISPLAY_PRIMARY)) ||
+        !r->bytes || r->bytes>TG_GPU_VA_LIMIT)
         return STATUS_INVALID_PARAMETER;
     return STATUS_SUCCESS;
 }
@@ -44,18 +46,25 @@ NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATI
     TG_GPU_CONTEXT_ENGINE *e=adapter;TG_GPU_RESOURCE *r=NULL;
     struct tg_gpu_allocation_request desc;TG_GPU_ALLOCATION *allocation;
     NTSTATUS status;KIRQL irql;UINT i,created=0;BOOLEAN new_resource=FALSE;
-    UINT64 bytes=0;
+    UINT64 bytes=0, limit;
     if(!e || !a || !e->Tables || e->Tables->SegmentId!=TG_GPU_EXPLICIT_TABLE_SEGMENT ||
         a->PrivateDriverDataSize || a->Flags.Reserved || (!a->Flags.Resource && a->hResource) ||
         (a->NumAllocations && !a->pAllocationInfo) || (!a->NumAllocations && !a->Flags.Resource))
         return STATUS_INVALID_PARAMETER;
+    limit=TG_GPU_MEMORY_BUDGET_BYTES-e->Tables->Scanout.Bytes;
     /* Validate all user descriptors before allocating or changing a resource. */
     for(i=0;i<a->NumAllocations;++i) a->pAllocationInfo[i].hAllocation=NULL;
     for(i=0;i<a->NumAllocations;++i) {
         status=request(&a->pAllocationInfo[i],&desc);
         if(!NT_SUCCESS(status)) return status;
+        if(desc.flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY) {
+            /* VidMm manages residency within the already charged segment. */
+            if(!e->Tables->Scanout.Handle || !(desc.flags&TG_GPU_ALLOCATION_CPU_VISIBLE) ||
+                desc.bytes!=T214_GPU_POST_FB_SIZE) return STATUS_INVALID_PARAMETER;
+            continue;
+        }
         UINT64 size=allocation_size(desc.bytes);
-        if(size>TG_GPU_MEMORY_BUDGET_BYTES-bytes) return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
+        if(size>limit-bytes) return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
         bytes+=size;
     }
     KeAcquireSpinLock(&e->Lock,&irql);
@@ -66,7 +75,7 @@ NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATI
     }
     /* Charge the batch before releasing the lock so concurrent devices
      * compete for the same UMA ceiling, including in-flight creates. */
-    if(bytes>TG_GPU_MEMORY_BUDGET_BYTES-e->AllocationBytes) {
+    if(e->AllocationBytes>limit || bytes>limit-e->AllocationBytes) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
     }
     e->AllocationBytes+=bytes;
@@ -96,18 +105,17 @@ NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATI
         RtlZeroMemory(info,sizeof(*info));
         info->pPrivateDriverData=private_data;info->PrivateDriverDataSize=private_bytes;
         info->hAllocation=allocation;info->Size=allocation->Bytes;info->Alignment=PAGE_SIZE;
+        const BOOLEAN primary=(allocation->Request.flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY)!=0;
+        const UINT segment=primary ? TG_GPU_SCANOUT_SEGMENT : TG_GPU_PAGING_APERTURE_SEGMENT;
         /* VidMm redirects GpuMmu allocations from the aperture to implicit
          * system memory when AccessedPhysically is clear. */
-        info->PreferredSegment.SegmentId0=TG_GPU_PAGING_APERTURE_SEGMENT;
-        info->SupportedReadSegmentSet=info->SupportedWriteSegmentSet=
-            1u<<(TG_GPU_PAGING_APERTURE_SEGMENT-1);
+        info->PreferredSegment.SegmentId0=segment;
+        info->SupportedReadSegmentSet=info->SupportedWriteSegmentSet=1u<<(segment-1);
         info->FlagsWddm2.Value=os_flags;
         info->FlagsWddm2.CpuVisible=(allocation->Request.flags&TG_GPU_ALLOCATION_CPU_VISIBLE)!=0;
+        info->FlagsWddm2.AccessedPhysically=primary;
         info->FlagsWddm2.DisableLargePageMapping=1;
         info->AllocationPriority=D3DDDI_ALLOCATIONPRIORITY_NORMAL;
-        /* No AccessedPhysically, cache-coherent or scanout claim. Pages may be
-         * scattered; the ordinary GpuMmu PTE path maps VidMm-owned backing.
-         */
     }
     KeAcquireSpinLock(&e->Lock,&irql);
     e->AllocationCount+=created;
@@ -154,7 +162,8 @@ NTSTATUS APIENTRY TgGpuDdiDestroyAllocation(HANDLE adapter,const DXGKARG_DESTROY
     for(i=0;i<a->NumAllocations;++i) {
         allocation=a->pAllocationList[i];
         if(allocation->Resource) --allocation->Resource->Allocations;
-        e->AllocationBytes-=allocation->Bytes;
+        if(!(allocation->Request.flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY))
+            e->AllocationBytes-=allocation->Bytes;
         --e->AllocationCount;
     }
     if(resource) --e->ResourceCount;
