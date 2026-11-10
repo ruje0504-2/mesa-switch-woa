@@ -660,7 +660,7 @@ nvk_CmdDispatchIndirect2KHR(VkCommandBuffer commandBuffer,
          nvk_cmd_buffer_switch_sync_host(cmd);
          p = nvk_cmd_buffer_push(cmd, 5);
 #else
-         __push_immd(p, SUBC_NV9097, NV906F_SET_REFERENCE, 0);
+         nvk_push_legacy_host_wfi(p, SUBC_NV9097);
 #endif
       }
 

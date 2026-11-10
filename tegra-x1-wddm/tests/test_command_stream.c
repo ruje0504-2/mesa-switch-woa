@@ -690,7 +690,8 @@ static void test_captured_qmd(void)
     uint32_t snapshot[PCAS + 3];
     memcpy(snapshot, push, sizeof(push));
     assert(tg_gpu_prepare_command_stream(snapshot, sizeof(snapshot), &va, &info));
-    const uint64_t qmd_va = va.reserved_base + TG_GPU_COMMAND_CAPTURE + 256;
+    const uint64_t qmd_va = va.reserved_base + TG_GPU_COMMAND_QMD + 256;
+    assert(info.has_qmd && qmd_va >= va.reserved_base + TG_GPU_COMMAND_CAPTURE + TG_GPU_COMMAND_CAPTURE_BYTES);
     assert(snapshot[PCAS + 1] == qmd_va >> 8 && !push[PCAS + 1]);
     assert(info.va_end == qmd_va + 256 && !memcmp(snapshot + TG_GPU_QMD_WORDS, qmd, 256));
     struct tg_gpu_program_state programs = {.end = {[TG_GPU_PROGRAM_COMPUTE] = 0x200000000}};
@@ -739,6 +740,46 @@ static void test_captured_qmd(void)
     assert(tg_gpu_inspect_command_stream(push + PCAS, 12, &va, NULL));
     assert(!tg_gpu_prepare_command_stream(push + PCAS, 12, &va, NULL));
 #undef SET_QMD
+}
+
+static void test_native_umd_barrier(void)
+{
+    /* Exact 592-byte NVK_DEBUG=push stream from the .134 native D3D clear.
+     * QMD data occupies the NO_OPERATION payload at DWORD 0x0b.  The final
+     * MME-data invalidation used SET_REFERENCE, which is reserved for KMD
+     * retirement.  Changing only that barrier must preserve QMD relocation.
+     */
+    uint32_t push[148] = {
+        [0x00] = 0x20010040,
+        [0x02] = 0x800020a6, [0x03] = 0x80002509, [0x04] = 0x80002091,
+        [0x05] = 0x20020509,
+        [0x08] = 0x90000369, [0x09] = 0x80012651, [0x0a] = 0x607f2040,
+        [0x13] = 0x0000f480,
+        [0x16] = 0x04000000, [0x17] = 0x00000004, [0x18] = 0x00010008,
+        [0x1d] = 0x00100006, [0x1e] = 0x00010008, [0x1f] = 0x20000003,
+        [0x28] = 0x027b0100, [0x29] = 0x04000000,
+        [0x2a] = 0x027b0000, [0x2b] = 0x00800000,
+        [0x39] = 0x18000000, [0x3a] = 0x30000000,
+        [0x8a] = 0x200120ad,
+        [0x8c] = 0x800320af, [0x8d] = 0x80002651,
+        [0x8e] = 0x80142087, [0x8f] = 0x80142087,
+        [0x90] = 0x800024a2, [0x91] = 0x901025a6,
+        [0x92] = IMMD(0, NVB06F_SET_REFERENCE, 0),
+        [0x93] = 0x800020a6,
+    };
+    const struct tg_gpu_command_va va = {TG_GPU_VA_LIMIT, 0x7000000000, 0x7004000000};
+    struct tg_gpu_command_info info;
+    assert(!tg_gpu_inspect_command_stream(push, sizeof(push), &va, NULL));
+    push[0x92] = IMMD(0, NVB06F_WFI, NVB06F_WFI_SCOPE_ALL);
+    uint32_t qmd[TG_GPU_QMD_WORDS];
+    memcpy(qmd, push + 0x0b, sizeof(qmd));
+    assert(tg_gpu_prepare_command_stream(push, sizeof(push), &va, &info));
+    const uint64_t qmd_va = va.reserved_base + TG_GPU_COMMAND_QMD + 256;
+    assert(info.has_qmd);
+    assert(push[0x8b] == qmd_va >> 8);
+    assert(info.va_end == qmd_va + 256);
+    assert(info.requires_program == (1u << TG_GPU_PROGRAM_COMPUTE));
+    assert(!memcmp(push + TG_GPU_QMD_WORDS, qmd, sizeof(qmd)));
 }
 
 int main(void)
@@ -795,5 +836,6 @@ int main(void)
     test_program_regions();
     test_shader_local_memory();
     test_captured_qmd();
+    test_native_umd_barrier();
     puts("B06F packets, GM20B MME and command address ranges passed");return 0;
 }

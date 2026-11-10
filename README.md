@@ -13,7 +13,7 @@ Windows desktop GPU acceleration is the current development milestone.
 | Native Vulkan | NVK rendered an offscreen triangle and read back the expected pixels and guards with driver **0.1.0.87**. A Win32 preview showed that readback. |
 | Display adapter | **0.1.0.130** reached **Code 0**, completed GDI copies and displayed verified RGB bars on the internal panel through the GM20B VidPN and native scanout. |
 | Shared storage | **0.1.0.132** passed NT-handle import and CPU readback between two devices on GM20B, including after producer release. [Test scope and evidence](tegra-x1-wddm/docs/SHARED_STORAGE_RESULT.md). |
-| Windows desktop | The experimental D3D10 UMD opened a native NVK device in **.133** direct-DDI testing. Clear/readback hit a rejected submission; hardware DWM composition remains pending. [Evidence](tegra-x1-wddm/docs/D3D_UMD_RESULT.md). |
+| Windows desktop | **0.1.0.137** passes native D3D10 UMD clear/copy/readback: three colors, 12,288 matching pixels on GM20B. Windows D3D runtime integration and hardware DWM composition remain pending. [Evidence](tegra-x1-wddm/docs/D3D_UMD_RESULT.md). |
 
 The Windows NVK backend uses KMT for allocations, GPU virtual addresses,
 submissions and monitored fences. The KMD uses dynamically allocated system

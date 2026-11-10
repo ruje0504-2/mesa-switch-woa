@@ -1582,6 +1582,10 @@ void start(void)
         UINT64 *pt=((TG_GPU_PROCESS *)process.hKmdProcess)->Internal.Leaf.CpuAddress;
         CHECK(pt[0]==UINT64_C(0x100910007) && pt[1]==UINT64_C(0x100910015));
         CHECK(pt[2]==UINT64_C(0x100910023) && pt[3]==0 && pt[TG_GPU_TABLE_ENTRIES-1]==0);
+        for(UINT i=TG_GPU_COMMAND_CAPTURE/PAGE_SIZE;i<TG_GPU_COMMAND_BYTES/PAGE_SIZE;i++) {
+            const BOOLEAN qmd=i>=TG_GPU_COMMAND_QMD/PAGE_SIZE;
+            CHECK((pt[i]&7)==(qmd?1:5)); /* USER data; only QMD pages allow writes. */
+        }
     }
     device.hKmdProcess=process.hKmdProcess;
     CHECK(ddi.DxgkDdiCreateDevice(&other,&device)==STATUS_INVALID_PARAMETER);

@@ -7,7 +7,9 @@
 
 #define TG_GPU_COMMAND_CAPTURE 0x4000u
 #define TG_GPU_COMMAND_CAPTURE_BYTES (64u*1024u)
-#define TG_GPU_COMMAND_BYTES (TG_GPU_COMMAND_CAPTURE+TG_GPU_COMMAND_CAPTURE_BYTES)
+#define TG_GPU_COMMAND_QMD (TG_GPU_COMMAND_CAPTURE+TG_GPU_COMMAND_CAPTURE_BYTES)
+#define TG_GPU_COMMAND_QMD_BYTES TG_GPU_COMMAND_CAPTURE_BYTES
+#define TG_GPU_COMMAND_BYTES (TG_GPU_COMMAND_QMD+TG_GPU_COMMAND_QMD_BYTES)
 #define TG_GPU_COMMAND_RING 0u
 #define TG_GPU_COMMAND_PUSH 0x1000u
 #define TG_GPU_COMMAND_USERD 0x2000u
@@ -18,7 +20,9 @@
  * channel rather than a virtual semaphore store to its privileged PTE.
  * The application's packet stays USER; only the generated completion packet
  * is KERNEL. Caller owns all backing and must quiesce the hardware slot before
- * preparing it. RAMIN PDB words are preserved, not exposed in the mapped pages.
+ * preparing it. QMDs use a separate writable data mirror: DFALCON writes
+ * them during dispatch, while the captured command stream stays read-only.
+ * RAMIN PDB words are preserved, not exposed in the mapped pages.
  */
 bool tg_gpu_prepare_submission(void *commands, size_t bytes, uint64_t physical,
     uint64_t internal_va, void *instance, size_t instance_bytes,

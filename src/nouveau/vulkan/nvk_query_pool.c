@@ -393,7 +393,7 @@ nvk_CmdResetQueryPool(VkCommandBuffer commandBuffer,
       P_NVC86F_MEM_OP_D(p, { .operation = OPERATION_MEMBAR });
    } else {
       struct nv_push *p = nvk_cmd_buffer_push(cmd, 1);
-      __push_immd(p, SUBC_NV9097, NV906F_SET_REFERENCE, 0);
+      nvk_push_legacy_host_wfi(p, SUBC_NV9097);
    }
 }
 

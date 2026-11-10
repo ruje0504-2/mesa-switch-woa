@@ -53,6 +53,7 @@ struct tg_gpu_command_info {
     bool uploads_mme;
     bool requires_mme; /* A call precedes any upload in this stream. */
     bool requires_cb0; /* Uses the CB0 selected by a preceding submission. */
+    bool has_qmd; /* Publish the immutable payload to the writable QMD mirror. */
     uint64_t cb0_end; /* An initialized CB0 to publish on retirement. */
 };
 

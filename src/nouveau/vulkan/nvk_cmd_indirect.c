@@ -1159,7 +1159,7 @@ nvk_CmdExecuteGeneratedCommandsEXT(VkCommandBuffer commandBuffer,
 #ifdef HAVE_SWITCH_PLATFORM
          nvk_cmd_buffer_switch_sync_host(cmd);
 #else
-         __push_immd(p, SUBC_NV9097, NV906F_SET_REFERENCE, 0);
+         nvk_push_legacy_host_wfi(p, SUBC_NV9097);
 #endif
       }
    }
@@ -1390,7 +1390,7 @@ nvk_CmdCopyMemoryIndirectKHR(VkCommandBuffer commandBuffer,
 #ifdef HAVE_SWITCH_PLATFORM
       nvk_cmd_buffer_switch_sync_host(cmd);
 #else
-      __push_immd(p, SUBC_NV9097, NV906F_SET_REFERENCE, 0);
+      nvk_push_legacy_host_wfi(p, SUBC_NV9097);
 #endif
    }
 

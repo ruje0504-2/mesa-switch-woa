@@ -140,10 +140,12 @@ nvk_init_debug_flags(struct nvk_instance *instance)
       { "gart", NVK_DEBUG_FORCE_GART },
       { "coherent", NVK_DEBUG_FORCE_COHERENT },
       { "no_compression", NVK_DEBUG_NO_COMPRESSION },
+      { "log", NVK_DEBUG_LOG },
       { NULL, 0 },
    };
 
    instance->debug_flags = parse_debug_string(os_get_option("NVK_DEBUG"), flags);
+   instance->vk.enable_debug_logging = instance->debug_flags & NVK_DEBUG_LOG;
 }
 
 static void

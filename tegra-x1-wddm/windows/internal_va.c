@@ -14,7 +14,8 @@ NTSTATUS TgGpuCreateInternalVa(const DXGKRNL_INTERFACE *dxgk, HANDLE process,
         return STATUS_INVALID_ADDRESS;
     for (i=0;i<TG_GPU_COMMAND_BYTES/PAGE_SIZE;++i) {
         if(i==TG_GPU_COMMAND_RUNLIST/PAGE_SIZE)continue;
-        if (!tg_gpu_pte_4k(physical+(UINT64)i*PAGE_SIZE,i!=2,true,&entries[i]))
+        const BOOLEAN qmd=i>=TG_GPU_COMMAND_QMD/PAGE_SIZE;
+        if (!tg_gpu_pte_4k(physical+(UINT64)i*PAGE_SIZE,i!=2 && !qmd,true,&entries[i]))
             return STATUS_INVALID_ADDRESS;
         /* GM20B's PB fetch reads the KERNEL entry's instructions as USER:
          * the physical .51 fault was READ/PRIV at Base+0x1000. Keep that

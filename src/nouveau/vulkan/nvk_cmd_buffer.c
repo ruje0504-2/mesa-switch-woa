@@ -41,6 +41,19 @@ static uint8_t
 nvk_cmd_buffer_subchannel_mask(struct nvk_cmd_buffer *cmd);
 
 void
+nvk_push_legacy_host_wfi(struct nv_push *p, uint32_t subchannel)
+{
+#ifdef _WIN32
+   /* The GM20B KMD owns USERD.Reference for submission retirement.  A user
+    * barrier must wait without overwriting that completion marker.
+    */
+   __push_immd(p, subchannel, NVB06F_WFI, NVB06F_WFI_SCOPE_ALL);
+#else
+   __push_immd(p, subchannel, NV906F_SET_REFERENCE, 0);
+#endif
+}
+
+void
 nvk_descriptor_state_fini(struct nvk_cmd_buffer *cmd,
                           struct nvk_descriptor_state *desc)
 {
@@ -986,7 +999,7 @@ nvk_cmd_flush_wait_dep(struct nvk_cmd_buffer *cmd,
          P_NVC86F_MEM_OP_C(p, { .membar_type = 0 });
          P_NVC86F_MEM_OP_D(p, { .operation = OPERATION_MEMBAR });
       } else {
-         __push_immd(p, last_subchannel, NV906F_SET_REFERENCE, 0);
+         nvk_push_legacy_host_wfi(p, last_subchannel);
       }
 
       /* MEM_OP_D path is really usable starting with Maxwell B */
@@ -1143,12 +1156,7 @@ nvk_cmd_invalidate_deps(struct nvk_cmd_buffer *cmd,
          P_NVC86F_MEM_OP_C(p, { .membar_type = 0 });
          P_NVC86F_MEM_OP_D(p, { .operation = OPERATION_MEMBAR });
       } else {
-#ifdef _WIN32
-         /* USERD.Reference belongs to the KMD's retirement packet. */
-         __push_immd(p, last_subchannel, NVB06F_WFI, NVB06F_WFI_SCOPE_ALL);
-#else
-         __push_immd(p, last_subchannel, NV906F_SET_REFERENCE, 0);
-#endif
+         nvk_push_legacy_host_wfi(p, last_subchannel);
       }
    }
 
@@ -1163,7 +1171,7 @@ nvk_cmd_invalidate_deps(struct nvk_cmd_buffer *cmd,
          P_NVC86F_MEM_OP_D(p, { .operation = OPERATION_MEMBAR });
 
       } else {
-         __push_immd(p, SUBC_NV9097, NV906F_SET_REFERENCE, 0);
+         nvk_push_legacy_host_wfi(p, SUBC_NV9097);
 
          if (pdev->info.cls_eng3d >= TURING_A)
             P_IMMD(p, NVC597, MME_DMA_SYSMEMBAR, 0);

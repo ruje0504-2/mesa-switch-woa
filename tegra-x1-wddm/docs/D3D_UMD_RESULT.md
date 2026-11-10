@@ -2,17 +2,91 @@
 
 2026-11-10, Windows 11 ARM64 23H2 on Switch Lite HDH-001.
 
-**.133 opens the real NVK UMD adapter/device, but clear/readback fails.**
-The direct-DDI probe reaches GM20B LUID `000000000009493e`, creates its
-textures and completes a native submission. A later 592-byte submission is
-rejected with `STATUS_INVALID_PARAMETER`; Zink reports `VK_ERROR_DEVICE_LOST`
-and all 4,096 pixels in the first readback mismatch. The rejecting rule has
-not yet been identified.
+**.137 passes native D3D UMD clear/copy/readback on GM20B.**
+The explicit direct-DDI probe selects matching KMT/active VidPN LUID `a3dbb`,
+opens the real NVK UMD device, and checks every 64x64 RGBA pixel after three
+clear/copy/map passes. It runs 18:29:43–18:29:53 UTC and exits 0 without a
+timeout. Each staging image is first filled with a different sentinel.
 
-This calls the DDI frontend directly. It is not a `D3D11CreateDevice` runtime
-test, DWM composition test, or a successful rendering/presentation result.
+| Pass | Expected RGBA word | Checked pixels | Mismatches | Row pitch |
+| --- | --- | --- | --- | --- |
+| Red | `ff0000ff` | 4,096 | 0 | 256 |
+| Green | `ff00ff00` | 4,096 | 0 | 256 |
+| Blue | `ffff0000` | 4,096 | 0 | 256 |
 
-## Physical evidence
+The driver is Code 0 and reports a 512 MiB ceiling. Its first native fence
+`3c`, 8,532 bytes, completes with Reference `1d` and proof mask 7. The journal
+has no recorded recovery/rejection/MMU fault; the pixel checks, rather than
+missing events, establish the successful result. The ICD and UMD binaries
+are unchanged from .136. The KMD separates GPU-writable QMD data from the
+read-only command stream, resolving the previous DFALCON read-only fault
+for this tested path.
+
+This is an offscreen direct-DDI test. It does not exercise D3D Draw or
+application shader DDIs, D3D11CreateDevice, runtime resource sharing, DWM
+composition or Win32 Vulkan presentation.
+
+## Barrier rejection and execution fault
+
+.134 uses matching KMT/VidPN LUID `9d74b`. Native fence `32` completes with
+Reference `14` and proof mask 7; fence `47`, 592 bytes, is rejected with
+`c000000d`. The dump has 148 DWORDs. DWORD `0x92` is `0x80000014`, immediate
+SET_REFERENCE(0), from MME-data invalidation. KMD reserves that register
+for retirement.
+
+Replaying this packet reproduces the rejection. Changing only DWORD `0x92`
+to `0x8001001e` (WFI/SCOPE_ALL) passes unchanged KMD preparation, including
+the inline QMD relocation. The command-stream regression preserves the
+captured words and checks both outcomes and the relocated QMD. Windows NVK
+now shares that wait emitter across barriers, query reset and indirect
+commands. Non-Windows SET_REFERENCE and Hopper/Horizon special cases remain.
+[NVIDIA B06F definitions](https://github.com/NVIDIA/open-gpu-kernel-modules/blob/main/src/common/sdk/nvidia/inc/class/clb06f.h)
+
+.135 uses matching LUID `98054`, the same KMD core and a 512 MiB ceiling.
+Its 592-byte dump differs from .134 only in the barrier DWORD. Initial
+native fence `2e` completes with Reference `10` and proof mask 7. First
+worker recovery is fence `43`, `c000009c` (STATUS_DEVICE_DATA_ERROR), FIFO
+interrupt `10000000`, MMU mask `1`, PBDMA interrupt zero. Engine reset
+returns `c0000001`; adapter reset returns success. A later boot at
+18:01:40 UTC gates the driver and uses the fallback display path. There is
+no native-rejection record; absence alone does not prove every submission
+was accepted or completed. Push dumps also include later buffers in a batch
+whose execution may have stopped early.
+
+The test runs 18:00:49–18:00:58 UTC, exits 1 without timing out, and reports
+VK_ERROR_DEVICE_LOST from command-buffer finalization. Mapping returns
+`88760870`, as in .134, instead of exposing stale data. Neither completes
+a pixel-check pass. The first ETL export has 97,813 records with matching
+count/boundaries, but its retained events end before the native test starts.
+The worker journal supplies the fault evidence; the ETL tail is not used
+as the failure location. The fallback export has 88,774 records, also with
+matching count/boundaries.
+
+The optional `NVK_DEBUG=log` enables Mesa Vulkan diagnostics in release
+builds. .136 physically verifies it: after device removal, Lock2 and
+allocation/residency return `c00002b6`; the log identifies the source lines
+that propagate it into command-buffer finalization. Those calls are later
+symptoms, not the original MMU fault.
+
+.136 runs 18:14:32–18:14:41 UTC on matching LUID `97b6f`, exits 1 without
+timing out, and preserves the first worker fault at fence `7d`: address
+`04004000`, MMU info `1dc6`, instance `fc241` (physical `fc241000`), FIFO
+`10000000`, MMU mask `1`, PBDMA zero. The early journal returned in the same
+SSH response has SHA256
+`f77eeddd39c61b92a9a8e1fbb8c42c292b2e15959666aef761e3c6e9ee91172a`,
+matching the later device-hashed download. Windows boots again at
+18:15:21 UTC and gates the test driver.
+[nouveau MMU field decoding](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c)
+[Access, client and reason names](https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c)
+
+The .137 KMD fix keeps the aligned, checked QMD in the immutable CPU snapshot,
+but PCAS points into a separate GPU-writable mirror. The serialized worker
+refreshes that mirror before execution; command pages, ring and USERD keep
+their existing protections. Host tests and the ARM64 KMD build pass. The
+controlled context fixture passes on the Switch, including the distinct
+command/QMD PTE permissions. The .137 native test passes as described above.
+
+## Earlier physical evidence: .133
 
 | Check | .133 observation |
 | --- | --- |
@@ -65,8 +139,8 @@ frontend now checks Gallium reset status before and after mapping, reports
 `D3DDDIERR_DEVICEREMOVED`, and unmaps a newly returned transfer instead of
 exposing stale data. The extended controlled device fixture passes on the
 Switch's .59 baseline, including removal during a successful backend map.
-The ARM64 NVK UMD and GDI/softpipe target build. The native test must be
-repeated with the fix; these model results are not a native readback pass.
+The ARM64 NVK UMD and GDI/softpipe target build. .134 and .135 also confirm
+removal is reported at map; neither is a native readback pass.
 [ResourceMap contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_resourcemap)
 
 The earlier adapter, DLL-entry and device fixtures passed with commit
@@ -75,21 +149,39 @@ The earlier adapter, DLL-entry and device fixtures passed with commit
 `staged-hashes.json`. The frontend still negotiates D3D10 DDIs only, and its
 native presentation callbacks remain unsupported.
 
-Next, use NVK's existing `NVK_DEBUG=push` dump to capture the rejected command
-stream, reproduce the precise admission
-failure and correct the relevant transport/validation behavior. Then repeat
-native clear/draw/readback before connecting runtime allocations, shared
-textures, synchronization and sustained DWM presentation. DXVK remains a
-compatibility/code-reuse reference.
+Next, validate native draws/shaders and connect the Windows D3D runtime before
+connecting runtime allocations, shared textures, synchronization and sustained DWM presentation. DXVK
+remains a compatibility/code-reuse reference.
 
 ## Recovery and artifacts
 
-At 17:23:43 UTC the device is restored to .59 Code 0 with original driver and
-ACPI hashes. The start permit, test tasks and temporary ICD registration are
-gone. Before/after power-setting reports are byte-identical. Windows restarted
-directly into Windows; firmware and Hekate were unchanged.
+.134 through .137 were restored to .59 Code 0, most recently at 18:38:03 UTC.
+Original ACPI/driver hashes match, tasks/permit and temporary ICD registration
+are gone, and before/after power reports match. Firmware/Hekate were unchanged.
 
-Artifacts are under `/private/tmp/t214-gpu-round/native-ddi133.q2b6fbs1/`.
+Artifacts: `/private/tmp/t214-gpu-round/native-ddi134._opeardc/` (24 test and
+five recovery records) and `/private/tmp/t214-gpu-round/native-ddi135.3m6lfgsj/`
+(25 test and five recovery records). Each downloaded record matches the
+device SHA256/length in `physical/verified.json` and
+`physical/verified-recovery.json`. `app-manifest.json` identifies tested
+binaries; .135's `icd-with-log/` is a later build, distinct from its tested
+`app/`. .136 artifacts: `/private/tmp/t214-gpu-round/native-ddi136.govmyen6/` (26
+test records and seven recovery/model records match device SHA256/lengths).
+QMD implementation and its controlled model are in `qmd-wip/` and
+`qmd-model-result.json`.
+
+The .137 artifacts are under `/private/tmp/t214-gpu-round/native-ddi137.5ktxn6se/`.
+All 25 test records and five recovery records match device SHA256/lengths.
+The ETL export has 103,455 records with matching count and record boundaries.
+
+| .137 artifact | SHA256 |
+| --- | --- |
+| Signed KMD | `af5ef53a7ea4803d1c8127265704cfbe6098422cfd8b36f47817db1ceb145b39` |
+| Passing native test result | `d404120b7a31f6564b3af562ded2ef82d641a6754171a75c65ffdd4555b5496a` |
+| Early/live startup journal | `6b15b8b95bef0c05fd1f6653d29576a4fe2dc3ca321aeb31cab318c88915b7c5` |
+| ETL export | `5eed92183066fafe6c2fa97564f1f260e2fd760a97597a9c900c118f2dd8e97e` |
+
+Earlier .133 artifacts are under `/private/tmp/t214-gpu-round/native-ddi133.q2b6fbs1/`.
 All 39 downloaded test records and five recovery records match device SHA256
 and lengths in `physical/verified.json` and `physical/verified-recovery.json`.
 `app-manifest.json` identifies the exact physical-test binaries;

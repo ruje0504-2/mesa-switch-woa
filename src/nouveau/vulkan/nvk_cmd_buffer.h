@@ -310,6 +310,8 @@ nvk_cmd_buffer_pool(struct nvk_cmd_buffer *cmd)
 
 void nvk_cmd_buffer_new_push(struct nvk_cmd_buffer *cmd);
 
+void nvk_push_legacy_host_wfi(struct nv_push *p, uint32_t subchannel);
+
 #define NVK_CMD_BUFFER_MAX_PUSH 512
 
 static inline struct nv_push *

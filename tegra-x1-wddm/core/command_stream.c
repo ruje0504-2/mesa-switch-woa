@@ -603,12 +603,16 @@ static bool stage_qmd(uint32_t *words, size_t first, const struct tg_gpu_command
                        uint64_t *max_end)
 {
     const size_t aligned = qmd_aligned_word(first);
-    const size_t offset = TG_GPU_COMMAND_CAPTURE + aligned * sizeof(*words);
+    const size_t offset = TG_GPU_COMMAND_QMD + aligned * sizeof(*words);
     const size_t end = offset + TG_GPU_QMD_WORDS * sizeof(*words);
-    if (!va || !va->reserved_base || end > va->reserved_end - va->reserved_base ||
+    if (!va || !va->reserved_base || end > TG_GPU_COMMAND_QMD + TG_GPU_COMMAND_QMD_BYTES ||
+        end > va->reserved_end - va->reserved_base ||
         (va->reserved_base + offset) % (TG_GPU_QMD_WORDS * sizeof(*words)))
         return false;
-    /* Relocate inside the no-op payload. The original GPUVA is never used. */
+    /* Keep a checked, aligned copy in the immutable no-op payload. PCAS uses
+     * the separate writable mirror published by the serialized worker:
+     * DFALCON's QMD writeback must never make command pages writable.
+     */
     for (size_t i = TG_GPU_QMD_WORDS; i > 0; i--)
         words[aligned + i - 1] = words[first + i - 1];
     words[first + TG_GPU_QMD_RECORD_WORDS + 1] = (uint32_t)((va->reserved_base + offset) >> 8);
@@ -929,6 +933,7 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
             const size_t used = qmd_record(words + n, word_count - n, &ranges, &stream);
             if (!used || (staging && !stage_qmd(staging, n, va, &stream.va_end)))
                 return false;
+            stream.has_qmd = true;
             require_program(&stream, TG_GPU_PROGRAM_COMPUTE);
             require_texture_pools(&stream, TG_GPU_PROGRAM_COMPUTE);
             n += used;

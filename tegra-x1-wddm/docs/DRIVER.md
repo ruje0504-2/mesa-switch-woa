@@ -878,8 +878,13 @@ before activation or fence completion. B1C0 direct dispatch pairs
 a QMD address with NVK's invalidate-and-schedule operation, with either
 immediate or incrementing encoding. Windows NVK carries the 256-byte QMD 0.6
 in a no-op payload before the launch. The KMD checks the program offset,
-work-group dimensions, memory fields and constant-buffer ranges. It aligns the QMD
-inside the read-only command snapshot and patches PCAS to that GPU VA.
+work-group dimensions, memory fields and constant-buffer ranges. It aligns the
+checked QMD inside the immutable snapshot, but patches PCAS to the corresponding
+offset in a separate GPU-writable data mirror. DFALCON writes QMDs during
+dispatch; .136 recorded a write/read-only MMU fault when PCAS pointed into the
+command capture page. The worker refreshes the mirror before execution while
+keeping command pages read-only. .137 passes native D3D UMD clear/copy/readback
+with three colors and 12,288 matching pixels after this change.
 The worker checks readable pitch pages for each enabled constant buffer in
 the relocated QMD.
 The payload reserves space for alignment within the existing 64 KiB limit.
@@ -1075,13 +1080,16 @@ immediate and increment-span forms. The parser consumes data words as payload,
 even when they match packet headers. Native-submit stays unset until the
 remaining class-specific method and memory contracts are validated.
 
-Shared command backing grows from 16 to **80 KiB**: ring, completion packet,
-USERD and physical runlist retain their existing offsets/protection. The last
+Shared command backing is **144 KiB**: ring, completion packet,
+USERD and physical runlist retain their existing offsets/protection. The
 64 KiB at reserved VA `Internal.Base+0x4000` is USER-readable/read-only so PB
 fetch can read it, with user-mode remapping disabled. The runlist stays unmapped,
 and GR backing remains separate/privileged. The serialized worker clears this
-entire staging region before copying each immutable snapshot, preventing stale
-commands from another context remaining readable. Only then can it submit the
+entire staging region before copying each immutable snapshot. A separate
+64 KiB QMD data mirror at `Internal.Base+0x14000` is GPU-writable, with no
+user-mode CPU mapping. It is cleared for every captured submission and populated
+only when the validated snapshot carries QMDs. This preserves command protection
+and prevents prior-context contents remaining readable. Only then can it submit the
 USER entry followed by the KERNEL completion entry. Borrowed OS private bytes
 and the originating application GPU VA are not fetched for this execution.
 

@@ -326,6 +326,13 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
              * serialized execution slot can publish captured USER words. */
             RtlZeroMemory((UCHAR *)q->Engine->Commands.CpuAddress+TG_GPU_COMMAND_CAPTURE,TG_GPU_COMMAND_CAPTURE_BYTES);
             RtlCopyMemory((UCHAR *)q->Engine->Commands.CpuAddress+TG_GPU_COMMAND_CAPTURE,snapshot->Words,snapshot->Bytes);
+            /* Refresh the data mirror for each execution slot, including
+             * packets without QMDs. GPU writeback cannot alter instructions
+             * or the immutable snapshot used by mapping validation.
+             */
+            RtlZeroMemory((UCHAR *)q->Engine->Commands.CpuAddress+TG_GPU_COMMAND_QMD,TG_GPU_COMMAND_QMD_BYTES);
+            if(snapshot->Info.has_qmd)
+                RtlCopyMemory((UCHAR *)q->Engine->Commands.CpuAddress+TG_GPU_COMMAND_QMD,snapshot->Words,snapshot->Bytes);
             KeMemoryBarrier();++q->Engine->SnapshotUploads;q->Engine->SnapshotBytes+=snapshot->Bytes;
         }
         status=TgGpuSubmitContextWork(q->Engine,w,io,power);

@@ -3,12 +3,18 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Current work: D3D UMD/DWM.** The .133 direct-DDI trial opens the NVK UMD
-adapter/device on GM20B LUID `9493e`. A native submission completes, but the
-first clear/readback fails after KMD rejection of fence `163`, 592 bytes,
-with `c000000d`. The rejecting rule still needs identification. UMD mapping
-now reports device loss instead of returning stale data; that fix passes a
-controlled ARM64 test. See the [UMD result and next steps](D3D_UMD_RESULT.md).
+**Current work: D3D UMD/DWM.** .137 passes native direct-DDI clear/copy/readback
+on GM20B LUID `a3dbb`: all 4,096 pixels match in each of three color passes,
+exit 0, no timeout. Windows NVK uses WFI instead of writing the KMD-owned
+Reference marker; KMD stages QMDs in a separate writable data mirror while
+keeping command pages read-only. The earlier .136 DFALCON read-only fault
+is absent from this passing path. See the [UMD evidence](D3D_UMD_RESULT.md).
+
+Next: native draw/shader validation and Windows D3D runtime integration,
+then runtime allocations/shared images, synchronization and sustained DWM
+presentation. The direct-DDI result does not test those stages or Win32
+Vulkan presentation. Latest artifacts:
+`/private/tmp/t214-gpu-round/native-ddi137.5ktxn6se/`.
 
 The .132 trial passes 16 KiB NT-handle
 storage sharing between two KMT devices on GM20B, including CPU readback
@@ -17,13 +23,17 @@ budgets return to zero. The matched adapter/active VidPN LUID is `949ff`.
 D3D runtime integration, shared-image rendering/synchronization and DWM
 composition remain pending. DXVK remains a compatibility and code-reuse
 candidate. See the [shared-storage result](SHARED_STORAGE_RESULT.md).
-After .133 testing, .59 Code 0, the original ACPI/driver hashes and unchanged
+After .137 testing, .59 Code 0, the original ACPI/driver hashes and unchanged
 AC/DC display/sleep settings were verified. The start permit, test tasks and
 temporary ICD registration have been removed.
 
 | Driver | Result | Remaining work |
 | --- | --- | --- |
-| 0.1.0.133 | Code 0, matched LUID `9493e`, native-submit flag, real NVK UMD adapter/device and texture creation. Native fence `14f` completes with Reference `131` and proof mask 7. Fence `163` is rejected with `c000000d`; all 4,096 first-pass pixels mismatch. | Identify and fix the 592-byte submission rejection, then repeat native clear/draw/readback. No DWM or Vulkan presentation pass. |
+| 0.1.0.137 | Code 0, matching KMT/active VidPN LUID `a3dbb`, 512 MiB ceiling. Native D3D UMD clear/copy/readback passes three colors with 12,288 matching pixels; exit 0 without timeout. | Native draw/shaders, D3D runtime/shared resources and DWM; Win32 `vkcube` remains pending. |
+| 0.1.0.136 | Code 0, matching LUID `97b6f`; worker recovery at fence `7d` captures MMU address `04004000`, info `1dc6`, instance `fc241`. Release logging confirms later Lock2/allocation calls return `c00002b6`. Windows subsequently restarts. | QMD mirror passes in .137; native draw and runtime/DWM integration remain. |
+| 0.1.0.135 | Code 0, matching LUID `98054`; the barrier uses WFI. Native fence `2e` completes; worker recovery at fence `43` records `c000009c`, FIFO `10000000`, MMU mask `1`. Windows later restarts. | Capture the fault address/type and fix the failing mapping; clear/readback remains unverified. |
+| 0.1.0.134 | Code 0, LUID `9d74b`; the 592-byte rejection is reproduced offline at SET_REFERENCE(0). Changing only that DWORD to WFI passes unchanged KMD validation. Native mapping reports `88760870` after device loss. | Barrier fix physically tested in .135; further GPU execution work remains. |
+| 0.1.0.133 | Code 0, matched LUID `9493e`, native-submit flag, real NVK UMD adapter/device and texture creation. Native fence `14f` completes with Reference `131` and proof mask 7. Fence `163` is rejected with `c000000d`; all 4,096 first-pass pixels mismatch. | Rejection identified in .134. Native clear/draw/readback, DWM and Vulkan presentation remain pending. |
 | 0.1.0.132 | Code 0, LUID `949ff`, successful section-backed shared storage and 4,096 matching data words before/after producer release and NT-handle closure. GDI fence 23 completed with proof mask 7. | Cross-device GPU rendering/completion, native D3D UMD/DWM, and Win32 `vkcube`. The storage probe submits no drawing work. |
 | 0.1.0.130 | Code 0, GM20B LUID `8e7d4`, matching active VidPN, completed GDI copies, successful MPO3 and native scanout at `fb9c7000`. Pixel readback and the user confirm visible RGB bars on the internal panel. | DWM exits with `MILERR_NO_HARDWARE_DEVICE`; D3D11 device creation on GM20B returns `DXGI_ERROR_UNSUPPORTED`, while WARP succeeds. Continuous desktop refresh remains unresolved. See [native startup result](NATIVE_STARTUP_RESULT.md). |
 | 0.1.0.121 | The timing callback returned link success with a nonzero change ID. GM20B LUID `962ec` reached 720x1280, 60 Hz mode setup and successful shared-primary allocation creation. | Windows restarted later. The normal journal filled before the first failure; the next boot was gated to Code 43. Stable native presentation remains open. See [display timing result](DISPLAY_TIMING_RESULT.md). |
