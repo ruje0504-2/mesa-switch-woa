@@ -881,7 +881,8 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     DXGKARG_CREATECONTEXT gdi_context={.hContext=(HANDLE)104,.EngineAffinity=1,
         .Flags={.GdiContext=1,.VirtualAddressing=1}};
     CHECK(ddi.DxgkDdiCreateContext(device.hDevice,&gdi_context)==STATUS_SUCCESS);
-    CHECK(gdi_context.ContextInfo.AllocationListSize==256 && gdi_context.ContextInfo.Caps.NoPatchingRequired);
+    CHECK(gdi_context.ContextInfo.AllocationListSize==256 && gdi_context.ContextInfo.Caps.NoPatchingRequired &&
+          gdi_context.ContextInfo.DmaBufferPrivateDataSize==sizeof(TG_GPU_QUEUE_ENTRY));
     CHECK(ddi.DxgkDdiDestroyContext(gdi_context.hContext)==STATUS_SUCCESS);
     CHECK(ddi.DxgkDdiCreateContext(device.hDevice,&context)==STATUS_SUCCESS);
     CHECK(!context.ContextInfo.AllocationListSize);

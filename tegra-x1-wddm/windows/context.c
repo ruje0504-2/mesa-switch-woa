@@ -171,6 +171,9 @@ NTSTATUS APIENTRY TgGpuDdiCreateContext(HANDLE device, DXGKARG_CREATECONTEXT *a)
     if (a->Flags.SystemContext) {
         a->ContextInfo.DmaBufferPrivateDataSize=TG_GPU_PAGING_PRIVATE_BYTES;
         a->ContextInfo.DmaBufferSegmentSet=1u<<(TG_GPU_PAGING_APERTURE_SEGMENT-1);
+    } else if (a->Flags.GdiContext) {
+        /* GDI reserves only the kernel queue slot. */
+        a->ContextInfo.DmaBufferPrivateDataSize=sizeof(TG_GPU_QUEUE_ENTRY);
     } else
         a->ContextInfo.DmaBufferPrivateDataSize=sizeof(TG_GPU_QUEUE_ENTRY)+
             sizeof(struct tg_gpu_submit_request)+TG_GPU_SUBMIT_MAX_BYTES;
