@@ -312,12 +312,14 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
         a->DmaBufferVirtualAddress+a->DmaBufferSize>c->Device->Process->Internal.Base) {
         KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER;
     }
-    if (info && info->requires_mme && !c->MmeInitialized) {
+    if (info && ((info->requires_mme && !c->MmeInitialized) ||
+                 (info->requires_cb0 && !c->Cb0End))) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
     }
     /* VidMm can replace the root while the immutable snapshot is decoded. */
-    if (info && info->va_end && (info->va_end>c->Root.VaLimit ||
-        info->reserved_base!=c->Device->Process->Internal.Base)) {
+    if (info && ((info->va_end && (info->va_end>c->Root.VaLimit ||
+        info->reserved_base!=c->Device->Process->Internal.Base)) ||
+        (info->requires_cb0 && c->Cb0End>c->Root.VaLimit))) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
     }
     RtlZeroMemory(w,sizeof(*w));
@@ -476,7 +478,8 @@ NTSTATUS TgGpuContextWorkFinished(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *
         STATUS_SUCCESS : STATUS_PENDING;
     KeMemoryBarrier();KeReleaseSpinLock(&e->Lock,irql);return status;
 }
-NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w)
+NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w,
+                               const struct tg_gpu_command_info *info)
 {
     KIRQL irql; NTSTATUS status; BOOLEAN invoked=FALSE;
     if (!e || !w) return STATUS_INVALID_PARAMETER;
@@ -497,6 +500,8 @@ NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w
         }
         if (w->UploadsMme)
             w->Context->MmeInitialized=TRUE;
+        if (info && info->cb0_end)
+            w->Context->Cb0End=info->cb0_end;
         /* Retirement has already removed hardware references. Do not make
          * Dxgkrnl retry DestroyContext because our CPU reference lingers after
          * completion. Notification thereafter uses only this engine snapshot.

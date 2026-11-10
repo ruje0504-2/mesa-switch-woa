@@ -1221,7 +1221,7 @@ static VOID TestCommandSnapshots(void)
     CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_INVALID_PARAMETER && !snapshot);
     payload.Words[0]=0xa0010e00; /* SELECT_CB0 with no preceding upload. */
     CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_SUCCESS && snapshot &&
-        snapshot->Info.requires_mme && !snapshot->Info.uploads_mme);
+        snapshot->Info.requires_mme && snapshot->Info.requires_cb0 && !snapshot->Info.uploads_mme);
     TgGpuFreeCommandSnapshot(snapshot);snapshot=NULL;
     const struct tg_gpu_command_va va={0x30000,0x20000,0x30000};
     /* A complete FIFO event acquire, followed by the zero-filled NOPs. */
@@ -1268,7 +1268,8 @@ void start(void)
     DXGKARG_SUBMITCOMMANDVIRTUAL submit={.DmaBufferVirtualAddress=0x10000,.DmaBufferSize=40,.SubmissionFenceId=7};
     DXGKARG_QUERYCURRENTFENCE query={0};
     TG_GPU_CONTEXT *c,*c2; TG_GPU_CONTEXT_WORK work={0},blocked={0};
-    const struct tg_gpu_command_info upload={.uploads_mme=true},call={.requires_mme=true};
+    const struct tg_gpu_command_info upload={.uploads_mme=true,.cb0_end=0x18800};
+    const struct tg_gpu_command_info call={.requires_mme=true,.requires_cb0=true};
     struct tg_gpu_power power={.owned=true,.ready=true,.stage=TG_GPU_STAGE_READY,
         .pmic_address=0x33,.original_enable=0x40,.original_voltage=50};
     struct tg_gpu_clock clock={0};
@@ -1342,12 +1343,13 @@ void start(void)
     CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_INVALID_PARAMETER && !blocked.Context);
     CHECK(TgGpuCaptureContextWork(&e,&submit,&upload,&blocked)==STATUS_SUCCESS && blocked.UploadsMme);
-    CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->MmeInitialized && !c->References);
+    CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS &&
+          !c->MmeInitialized && !c->Cb0End && !c->References);
     CHECK(TgGpuCaptureContextWork(&e,&submit,&upload,&work)==STATUS_SUCCESS && work.UploadsMme);
     CHECK(TgGpuActivateContextWork(&e,&work)==STATUS_SUCCESS);
     CHECK(work.Root.Valid && c->References==1 && work.FencePhysicalAddress==0x91002048);
     CHECK(*fence==~work.Expected && instance[0x800/4]==0);
-    CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY && !c->MmeInitialized);
+    CHECK(TgGpuSignalContextWork(&e,&work,&upload)==STATUS_DEVICE_NOT_READY && !c->MmeInitialized && !c->Cb0End);
     ((UINT64 *)table)[1]=0; /* VidMm made the reserved root entry invalid */
     CHECK(NT_SUCCESS(TgGpuPrepareContextWork(&e,&work)));
     TestGraphicsImage(&e,c,&((TG_GPU_PROCESS *)process.hKmdProcess)->Internal);
@@ -1357,7 +1359,7 @@ void start(void)
     CHECK(TgGpuPrepareContextWork(&e,&work)==STATUS_INVALID_DEVICE_STATE);
     CHECK(TgGpuAcquireContextWork(&e,&submit,&blocked)==STATUS_DEVICE_BUSY && !blocked.Context);
     CHECK(ddi.DxgkDdiDestroyContext(c)==STATUS_DEVICE_BUSY);
-    CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY && !interrupts && !c->MmeInitialized);
+    CHECK(TgGpuSignalContextWork(&e,&work,&upload)==STATUS_DEVICE_NOT_READY && !interrupts && !c->MmeInitialized);
     before=hw.reads+hw.writes;
     CHECK(TgGpuSubmitContextWork(&e,&work,&io,&power)==STATUS_DEVICE_NOT_READY);
     CHECK(!work.Attempted && !e.Channel.referenced && hw.reads+hw.writes==before);
@@ -1379,7 +1381,7 @@ void start(void)
     CHECK(work.Root.Entries==2 && instance[130]==0x07fff000);
     *fence=work.Expected; /* explicit simulated GPU write */
     CHECK(TgGpuContextWorkFinished(&e,&work)==STATUS_SUCCESS);
-    CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY);
+    CHECK(TgGpuSignalContextWork(&e,&work,&upload)==STATUS_DEVICE_NOT_READY);
     CHECK(TgGpuObserveContextWork(&e,&work,&io,&power)==STATUS_PENDING);
     *fence=~work.Expected;hw.gpu_fence=work.Expected;hw.delay_reference=TRUE;
     CHECK(TgGpuObserveContextWork(&e,&work,&io,&power)==STATUS_SUCCESS);
@@ -1391,24 +1393,28 @@ void start(void)
     hw.fail_preempt=FALSE;
     CHECK(NT_SUCCESS(TgGpuQuiesceContextWork(&e,&work,&io,&power)) && work.Retired && c->References==1);
     CHECK(!e.Channel.referenced && !hw.inst && !hw.runlist && hw.flushes==4 && hw.tlbs==2);
-    CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY && !interrupts);
+    CHECK(TgGpuSignalContextWork(&e,&work,&upload)==STATUS_DEVICE_NOT_READY && !interrupts);
     CHECK(TgGpuObserveContextWork(&e,&work,&io,&power)==STATUS_SUCCESS && work.CpuCompleted);
     CHECK(*fence==work.Expected && hw.flushes==6);hw.delay_reference=FALSE;
-    fail_sync=TRUE;CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_UNSUCCESSFUL && !work.Notified);
+    fail_sync=TRUE;CHECK(TgGpuSignalContextWork(&e,&work,&upload)==STATUS_UNSUCCESSFUL && !work.Notified);
     CHECK(!interrupts && !c->References && !work.Context && e.Notification==&work);
-    CHECK(c->MmeInitialized && !c2->MmeInitialized);
+    CHECK(c->MmeInitialized && c->Cb0End==upload.cb0_end && !c2->MmeInitialized && !c2->Cb0End);
     CHECK(TgGpuInitializeWorkQueue(&queue,&e)==STATUS_DEVICE_BUSY && !e.QueueOwner);
     CHECK(TgGpuCaptureContextWork(&e,&submit,NULL,&work)==STATUS_DEVICE_BUSY);
     fail_sync=FALSE;expected_fence=7;notify_context=c;notify_references=0;
-    CHECK(NT_SUCCESS(TgGpuSignalContextWork(&e,&work)) && work.Notified);
+    CHECK(NT_SUCCESS(TgGpuSignalContextWork(&e,&work,&upload)) && work.Notified);
     CHECK(interrupts==1 && queues==1 && !c->References && !e.Notification);
-    CHECK(NT_SUCCESS(TgGpuSignalContextWork(&e,&work)) && interrupts==1);
+    CHECK(NT_SUCCESS(TgGpuSignalContextWork(&e,&work,&upload)) && interrupts==1);
     ddi.DxgkDdiDpcRoutine(&e);CHECK(dpcs==1);
     CHECK(NT_SUCCESS(ddi.DxgkDdiQueryCurrentFence(&e,&query)) && query.CurrentFence==7);
     CHECK(NT_SUCCESS(TgGpuRetireContextWork(&e,&work,&io,&power)) && !work.Context && !c->References);
     CHECK(!e.Channel.referenced && !hw.inst && !hw.runlist && hw.flushes==6 && hw.tlbs==2);
     CHECK(TgGpuAcquireContextWork(&e,&submit,&work)==STATUS_DEVICE_NOT_READY); /* lost root is internal state */
     ddi.DxgkDdiSetRootPageTable(&e,&root);CHECK(c->Root.Valid && instance[130]==0x0bfff000);
+    const UINT64 saved_limit=c->Root.VaLimit;
+    c->Root.VaLimit=upload.cb0_end-1;
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
+    c->Root.VaLimit=saved_limit;
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_SUCCESS);
     CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
     root.Address.SegmentOffset=sizeof(table)-PAGE_SIZE;root.NumEntries=TG_GPU_TABLE_ENTRIES;

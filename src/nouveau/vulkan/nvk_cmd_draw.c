@@ -142,6 +142,13 @@ nvk_mme_select_cb0(struct mme_builder *b)
 static uint32_t nvk_mme_anti_alias_init(void);
 
 static void
+nvk_push_select_cb0(struct nv_push *p)
+{
+   P_1INC(p, NV9097, CALL_MME_MACRO(NVK_MME_SELECT_CB0));
+   P_INLINE_DATA(p, 0);
+}
+
+static void
 nvk_push_mme_zero_addr(struct nv_push *p, uint64_t addr)
 {
    P_MTHD(p, NV9097, SET_MME_SHADOW_SCRATCH(NVK_MME_SCRATCH_ZERO_ADDR_HI));
@@ -702,8 +709,7 @@ nvk_push_draw_state_init(struct nvk_queue *queue, struct nv_push *p)
    nvk_push_mme_zero_addr(p, zero_addr);
 
    /* We leave CB0 selected by default */
-   P_1INC(p, NV9097, CALL_MME_MACRO(NVK_MME_SELECT_CB0));
-   P_INLINE_DATA(p, 0);
+   nvk_push_select_cb0(p);
 
    /* Bind CB0 to all shader groups */
    for (uint32_t group = 0; group < 5; group++) {
@@ -4383,7 +4389,7 @@ nvk_cmd_flush_gfx_cbufs(struct nvk_cmd_buffer *cmd)
       }
    }
 
-   bool bound_any_cbuf = false;
+   bool restore_cb0_at_end = false;
    for (uint32_t g = 0; g < ARRAY_SIZE(cbuf_shaders); g++) {
       if (cbuf_shaders[g] == NULL)
          continue;
@@ -4405,15 +4411,16 @@ nvk_cmd_flush_gfx_cbufs(struct nvk_cmd_buffer *cmd)
          if (cbuf->type == NVK_CBUF_TYPE_ROOT_DESC)
             continue;
 
-         bound_any_cbuf = true;
-
          struct nvk_buffer_address ba;
          if (nvk_cmd_buffer_get_cbuf_addr(cmd, desc, shader, cbuf, &ba)) {
             assert(ba.base_addr % min_cbuf_alignment == 0);
             ba.size = align(ba.size, min_cbuf_alignment);
             ba.size = MIN2(ba.size, NVK_MAX_CBUF_SIZE);
 
-            struct nv_push *p = nvk_cmd_buffer_push(cmd, 6);
+            /* Keep the selector restored at every Windows push boundary. */
+            const bool restore_here = DETECT_OS_WINDOWS && ba.size > 0;
+            restore_cb0_at_end |= !DETECT_OS_WINDOWS;
+            struct nv_push *p = nvk_cmd_buffer_push(cmd, restore_here ? 8 : 6);
 
             if (ba.size > 0) {
                P_MTHD(p, NV9097, SET_CONSTANT_BUFFER_SELECTOR_A);
@@ -4426,7 +4433,10 @@ nvk_cmd_flush_gfx_cbufs(struct nvk_cmd_buffer *cmd)
                .valid = ba.size > 0,
                .shader_slot = c,
             });
+            if (restore_here)
+               nvk_push_select_cb0(p);
          } else {
+            restore_cb0_at_end = true;
             uint64_t desc_addr =
                nvk_cmd_buffer_get_cbuf_descriptor_addr(cmd, desc, cbuf);
 
@@ -4460,10 +4470,9 @@ nvk_cmd_flush_gfx_cbufs(struct nvk_cmd_buffer *cmd)
     * parameters and similar MME root table updates always hit the root
     * descriptor table and not some random UBO.
     */
-   if (bound_any_cbuf) {
+   if (restore_cb0_at_end) {
       struct nv_push *p = nvk_cmd_buffer_push(cmd, 2);
-      P_1INC(p, NV9097, CALL_MME_MACRO(NVK_MME_SELECT_CB0));
-      P_INLINE_DATA(p, 0);
+      nvk_push_select_cb0(p);
    }
 }
 

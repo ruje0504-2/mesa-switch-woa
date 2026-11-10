@@ -307,7 +307,8 @@ notify:
         free_entry(entry);
     }
     KeAcquireSpinLock(&q->Lock,&irql);q->CurrentPrivate=NULL;KeReleaseSpinLock(&q->Lock,irql);
-    status=TgGpuSignalContextWork(q->Engine,w);
+    const TG_GPU_COMMAND_SNAPSHOT *snapshot=q->CurrentOwned?q->CurrentOwned->Snapshot:NULL;
+    status=TgGpuSignalContextWork(q->Engine,w,snapshot?&snapshot->Info:NULL);
     if(status!=STATUS_SUCCESS) goto done;
     RtlZeroMemory(w,sizeof(*w));RtlZeroMemory(&q->CurrentPaging,sizeof(q->CurrentPaging));
     if(q->CurrentOwned) {

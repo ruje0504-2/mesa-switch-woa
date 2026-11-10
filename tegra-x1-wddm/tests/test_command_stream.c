@@ -361,6 +361,137 @@ static void test_input_bindings(void)
     assert(tg_gpu_validate_command_stream(format_and_frequency, sizeof(format_and_frequency)));
 }
 
+static void test_color_targets(void)
+{
+    const struct tg_gpu_command_va va = {0x100050000, 0x100020000, 0x100030000};
+    struct tg_gpu_command_info info;
+    uint32_t color[] = {
+        INCR(0, NVB197_SET_COLOR_TARGET_A(7), 9), 1, 0x4e000, 128, 64,
+        NVB197_SET_COLOR_TARGET_FORMAT_V_A8R8G8B8,
+        NVDEF(NVB197, SET_COLOR_TARGET_MEMORY, LAYOUT, PITCH), 1, 0, 0,
+    };
+    assert(tg_gpu_inspect_command_stream(color, sizeof(color), &va, &info));
+    assert(info.va_end == va.limit);
+    color[4]++;
+    assert(!tg_gpu_inspect_command_stream(color, sizeof(color), &va, &info));
+
+    color[2] = 0x4b000;
+    color[3] = 32;
+    color[4] = 33;
+    color[6] = NVDEF(NVB197, SET_COLOR_TARGET_MEMORY, BLOCK_HEIGHT, FOUR_GOBS);
+    color[7] = 2;
+    color[8] = 0xc00;
+    assert(tg_gpu_inspect_command_stream(color, sizeof(color), &va, &info));
+    assert(info.va_end == va.limit);
+    color[2] = 0x1e000;
+    assert(!tg_gpu_inspect_command_stream(color, sizeof(color), &va, &info));
+    color[2] = 0x4b000;
+    color[8] = 0x400;
+    assert(!tg_gpu_validate_command_stream(color, sizeof(color)));
+
+    color[2] = 0x4f800;
+    color[3] = 16;
+    color[4] = 8;
+    color[6] = NVDEF(NVB197, SET_COLOR_TARGET_MEMORY, BLOCK_DEPTH, TWO_GOBS) |
+               NVDEF(NVB197, SET_COLOR_TARGET_MEMORY, THIRD_DIMENSION_CONTROL,
+                     THIRD_DIMENSION_DEFINES_DEPTH_SIZE);
+    color[7] = 3;
+    assert(tg_gpu_inspect_command_stream(color, sizeof(color), &va, &info));
+    assert(info.va_end == va.limit);
+    color[2] += 512;
+    assert(!tg_gpu_inspect_command_stream(color, sizeof(color), &va, &info));
+    color[2] -= 512;
+    color[5] = 0xd3; /* Unassigned Maxwell format. */
+    assert(!tg_gpu_validate_command_stream(color, sizeof(color)));
+
+    const uint32_t format_only = IMMD(0, NVB197_SET_COLOR_TARGET_FORMAT(7),
+                                      NVB197_SET_COLOR_TARGET_FORMAT_V_A8R8G8B8);
+    assert(!tg_gpu_validate_command_stream(&format_only, sizeof(format_only)));
+}
+
+static void test_depth_targets(void)
+{
+    const struct tg_gpu_command_va va = {0x100050000, 0x100020000, 0x100030000};
+    struct tg_gpu_command_info info;
+    uint32_t depth[] = {
+        INCR(0, NVB197_SET_ZT_A, 5), 1, 0x45000, NVB197_SET_ZT_FORMAT_V_Z16,
+        NVDEF(NVB197, SET_ZT_BLOCK_SIZE, HEIGHT, FOUR_GOBS), 0x1000,
+        IMMD(0, NVB197_SET_ZT_SELECT, 1),
+        INCR(0, NVB197_SET_ZT_SIZE_A, 3), 64, 65, 3,
+        IMMD(0, NVB197_SET_ZT_LAYER, 2),
+    };
+    assert(tg_gpu_inspect_command_stream(depth, sizeof(depth), &va, &info));
+    assert(info.va_end == va.limit);
+    depth[2] += 0x800;
+    assert(!tg_gpu_inspect_command_stream(depth, sizeof(depth), &va, &info));
+    depth[2] -= 0x800;
+    depth[11] = IMMD(0, NVB197_SET_ZT_LAYER, 3);
+    assert(!tg_gpu_validate_command_stream(depth, sizeof(depth)));
+    assert(!tg_gpu_validate_command_stream(depth, sizeof(depth) - sizeof(uint32_t)));
+
+    const uint32_t debug[] = {
+        INCR(0, NVB197_SET_ZT_A, 5), 1, 0x45000, NVB197_SET_ZT_FORMAT_V_Z16,
+        NVDEF(NVB197, SET_ZT_BLOCK_SIZE, HEIGHT, FOUR_GOBS), 0x1000,
+        INCR(0, NVB197_SET_ZT_SELECT, 1), 1,
+        INCR(0, NVB197_SET_ZT_SIZE_A, 3), 64, 65, 3,
+        INCR(0, NVB197_SET_ZT_LAYER, 1), 2,
+    };
+    assert(tg_gpu_inspect_command_stream(debug, sizeof(debug), &va, &info));
+    assert(info.va_end == va.limit);
+    assert(!tg_gpu_validate_command_stream(debug + 6, 2 * sizeof(uint32_t)));
+    const uint32_t disable[] = {IMMD(0, NVB197_SET_ZT_SELECT, 0)};
+    assert(tg_gpu_validate_command_stream(disable, sizeof(disable)));
+}
+
+static void test_constant_buffers(void)
+{
+    const struct tg_gpu_command_va va = {0x100050000, 0x100020000, 0x100030000};
+    struct tg_gpu_command_info info;
+    const uint32_t select = ONEINCR(0, NVB197_CALL_MME_MACRO(NVK_MME_SELECT_CB0), 1);
+    const uint32_t load = ONEINCR(0, NVB197_LOAD_CONSTANT_BUFFER_OFFSET, 2);
+    uint32_t root[] = {load, TG_GPU_NVK_DRAW_CB0_BYTES - 4, 0xdeadbeef};
+    assert(tg_gpu_inspect_command_stream(root, sizeof(root), &va, &info));
+    assert(info.requires_cb0 && !info.cb0_end);
+    root[1] += 4;
+    assert(!tg_gpu_validate_command_stream(root, sizeof(root)));
+    root[1] -= 6;
+    assert(!tg_gpu_validate_command_stream(root, sizeof(root)));
+
+    uint32_t bind[] = {
+        INCR(0, NVB197_SET_CONSTANT_BUFFER_SELECTOR_A, 3), 0x100, 1, 0x4ff00,
+        INCR(0, NVB197_BIND_GROUP_CONSTANT_BUFFER(4), 1), 0x11,
+        select, 0,
+    };
+    assert(tg_gpu_inspect_command_stream(bind, sizeof(bind), &va, &info));
+    assert(info.va_end == va.limit && info.requires_cb0 && info.requires_mme);
+    assert(!tg_gpu_validate_command_stream(bind, sizeof(bind) - 2 * sizeof(uint32_t)));
+    bind[3] = 0x20000;
+    assert(!tg_gpu_inspect_command_stream(bind, sizeof(bind), &va, &info));
+    bind[3] = 0x4ff00;
+    bind[5] = 1;
+    assert(!tg_gpu_validate_command_stream(bind, sizeof(bind)));
+    bind[5] = 0x11;
+    assert(!tg_gpu_validate_command_stream(bind + 4, 2 * sizeof(uint32_t)));
+
+    enum { MME_WORDS = sizeof(tg_gpu_nvk_mme_init) / sizeof(uint32_t) };
+    const uint32_t setup[] = {
+        INCR(0, TG_GPU_NVK_MME_CB0_ADDR_HI, 2), 1, 0x4f800,
+        select, 0,
+        IMMD(0, NVB197_BIND_GROUP_CONSTANT_BUFFER(4), 1),
+        load, TG_GPU_NVK_DRAW_CB0_BYTES - 4, 0xdeadbeef,
+    };
+    uint32_t init[MME_WORDS + sizeof(setup) / sizeof(uint32_t)];
+    memcpy(init, tg_gpu_nvk_mme_init, sizeof(tg_gpu_nvk_mme_init));
+    memcpy(init + MME_WORDS, setup, sizeof(setup));
+    assert(tg_gpu_inspect_command_stream(init, sizeof(init), &va, &info));
+    assert(info.uploads_mme && !info.requires_mme && !info.requires_cb0);
+    assert(info.cb0_end == va.limit && info.va_end == va.limit);
+    assert(!tg_gpu_validate_command_stream(setup, sizeof(setup)));
+    assert(!tg_gpu_validate_command_stream(init, (MME_WORDS + 3) * sizeof(uint32_t)));
+    init[MME_WORDS + 2] += 256;
+    assert(!tg_gpu_inspect_command_stream(init, sizeof(init), &va, &info));
+}
+
 int main(void)
 {
     uint32_t w[16]={0x20010000,0xb197,0x20020100,0x20010014,0xdeadbeef,0};
@@ -409,5 +540,8 @@ int main(void)
     test_texture_pools();
     test_compute_dispatch();
     test_input_bindings();
+    test_color_targets();
+    test_depth_targets();
+    test_constant_buffers();
     puts("B06F packets, GM20B MME and command address ranges passed");return 0;
 }

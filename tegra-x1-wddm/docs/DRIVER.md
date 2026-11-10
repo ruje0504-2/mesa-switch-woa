@@ -829,6 +829,12 @@ and the graphics generation check rejects contexts lost to reset. Windows NVK
 waits for the push stream's existing monitored fence when creating a graphics
 queue, so later submits can use the saved MME programs.
 
+The same retirement step publishes the checked range of NVK's CB0 root
+table. Later graphics pushes that update it require that context's CB0 to fit
+the current root. Direct bindings validate the selected constant buffer's
+aligned address and size. Windows NVK restores CB0 in the same push, and
+inline root uploads are bounded by the generated table size.
+
 The B0B5 validator checks virtual pitch and block-linear transfers, remapped
 fills, zero-length flushes and semaphore releases. Each launch supplies its
 address and layout state in the captured push. NVK programs the remap and
@@ -844,6 +850,14 @@ events and query waits. An inline upload supplies one pitch-linear row and
 its complete data in the following increment-once packet. The KMD checks the
 report operation and size and admits the read-only equality and greater-or-equal
 FIFO waits emitted by NVK.
+
+B197 attachment checks use the complete target setup emitted by NVK.
+Pitch-linear color uses the byte pitch and height. Block-linear color and
+depth/stencil use the sample stride, format size and GOB padding. Array targets
+include the layer pitch and final layer. Volumes include the padded depth.
+These layout ranges are checked against the WDDM context. The depth target is
+enabled with its base, block size, format and layer state in the same push.
+[NVIDIA Maxwell 3D class](https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/3d/clb197.h)
 
 NVK's B197 and B1C0 queue-state updates supply each texture header or sampler
 pool as a complete base and inclusive maximum index. The KMD checks the full

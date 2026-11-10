@@ -43,6 +43,7 @@ struct _TG_GPU_CONTEXT {
     NTSTATUS RootStatus;
     UINT References;
     UINT GraphicsGeneration,ContextId;
+    UINT64 Cb0End;
     BOOLEAN Closing,MmeInitialized;
 };
 struct _TG_GPU_CONTEXT_ENGINE {
@@ -179,7 +180,8 @@ NTSTATUS TgGpuQuiesceContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *,
  * record for retry/reset and prevents the next work from overtaking its fence.
  * STATUS_PENDING is not completion, even though NT_SUCCESS accepts it.
  */
-NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
+NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *,
+                               const struct tg_gpu_command_info *);
 NTSTATUS TgGpuCancelContextNotification(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
 /* Releases only after the actual channel-retirement sequence succeeds.
  * Timeout keeps the context/RAMIN/commands pinned. Aborts do not notify a

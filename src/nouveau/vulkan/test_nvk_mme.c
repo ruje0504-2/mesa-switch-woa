@@ -4,6 +4,7 @@
  */
 #include "nvk_mme.h"
 
+#include "nvk_cmd_buffer.h"
 #include "nv_push.h"
 #include "nv_push_cla097.h"
 #include "nv_push_cla0c0.h"
@@ -46,6 +47,12 @@ emit_gm20b_windows_mme(void)
         "#ifndef TG_GPU_NVK_MME_PROGRAMS_H\n"
         "#define TG_GPU_NVK_MME_PROGRAMS_H\n"
         "#include <stdint.h>\n");
+   printf("#define TG_GPU_NVK_DRAW_CB0_BYTES %zuu\n",
+          sizeof(struct nvk_root_descriptor_table));
+   printf("#define TG_GPU_NVK_MME_CB0_ADDR_HI 0x%04xu\n",
+          (unsigned)NVK_SET_MME_SCRATCH(CB0_ADDR_HI));
+   printf("#define TG_GPU_NVK_MME_CB0_ADDR_LO 0x%04xu\n",
+          (unsigned)NVK_SET_MME_SCRATCH(CB0_ADDR_LO));
    printf("#define TG_GPU_NVK_MME_ZERO_ADDR_HI 0x%04xu\n",
           (unsigned)NVK_SET_MME_SCRATCH(ZERO_ADDR_HI));
    printf("#define TG_GPU_NVK_MME_ZERO_ADDR_LO 0x%04xu\n\n",

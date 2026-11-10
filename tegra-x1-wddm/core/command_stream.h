@@ -15,6 +15,8 @@ struct tg_gpu_command_info {
     uint64_t reserved_base;
     bool uploads_mme;
     bool requires_mme; /* A call precedes any upload in this stream. */
+    bool requires_cb0; /* Uses the CB0 selected by a preceding submission. */
+    uint64_t cb0_end; /* An initialized CB0 to publish on retirement. */
 };
 
 /* Decode the complete linear B06F stream. Reject control-flow/subdevice
@@ -25,7 +27,8 @@ struct tg_gpu_command_info {
  * MME calls require a complete parameter packet for a supported slot and
  * bounded register indices. Copy launches use virtual addresses and supply
  * their operands in the stream. Inline uploads and reports also use complete
- * packets. Optional process bounds exclude KMD memory from these accesses.
+ * packets. B197 color and depth attachments supply complete layout state.
+ * Optional process bounds exclude KMD memory from these accesses.
  */
 bool tg_gpu_inspect_command_stream(const uint32_t *, size_t bytes,
                                    const struct tg_gpu_command_va *,
