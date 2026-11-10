@@ -5,6 +5,8 @@
 #include <d3dkmthk.h>
 #include <winternl.h>
 #include <string.h>
+#include <stdio.h>
+#include <wchar.h>
 
 #define CHECK(test) do { if (!(test)) ExitProcess(__LINE__); } while (0)
 
@@ -18,6 +20,24 @@ static HANDLE shared_handle;
 static HANDLE last_section;
 static LONG create_status, open_status, resident_status, destroy_status;
 static bool bad_query, bad_descriptor;
+static WCHAR expected_name[128];
+static DWORD expected_access = STANDARD_RIGHTS_READ | SHARED_ALLOCATION_WRITE;
+static PVOID expected_security;
+static bool expected_inherit;
+
+static void
+check_object_attributes(const OBJECT_ATTRIBUTES *attributes)
+{
+   CHECK(attributes->Length == sizeof(*attributes) && !attributes->RootDirectory);
+   if (*expected_name) {
+      const UNICODE_STRING *name = attributes->ObjectName;
+      CHECK(name && name->Length == wcslen(expected_name) * sizeof(WCHAR) &&
+            name->MaximumLength == name->Length + sizeof(WCHAR) &&
+            wcscmp(name->Buffer, expected_name) == 0);
+   } else {
+      CHECK(!attributes->ObjectName);
+   }
+}
 
 static UINT
 new_allocation(UINT device, bool shared)
@@ -118,11 +138,24 @@ D3DKMTShareObjects(UINT count, const D3DKMT_HANDLE *objects,
                    POBJECT_ATTRIBUTES attributes, DWORD access, HANDLE *handle)
 {
    CHECK(count == 1 && *objects > 100 && allocations[*objects - 100].alive);
-   CHECK(attributes->Length == sizeof(*attributes) && !attributes->ObjectName &&
-         access == (STANDARD_RIGHTS_READ | SHARED_ALLOCATION_WRITE));
-   *handle = CreateEventW(NULL, FALSE, FALSE, NULL);
+   check_object_attributes(attributes);
+   CHECK(access == expected_access && attributes->SecurityDescriptor == expected_security &&
+         attributes->Attributes == (expected_inherit ? OBJ_INHERIT : 0));
+   SECURITY_ATTRIBUTES security = {sizeof(security), NULL, expected_inherit};
+   *handle = CreateEventW(&security, FALSE, FALSE, NULL);
    CHECK(*handle);
    shared_handle = *handle;
+   return 0;
+}
+
+NTSTATUS APIENTRY
+D3DKMTOpenNtHandleFromName(D3DKMT_OPENNTHANDLEFROMNAME *args)
+{
+   check_object_attributes(args->pObjAttrib);
+   CHECK(args->dwDesiredAccess == (STANDARD_RIGHTS_READ | SHARED_ALLOCATION_WRITE) &&
+         !args->pObjAttrib->Attributes && !args->pObjAttrib->SecurityDescriptor);
+   CHECK(DuplicateHandle(GetCurrentProcess(), shared_handle, GetCurrentProcess(),
+                         &args->hNtHandle, 0, FALSE, DUPLICATE_SAME_ACCESS));
    return 0;
 }
 
@@ -184,6 +217,36 @@ int main(void)
    CHECK(tg_kmt_allocate_shared(&producer, 4097, true, &original) == 0);
    CHECK(original.resource && original.flags == TG_GPU_ALLOCATION_CPU_VISIBLE &&
          !GetHandleInformation(last_section, &flags));
+
+   DWORD session;
+   CHECK(ProcessIdToSessionId(GetCurrentProcessId(), &session));
+   if (session)
+      _snwprintf(expected_name, ARRAYSIZE(expected_name),
+                  L"\\Sessions\\%lu\\BaseNamedObjects\\nvk-storage-test", session);
+   else
+      wcscpy(expected_name, L"\\BaseNamedObjects\\nvk-storage-test");
+   CHECK(tg_kmt_export_memory_win32(&original, NULL, expected_access,
+                                   L"Local\\nvk-storage-test", &handle) == 0);
+   HANDLE named;
+   CHECK(tg_kmt_open_memory_name(L"nvk-storage-test", &named) == 0 && named != handle);
+   CHECK(GetHandleInformation(named, &flags) && !(flags & HANDLE_FLAG_INHERIT));
+   CHECK(CloseHandle(named) && CloseHandle(handle));
+   wcscpy(expected_name, L"\\BaseNamedObjects\\nvk-storage-test");
+   SECURITY_DESCRIPTOR descriptor = {.Revision = SECURITY_DESCRIPTOR_REVISION};
+   SECURITY_ATTRIBUTES security = {sizeof(security), &descriptor, TRUE};
+   expected_access = STANDARD_RIGHTS_READ;
+   expected_security = &descriptor;
+   expected_inherit = true;
+   CHECK(tg_kmt_export_memory_win32(&original, &security, expected_access,
+                                   L"Global\\nvk-storage-test", &handle) == 0);
+   CHECK(GetHandleInformation(handle, &flags) && (flags & HANDLE_FLAG_INHERIT));
+   CHECK(CloseHandle(handle));
+   CHECK(tg_kmt_open_memory_name(L"Global\\", &named) == TG_KMT_INVALID_PARAMETER && !named);
+   CHECK(tg_kmt_open_memory_name(L"bad\\name", &named) == TG_KMT_INVALID_PARAMETER && !named);
+   *expected_name = 0;
+   expected_access = STANDARD_RIGHTS_READ | SHARED_ALLOCATION_WRITE;
+   expected_security = NULL;
+   expected_inherit = false;
    CHECK(tg_kmt_export_memory(&original, &handle) == 0 && GetHandleInformation(handle, &flags));
    CHECK(tg_kmt_import_memory(&consumer, handle, &imported) == 0);
    CHECK(tg_kmt_import_memory(&consumer, handle, &second) == 0);
@@ -230,7 +293,7 @@ int main(void)
    CHECK(residents >= 6 && destroys == next_allocation);
    for (UINT i = 1; i <= next_allocation; i++)
       CHECK(!allocations[i].alive);
-   const char pass[] = "PASS: SDK shared-resource handles, repeated imports, budgets and failed-residency cleanup (controlled KMT)\r\n";
+   const char pass[] = "PASS: SDK shared-resource handles, named objects, security/access/inheritance, repeated imports, budgets and failed-residency cleanup (controlled KMT)\r\n";
    DWORD written;
    CHECK(WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), pass, sizeof(pass) - 1, &written, NULL));
    return 0;

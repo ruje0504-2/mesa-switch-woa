@@ -4,6 +4,9 @@
 #include <winternl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+#include <stdio.h>
+#include <wchar.h>
 #include "allocation_abi.h"
 #include "submit_abi.h"
 
@@ -232,14 +235,101 @@ tg_kmt_allocate_shared(struct tg_kmt_device *dev, uint64_t size, bool cpu_visibl
 LONG
 tg_kmt_export_memory(const struct tg_kmt_allocation *allocation, HANDLE *handle)
 {
+   return tg_kmt_export_memory_win32(allocation, NULL,
+                                     STANDARD_RIGHTS_READ | SHARED_ALLOCATION_WRITE,
+                                     NULL, handle);
+}
+
+/* D3DKMT takes an object-manager name, rather than the Win32 name used by
+ * Vulkan. Match the per-session, Local\\ and Global\\ named-object namespaces.
+ */
+static LONG
+memory_object_name(LPCWSTR name, UNICODE_STRING *object_name)
+{
+   WCHAR prefix[64];
+   int prefix_len;
+   if (wcsncmp(name, L"Global\\", 7) == 0) {
+      name += 7;
+      prefix_len = _snwprintf(prefix, ARRAYSIZE(prefix), L"\\BaseNamedObjects\\");
+   } else {
+      if (wcsncmp(name, L"Local\\", 6) == 0)
+         name += 6;
+      DWORD session;
+      if (!ProcessIdToSessionId(GetCurrentProcessId(), &session))
+         return TG_KMT_INVALID_PARAMETER;
+      prefix_len = session ?
+         _snwprintf(prefix, ARRAYSIZE(prefix), L"\\Sessions\\%lu\\BaseNamedObjects\\", session) :
+         _snwprintf(prefix, ARRAYSIZE(prefix), L"\\BaseNamedObjects\\");
+   }
+   if (!*name || wcschr(name, L'\\') || prefix_len < 0)
+      return TG_KMT_INVALID_PARAMETER;
+   const size_t length = (size_t)prefix_len + wcslen(name);
+   if (length >= USHRT_MAX / sizeof(WCHAR))
+      return TG_KMT_INVALID_PARAMETER;
+   WCHAR *buffer = calloc(length + 1, sizeof(WCHAR));
+   if (!buffer)
+      return TG_KMT_NO_MEMORY;
+   memcpy(buffer, prefix, prefix_len * sizeof(WCHAR));
+   memcpy(buffer + prefix_len, name, (length - prefix_len) * sizeof(WCHAR));
+   *object_name = (UNICODE_STRING) {
+      .Length = (USHORT)(length * sizeof(WCHAR)),
+      .MaximumLength = (USHORT)((length + 1) * sizeof(WCHAR)),
+      .Buffer = buffer,
+   };
+   return 0;
+}
+
+LONG
+tg_kmt_export_memory_win32(const struct tg_kmt_allocation *allocation,
+                           const SECURITY_ATTRIBUTES *security, DWORD access,
+                           LPCWSTR name, HANDLE *handle)
+{
    if (!handle)
       return TG_KMT_INVALID_PARAMETER;
    *handle = NULL;
    if (!allocation->resource || !allocation->handle || !allocation->size)
       return TG_KMT_INVALID_PARAMETER;
-   OBJECT_ATTRIBUTES attributes = {.Length = sizeof(attributes)};
-   return D3DKMTShareObjects(1, &allocation->resource, &attributes,
-                             STANDARD_RIGHTS_READ | SHARED_ALLOCATION_WRITE, handle);
+   UNICODE_STRING object_name = {0};
+   if (name) {
+      LONG status = memory_object_name(name, &object_name);
+      if (status < 0)
+         return status;
+   }
+   OBJECT_ATTRIBUTES attributes = {
+      .Length = sizeof(attributes),
+      .ObjectName = name ? &object_name : NULL,
+      .Attributes = security && security->bInheritHandle ? OBJ_INHERIT : 0,
+      .SecurityDescriptor = security ? security->lpSecurityDescriptor : NULL,
+   };
+   LONG status = D3DKMTShareObjects(1, &allocation->resource, &attributes, access, handle);
+   free(object_name.Buffer);
+   return status;
+}
+
+LONG
+tg_kmt_open_memory_name(LPCWSTR name, HANDLE *handle)
+{
+   if (!handle)
+      return TG_KMT_INVALID_PARAMETER;
+   *handle = NULL;
+   if (!name)
+      return TG_KMT_INVALID_PARAMETER;
+   UNICODE_STRING object_name;
+   LONG status = memory_object_name(name, &object_name);
+   if (status < 0)
+      return status;
+   OBJECT_ATTRIBUTES attributes = {
+      .Length = sizeof(attributes), .ObjectName = &object_name,
+   };
+   D3DKMT_OPENNTHANDLEFROMNAME open = {
+      .dwDesiredAccess = STANDARD_RIGHTS_READ | SHARED_ALLOCATION_WRITE,
+      .pObjAttrib = &attributes,
+   };
+   status = D3DKMTOpenNtHandleFromName(&open);
+   if (status >= 0)
+      *handle = open.hNtHandle;
+   free(object_name.Buffer);
+   return status;
 }
 
 LONG

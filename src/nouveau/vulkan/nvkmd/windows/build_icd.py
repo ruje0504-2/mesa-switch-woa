@@ -56,6 +56,9 @@ def main():
     run(a.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
         win / "check-shared.c", win / "kmt.c", kmt_object, "-lgdi32",
         "-o", out / "nvk-windows-shared-check.exe")
+    run(a.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-I" + str(src / "include"),
+        win / "check-vulkan-shared.c", win / "kmt.c",
+        "-o", out / "nvk-windows-vulkan-shared-check.exe")
     if a.prepare_only:
         print(f"Validated the SDK KMT layout and built the bridge and memory tests in {out}")
         return
@@ -83,7 +86,8 @@ def main():
         "library_path": "./libvulkan_nouveau.dll", "api_version": "1.4.0",
     }}, indent=2) + "\n")
     files = [dll, out / "nvk-windows-check.exe", out / "test-kmt.exe",
-             out / "test-kmt-shared.exe", out / "nvk-windows-shared-check.exe", manifest]
+             out / "test-kmt-shared.exe", out / "nvk-windows-shared-check.exe",
+             out / "nvk-windows-vulkan-shared-check.exe", manifest]
     (out / "manifest.json").write_text(json.dumps({
         "mesa": rev, "mesa_switch_base": REV, "build_id": digest.hexdigest(), "sdk_kmt_layout_verified": True,
         "scope": "NVK ICD with Windows KMT transport gated by the native-submit KMD flag",

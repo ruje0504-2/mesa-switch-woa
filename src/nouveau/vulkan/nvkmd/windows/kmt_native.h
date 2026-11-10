@@ -52,6 +52,10 @@ LONG tg_kmt_allocate_shared(struct tg_kmt_device *dev, uint64_t size, bool cpu_v
  * reference and is released with tg_kmt_free, including partial failures.
  */
 LONG tg_kmt_export_memory(const struct tg_kmt_allocation *allocation, HANDLE *handle);
+LONG tg_kmt_export_memory_win32(const struct tg_kmt_allocation *allocation,
+                               const SECURITY_ATTRIBUTES *security, DWORD access,
+                               LPCWSTR name, HANDLE *handle);
+LONG tg_kmt_open_memory_name(LPCWSTR name, HANDLE *handle);
 LONG tg_kmt_import_memory(struct tg_kmt_device *dev, HANDLE handle,
                           struct tg_kmt_allocation *allocation);
 LONG tg_kmt_free(struct tg_kmt_device *dev, struct tg_kmt_allocation *allocation);

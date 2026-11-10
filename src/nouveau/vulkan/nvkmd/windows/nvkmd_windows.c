@@ -5,6 +5,7 @@
 #include "util/u_math.h"
 #include "vk_log.h"
 #include "vk_sync_binary.h"
+#include "allocation_abi.h"
 
 struct nvkmd_windows_pdev {
    struct nvkmd_pdev base;
@@ -169,6 +170,36 @@ static const struct nvkmd_mem_ops win_mem_ops = {
 };
 
 static VkResult
+win_finish_mem(struct nvkmd_dev *dev, struct vk_object_base *log,
+               struct nvkmd_windows_mem *mem, uint64_t alignment, uint8_t kind,
+               enum nvkmd_mem_flags flags, struct nvkmd_mem **out)
+{
+   struct nvkmd_va *va = NULL;
+   const uint64_t size = mem->allocation.size;
+   VkResult result = win_alloc_va(dev, log, 0, kind, size, alignment, 0, &va);
+   if (result != VK_SUCCESS)
+      goto fail_allocation;
+
+   nvkmd_mem_init(dev, &mem->base, &win_mem_ops,
+                  flags | ((flags & NVKMD_MEM_CAN_MAP) ? NVKMD_MEM_COHERENT : 0),
+                  size, TG_KMT_PAGE_SIZE);
+   InitializeSRWLock(&mem->map_lock);
+   mem->base.va = va;
+   result = win_bind_mem(va, log, 0, &mem->base, 0, size);
+   if (result != VK_SUCCESS) {
+      win_free_mem(&mem->base);
+      return result;
+   }
+   *out = &mem->base;
+   return VK_SUCCESS;
+
+fail_allocation:
+   tg_kmt_free(&nvkmd_windows_dev(dev)->kmt, &mem->allocation);
+   free(mem);
+   return result;
+}
+
+static VkResult
 win_alloc_tiled_mem(struct nvkmd_dev *dev, struct vk_object_base *log, uint64_t size,
                     uint64_t alignment, uint8_t kind, uint16_t tile_mode,
                     enum nvkmd_mem_flags flags, struct nvkmd_mem **out)
@@ -190,30 +221,48 @@ win_alloc_tiled_mem(struct nvkmd_dev *dev, struct vk_object_base *log, uint64_t 
       return nvkmd_windows_status(log, "KMT allocation and residency", status,
                                   VK_ERROR_OUT_OF_DEVICE_MEMORY);
    }
+   return win_finish_mem(dev, log, mem, alignment, kind, flags, out);
+}
 
-   struct nvkmd_va *va = NULL;
-   size = mem->allocation.size;
-   VkResult result = win_alloc_va(dev, log, 0, kind, size, alignment, 0, &va);
-   if (result != VK_SUCCESS)
-      goto fail_allocation;
-
-   nvkmd_mem_init(dev, &mem->base, &win_mem_ops,
-                  flags | (cpu_visible ? NVKMD_MEM_COHERENT : 0),
-                  size, TG_KMT_PAGE_SIZE);
-   InitializeSRWLock(&mem->map_lock);
-   mem->base.va = va;
-   result = win_bind_mem(va, log, 0, &mem->base, 0, size);
-   if (result != VK_SUCCESS) {
-      win_free_mem(&mem->base);
-      return result;
+static VkResult
+win_import_mem(struct nvkmd_dev *dev, struct vk_object_base *log, void *handle,
+                uint64_t size, uint64_t alignment, uint8_t kind,
+                enum nvkmd_mem_flags flags, struct nvkmd_mem **out)
+{
+   struct nvkmd_windows_mem *mem = calloc(1, sizeof(*mem));
+   if (!mem)
+      return vk_error(log, VK_ERROR_OUT_OF_HOST_MEMORY);
+   struct tg_kmt_device *kmt = &nvkmd_windows_dev(dev)->kmt;
+   LONG status = tg_kmt_import_memory(kmt, handle, &mem->allocation);
+   if (status < 0) {
+      free(mem);
+      return nvkmd_windows_status(log, "open KMT shared storage", status,
+                                  VK_ERROR_INVALID_EXTERNAL_HANDLE);
    }
-   *out = &mem->base;
-   return VK_SUCCESS;
+   if (mem->allocation.size != size || (flags & NVKMD_MEM_VRAM) ||
+       ((flags & NVKMD_MEM_CAN_MAP) &&
+        !(mem->allocation.flags & TG_GPU_ALLOCATION_CPU_VISIBLE))) {
+      tg_kmt_free(kmt, &mem->allocation);
+      free(mem);
+      return vk_error(log, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+   }
+   return win_finish_mem(dev, log, mem, alignment, kind, flags, out);
+}
 
-fail_allocation:
-   tg_kmt_free(kmt, &mem->allocation);
-   free(mem);
-   return result;
+VkResult
+nvkmd_windows_export_memory(struct nvkmd_mem *base, struct vk_object_base *log,
+                            const VkExportMemoryWin32HandleInfoKHR *info, HANDLE *handle)
+{
+   struct nvkmd_windows_mem *mem = container_of(base, struct nvkmd_windows_mem, base);
+   /* Only handles returned to the application may be inherited. */
+   SECURITY_ATTRIBUTES security = {.nLength = sizeof(security)};
+   if (info && info->pAttributes)
+      security.lpSecurityDescriptor = info->pAttributes->lpSecurityDescriptor;
+   LONG status = info ?
+      tg_kmt_export_memory_win32(&mem->allocation, &security, info->dwAccess, info->name, handle) :
+      tg_kmt_export_memory(&mem->allocation, handle);
+   return nvkmd_windows_status(log, "share KMT storage", status,
+                               VK_ERROR_INVALID_EXTERNAL_HANDLE);
 }
 
 static VkResult
@@ -245,6 +294,7 @@ static const struct nvkmd_dev_ops win_dev_ops = {
    .get_gpu_timestamp = win_get_timestamp,
    .alloc_mem = win_alloc_mem,
    .alloc_tiled_mem = win_alloc_tiled_mem,
+   .import_win32_handle = win_import_mem,
    .alloc_va = win_alloc_va,
    .create_ctx = nvkmd_windows_create_ctx,
 };
@@ -302,6 +352,7 @@ nvk_enumerate_windows_physical_devices(struct vk_instance *vk)
    pdev->base.ops = &win_pdev_ops;
    pdev->base.debug_flags = instance->debug_flags;
    pdev->base.bind_align_B = TG_KMT_PAGE_SIZE;
+   pdev->base.kmd_info.has_win32_memory = true;
    pdev->base.dev_info = (struct nv_device_info) {
       .type = NV_DEVICE_TYPE_SOC, .device_id = 0x0fe0, .chipset = pdev->adapter.chipset,
       .device_name = "NVIDIA Tegra X1 (GM20B)", .chipset_name = "GM20B",

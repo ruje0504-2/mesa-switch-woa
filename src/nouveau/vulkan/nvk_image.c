@@ -559,6 +559,12 @@ nvk_GetPhysicalDeviceImageFormatProperties2(
       }
 
       switch (external_info->handleType) {
+      case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT:
+         if (!pdev->nvkmd->kmd_info.has_win32_memory)
+            return VK_ERROR_FORMAT_NOT_SUPPORTED;
+         ext_mem_props = &nvk_opaque_win32_mem_props;
+         break;
+
       case VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT:
          if (!pdev->nvkmd->kmd_info.has_dma_buf)
             return VK_ERROR_FORMAT_NOT_SUPPORTED;

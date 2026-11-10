@@ -4,6 +4,7 @@
 
 #include "nvkmd/nvkmd.h"
 #include "kmt_native.h"
+#include <vulkan/vulkan_win32.h>
 
 struct nvkmd_windows_dev {
    struct nvkmd_dev base;
@@ -17,6 +18,9 @@ nvkmd_windows_dev(struct nvkmd_dev *dev)
 }
 
 const struct tg_gpu_adapter_info *nvkmd_windows_adapter(const struct nvkmd_pdev *pdev);
+VkResult nvkmd_windows_export_memory(struct nvkmd_mem *mem, struct vk_object_base *log,
+                                     const VkExportMemoryWin32HandleInfoKHR *info,
+                                     HANDLE *handle);
 VkResult nvkmd_windows_status(struct vk_object_base *log, const char *operation,
                              LONG status, VkResult failure);
 VkResult nvkmd_windows_create_ctx(struct nvkmd_dev *dev, struct vk_object_base *log,
