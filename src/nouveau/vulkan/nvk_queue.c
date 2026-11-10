@@ -82,12 +82,40 @@ static void
 nvk_queue_state_init(struct nvk_queue_state *qs)
 {
    memset(qs, 0, sizeof(*qs));
+#ifdef _WIN32
+   list_inithead(&qs->retired_slm);
+#endif
 }
+
+#ifdef _WIN32
+struct nvk_retired_slm {
+   struct list_head link;
+   struct nvkmd_mem *mem;
+   uint64_t time_point;
+};
+
+static void
+nvk_queue_release_slm(struct nvk_device *dev, struct nvk_queue_state *qs,
+                      uint64_t completed)
+{
+   list_for_each_entry_safe(struct nvk_retired_slm, slm, &qs->retired_slm, link) {
+      if (slm->time_point > completed)
+         break;
+
+      list_del(&slm->link);
+      nvkmd_mem_unref(slm->mem);
+      vk_free(&dev->vk.alloc, slm);
+   }
+}
+#endif
 
 static void
 nvk_queue_state_finish(struct nvk_device *dev,
                        struct nvk_queue_state *qs)
 {
+#ifdef _WIN32
+   nvk_queue_release_slm(dev, qs, UINT64_MAX);
+#endif
    if (qs->slm.mem)
       nvkmd_mem_unref(qs->slm.mem);
 }
@@ -101,6 +129,16 @@ nvk_queue_state_update(struct nvk_queue *queue,
    struct nvkmd_mem *mem;
    uint32_t alloc_count, bytes_per_warp, bytes_per_tpc;
    bool dirty = false;
+#ifdef _WIN32
+   if (!list_is_empty(&qs->retired_slm)) {
+      uint64_t completed;
+      VkResult result = vk_sync_get_value(&dev->vk, queue->push_stream.sync,
+                                          &completed);
+      if (result != VK_SUCCESS)
+         return result;
+      nvk_queue_release_slm(dev, qs, completed);
+   }
+#endif
 #ifdef __SWITCH__
    struct nouveau_horizon_zbc_state zbc_state;
    const bool zbc_dirty =
@@ -123,8 +161,24 @@ nvk_queue_state_update(struct nvk_queue *queue,
    mem = nvk_slm_area_get_mem_ref(&dev->slm, &bytes_per_warp, &bytes_per_tpc);
    if (qs->slm.mem != mem || qs->slm.bytes_per_warp != bytes_per_warp ||
        qs->slm.bytes_per_tpc != bytes_per_tpc) {
-      if (qs->slm.mem)
+      if (qs->slm.mem) {
+#ifdef _WIN32
+         struct nvk_retired_slm *old = vk_alloc(&dev->vk.alloc, sizeof(*old), 8,
+                                                VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+         if (!old) {
+            if (mem)
+               nvkmd_mem_unref(mem);
+            return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
+         }
+
+         /* The state push signals this point after earlier SLM users. */
+         old->mem = qs->slm.mem;
+         old->time_point = queue->push_stream.next_time_point;
+         list_addtail(&old->link, &qs->retired_slm);
+#else
          nvkmd_mem_unref(qs->slm.mem);
+#endif
+      }
       qs->slm.mem = mem;
       qs->slm.bytes_per_warp = bytes_per_warp;
       qs->slm.bytes_per_tpc = bytes_per_tpc;
@@ -823,11 +877,11 @@ nvk_queue_destroy(struct nvk_device *dev, struct nvk_queue *queue)
       nvk_upload_queue_sync(dev, &dev->upload);
       nvkmd_mem_unref(queue->draw_cb0);
    }
-   nvk_queue_state_finish(dev, &queue->state);
    if (queue->bind_ctx != NULL)
       nvkmd_ctx_destroy(queue->bind_ctx);
    if (queue->exec_ctx != NULL)
       nvkmd_ctx_destroy(queue->exec_ctx);
+   nvk_queue_state_finish(dev, &queue->state);
    vk_queue_finish(&queue->vk);
    vk_free(&dev->vk.alloc, queue);
 #endif

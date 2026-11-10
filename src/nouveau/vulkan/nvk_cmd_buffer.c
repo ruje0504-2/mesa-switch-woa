@@ -1239,8 +1239,12 @@ nvk_cmd_bind_shaders(struct vk_command_buffer *vk_cmd,
          container_of(shaders[i], struct nvk_shader, vk);
 
       if (shader != NULL) {
-         nvk_device_ensure_slm(dev, shader->info.slm_size,
-                                    shader->info.crs_size);
+         VkResult result = nvk_device_ensure_slm(dev, shader->info.slm_size,
+                                                 shader->info.crs_size);
+         if (result != VK_SUCCESS) {
+            vk_command_buffer_set_error(vk_cmd, result);
+            return;
+         }
       }
 
       if (stages[i] == MESA_SHADER_COMPUTE ||

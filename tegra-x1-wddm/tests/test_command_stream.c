@@ -590,7 +590,8 @@ static void test_captured_qmd(void)
     NVVAL_MW_SET(qmd, NVB1C0, QMDV00_06, CONSTANT_BUFFER_SIZE, 0, 2048);
 
     assert(tg_gpu_inspect_command_stream(push, sizeof(push), &va, &info));
-    assert(info.va_end == 0x30800 && info.requires_program == (1u << TG_GPU_PROGRAM_COMPUTE));
+    assert(info.va_end == 0x30800 && info.requires_program == (1u << TG_GPU_PROGRAM_COMPUTE) &&
+           !info.required_compute_slm_per_tpc);
     uint32_t snapshot[PCAS + 3];
     memcpy(snapshot, push, sizeof(push));
     assert(tg_gpu_prepare_command_stream(snapshot, sizeof(snapshot), &va, &info));
@@ -603,6 +604,23 @@ static void test_captured_qmd(void)
     struct tg_gpu_command_va short_va = va;
     short_va.reserved_end = qmd_va + 255;
     assert(!tg_gpu_prepare_command_stream(snapshot, sizeof(snapshot), &short_va, NULL));
+
+    SET_QMD(SHADER_LOCAL_MEMORY_LOW_SIZE, 16);
+    SET_QMD(SHADER_LOCAL_MEMORY_CRS_SIZE, 512);
+    assert(tg_gpu_inspect_command_stream(push, sizeof(push), &va, &info));
+    assert(info.required_compute_slm_per_tpc == 0x10000 && !info.compute_slm.va_end);
+
+    uint32_t bound[11 + PCAS + 3] = {
+        INCR(1, NVB1C0_SET_SHADER_LOCAL_MEMORY_A, 2), 0, 0x100000,
+        INCR(1, NVB1C0_SET_SHADER_LOCAL_MEMORY_NON_THROTTLED_A, 3), 0, 0x10000, 0xff,
+        INCR(1, NVB1C0_SET_SHADER_LOCAL_MEMORY_THROTTLED_A, 3), 0, 0x10000, 0xff,
+    };
+    memcpy(bound + 11, push, sizeof(push));
+    assert(tg_gpu_inspect_command_stream(bound, sizeof(bound), &va, &info));
+    assert(info.compute_slm.bytes_per_tpc == 0x10000 && info.compute_slm.va_end == 0x120000 &&
+           !info.required_compute_slm_per_tpc);
+    bound[5] = bound[9] = 0x8000;
+    assert(!tg_gpu_inspect_command_stream(bound, sizeof(bound), &va, NULL));
 
     SET_QMD(CTA_THREAD_DIMENSION0, 1024);
     assert(!tg_gpu_inspect_command_stream(push, sizeof(push), &va, NULL));

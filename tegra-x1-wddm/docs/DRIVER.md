@@ -877,10 +877,14 @@ that context. On Windows, NVK waits for the initialization push to retire
 on its combined graphics and compute queue. B197 pipeline offsets must
 align the first instruction and leave room for the initial fetch and NVK's
 prefetch padding. Local memory setup covers the size programmed for both
-TPCs and checks both compute throttle modes together. VidMm manages backing
-pages. General application submission still requires matching each QMD's
-scratch requirements to the queue's backing, validating GPU-resident shader
-and descriptor contents, and covering the remaining engine methods.
+TPCs and checks both compute throttle modes together. QMD scratch and CRS
+sizes determine the requirement for 64 warps per TPC. A binding in the same
+push is checked in command order. A previous binding is published at GPU
+retirement and checked against the saved context and root at activation.
+Windows NVK keeps a replaced SLM allocation until the queue's state-push
+fence completes. VidMm manages backing pages. General application submission
+still requires validation of GPU-resident shader and descriptor contents and
+the remaining engine methods.
 
 The .83 one-boot test exercised the new KMT bridge on the Lite, including
 aligned and fixed VA reservations, residency, event waits and GPU B0B5 copy.

@@ -16,10 +16,17 @@ enum tg_gpu_program_engine {
     TG_GPU_PROGRAM_ENGINES,
 };
 
+struct tg_gpu_compute_slm {
+    uint64_t bytes_per_tpc;
+    uint64_t va_end;
+};
+
 struct tg_gpu_command_info {
     uint64_t va_end;
     uint64_t reserved_base;
     uint64_t program_end[TG_GPU_PROGRAM_ENGINES];
+    struct tg_gpu_compute_slm compute_slm;
+    uint64_t required_compute_slm_per_tpc; /* Before the first binding in this stream. */
     uint32_t requires_program; /* Engines using a previously set program region. */
     bool uploads_mme;
     bool requires_mme; /* A call precedes any upload in this stream. */

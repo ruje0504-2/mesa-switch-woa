@@ -23,7 +23,7 @@ static NTSTATUS start_dma(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
     w->PagingDmaBytes = (UINT)step->RecordBytes;
     w->DmaAddress = w->InternalVa + TG_GPU_COMMAND_CAPTURE;
     w->DmaBytes = words * sizeof(*packet);
-    NTSTATUS status = TgGpuActivateContextWork(e,w);
+    NTSTATUS status = TgGpuActivateContextWork(e,w,NULL);
     if (status != STATUS_SUCCESS) return status;
     status = TgGpuPrepareContextWork(e,w);
     if (status != STATUS_SUCCESS) return status;

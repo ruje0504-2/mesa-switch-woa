@@ -1269,9 +1269,10 @@ void start(void)
     DXGKARG_QUERYCURRENTFENCE query={0};
     TG_GPU_CONTEXT *c,*c2; TG_GPU_CONTEXT_WORK work={0},blocked={0};
     const struct tg_gpu_command_info upload={.uploads_mme=true,.cb0_end=0x18800,
-        .program_end={[TG_GPU_PROGRAM_3D]=0x02000000}};
+        .program_end={[TG_GPU_PROGRAM_3D]=0x02000000},.compute_slm={0x10000,0x02040000}};
     const struct tg_gpu_command_info call={.requires_mme=true,.requires_cb0=true,
-        .requires_program=1u << TG_GPU_PROGRAM_3D};
+        .requires_program=1u << TG_GPU_PROGRAM_3D,.required_compute_slm_per_tpc=0x10000};
+    const struct tg_gpu_command_info scratch={.required_compute_slm_per_tpc=0x10000};
     struct tg_gpu_power power={.owned=true,.ready=true,.stage=TG_GPU_STAGE_READY,
         .pmic_address=0x33,.original_enable=0x40,.original_voltage=50};
     struct tg_gpu_clock clock={0};
@@ -1346,9 +1347,14 @@ void start(void)
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_INVALID_PARAMETER && !blocked.Context);
     CHECK(TgGpuCaptureContextWork(&e,&submit,&upload,&blocked)==STATUS_SUCCESS && blocked.UploadsMme);
     CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS &&
-          !c->MmeInitialized && !c->Cb0End && !c->ProgramEnd[TG_GPU_PROGRAM_3D] && !c->References);
+          !c->MmeInitialized && !c->Cb0End && !c->ProgramEnd[TG_GPU_PROGRAM_3D] &&
+          !c->ComputeSlm.va_end && !c->References);
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&scratch,&blocked)==STATUS_SUCCESS);
+    CHECK(TgGpuActivateContextWork(&e,&blocked,&scratch)==STATUS_INVALID_PARAMETER &&
+          !blocked.Expected && !e.Active);
+    CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
     CHECK(TgGpuCaptureContextWork(&e,&submit,&upload,&work)==STATUS_SUCCESS && work.UploadsMme);
-    CHECK(TgGpuActivateContextWork(&e,&work)==STATUS_SUCCESS);
+    CHECK(TgGpuActivateContextWork(&e,&work,&upload)==STATUS_SUCCESS);
     CHECK(work.Root.Valid && c->References==1 && work.FencePhysicalAddress==0x91002048);
     CHECK(*fence==~work.Expected && instance[0x800/4]==0);
     CHECK(TgGpuSignalContextWork(&e,&work,&upload)==STATUS_DEVICE_NOT_READY && !c->MmeInitialized && !c->Cb0End);
@@ -1403,6 +1409,8 @@ void start(void)
     CHECK(c->MmeInitialized && c->Cb0End==upload.cb0_end && !c2->MmeInitialized && !c2->Cb0End);
     CHECK(c->ProgramEnd[TG_GPU_PROGRAM_3D]==upload.program_end[TG_GPU_PROGRAM_3D] &&
           !c->ProgramEnd[TG_GPU_PROGRAM_COMPUTE] && !c2->ProgramEnd[TG_GPU_PROGRAM_3D]);
+    CHECK(c->ComputeSlm.bytes_per_tpc==upload.compute_slm.bytes_per_tpc &&
+          c->ComputeSlm.va_end==upload.compute_slm.va_end && !c2->ComputeSlm.va_end);
     CHECK(TgGpuInitializeWorkQueue(&queue,&e)==STATUS_DEVICE_BUSY && !e.QueueOwner);
     CHECK(TgGpuCaptureContextWork(&e,&submit,NULL,&work)==STATUS_DEVICE_BUSY);
     fail_sync=FALSE;expected_fence=7;notify_context=c;notify_references=0;
@@ -1420,6 +1428,10 @@ void start(void)
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
     c->Root.VaLimit=upload.program_end[TG_GPU_PROGRAM_3D]-1;
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
+    c->Root.VaLimit=upload.compute_slm.va_end-1;
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_SUCCESS);
+    CHECK(TgGpuActivateContextWork(&e,&blocked,&call)==STATUS_INVALID_PARAMETER && !blocked.Expected);
+    CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
     c->Root.VaLimit=saved_limit;
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_SUCCESS);
     CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
@@ -1432,7 +1444,8 @@ void start(void)
     submit.DmaBufferVirtualAddress=c->Root.VaLimit-4;
     CHECK(TgGpuAcquireContextWork(&e,&submit,&work)==STATUS_INVALID_PARAMETER);
     submit.DmaBufferVirtualAddress=0x10000;submit.SubmissionFenceId=8;
-    CHECK(NT_SUCCESS(TgGpuAcquireContextWork(&e,&submit,&work)));
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&work)==STATUS_SUCCESS);
+    CHECK(TgGpuActivateContextWork(&e,&work,&call)==STATUS_SUCCESS);
     CHECK(NT_SUCCESS(TgGpuPrepareContextWork(&e,&work)));
     CHECK(NT_SUCCESS(TgGpuSubmitContextWork(&e,&work,&io,&power)));
     CHECK(TgGpuContextWorkFinished(&e,&work)==STATUS_PENDING);

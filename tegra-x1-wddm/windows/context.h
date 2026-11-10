@@ -45,6 +45,7 @@ struct _TG_GPU_CONTEXT {
     UINT GraphicsGeneration,ContextId;
     UINT64 Cb0End;
     UINT64 ProgramEnd[TG_GPU_PROGRAM_ENGINES];
+    struct tg_gpu_compute_slm ComputeSlm;
     BOOLEAN Closing,MmeInitialized;
 };
 struct _TG_GPU_CONTEXT_ENGINE {
@@ -135,7 +136,8 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *,
     const DXGKARG_SUBMITCOMMANDVIRTUAL *, const struct tg_gpu_command_info *,
     TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuCapturePagingContext(TG_GPU_CONTEXT_ENGINE *,HANDLE,TG_GPU_CONTEXT_WORK *);
-NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
+NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *,
+                                  const struct tg_gpu_command_info *);
 NTSTATUS TgGpuCancelCapturedWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuCaptureSoftwareWork(TG_GPU_CONTEXT_ENGINE *,const DXGKARG_SUBMITCOMMANDVIRTUAL *,TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuArmSoftwareCompletion(TG_GPU_CONTEXT_ENGINE *,TG_GPU_CONTEXT_WORK *);

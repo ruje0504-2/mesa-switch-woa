@@ -32,6 +32,10 @@ struct nvk_queue_state {
       uint32_t bytes_per_warp;
       uint32_t bytes_per_tpc;
    } slm;
+
+#ifdef _WIN32
+   struct list_head retired_slm;
+#endif
 };
 
 struct nvk_queue {

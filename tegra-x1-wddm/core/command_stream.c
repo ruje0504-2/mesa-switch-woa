@@ -434,6 +434,10 @@ static uint32_t pipeline_program_in_span(uint32_t first, uint32_t last)
 
 #define B197_PROGRAM_HEADER_BYTES 80u
 
+/* The Windows GM20B profile has two TPCs with 64 warps each. */
+#define GM20B_TPCS 2u
+#define GM20B_WARPS_PER_TPC 64u
+
 static bool program_offset(uint32_t offset, uint32_t header_bytes)
 {
     /* Leave room for the first aligned fetch and NVK's 2 KiB I-cache guard. */
@@ -443,7 +447,8 @@ static bool program_offset(uint32_t offset, uint32_t header_bytes)
            entry + instruction_alignment + 2048 <= PROGRAM_REGION_BYTES;
 }
 
-static bool qmd_0_6(const uint32_t *qmd, const struct tg_gpu_command_va *va, uint64_t *max_end)
+static bool qmd_0_6(const uint32_t *qmd, const struct tg_gpu_command_va *va,
+                    struct tg_gpu_command_info *info)
 {
 #define QMD_WORD(field) DRF_LW_IDX(qmd, NVB1C0_QMDV00_06_##field)
 #define QMD_MASK(field) DRF_LW_SMASK(qmd, NVB1C0_QMDV00_06_##field)
@@ -474,14 +479,15 @@ static bool qmd_0_6(const uint32_t *qmd, const struct tg_gpu_command_va *va, uin
     }
     const uint32_t x = QMD_GET(CTA_THREAD_DIMENSION0), y = QMD_GET(CTA_THREAD_DIMENSION1);
     const uint32_t z = QMD_GET(CTA_THREAD_DIMENSION2), shared = QMD_GET(SHARED_MEMORY_SIZE);
+    const uint32_t slm = QMD_GET(SHADER_LOCAL_MEMORY_LOW_SIZE);
+    const uint32_t crs = QMD_GET(SHADER_LOCAL_MEMORY_CRS_SIZE);
     const uint32_t l1 = shared <= 16 * 1024 ? 1 : shared <= 32 * 1024 ? 2 : 3;
     if (QMD_GET(QMD_VERSION) != 6 || QMD_GET(SASS_VERSION) != 0x30 ||
         QMD_GET(API_VISIBLE_CALL_LIMIT) != NVB1C0_QMDV00_06_API_VISIBLE_CALL_LIMIT_NO_CHECK ||
         !program_offset(QMD_GET(PROGRAM_OFFSET), 0) || QMD_GET(CTA_RASTER_WIDTH) > INT32_MAX ||
         !x || !y || !z || z > 64 || (uint64_t)x * y * z > 1024 ||
         shared > 48 * 1024 || shared % 256 || QMD_GET(L1_CONFIGURATION) != l1 ||
-        QMD_GET(SHADER_LOCAL_MEMORY_LOW_SIZE) % 16 || QMD_GET(SHADER_LOCAL_MEMORY_CRS_SIZE) % 512 ||
-        QMD_GET(SHADER_LOCAL_MEMORY_CRS_SIZE) > (1u << 20))
+        slm % 16 || crs % 512 || crs > (1u << 20))
         return false;
 
     for (unsigned i = 0; i < 8; i++) {
@@ -489,12 +495,17 @@ static bool qmd_0_6(const uint32_t *qmd, const struct tg_gpu_command_va *va, uin
         const uint32_t hi = QMD_GET(CONSTANT_BUFFER_ADDR_UPPER(i));
         const uint32_t bytes = QMD_GET(CONSTANT_BUFFER_SIZE(i));
         if (QMD_GET(CONSTANT_BUFFER_VALID(i))) {
-            if (bytes > 65536 || bytes % 256 || !word_span(va, hi, lo, bytes, 256, max_end))
+            if (bytes > 65536 || bytes % 256 || !word_span(va, hi, lo, bytes, 256, &info->va_end))
                 return false;
         } else if (lo || hi || bytes) {
             return false;
         }
     }
+    const uint64_t bytes_per_tpc = ((uint64_t)slm * 32 + crs) * GM20B_WARPS_PER_TPC;
+    if (info->compute_slm.va_end)
+        return bytes_per_tpc <= info->compute_slm.bytes_per_tpc;
+    if (bytes_per_tpc > info->required_compute_slm_per_tpc)
+        info->required_compute_slm_per_tpc = bytes_per_tpc;
     return true;
 #undef QMD_CBUF
 #undef QMD_GET
@@ -503,7 +514,7 @@ static bool qmd_0_6(const uint32_t *qmd, const struct tg_gpu_command_va *va, uin
 }
 
 static size_t qmd_record(const uint32_t *args, size_t remaining,
-                         const struct tg_gpu_command_va *va, uint64_t *max_end)
+                         const struct tg_gpu_command_va *va, struct tg_gpu_command_info *info)
 {
     const size_t record = TG_GPU_QMD_RECORD_WORDS;
     const uint32_t pcas_a = NVDEF(NVB06F, DMA_INCR, OPCODE, VALUE) |
@@ -513,7 +524,7 @@ static size_t qmd_record(const uint32_t *args, size_t remaining,
     if (remaining < record + 3 || args[record] != pcas_a || args[record + 1])
         return 0;
     const size_t used = compute_dispatch(args + record + 1, remaining - record - 1);
-    return used && qmd_0_6(args, va, max_end) ? record + 1 + used : 0;
+    return used && qmd_0_6(args, va, info) ? record + 1 + used : 0;
 }
 
 static bool stage_qmd(uint32_t *words, size_t first, const struct tg_gpu_command_va *va,
@@ -545,12 +556,10 @@ static bool shader_local_memory_span(uint32_t engine, uint32_t first, uint32_t l
 
 static size_t shader_local_memory(uint32_t engine, uint32_t count, const uint32_t *args,
                                   size_t remaining, const struct tg_gpu_command_va *va,
-                                  uint64_t *max_end)
+                                  struct tg_gpu_command_info *info)
 {
-    /* The Windows GM20B profile has two TPCs with 64 warps each. */
-    const uint32_t tpcs = 2, warps_per_tpc = 64;
     const uint32_t tpc_alignment = 0x8000, warp_alignment = 0x200;
-    uint64_t bytes;
+    uint64_t bytes, bytes_per_tpc = 0, end = 0;
     size_t used;
     if (engine == TG_GPU_PROGRAM_3D) {
         if (count != 5 || args[2] > DRF_MASK(NVB197_SET_SHADER_LOCAL_MEMORY_C_SIZE_UPPER) ||
@@ -558,7 +567,7 @@ static size_t shader_local_memory(uint32_t engine, uint32_t count, const uint32_
             !args[4] || args[4] % warp_alignment)
             return 0;
         bytes = ((uint64_t)args[2] << 32) | args[3];
-        if (bytes % 0x20000 || bytes < (uint64_t)args[4] * warps_per_tpc * tpcs)
+        if (bytes % 0x20000 || bytes < (uint64_t)args[4] * GM20B_WARPS_PER_TPC * GM20B_TPCS)
             return 0;
         used = 5;
     } else {
@@ -571,11 +580,17 @@ static size_t shader_local_memory(uint32_t engine, uint32_t count, const uint32_
             args[3] > UINT8_MAX || args[4] % tpc_alignment || args[5] != 0xff ||
             args[7] != args[3] || args[8] != args[4] || args[9] != args[5])
             return 0;
-        const uint64_t per_tpc = ((uint64_t)args[3] << 32) | args[4];
-        bytes = per_tpc * tpcs;
+        bytes_per_tpc = ((uint64_t)args[3] << 32) | args[4];
+        bytes = bytes_per_tpc * GM20B_TPCS;
         used = 10;
     }
-    return word_span(va, args[0], args[1], bytes, 1u << TG_GPU_PAGE_SHIFT, max_end) ? used : 0;
+    if (!word_span(va, args[0], args[1], bytes, 1u << TG_GPU_PAGE_SHIFT, &end))
+        return 0;
+    if (bytes_per_tpc)
+        info->compute_slm = (struct tg_gpu_compute_slm){bytes_per_tpc, end};
+    if (end > info->va_end)
+        info->va_end = end;
+    return used;
 }
 
 static size_t color_target_setup(uint32_t method, uint32_t count, const uint32_t *args,
@@ -834,7 +849,7 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
             if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB197_SET_SHADER_LOCAL_MEMORY_A)
                 return false;
             const size_t used = shader_local_memory(subchannel, count, words + n, word_count - n,
-                                                    va, &stream.va_end);
+                                                    va, &stream);
             if (!used)
                 return false;
             n += used;
@@ -842,7 +857,7 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
         }
         if (subchannel == TG_GPU_PROGRAM_COMPUTE && method == NVB1C0_NO_OPERATION &&
             op == NVB06F_DMA_NONINCR_OPCODE_VALUE && count == TG_GPU_QMD_RECORD_WORDS) {
-            const size_t used = qmd_record(words + n, word_count - n, va, &stream.va_end);
+            const size_t used = qmd_record(words + n, word_count - n, va, &stream);
             if (!used || (staging && !stage_qmd(staging, n, va, &stream.va_end)))
                 return false;
             require_program(&stream, TG_GPU_PROGRAM_COMPUTE);

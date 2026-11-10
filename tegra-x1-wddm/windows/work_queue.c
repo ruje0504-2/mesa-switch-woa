@@ -246,6 +246,8 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
         entry->Work.Context=NULL;
     }
     KeReleaseSpinLock(&q->Lock,irql);
+    const TG_GPU_COMMAND_SNAPSHOT *snapshot=q->CurrentOwned?q->CurrentOwned->Snapshot:NULL;
+    const struct tg_gpu_command_info *info=snapshot?&snapshot->Info:NULL;
     status=STATUS_SUCCESS;
     if(!w->Engine) goto done;
     if(w->Software || w->Preemption) {
@@ -261,7 +263,7 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
     }
     if(w->CompletionReady)goto notify;
     if(!w->Expected) {
-        status=TgGpuActivateContextWork(q->Engine,w);
+        status=TgGpuActivateContextWork(q->Engine,w,info);
         if(status==STATUS_DEVICE_BUSY) { status=STATUS_PENDING;goto done; }
         if(!NT_SUCCESS(status)) goto done;
     }
@@ -270,9 +272,8 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
         if(!NT_SUCCESS(status)) goto done;
     }
     if(!w->Attempted) {
-        if(q->CurrentOwned && q->CurrentOwned->Snapshot) {
-            const TG_GPU_COMMAND_SNAPSHOT *s=q->CurrentOwned->Snapshot;
-            if(s->Bytes!=w->DmaBytes || s->Bytes>TG_GPU_COMMAND_CAPTURE_BYTES ||
+        if(snapshot) {
+            if(snapshot->Bytes!=w->DmaBytes || snapshot->Bytes>TG_GPU_COMMAND_CAPTURE_BYTES ||
                w->DmaAddress!=w->InternalVa+TG_GPU_COMMAND_CAPTURE ||
                q->Engine->Commands.Bytes!=TG_GPU_COMMAND_BYTES) {
                 status=STATUS_INVALID_PARAMETER;goto done;
@@ -280,8 +281,8 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
             /* Prepare cleared control pages, not this region. Only the
              * serialized execution slot can publish captured USER words. */
             RtlZeroMemory((UCHAR *)q->Engine->Commands.CpuAddress+TG_GPU_COMMAND_CAPTURE,TG_GPU_COMMAND_CAPTURE_BYTES);
-            RtlCopyMemory((UCHAR *)q->Engine->Commands.CpuAddress+TG_GPU_COMMAND_CAPTURE,s->Words,s->Bytes);
-            KeMemoryBarrier();++q->Engine->SnapshotUploads;q->Engine->SnapshotBytes+=s->Bytes;
+            RtlCopyMemory((UCHAR *)q->Engine->Commands.CpuAddress+TG_GPU_COMMAND_CAPTURE,snapshot->Words,snapshot->Bytes);
+            KeMemoryBarrier();++q->Engine->SnapshotUploads;q->Engine->SnapshotBytes+=snapshot->Bytes;
         }
         status=TgGpuSubmitContextWork(q->Engine,w,io,power);
         if(!NT_SUCCESS(status)) goto done;
@@ -307,8 +308,7 @@ notify:
         free_entry(entry);
     }
     KeAcquireSpinLock(&q->Lock,&irql);q->CurrentPrivate=NULL;KeReleaseSpinLock(&q->Lock,irql);
-    const TG_GPU_COMMAND_SNAPSHOT *snapshot=q->CurrentOwned?q->CurrentOwned->Snapshot:NULL;
-    status=TgGpuSignalContextWork(q->Engine,w,snapshot?&snapshot->Info:NULL);
+    status=TgGpuSignalContextWork(q->Engine,w,info);
     if(status!=STATUS_SUCCESS) goto done;
     RtlZeroMemory(w,sizeof(*w));RtlZeroMemory(&q->CurrentPaging,sizeof(q->CurrentPaging));
     if(q->CurrentOwned) {

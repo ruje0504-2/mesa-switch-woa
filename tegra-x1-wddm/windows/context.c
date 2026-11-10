@@ -367,7 +367,8 @@ NTSTATUS TgGpuCapturePagingContext(TG_GPU_CONTEXT_ENGINE *e,HANDLE handle,TG_GPU
     return status;
 }
 
-NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w)
+NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *w,
+                                  const struct tg_gpu_command_info *info)
 {
     KIRQL irql;UINT marker;NTSTATUS status;
     if(!e || !w) return STATUS_INVALID_PARAMETER;
@@ -382,6 +383,12 @@ NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *
     if(!e->Graphics.Memory.Handle || (w->Context->GraphicsGeneration &&
        w->Context->GraphicsGeneration!=e->GraphicsGeneration)) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
+    }
+    /* A preceding SLM update can still be queued when this work is admitted. */
+    if (info && info->required_compute_slm_per_tpc &&
+        (info->required_compute_slm_per_tpc>w->Context->ComputeSlm.bytes_per_tpc ||
+         w->Context->ComputeSlm.va_end>w->Root.VaLimit)) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
     }
     status=TgGpuWriteRootInstance(&w->Root,&w->Context->Instance,TRUE);
     if(!NT_SUCCESS(status)) { KeReleaseSpinLock(&e->Lock,irql);return status; }
@@ -415,7 +422,7 @@ NTSTATUS TgGpuAcquireContextWork(TG_GPU_CONTEXT_ENGINE *e,
     if(!NT_SUCCESS(status)) return status;
     status=TgGpuCaptureContextWork(e,a,NULL,w);
     if(!NT_SUCCESS(status)) return status;
-    status=TgGpuActivateContextWork(e,w);
+    status=TgGpuActivateContextWork(e,w,NULL);
     if(!NT_SUCCESS(status)) (VOID)TgGpuCancelCapturedWork(e,w);
     return status;
 }
@@ -513,6 +520,8 @@ NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w
         if (info) {
             if (info->cb0_end)
                 w->Context->Cb0End=info->cb0_end;
+            if (info->compute_slm.va_end)
+                w->Context->ComputeSlm=info->compute_slm;
             for (UINT engine=0;engine<TG_GPU_PROGRAM_ENGINES;engine++) {
                 if (info->program_end[engine])
                     w->Context->ProgramEnd[engine]=info->program_end[engine];

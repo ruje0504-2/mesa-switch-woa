@@ -417,8 +417,12 @@ nvk_cmd_dispatch_with_root(struct nvk_cmd_buffer *cmd,
    }
 
    if (shader != NULL) {
-      nvk_device_ensure_slm(dev, shader->info.slm_size,
-                                 shader->info.crs_size);
+      result = nvk_device_ensure_slm(dev, shader->info.slm_size,
+                                        shader->info.crs_size);
+      if (result != VK_SUCCESS) {
+         vk_command_buffer_set_error(&cmd->vk, result);
+         return;
+      }
    }
 
    nvk_push_direct_dispatch(cmd, qmd_addr, inline_qmd, true);
