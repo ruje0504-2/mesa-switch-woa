@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "adapter.h"
-#include "allocation_abi.h"
+#include "allocation.h"
 #include "../platform/t214_resources.h"
 
 const D3DKMDT_VIDEO_SIGNAL_INFO TgGpuPanelSignal = {
@@ -85,6 +85,10 @@ NTSTATUS TgGpuPanelStart(TG_GPU_ADAPTER *adapter)
     if (boot.TargetId == D3DDDI_ID_UNINITIALIZED)
         boot.TargetId = 0;
     adapter->Panel.Boot = boot;
+    adapter->Panel.Displayed = (TG_GPU_PANEL_FLIP){
+        .Address = (UINT64)boot.PhysicAddress.QuadPart,
+        .Visible = TRUE,
+    };
     return STATUS_SUCCESS;
 }
 
@@ -293,10 +297,14 @@ static NTSTATUS APIENTRY standard_allocation(HANDLE context,
         surface->Width != T214_DC_PANEL_WIDTH || surface->Height != T214_DC_PANEL_HEIGHT ||
         (surface->Format != D3DDDIFMT_X8R8G8B8 && surface->Format != D3DDDIFMT_A8R8G8B8))
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE_MODE;
-    const struct tg_gpu_allocation_request request = {
-        TG_GPU_ALLOCATION_ABI,
-        TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_DISPLAY_PRIMARY,
-        T214_GPU_POST_FB_SIZE,
+    const TG_GPU_PRIMARY_ALLOCATION_REQUEST request = {
+        .Buffer = {
+            TG_GPU_ALLOCATION_ABI,
+            TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_DISPLAY_PRIMARY,
+            T214_GPU_POST_FB_SIZE,
+        },
+        .Format = surface->Format,
+        .RefreshRate = surface->RefreshRate,
     };
     args->AllocationPrivateDriverDataSize = sizeof(request);
     args->ResourcePrivateDriverDataSize = 0;

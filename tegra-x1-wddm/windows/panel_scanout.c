@@ -188,7 +188,7 @@ static BOOLEAN panel_interrupt(PVOID context, ULONG message)
             panel->Displayed = panel->Pending;
             panel->Pending = (TG_GPU_PANEL_FLIP){0};
         } else if (address != panel->Displayed.Address || visible != (panel->Displayed.Visible != FALSE)) {
-            panel->Displayed = (TG_GPU_PANEL_FLIP){0};
+            panel->Displayed = (TG_GPU_PANEL_FLIP){.Address = address, .Visible = visible};
         }
     }
 
@@ -207,14 +207,20 @@ static BOOLEAN panel_interrupt(PVOID context, ULONG message)
         dxgk->DxgkCbNotifyInterrupt(dxgk->DeviceHandle, &data);
     }
     if (panel->NotifyVBlank) {
+        const UINT64 displayed = panel->Displayed.Address;
+        const UINT64 base = (UINT64)adapter->Tables.Scanout.SystemPhysicalAddress.QuadPart;
+        /* VidSch matches a primary flip against its submitted segment offset.
+         * The inherited POST buffer lives outside that segment.
+         */
+        const UINT64 reported = displayed >= base && displayed - base < adapter->Tables.Scanout.Bytes
+            ? displayed - base : displayed;
         DXGKARGCB_NOTIFY_INTERRUPT_DATA data = {
             .InterruptType = DXGK_INTERRUPT_CRTC_VSYNC,
-            .CrtcVsync = {.VidPnTargetId = panel->Boot.TargetId},
+            .CrtcVsync = {
+                .VidPnTargetId = panel->Boot.TargetId,
+                .PhysicalAddress = {.QuadPart = (LONGLONG)reported},
+            },
         };
-        address = tg_t214_dc_active_address(&panel->Dc);
-        const UINT64 base = (UINT64)adapter->Tables.Scanout.SystemPhysicalAddress.QuadPart;
-        data.CrtcVsync.PhysicalAddress.QuadPart = address >= base &&
-            address - base < adapter->Tables.Scanout.Bytes ? (LONGLONG)(address - base) : 0;
         dxgk->DxgkCbNotifyInterrupt(dxgk->DeviceHandle, &data);
     }
     if (panel->NotifyMpoVBlank || panel->NotifyVBlank)

@@ -118,14 +118,6 @@ static NTSTATUS query_interface(PVOID context,PQUERY_INTERFACE request)
     return STATUS_NOT_SUPPORTED;
 }
 
-static NTSTATUS APIENTRY describe_allocation(HANDLE adapter,DXGKARG_DESCRIBEALLOCATION *args)
-{
-    UNREFERENCED_PARAMETER(adapter);
-    UNREFERENCED_PARAMETER(args);
-    /* All supported allocations are opaque buffers without display modes. */
-    return STATUS_NOT_SUPPORTED;
-}
-
 static NTSTATUS APIENTRY standard_allocation(HANDLE adapter,DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA *args)
 {
     UNREFERENCED_PARAMETER(adapter);
@@ -185,7 +177,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT object,PUNICODE_STRING path)
     d.DxgkDdiDispatchIoRequest=dispatch_io;
     d.DxgkDdiQueryInterface=query_interface;
     d.DxgkDdiUnload=unload;
-    d.DxgkDdiDescribeAllocation=describe_allocation;
     d.DxgkDdiGetStandardAllocationDriverData=standard_allocation;
     d.DxgkDdiCalibrateGpuClock=calibrate_clock;
     d.DxgkDdiFormatHistoryBuffer=format_history;

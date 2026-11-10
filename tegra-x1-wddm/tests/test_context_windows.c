@@ -370,7 +370,28 @@ static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *othe
           info[0].FlagsWddm2.CpuVisible && info[0].PreferredSegment.SegmentId0==TG_GPU_SCANOUT_SEGMENT);
     CHECK(info[0].SupportedReadSegmentSet==(1u<<(TG_GPU_SCANOUT_SEGMENT-1)) &&
           info[0].SupportedWriteSegmentSet==info[0].SupportedReadSegmentSet && !e->AllocationBytes);
+    DXGKARG_DESCRIBEALLOCATION describe={.hAllocation=info[0].hAllocation};
+    CHECK(ddi->DxgkDdiDescribeAllocation(e,&describe)==STATUS_NOT_SUPPORTED);
     CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)) && !e->AllocationBytes);
+
+    TG_GPU_PRIMARY_ALLOCATION_REQUEST primary={
+        .Buffer=desc[0],.Format=D3DDDIFMT_A8R8G8B8,.RefreshRate={60000,1001},
+    };
+    info[0].pPrivateDriverData=&primary;
+    info[0].PrivateDriverDataSize=sizeof(primary);
+    CHECK(NT_SUCCESS(ddi->DxgkDdiCreateAllocation(e,&create)));
+    describe.hAllocation=info[0].hAllocation;
+    describe.Flags.CheckDisplayMode=1;
+    CHECK(ddi->DxgkDdiDescribeAllocation(other,&describe)==STATUS_INVALID_PARAMETER);
+    CHECK(NT_SUCCESS(ddi->DxgkDdiDescribeAllocation(e,&describe)));
+    CHECK(describe.hAllocation==info[0].hAllocation &&
+          describe.Width==T214_DC_PANEL_WIDTH && describe.Height==T214_DC_PANEL_HEIGHT &&
+          describe.Format==D3DDDIFMT_A8R8G8B8 && describe.MultisampleMethod.NumSamples==1 &&
+          describe.RefreshRate.Numerator==60000 && describe.RefreshRate.Denominator==1001 &&
+          describe.Flags.CheckDisplayMode);
+    CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)) && !e->AllocationBytes);
+    info[0].pPrivateDriverData=&desc[0];
+    info[0].PrivateDriverDataSize=sizeof(desc[0]);
     desc[0].flags=0;desc[0].bytes=TG_GPU_MEMORY_BUDGET_BYTES-TG_GPU_SCANOUT_SEGMENT_BYTES+1;
     CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_GRAPHICS_NO_VIDEO_MEMORY);
     RtlZeroMemory(&e->Tables->Scanout,sizeof(e->Tables->Scanout));

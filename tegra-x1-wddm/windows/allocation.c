@@ -4,6 +4,7 @@
  */
 #include "allocation.h"
 #include "adapter_abi.h"
+#include "../platform/t214_dc.h"
 #include "../platform/t214_resources.h"
 
 #define TAG 0x41674754u
@@ -14,7 +15,7 @@ typedef struct _TG_GPU_RESOURCE {
 typedef struct _TG_GPU_ALLOCATION {
     TG_GPU_CONTEXT_ENGINE *Engine;
     TG_GPU_RESOURCE *Resource;
-    struct tg_gpu_allocation_request Request;
+    TG_GPU_PRIMARY_ALLOCATION_REQUEST Desc;
     SIZE_T Bytes;
     UINT Opens;
 } TG_GPU_ALLOCATION;
@@ -24,15 +25,20 @@ typedef struct _TG_GPU_OPEN_ALLOCATION {
     BOOLEAN ReadOnly;
 } TG_GPU_OPEN_ALLOCATION;
 
-static NTSTATUS request(const DXGK_ALLOCATIONINFO *info,struct tg_gpu_allocation_request *r)
+static NTSTATUS request(const DXGK_ALLOCATIONINFO *info,TG_GPU_PRIMARY_ALLOCATION_REQUEST *desc)
 {
-    if(!info->pPrivateDriverData || info->PrivateDriverDataSize!=sizeof(*r))
+    const UINT size=info->PrivateDriverDataSize;
+    const struct tg_gpu_allocation_request *r=&desc->Buffer;
+    if(!info->pPrivateDriverData || (size!=sizeof(*r) && size!=sizeof(*desc)))
         return STATUS_GRAPHICS_DRIVER_MISMATCH;
-    RtlCopyMemory(r,info->pPrivateDriverData,sizeof(*r));
+    RtlCopyMemory(desc,info->pPrivateDriverData,size);
     if(info->FlagsWddm2.CreateInVpr) return STATUS_INVALID_PARAMETER;
     if(r->version!=TG_GPU_ALLOCATION_ABI) return STATUS_GRAPHICS_DRIVER_MISMATCH;
     if((r->flags&~(TG_GPU_ALLOCATION_CPU_VISIBLE|TG_GPU_ALLOCATION_DISPLAY_PRIMARY)) ||
         !r->bytes || r->bytes>TG_GPU_VA_LIMIT)
+        return STATUS_INVALID_PARAMETER;
+    if(size==sizeof(*desc) && (!(r->flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY) || desc->Reserved ||
+        (desc->Format!=D3DDDIFMT_X8R8G8B8 && desc->Format!=D3DDDIFMT_A8R8G8B8)))
         return STATUS_INVALID_PARAMETER;
     return STATUS_SUCCESS;
 }
@@ -44,7 +50,7 @@ static UINT64 allocation_size(UINT64 bytes)
 NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATION *a)
 {
     TG_GPU_CONTEXT_ENGINE *e=adapter;TG_GPU_RESOURCE *r=NULL;
-    struct tg_gpu_allocation_request desc;TG_GPU_ALLOCATION *allocation;
+    TG_GPU_PRIMARY_ALLOCATION_REQUEST desc;TG_GPU_ALLOCATION *allocation;
     NTSTATUS status;KIRQL irql;UINT i,created=0;BOOLEAN new_resource=FALSE;
     UINT64 bytes=0, limit;
     if(!e || !a || !e->Tables || e->Tables->SegmentId!=TG_GPU_EXPLICIT_TABLE_SEGMENT ||
@@ -57,13 +63,13 @@ NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATI
     for(i=0;i<a->NumAllocations;++i) {
         status=request(&a->pAllocationInfo[i],&desc);
         if(!NT_SUCCESS(status)) return status;
-        if(desc.flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY) {
+        if(desc.Buffer.flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY) {
             /* VidMm manages residency within the already charged segment. */
-            if(!e->Tables->Scanout.Handle || !(desc.flags&TG_GPU_ALLOCATION_CPU_VISIBLE) ||
-                desc.bytes!=T214_GPU_POST_FB_SIZE) return STATUS_INVALID_PARAMETER;
+            if(!e->Tables->Scanout.Handle || !(desc.Buffer.flags&TG_GPU_ALLOCATION_CPU_VISIBLE) ||
+                desc.Buffer.bytes!=T214_GPU_POST_FB_SIZE) return STATUS_INVALID_PARAMETER;
             continue;
         }
-        UINT64 size=allocation_size(desc.bytes);
+        UINT64 size=allocation_size(desc.Buffer.bytes);
         if(size>limit-bytes) return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
         bytes+=size;
     }
@@ -91,8 +97,9 @@ NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATI
         allocation=ExAllocatePool2(POOL_FLAG_NON_PAGED,sizeof(*allocation),TAG);
         if(!allocation) { status=STATUS_NO_MEMORY;goto fail; }
         /* Dxgkrnl provides a stable kernel copy of the UMD data for this call. */
-        RtlCopyMemory(&allocation->Request,a->pAllocationInfo[i].pPrivateDriverData,sizeof(desc));
-        allocation->Bytes=(SIZE_T)allocation_size(allocation->Request.bytes);
+        RtlCopyMemory(&allocation->Desc,a->pAllocationInfo[i].pPrivateDriverData,
+            a->pAllocationInfo[i].PrivateDriverDataSize);
+        allocation->Bytes=(SIZE_T)allocation_size(allocation->Desc.Buffer.bytes);
         allocation->Engine=e;allocation->Resource=r;
         a->pAllocationInfo[i].hAllocation=allocation;++created;
     }
@@ -105,14 +112,14 @@ NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATI
         RtlZeroMemory(info,sizeof(*info));
         info->pPrivateDriverData=private_data;info->PrivateDriverDataSize=private_bytes;
         info->hAllocation=allocation;info->Size=allocation->Bytes;info->Alignment=PAGE_SIZE;
-        const BOOLEAN primary=(allocation->Request.flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY)!=0;
+        const BOOLEAN primary=(allocation->Desc.Buffer.flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY)!=0;
         const UINT segment=primary ? TG_GPU_SCANOUT_SEGMENT : TG_GPU_PAGING_APERTURE_SEGMENT;
         /* VidMm redirects GpuMmu allocations from the aperture to implicit
          * system memory when AccessedPhysically is clear. */
         info->PreferredSegment.SegmentId0=segment;
         info->SupportedReadSegmentSet=info->SupportedWriteSegmentSet=1u<<(segment-1);
         info->FlagsWddm2.Value=os_flags;
-        info->FlagsWddm2.CpuVisible=(allocation->Request.flags&TG_GPU_ALLOCATION_CPU_VISIBLE)!=0;
+        info->FlagsWddm2.CpuVisible=(allocation->Desc.Buffer.flags&TG_GPU_ALLOCATION_CPU_VISIBLE)!=0;
         info->FlagsWddm2.AccessedPhysically=primary;
         info->FlagsWddm2.DisableLargePageMapping=1;
         info->AllocationPriority=D3DDDI_ALLOCATIONPRIORITY_NORMAL;
@@ -135,6 +142,29 @@ fail:
     e->AllocationBytes-=bytes;
     --e->Creating;KeReleaseSpinLock(&e->Lock,irql);return status;
 }
+
+static NTSTATUS APIENTRY describe_allocation(HANDLE adapter,DXGKARG_DESCRIBEALLOCATION *args)
+{
+    PAGED_CODE();
+    if(!adapter || !args || !args->hAllocation) return STATUS_INVALID_PARAMETER;
+    /* Dxgkrnl holds the KMD allocation alive for this call. */
+    const TG_GPU_ALLOCATION *allocation=args->hAllocation;
+    if(allocation->Engine!=adapter) return STATUS_INVALID_PARAMETER;
+    const TG_GPU_PRIMARY_ALLOCATION_REQUEST *desc=&allocation->Desc;
+    /* Opaque buffers and legacy primaries have no recorded mode. */
+    if(desc->Format==D3DDDIFMT_UNKNOWN) return STATUS_NOT_SUPPORTED;
+    *args=(DXGKARG_DESCRIBEALLOCATION){
+        .hAllocation=args->hAllocation,
+        .Width=T214_DC_PANEL_WIDTH,
+        .Height=T214_DC_PANEL_HEIGHT,
+        .Format=desc->Format,
+        .MultisampleMethod={.NumSamples=1},
+        .RefreshRate=desc->RefreshRate,
+        .Flags=args->Flags,
+    };
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS APIENTRY TgGpuDdiDestroyAllocation(HANDLE adapter,const DXGKARG_DESTROYALLOCATION *a)
 {
     TG_GPU_CONTEXT_ENGINE *e=adapter;TG_GPU_RESOURCE *resource=NULL;
@@ -162,7 +192,7 @@ NTSTATUS APIENTRY TgGpuDdiDestroyAllocation(HANDLE adapter,const DXGKARG_DESTROY
     for(i=0;i<a->NumAllocations;++i) {
         allocation=a->pAllocationList[i];
         if(allocation->Resource) --allocation->Resource->Allocations;
-        if(!(allocation->Request.flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY))
+        if(!(allocation->Desc.Buffer.flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY))
             e->AllocationBytes-=allocation->Bytes;
         --e->AllocationCount;
     }
@@ -260,6 +290,7 @@ NTSTATUS TgGpuValidateOpenAllocationRange(TG_GPU_DEVICE *d,HANDLE handle,
 void TgGpuRegisterAllocationDdis(DRIVER_INITIALIZATION_DATA *d)
 {
     d->DxgkDdiCreateAllocation=TgGpuDdiCreateAllocation;
+    d->DxgkDdiDescribeAllocation=describe_allocation;
     d->DxgkDdiDestroyAllocation=TgGpuDdiDestroyAllocation;
     d->DxgkDdiOpenAllocation=TgGpuDdiOpenAllocation;
     d->DxgkDdiCloseAllocation=TgGpuDdiCloseAllocation;
