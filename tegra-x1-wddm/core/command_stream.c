@@ -2,10 +2,20 @@
 #include "command_stream.h"
 #include "nouveau/headers/drf.h"
 #include "nouveau/headers/nvidia/classes/clb06f.h"
+#include "nouveau/headers/nvidia/classes/clb0b5.h"
+#include "nouveau/headers/nvidia/classes/clb197.h"
+#include "nouveau/headers/nvidia/classes/clb1c0.h"
+
+/* NVK's 3D, compute and copy subchannels on GM20B. */
+static const uint32_t nvk_class[NVB06F_NUMBER_OF_SUBCHANNELS] = {
+    [0] = MAXWELL_B,
+    [1] = MAXWELL_COMPUTE_B,
+    [4] = MAXWELL_DMA_COPY_A,
+};
 
 static bool method_allowed(uint32_t method)
 {
-    return method>=0x100 || method==0 || method==NVB06F_WFI;
+    return method>=0x100 || method==NVB06F_SET_OBJECT || method==NVB06F_WFI;
 }
 bool tg_gpu_validate_command_stream(const uint32_t *words,size_t bytes)
 {
@@ -15,13 +25,15 @@ bool tg_gpu_validate_command_stream(const uint32_t *words,size_t bytes)
         uint32_t method=NVVAL_GET(header,NVB06F,DMA_INCR,ADDRESS)*4;
         uint32_t count=NVVAL_GET(header,NVB06F,DMA_INCR,COUNT),last;
         if(header==NVB06F_DMA_NOP)continue;
-        if(header&(1u<<12))return false;
+        uint32_t subchannel=NVVAL_GET(header,NVB06F,DMA_INCR,SUBCHANNEL);
+        if((header&(1u<<12)) || !nvk_class[subchannel])return false;
         if(op==NVB06F_DMA_IMMD_OPCODE_VALUE) {
-            if(!method_allowed(method))return false;
+            if(!method_allowed(method) || method==NVB06F_SET_OBJECT)return false;
             continue;
         }
         if((op!=NVB06F_DMA_INCR_OPCODE_VALUE && op!=NVB06F_DMA_NONINCR_OPCODE_VALUE &&
             op!=NVB06F_DMA_ONEINCR_OPCODE_VALUE) || !count || count>bytes/4-n)return false;
+        if(method==NVB06F_SET_OBJECT && (count!=1 || words[n]!=nvk_class[subchannel]))return false;
         last=method;
         if(op==NVB06F_DMA_INCR_OPCODE_VALUE) {
             if(count-1>(0x3ffc-method)/4)return false;

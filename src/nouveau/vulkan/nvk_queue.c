@@ -537,6 +537,11 @@ nvk_queue_init_context_state(struct nvk_queue *queue)
                 nvk_queue_subchannels_from_engines(queue->engines));
    struct nv_push *p = &push;
 
+#ifdef _WIN32
+   if (queue->engines & NVKMD_ENGINE_COPY)
+      nvk_push_bind_copy(p, pdev->info.cls_copy);
+#endif
+
    /* M2MF state */
    if (pdev->info.cls_m2mf <= FERMI_MEMORY_TO_MEMORY_FORMAT_A) {
       /* we absolutely do not support Fermi, but if somebody wants to toy

@@ -787,8 +787,10 @@ T214/SM53/B197, the OS LUID and the 512 MiB ceiling. A matching KMD must set
 `NATIVE_SUBMIT` before NVK exposes its Vulkan physical device. The Windows
 backend opens that LUID, manages VidMm allocations and VA reservations, and
 submits linear NVK pushes through KMT. CPU waits and queue signals use Windows
-monitored fences. Windows keeps GPU memory in the UMA heap and uses the KMD's
-ceiling for per-device allocations. Privileged register-write MME programs
+monitored fences. Copy-capable queues bind the GM20B copy object during
+initialization, including the upload queue. Windows keeps GPU memory in the
+UMA heap and uses the KMD's ceiling for per-device allocations. Privileged
+register-write MME programs
 and their callers are excluded from the Windows command stream.
 
 The .83 one-boot test exercised the new KMT bridge on the Lite, including
@@ -953,7 +955,9 @@ fake completion. Queue completion, prefix preemption and verified reset release
 the owned snapshot through the same lifetime gates as the context reference.
 
 `core/command_stream.c` decodes incrementing, nonincrementing, increment-once,
-immediate and NOP packets across every subchannel. It rejects truncated/empty
+immediate and NOP packets. NVK uses subchannels 0, 1 and 4 for GM20B graphics,
+compute and copy. A `SET_OBJECT` packet must contain the matching class ID
+with engine 0. The parser rejects unused subchannels, truncated or empty
 packets, reserved/control-flow/subdevice headers, reserved address bits, method
 wrap and host methods other than object binding and WFI. Caller-issued
 `SET_REFERENCE` is rejected, including immediate and increment-span forms.

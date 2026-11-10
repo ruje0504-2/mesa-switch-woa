@@ -9,15 +9,28 @@ int main(void)
     assert(!tg_gpu_validate_command_stream(NULL,4));
     assert(!tg_gpu_validate_command_stream(w,0) && !tg_gpu_validate_command_stream(w,23));
     assert(!tg_gpu_validate_command_stream((void *)((char *)w+1),4));
+    const uint32_t classes[8]={[0]=0xb197,[1]=0xb1c0,[4]=0xb0b5};
     for(unsigned sub=0;sub<8;sub++)for(unsigned op=1;op<=5;op++) {
         if(op==2)continue;
         w[0]=(op<<29)|(sub<<13)|(1<<16)|(0x50>>2);w[1]=123;
         assert(!tg_gpu_validate_command_stream(w,op==4?4:8));
         w[0]=(w[0]&~0xfffu)|(0x100>>2);
-        assert(tg_gpu_validate_command_stream(w,op==4?4:8));
+        assert(tg_gpu_validate_command_stream(w,op==4?4:8)==(classes[sub]!=0));
         if(op!=4)assert(!tg_gpu_validate_command_stream(w,4));
         w[0]|=1u<<12;assert(!tg_gpu_validate_command_stream(w,op==4?4:8));
     }
+    for(unsigned sub=0;sub<8;sub++) {
+        w[0]=0x20010000 | (sub<<13);
+        w[1]=classes[sub];
+        assert(tg_gpu_validate_command_stream(w,8)==(classes[sub]!=0));
+        w[1]=classes[sub] | (1u<<16);
+        assert(!tg_gpu_validate_command_stream(w,8));
+    }
+    w[0]=0x20018000;w[1]=0xb197; /* A copy subchannel must bind the copy class. */
+    assert(!tg_gpu_validate_command_stream(w,8));
+    w[0]=0x80010000;assert(!tg_gpu_validate_command_stream(w,4)); /* Immediate SET_OBJECT. */
+    w[0]=0x60020000;w[1]=w[2]=0xb197;
+    assert(!tg_gpu_validate_command_stream(w,12)); /* One object binding per packet. */
     w[0]=0x20030000;assert(!tg_gpu_validate_command_stream(w,16)); /* Host span. */
     w[0]=0x20010fff;assert(tg_gpu_validate_command_stream(w,8));
     w[0]=0x20020fff;assert(!tg_gpu_validate_command_stream(w,12)); /* Method wrap. */
@@ -27,5 +40,5 @@ int main(void)
     w[0]=0xe0000000;assert(!tg_gpu_validate_command_stream(w,4)); /* End segment. */
     w[0]=0xc0000040;assert(!tg_gpu_validate_command_stream(w,4)); /* Reserved. */
     w[0]=0x20000040;assert(!tg_gpu_validate_command_stream(w,4)); /* Zero count. */
-    puts("Linear B06F packet/reference validation passed");return 0;
+    puts("Linear B06F packets, object bindings and reference isolation passed");return 0;
 }
