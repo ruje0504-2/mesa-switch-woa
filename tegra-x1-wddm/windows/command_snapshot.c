@@ -20,7 +20,7 @@ NTSTATUS TgGpuCaptureCommandSnapshot(const DXGKARG_SUBMITCOMMANDVIRTUAL *a,
     if(!s)return STATUS_NO_MEMORY;
     s->Bytes=request.command_bytes;
     RtlCopyMemory(s->Words,(const UCHAR *)a->pDmaBufferPrivateData+sizeof(request),s->Bytes);
-    if(!tg_gpu_inspect_command_stream(s->Words,s->Bytes,va,&s->Info)) {
+    if(!tg_gpu_prepare_command_stream(s->Words,s->Bytes,va,&s->Info)) {
         ExFreePoolWithTag(s,TAG);return STATUS_INVALID_PARAMETER;
     }
     *out=s;return STATUS_SUCCESS;

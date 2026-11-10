@@ -3,12 +3,15 @@
 #include "copy_stream.h"
 #include "gm20b_mmu.h"
 #include "nvk_mme_programs.h"
+#include "submission.h"
 #include "nouveau/headers/drf.h"
 #include "nouveau/headers/nvidia/classes/clb06f.h"
 #include "nouveau/headers/nvidia/classes/clb0b5.h"
 #include "nouveau/headers/nvidia/classes/clb197.h"
 #include "nouveau/headers/nvidia/classes/clb1c0.h"
+#include "nouveau/headers/nvidia/classes/clb1c0qmd.h"
 #include "nouveau/vulkan/nvk_mme_slots.h"
+#include "nouveau/vulkan/nvkmd/windows/submit_abi.h"
 
 /* NVK's 3D, compute and copy subchannels on GM20B. */
 static const uint32_t nvk_class[NVB06F_NUMBER_OF_SUBCHANNELS] = {
@@ -178,8 +181,7 @@ static bool pcas_span(uint32_t first, uint32_t last)
     return first <= NVB1C0_SEND_SIGNALING_PCAS_B && last >= NVB1C0_SEND_PCAS_A;
 }
 
-static size_t compute_dispatch(const uint32_t *args, size_t remaining,
-                               const struct tg_gpu_command_va *va, uint64_t *max_end)
+static size_t compute_dispatch(const uint32_t *args, size_t remaining)
 {
     const uint32_t launch = NVDEF(NVB1C0, SEND_SIGNALING_PCAS_B, INVALIDATE, TRUE) |
                             NVDEF(NVB1C0, SEND_SIGNALING_PCAS_B, SCHEDULE, TRUE);
@@ -194,18 +196,11 @@ static size_t compute_dispatch(const uint32_t *args, size_t remaining,
                                   NVVAL(NVB06F, DMA_INCR, COUNT, 1);
     if (remaining < 2)
         return 0;
-    size_t used;
     if (args[1] == immediate)
-        used = 2;
-    else if (remaining >= 3 && args[1] == incrementing && args[2] == launch)
-        used = 3;
-    else
-        return 0;
-
-    /* SEND_PCAS_A encodes the address in 256-byte units.
-     * NVK's QMD 0.6 is 64 dwords.
-     */
-    return tg_gpu_command_range_allowed(va, (uint64_t)args[0] << 8, 256, max_end) ? used : 0;
+        return 2;
+    if (remaining >= 3 && args[1] == incrementing && args[2] == launch)
+        return 3;
+    return 0;
 }
 
 static bool mme_upload_span(uint32_t subchannel, uint32_t first, uint32_t last)
@@ -437,16 +432,106 @@ static uint32_t pipeline_program_in_span(uint32_t first, uint32_t last)
     return method <= last && method <= NVB197_SET_PIPELINE_PROGRAM(5) ? method : 0;
 }
 
-static bool pipeline_program_offset(uint32_t offset)
+#define B197_PROGRAM_HEADER_BYTES 80u
+
+static bool program_offset(uint32_t offset, uint32_t header_bytes)
 {
-    /* NVK places the 80-byte SPH immediately before 128-byte-aligned
-     * instructions. Leave room in the region for the initial fetch and
-     * the 2 KiB I-cache guard used by its shader arena.
-     */
-    const uint32_t header_bytes = 80, instruction_alignment = 128;
+    /* Leave room for the first aligned fetch and NVK's 2 KiB I-cache guard. */
+    const uint32_t instruction_alignment = 128;
     const uint64_t entry = (uint64_t)offset + header_bytes;
     return entry % instruction_alignment == 0 &&
            entry + instruction_alignment + 2048 <= PROGRAM_REGION_BYTES;
+}
+
+static bool qmd_0_6(const uint32_t *qmd, const struct tg_gpu_command_va *va, uint64_t *max_end)
+{
+#define QMD_WORD(field) DRF_LW_IDX(qmd, NVB1C0_QMDV00_06_##field)
+#define QMD_MASK(field) DRF_LW_SMASK(qmd, NVB1C0_QMDV00_06_##field)
+#define QMD_GET(field) NVVAL_MW_GET(qmd, NVB1C0, QMDV00_06, field)
+#define QMD_CBUF(i) \
+    [QMD_WORD(CONSTANT_BUFFER_ADDR_LOWER(i))] = QMD_MASK(CONSTANT_BUFFER_ADDR_LOWER(i)), \
+    [QMD_WORD(CONSTANT_BUFFER_ADDR_UPPER(i))] = QMD_MASK(CONSTANT_BUFFER_ADDR_UPPER(i)) | \
+                                              QMD_MASK(CONSTANT_BUFFER_SIZE(i))
+    /* The QMD 0.6 fields initialized by NAK for a direct launch. */
+    static const uint32_t allowed[TG_GPU_QMD_WORDS] = {
+        [QMD_WORD(PROGRAM_OFFSET)] = QMD_MASK(PROGRAM_OFFSET),
+        [QMD_WORD(API_VISIBLE_CALL_LIMIT)] = QMD_MASK(API_VISIBLE_CALL_LIMIT),
+        [QMD_WORD(CTA_RASTER_WIDTH)] = QMD_MASK(CTA_RASTER_WIDTH),
+        [QMD_WORD(CTA_RASTER_HEIGHT)] = QMD_MASK(CTA_RASTER_HEIGHT) | QMD_MASK(CTA_RASTER_DEPTH),
+        [QMD_WORD(SHARED_MEMORY_SIZE)] = QMD_MASK(SHARED_MEMORY_SIZE),
+        [QMD_WORD(QMD_VERSION)] = QMD_MASK(QMD_VERSION) | QMD_MASK(CTA_THREAD_DIMENSION0),
+        [QMD_WORD(CTA_THREAD_DIMENSION1)] = QMD_MASK(CTA_THREAD_DIMENSION1) | QMD_MASK(CTA_THREAD_DIMENSION2),
+        [QMD_WORD(CONSTANT_BUFFER_VALID(0))] = 0xff | QMD_MASK(L1_CONFIGURATION),
+        QMD_CBUF(0), QMD_CBUF(1), QMD_CBUF(2), QMD_CBUF(3),
+        QMD_CBUF(4), QMD_CBUF(5), QMD_CBUF(6), QMD_CBUF(7),
+        [QMD_WORD(SHADER_LOCAL_MEMORY_LOW_SIZE)] = QMD_MASK(SHADER_LOCAL_MEMORY_LOW_SIZE) | QMD_MASK(BARRIER_COUNT),
+        [QMD_WORD(REGISTER_COUNT)] = QMD_MASK(REGISTER_COUNT),
+        [QMD_WORD(SASS_VERSION)] = QMD_MASK(SASS_VERSION) | QMD_MASK(SHADER_LOCAL_MEMORY_CRS_SIZE),
+    };
+    for (size_t i = 0; i < TG_GPU_QMD_WORDS; i++) {
+        if (qmd[i] & ~allowed[i])
+            return false;
+    }
+    const uint32_t x = QMD_GET(CTA_THREAD_DIMENSION0), y = QMD_GET(CTA_THREAD_DIMENSION1);
+    const uint32_t z = QMD_GET(CTA_THREAD_DIMENSION2), shared = QMD_GET(SHARED_MEMORY_SIZE);
+    const uint32_t l1 = shared <= 16 * 1024 ? 1 : shared <= 32 * 1024 ? 2 : 3;
+    if (QMD_GET(QMD_VERSION) != 6 || QMD_GET(SASS_VERSION) != 0x30 ||
+        QMD_GET(API_VISIBLE_CALL_LIMIT) != NVB1C0_QMDV00_06_API_VISIBLE_CALL_LIMIT_NO_CHECK ||
+        !program_offset(QMD_GET(PROGRAM_OFFSET), 0) || QMD_GET(CTA_RASTER_WIDTH) > INT32_MAX ||
+        !x || !y || !z || z > 64 || (uint64_t)x * y * z > 1024 ||
+        shared > 48 * 1024 || shared % 256 || QMD_GET(L1_CONFIGURATION) != l1 ||
+        QMD_GET(SHADER_LOCAL_MEMORY_LOW_SIZE) % 16 || QMD_GET(SHADER_LOCAL_MEMORY_CRS_SIZE) % 512 ||
+        QMD_GET(SHADER_LOCAL_MEMORY_CRS_SIZE) > (1u << 20))
+        return false;
+
+    for (unsigned i = 0; i < 8; i++) {
+        const uint32_t lo = QMD_GET(CONSTANT_BUFFER_ADDR_LOWER(i));
+        const uint32_t hi = QMD_GET(CONSTANT_BUFFER_ADDR_UPPER(i));
+        const uint32_t bytes = QMD_GET(CONSTANT_BUFFER_SIZE(i));
+        if (QMD_GET(CONSTANT_BUFFER_VALID(i))) {
+            if (bytes > 65536 || bytes % 256 || !word_span(va, hi, lo, bytes, 256, max_end))
+                return false;
+        } else if (lo || hi || bytes) {
+            return false;
+        }
+    }
+    return true;
+#undef QMD_CBUF
+#undef QMD_GET
+#undef QMD_MASK
+#undef QMD_WORD
+}
+
+static size_t qmd_record(const uint32_t *args, size_t remaining,
+                         const struct tg_gpu_command_va *va, uint64_t *max_end)
+{
+    const size_t record = TG_GPU_QMD_RECORD_WORDS;
+    const uint32_t pcas_a = NVDEF(NVB06F, DMA_INCR, OPCODE, VALUE) |
+                            NVVAL(NVB06F, DMA_INCR, COUNT, 1) |
+                            NVVAL(NVB06F, DMA_INCR, SUBCHANNEL, 1) |
+                            NVVAL(NVB06F, DMA_INCR, ADDRESS, NVB1C0_SEND_PCAS_A >> 2);
+    if (remaining < record + 3 || args[record] != pcas_a || args[record + 1])
+        return 0;
+    const size_t used = compute_dispatch(args + record + 1, remaining - record - 1);
+    return used && qmd_0_6(args, va, max_end) ? record + 1 + used : 0;
+}
+
+static bool stage_qmd(uint32_t *words, size_t first, const struct tg_gpu_command_va *va,
+                       uint64_t *max_end)
+{
+    const size_t aligned = (first + TG_GPU_QMD_WORDS - 1) & ~(size_t)(TG_GPU_QMD_WORDS - 1);
+    const size_t offset = TG_GPU_COMMAND_CAPTURE + aligned * sizeof(*words);
+    const size_t end = offset + TG_GPU_QMD_WORDS * sizeof(*words);
+    if (!va || !va->reserved_base || end > va->reserved_end - va->reserved_base ||
+        (va->reserved_base + offset) % (TG_GPU_QMD_WORDS * sizeof(*words)))
+        return false;
+    /* Relocate inside the no-op payload. The original GPUVA is never used. */
+    for (size_t i = TG_GPU_QMD_WORDS; i > 0; i--)
+        words[aligned + i - 1] = words[first + i - 1];
+    words[first + TG_GPU_QMD_RECORD_WORDS + 1] = (uint32_t)((va->reserved_base + offset) >> 8);
+    if (va->reserved_base + end > *max_end)
+        *max_end = va->reserved_base + end;
+    return true;
 }
 
 static bool shader_local_memory_span(uint32_t engine, uint32_t first, uint32_t last)
@@ -636,9 +721,8 @@ static bool mme_call_allowed(uint32_t op, uint32_t method, uint32_t count,
     }
 }
 
-bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
-                                   const struct tg_gpu_command_va *va,
-                                   struct tg_gpu_command_info *info)
+static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
+                     const struct tg_gpu_command_va *va, struct tg_gpu_command_info *info)
 {
     struct tg_gpu_command_info stream = {.reserved_base = va ? va->reserved_base : 0};
     struct tg_gpu_copy_state copy = {0};
@@ -679,7 +763,7 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
                                     shader_local_memory_span(subchannel, method, method)))
                 return false;
             if (subchannel == TG_GPU_PROGRAM_3D && pipeline_program_in_span(method, method)) {
-                if (!pipeline_program_offset(NVVAL_GET(header, NVB06F, DMA_IMMD, DATA)))
+                if (!program_offset(NVVAL_GET(header, NVB06F, DMA_IMMD, DATA), B197_PROGRAM_HEADER_BYTES))
                     return false;
                 require_program(&stream, TG_GPU_PROGRAM_3D);
             }
@@ -756,11 +840,22 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
             n += used;
             continue;
         }
-        if (subchannel == 1 && pcas_span(method, last)) {
-            if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB1C0_SEND_PCAS_A || count != 1)
+        if (subchannel == TG_GPU_PROGRAM_COMPUTE && method == NVB1C0_NO_OPERATION &&
+            op == NVB06F_DMA_NONINCR_OPCODE_VALUE && count == TG_GPU_QMD_RECORD_WORDS) {
+            const size_t used = qmd_record(words + n, word_count - n, va, &stream.va_end);
+            if (!used || (staging && !stage_qmd(staging, n, va, &stream.va_end)))
                 return false;
-            const size_t used = compute_dispatch(words + n, word_count - n, va, &stream.va_end);
-            if (!used)
+            require_program(&stream, TG_GPU_PROGRAM_COMPUTE);
+            n += used;
+            continue;
+        }
+        if (subchannel == TG_GPU_PROGRAM_COMPUTE && pcas_span(method, last)) {
+            /* Read-only replay can inspect the old external-QMD packet. */
+            if (staging || op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB1C0_SEND_PCAS_A || count != 1)
+                return false;
+            const size_t used = compute_dispatch(words + n, word_count - n);
+            if (!used || !tg_gpu_command_range_allowed(va, (uint64_t)words[n] << 8,
+                                                     TG_GPU_QMD_WORDS * sizeof(*words), &stream.va_end))
                 return false;
             require_program(&stream, TG_GPU_PROGRAM_COMPUTE);
             n += used;
@@ -770,7 +865,7 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
             const uint32_t program = pipeline_program_in_span(method, last);
             if (program) {
                 if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != program || count != 1 ||
-                    !pipeline_program_offset(words[n]))
+                    !program_offset(words[n], B197_PROGRAM_HEADER_BYTES))
                     return false;
                 require_program(&stream, TG_GPU_PROGRAM_3D);
             }
@@ -883,4 +978,18 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
     if (info)
         *info = stream;
     return true;
+}
+
+bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
+                                   const struct tg_gpu_command_va *va,
+                                   struct tg_gpu_command_info *info)
+{
+    return inspect(words, NULL, bytes, va, info);
+}
+
+bool tg_gpu_prepare_command_stream(uint32_t *words, size_t bytes,
+                                   const struct tg_gpu_command_va *va,
+                                   struct tg_gpu_command_info *info)
+{
+    return bytes <= TG_GPU_COMMAND_CAPTURE_BYTES && inspect(words, words, bytes, va, info);
 }

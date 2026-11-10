@@ -1,12 +1,15 @@
 /* SPDX-License-Identifier: MIT */
 #include "../core/command_stream.h"
 #include "../core/nvk_mme_programs.h"
+#include "../core/submission.h"
 #include "nouveau/headers/drf.h"
 #include "nouveau/headers/nvidia/classes/clb06f.h"
 #include "nouveau/headers/nvidia/classes/clb0b5.h"
 #include "nouveau/headers/nvidia/classes/clb197.h"
 #include "nouveau/headers/nvidia/classes/clb1c0.h"
+#include "nouveau/headers/nvidia/classes/clb1c0qmd.h"
 #include "nouveau/vulkan/nvk_mme_slots.h"
+#include "nouveau/vulkan/nvkmd/windows/submit_abi.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -92,6 +95,7 @@ static void test_mme_order(void)
 }
 
 #define INCR(subchannel, method, count) (0x20000000u | ((subchannel) << 13) | ((count) << 16) | ((method) >> 2))
+#define NONINCR(subchannel, method, count) (0x60000000u | ((subchannel) << 13) | ((count) << 16) | ((method) >> 2))
 #define IMMD(subchannel, method, data) (0x80000000u | ((subchannel) << 13) | ((data) << 16) | ((method) >> 2))
 #define ONEINCR(subchannel, method, count) (0xa0000000u | ((subchannel) << 13) | ((count) << 16) | ((method) >> 2))
 #define CE_INCR(method, count) INCR(4, NVB0B5_##method, count)
@@ -557,6 +561,64 @@ static void test_shader_local_memory(void)
     assert(!tg_gpu_inspect_command_stream(compute, sizeof(compute), &va, &info));
 }
 
+static void test_captured_qmd(void)
+{
+    enum { PCAS = 1 + TG_GPU_QMD_RECORD_WORDS };
+    const struct tg_gpu_command_va va = {0x100000000, 0x80000000, 0x80100000};
+    struct tg_gpu_command_info info;
+    uint32_t push[PCAS + 3] = {
+        NONINCR(1, NVB1C0_NO_OPERATION, TG_GPU_QMD_RECORD_WORDS),
+        [PCAS] = INCR(1, NVB1C0_SEND_PCAS_A, 1),
+        [PCAS + 2] = IMMD(1, NVB1C0_SEND_SIGNALING_PCAS_B, 3),
+    };
+    uint32_t *qmd = push + 1;
+#define SET_QMD(field, value) NVVAL_MW_SET(qmd, NVB1C0, QMDV00_06, field, value)
+    SET_QMD(PROGRAM_OFFSET, 0xed80);
+    SET_QMD(API_VISIBLE_CALL_LIMIT, 1);
+    SET_QMD(CTA_RASTER_WIDTH, 20);
+    SET_QMD(CTA_RASTER_HEIGHT, 30);
+    SET_QMD(CTA_RASTER_DEPTH, 1);
+    SET_QMD(QMD_VERSION, 6);
+    SET_QMD(CTA_THREAD_DIMENSION0, 16);
+    SET_QMD(CTA_THREAD_DIMENSION1, 8);
+    SET_QMD(CTA_THREAD_DIMENSION2, 1);
+    SET_QMD(L1_CONFIGURATION, 1);
+    SET_QMD(REGISTER_COUNT, 24);
+    SET_QMD(SASS_VERSION, 0x30);
+    NVVAL_MW_SET(qmd, NVB1C0, QMDV00_06, CONSTANT_BUFFER_VALID, 0, 1);
+    NVVAL_MW_SET(qmd, NVB1C0, QMDV00_06, CONSTANT_BUFFER_ADDR_LOWER, 0, 0x30000);
+    NVVAL_MW_SET(qmd, NVB1C0, QMDV00_06, CONSTANT_BUFFER_SIZE, 0, 2048);
+
+    assert(tg_gpu_inspect_command_stream(push, sizeof(push), &va, &info));
+    assert(info.va_end == 0x30800 && info.requires_program == (1u << TG_GPU_PROGRAM_COMPUTE));
+    uint32_t snapshot[PCAS + 3];
+    memcpy(snapshot, push, sizeof(push));
+    assert(tg_gpu_prepare_command_stream(snapshot, sizeof(snapshot), &va, &info));
+    const uint64_t qmd_va = va.reserved_base + TG_GPU_COMMAND_CAPTURE + 256;
+    assert(snapshot[PCAS + 1] == qmd_va >> 8 && !push[PCAS + 1]);
+    assert(info.va_end == qmd_va + 256 && !memcmp(snapshot + TG_GPU_QMD_WORDS, qmd, 256));
+
+    memcpy(snapshot, push, sizeof(push));
+    assert(!tg_gpu_prepare_command_stream(snapshot, sizeof(snapshot) - 4, &va, NULL));
+    struct tg_gpu_command_va short_va = va;
+    short_va.reserved_end = qmd_va + 255;
+    assert(!tg_gpu_prepare_command_stream(snapshot, sizeof(snapshot), &short_va, NULL));
+
+    SET_QMD(CTA_THREAD_DIMENSION0, 1024);
+    assert(!tg_gpu_inspect_command_stream(push, sizeof(push), &va, NULL));
+    SET_QMD(CTA_THREAD_DIMENSION0, 16);
+    SET_QMD(RELEASE0_ADDRESS_LOWER, 0x10000);
+    assert(!tg_gpu_inspect_command_stream(push, sizeof(push), &va, NULL));
+    SET_QMD(RELEASE0_ADDRESS_LOWER, 0);
+    NVVAL_MW_SET(qmd, NVB1C0, QMDV00_06, CONSTANT_BUFFER_ADDR_LOWER, 0, va.reserved_base - 256);
+    assert(!tg_gpu_inspect_command_stream(push, sizeof(push), &va, NULL));
+
+    push[PCAS + 1] = 0x300;
+    assert(tg_gpu_inspect_command_stream(push + PCAS, 12, &va, NULL));
+    assert(!tg_gpu_prepare_command_stream(push + PCAS, 12, &va, NULL));
+#undef SET_QMD
+}
+
 int main(void)
 {
     uint32_t w[16]={0x20010000,0xb197,0x20020100,0x20010014,0xdeadbeef,0};
@@ -610,5 +672,6 @@ int main(void)
     test_constant_buffers();
     test_program_regions();
     test_shader_local_memory();
+    test_captured_qmd();
     puts("B06F packets, GM20B MME and command address ranges passed");return 0;
 }

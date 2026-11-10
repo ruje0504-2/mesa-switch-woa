@@ -863,7 +863,11 @@ NVK's B197 and B1C0 queue-state updates supply each texture header or sampler
 pool as a complete base and inclusive maximum index. The KMD checks the full
 range of 32-byte entries. B1C0 direct dispatch pairs a QMD address with NVK's
 invalidate-and-schedule operation, with either immediate or incrementing
-encoding. The checked address range covers the complete 256-byte QMD 0.6.
+encoding. Windows NVK carries the 256-byte QMD 0.6 in a no-op payload before
+the launch. The KMD checks the descriptor's program offset, work-group
+dimensions, memory fields and constant-buffer ranges. It aligns the QMD
+inside the read-only command snapshot and patches PCAS to that GPU VA.
+The payload reserves space for alignment within the existing 64 KiB limit.
 [NVIDIA Maxwell compute class](https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/compute/clb1c0.h)
 [QMD layout](https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/compute/clb1c0qmd.h)
 
@@ -874,8 +878,9 @@ on its combined graphics and compute queue. B197 pipeline offsets must
 align the first instruction and leave room for the initial fetch and NVK's
 prefetch padding. Local memory setup covers the size programmed for both
 TPCs and checks both compute throttle modes together. VidMm manages backing
-pages. General application submission still requires validation of
-GPU-resident shader and descriptor contents and the remaining engine methods.
+pages. General application submission still requires matching each QMD's
+scratch requirements to the queue's backing, validating GPU-resident shader
+and descriptor contents, and covering the remaining engine methods.
 
 The .83 one-boot test exercised the new KMT bridge on the Lite, including
 aligned and fixed VA reservations, residency, event waits and GPU B0B5 copy.

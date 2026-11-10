@@ -4,6 +4,9 @@
 #include <stdint.h>
 #define TG_GPU_SUBMIT_ABI 1u
 #define TG_GPU_SUBMIT_MAX_BYTES (64u*1024u)
+/* A B1C0 NO_OPERATION packet carries QMD 0.6 and room to align it at capture. */
+#define TG_GPU_QMD_WORDS 64u
+#define TG_GPU_QMD_RECORD_WORDS (2u * TG_GPU_QMD_WORDS - 1u)
 /* D3DKMTSubmitCommand private bytes: header followed by command_bytes of
  * linear NVK push words. Dxgkrnl copies this payload into kernel storage;
  * the KMD snapshots it again for the entire asynchronous queue lifetime.

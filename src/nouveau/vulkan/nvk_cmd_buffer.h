@@ -463,7 +463,8 @@ VkResult nvk_cmd_flush_cs_qmd(struct nvk_cmd_buffer *cmd,
                               const struct nvk_cmd_state *state,
                               uint32_t global_size[3],
                               uint64_t *qmd_addr_out,
-                              uint64_t *root_desc_addr_out);
+                              uint64_t *root_desc_addr_out,
+                              uint32_t *inline_qmd);
 
 void nvk_cmd_flush_gfx_dynamic_state(struct nvk_cmd_buffer *cmd);
 void nvk_cmd_flush_gfx_shaders(struct nvk_cmd_buffer *cmd);

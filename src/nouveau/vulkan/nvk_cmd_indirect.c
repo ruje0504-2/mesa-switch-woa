@@ -1075,7 +1075,7 @@ nvk_cmd_process_cmds(struct nvk_cmd_buffer *cmd,
    if (layout->stages & VK_SHADER_STAGE_COMPUTE_BIT) {
       uint32_t global_size[3] = { 0, 0, 0 };
       VkResult result = nvk_cmd_flush_cs_qmd(cmd, state, global_size,
-                                             &qmd_addr, &push.root_addr);
+                                             &qmd_addr, &push.root_addr, NULL);
       if (unlikely(result != VK_SUCCESS)) {
          vk_command_buffer_set_error(&cmd->vk, result);
          return;

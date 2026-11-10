@@ -41,6 +41,10 @@ struct tg_gpu_command_info {
 bool tg_gpu_inspect_command_stream(const uint32_t *, size_t bytes,
                                    const struct tg_gpu_command_va *,
                                    struct tg_gpu_command_info *);
+/* Prepare the KMD-owned snapshot for execution, including direct QMDs. */
+bool tg_gpu_prepare_command_stream(uint32_t *, size_t bytes,
+                                   const struct tg_gpu_command_va *,
+                                   struct tg_gpu_command_info *);
 bool tg_gpu_command_range_allowed(const struct tg_gpu_command_va *, uint64_t address,
                                   uint64_t bytes, uint64_t *max_end);
 
