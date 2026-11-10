@@ -40,6 +40,12 @@ libgallium_d3d10 = shared_library(
 )
 
 if with_tests and d3d10_backend == 'nvk'
+  # Explicitly run on a native-submission KMD; never a default Meson test.
+  executable(
+    'nvk_d3d_check',
+    files('tests/nvk_native.cpp'),
+    include_directories : [inc_src, inc_winddk],
+  )
   test(
     'd3d10_nvk_device',
     executable(

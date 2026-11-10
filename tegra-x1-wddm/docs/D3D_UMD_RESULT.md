@@ -1,74 +1,103 @@
-# NVK-backed D3D UMD interface bring-up
+# NVK-backed D3D UMD bring-up
 
-2026-11-10, Windows 11 ARM64 on Switch Lite HDH-001.
+2026-11-10, Windows 11 ARM64 23H2 on Switch Lite HDH-001.
 
-The experimental `TegraGpuD3D.dll` connects Mesa's D3D10 Gallium frontend to
-Zink/NVK. Three controlled tests pass on the Switch at 16:53:36 UTC. The
-installed driver remains .59 Code 0; no driver installation, reboot, firmware
-change or power-setting change was performed for these tests.
+**.133 opens the real NVK UMD adapter/device, but clear/readback fails.**
+The direct-DDI probe reaches GM20B LUID `000000000009493e`, creates its
+textures and completes a native submission. A later 592-byte submission is
+rejected with `STATUS_INVALID_PARAMETER`; Zink reports `VK_ERROR_DEVICE_LOST`
+and all 4,096 pixels in the first readback mismatch. The rejecting rule has
+not yet been identified.
 
-## Implementation
+This calls the DDI frontend directly. It is not a `D3D11CreateDevice` runtime
+test, DWM composition test, or a successful rendering/presentation result.
 
-`gallium-d3d10-backend=nvk` queries the runtime adapter callback for the Tegra
-ABI and requires a valid LUID and the KMD's native-submission capability.
-It opens Zink on that exact LUID. Zink now also checks `deviceLUIDValid`
-before accepting a match. No software-renderer fallback or software-adapter
-KMT thunks are linked into this target. The default GDI backend remains
-available separately.
+## Physical evidence
 
-The frontend handles context/empty-shader creation failures and releases
-partially created objects. Resource creation now tests the backend's
-allocation result, reports initial-data mapping failures, and cleans up
-those allocations. The ARM64 build uses Windows `DebugBreak`, and a D3D-only
-build includes Gallium's shader/state helpers without enabling OpenGL.
-
-The hardware target returns `S_OK` after successful DDI device creation,
-rather than selecting GDI's no-redirection mode. Present and SetDisplayMode
-remain explicitly unsupported until the runtime resource/presentation bridge
-exists. The build still negotiates only D3D10 DDIs; D3D10.1 and D3D11 DDIs
-are not enabled.
-[Adapter callback contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_openadapter)
-[Device creation status](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createdevice)
-
-## Validation scope
-
-| Check | Result |
+| Check | .133 observation |
 | --- | --- |
-| Windows ARM64 NVK UMD and test executables | Build successfully with `tools/build_umd.py` |
-| Existing GDI/softpipe target | ARM64 build still succeeds |
-| Adapter fixture | Runtime callback ABI, exact 64-bit LUID, capability rejection and backend failure propagation pass; Zink is substituted |
-| DLL entry fixture | Actual DLL loads; software KMT exports are absent; both adapter entry points propagate controlled callback/gate failures correctly |
-| Device fixture | Real frontend DDIs negotiate a version, create/destroy a device, and clean up failed context/shader/resource/initial-map operations; Gallium is substituted |
+| Identity | Code 0, matching KMT and active VidPN LUID `9493e`; native-submit capability set; 512 MiB ceiling |
+| Driver selection | Loader selects the staged `libvulkan_nouveau.dll` and names the NVK GM20B device |
+| UMD setup | OpenAdapter10_2, CreateDevice, render-target/staging allocation and render-target-view creation succeed |
+| First captured native submission | Fence `0x14f`, 8,532 command bytes |
+| First captured native completion | Fence `0x14f`, Reference `0x131`, completion/CPU-fence-readback/retirement mask 7 |
+| First captured native rejection | Fence `0x163`, 592 command bytes, status `c000000d` |
+| Clear/readback | Queue submit reports device loss; 4,096/4,096 first-pass pixels mismatch; probe exits 1 without timing out |
+| Separate GDI execution | Fence 14, Reference 5, proof mask 7 |
 
-All three executables exit 0 on the Switch. These are controlled interface
-tests, not calls to `D3D11CreateDevice` through the Windows runtime and not
-GPU rendering proof. The build retains existing `ShaderTGSI.c` warnings
-about operand paths using an uninitialized `reg`; shader execution has not
-been validated by this round.
+The dedicated native records survive the normal startup journal filling.
+In this diagnostic package, their `Flags` field stores the submission fence;
+their last data field stores byte count or completion proof. The completion
+preceding the rejection does not prove the failing clear/copy succeeded.
 
-## Next physical work
+The exported ETL contains 137,700 records, with matching header count and
+record boundaries. Its Tegra adapter report has LUID `9493e`; initial
+Microsoft adapters use `4d7e` and `4db7`. The persistent native rejection is
+the specific failure evidence. Missing or last-visible ETL events are not
+used to identify an unrecorded internal failure.
 
-Validate the UMD's adapter/device path with native NVK submissions on GM20B,
-then clear/draw/read back known pixels through the DDI. Connect D3D runtime
-allocation callbacks, texture layout and OpenResource to the storage/sharing
-path proved by .132. Native presentation, shared-surface synchronization and
-sustained DWM composition remain required. DXVK remains a compatibility and
-code-reuse reference, not a replacement for these UMD contracts.
+## Loader discovery
 
-## Evidence
+Initial runs could not find an ICD. The loader later explicitly reports that
+these Windows processes have elevated privileges, including the task started
+with a Limited principal, so it ignores `VK_DRIVER_FILES`. Registering the
+ICD manifest as `VulkanDriverName` in the Tegra device's software key allows
+discovery and native device creation. The test records the previous absence
+of that value and adds its removal to rollback. Production packaging needs
+the corresponding driver-package registration.
+[Khronos driver discovery and privilege rules](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderDriverInterface.md#exception-for-elevated-privileges)
 
-Builds and captures are under
-`/private/tmp/t214-gpu-round/d3d-umd.2huxro_6/`.
-`verified-build/manifest.json` records artifact hashes; `staged-hashes.json`
-confirms the four files copied to the Switch. Results are retained under
-`C:\ProgramData\SwitchWOA\GpuUpdate\d3d-umd-20261110a`.
-All eight downloaded result files match their device hashes and lengths in
-`verified-results.json`; `returned/results-summary.json` contains the compact
-exit-code and installed-driver record.
+## Source changes and validation
+
+The KMD private query now derives `NATIVE_SUBMIT` from its actual paging-only
+mode and requires initialized adapter identity. The main miniport remains
+paging-only; .133 explicitly enables application submissions in its test
+entry point. The WDK capability fixture passes on the .59 baseline.
+
+The new explicit `nvk_d3d_check.exe` creates a 64x64 RGBA render target and a
+staging image, initializes readback with a different sentinel, and checks
+every word after clear/copy/map. The intended three-pass test stops on the
+first failure. Its result above covers only the failed first pass.
+
+This run also exposed a UMD error-propagation problem: a mapping returned a
+host pointer after the asynchronous backend had lost the device. The
+frontend now checks Gallium reset status before and after mapping, reports
+`D3DDDIERR_DEVICEREMOVED`, and unmaps a newly returned transfer instead of
+exposing stale data. The extended controlled device fixture passes on the
+Switch's .59 baseline, including removal during a successful backend map.
+The ARM64 NVK UMD and GDI/softpipe target build. The native test must be
+repeated with the fix; these model results are not a native readback pass.
+[ResourceMap contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_resourcemap)
+
+The earlier adapter, DLL-entry and device fixtures passed with commit
+`035062b0`; their captures and tested hashes remain under
+`/private/tmp/t214-gpu-round/d3d-umd.2huxro_6/returned/` and
+`staged-hashes.json`. The frontend still negotiates D3D10 DDIs only, and its
+native presentation callbacks remain unsupported.
+
+Next, use NVK's existing `NVK_DEBUG=push` dump to capture the rejected command
+stream, reproduce the precise admission
+failure and correct the relevant transport/validation behavior. Then repeat
+native clear/draw/readback before connecting runtime allocations, shared
+textures, synchronization and sustained DWM presentation. DXVK remains a
+compatibility/code-reuse reference.
+
+## Recovery and artifacts
+
+At 17:23:43 UTC the device is restored to .59 Code 0 with original driver and
+ACPI hashes. The start permit, test tasks and temporary ICD registration are
+gone. Before/after power-setting reports are byte-identical. Windows restarted
+directly into Windows; firmware and Hekate were unchanged.
+
+Artifacts are under `/private/tmp/t214-gpu-round/native-ddi133.q2b6fbs1/`.
+All 39 downloaded test records and five recovery records match device SHA256
+and lengths in `physical/verified.json` and `physical/verified-recovery.json`.
+`app-manifest.json` identifies the exact physical-test binaries;
+`umd-after-loss/` contains the subsequent mapping-error fix and fixture.
 
 | Artifact | SHA256 |
 | --- | --- |
-| `TegraGpuD3D.dll` | `0d52c9eec154d2134eb774e7705ee60cbd014a979e451a424d9f2a430c947c9b` |
-| Adapter fixture | `8c48019e99ca689835b1616a8f9afc17a6b51635666af4c99e459a30db995fd8` |
-| DLL entry fixture | `838704d70a2a5f8d79b969be648bf640e176f60addc6917604cafdaac4e98d92` |
-| Device fixture | `d1297359af1c784394ee9db9c29c142c41b26bdd286cc3b61a7596d7b71bdeed` |
+| Signed .133 KMD | `90d402f7540d4219ddccbd6fbf975ba3d2306e1abf07c1ead448d93fd1503d43` |
+| Registered-ICD test result | `37d1135f0f98b8b9e1b9a8401f24b1462b9be67a33d1e5e2a9ed9ac14a89538e` |
+| Live startup journal | `a4b4b99683e6f46c671e8f88873ba7af2bd304bfe9e9ac6d9ae9fe47edd032a1` |
+| ETL export | `ebec876c50251219cfd67e5536f39fb24becc0d9fecbfd820bf7c78bf1a20b5d` |

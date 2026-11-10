@@ -135,8 +135,8 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
         if(e->AdapterIdentityReady) {
             info.flags=TG_GPU_ADAPTER_LUID_VALID;
             info.luid_low=e->AdapterLuid.LowPart;info.luid_high=e->AdapterLuid.HighPart;
+            if(!e->PagingOnly)info.flags|=TG_GPU_ADAPTER_NATIVE_SUBMIT;
         }
-        /* NATIVE_SUBMIT stays unset until application command validation. */
         RtlCopyMemory(a->pOutputData,&info,sizeof(info));
         return STATUS_SUCCESS;
     }

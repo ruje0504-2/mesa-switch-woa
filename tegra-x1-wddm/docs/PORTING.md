@@ -99,9 +99,20 @@ and three controlled Windows tests. Run `test_d3d10_nvk_adapter.exe`,
 The tests substitute adapter callbacks or a Gallium backend and do not prove
 GPU rendering or acceptance by DWM.
 
-Next, validate native adapter/device creation and GPU clear/draw/readback,
-connect runtime allocation and shared-image metadata, then implement
-cross-device synchronization and sustained composition/presentation.
+The explicit `nvk_d3d_check.exe <absolute-UMD.dll> <absolute-NVK-ICD.json>
+<16-digit-KMT-LUID>` probe calls the real DDI frontend and Zink/NVK for a
+64x64 RGBA clear/copy/readback. It is not a default Meson test. It requires a
+native-submission KMD and matching active adapter identity. Elevated Windows
+processes ignore `VK_DRIVER_FILES`; the physical .133 test used a temporary
+`VulkanDriverName` value in that device's software key, with removal included
+in rollback. Normal packaging must register its ICD through the driver package.
+[Loader discovery and privilege rules](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderDriverInterface.md#driver-discovery-on-windows)
+
+The .133 test reaches native adapter/device creation and a completed native
+submission, then fails clear/readback on a later 592-byte KMD rejection.
+Resolve that command-validation failure and repeat clear/draw/readback,
+then connect runtime allocation, shared-image metadata, synchronization and
+sustained composition/presentation. [Physical DDI result](D3D_UMD_RESULT.md)
 Device and resource tests must select and report the GM20B LUID.
 The UMD must handle runtime-owned allocation and presentation callbacks,
 resource layout metadata, ownership and completion across devices.

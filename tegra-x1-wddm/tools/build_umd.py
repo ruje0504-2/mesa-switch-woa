@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Build the experimental NVK-backed D3D UMD and controlled Windows tests.
+"""Build the NVK D3D UMD, controlled Windows tests and explicit native probe.
 
 Requires Meson/Ninja, an LLVM-MinGW cross file, Mesa's Python dependencies,
 and native mesa_clc/vtn_bindgen2 on PATH, as for build_icd.py. SDK/WDK headers
@@ -54,12 +54,12 @@ def main():
     ], check=True)
     target = "src/gallium/targets/d3d10umd/"
     names = ["TegraGpuD3D.dll", "test_d3d10_nvk_adapter.exe", "test_d3d10_nvk_entry.exe",
-             "test_d3d10_nvk_device.exe"]
+             "test_d3d10_nvk_device.exe", "nvk_d3d_check.exe"]
     subprocess.run(["ninja", "-C", str(build), *(target + name for name in names)], check=True)
     for name in names:
         shutil.copyfile(build / target / name, out / name)
     (out / "manifest.json").write_text(json.dumps({
-        "scope": "Experimental D3D10 UMD over Zink/NVK; controlled adapter/entry tests, no DWM proof",
+        "scope": "Experimental NVK D3D10 UMD, controlled fixtures, and explicit native DDI clear/readback probe",
         "files": {name: hashlib.sha256((out / name).read_bytes()).hexdigest() for name in names},
     }, indent=2) + "\n")
     print(f"Built the NVK D3D UMD and controlled tests in {out}")

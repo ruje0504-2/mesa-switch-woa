@@ -14,6 +14,11 @@ hardware target returns an unsupported result from presentation callbacks;
 it does not use the GDI target's frontbuffer path. It is not a working DWM
 driver yet. [Windows build and verification](../../../../tegra-x1-wddm/docs/PORTING.md#direct3d-umd-and-dwm)
 
+`nvk_d3d_check.exe` explicitly exercises native DDI clear/copy/readback on a
+selected KMT LUID. Run it only with a native-submission KMD and registered
+NVK ICD; elevated Windows processes ignore its `VK_DRIVER_FILES` override.
+This probe does not use the Windows D3D runtime or presentation callbacks.
+
 ## GDI software backend
 
 When compiled with `gallium-driver=llvmpipe` or `gallium-driver=softpipe` the resulting libgallium_d3d10.dll implements D3D10's software rendering interface, like WARP.

@@ -13,7 +13,7 @@ The current milestone is the Direct3D UMD and hardware DWM composition.
 | Native Vulkan | NVK rendered an offscreen triangle on the GM20B and read back the expected pixels and guards with driver **0.1.0.87**. A Win32 preview displayed that readback. |
 | Display adapter | **0.1.0.130** reached **Code 0**, completed GDI copies and displayed verified RGB bars through the GM20B VidPN and native scanout. |
 | Shared storage | **0.1.0.132** passed NT-handle import and CPU readback between two devices on GM20B, including after producer release. [Test scope and evidence](docs/SHARED_STORAGE_RESULT.md). |
-| Windows desktop | An experimental D3D10 UMD over Zink/NVK builds and passes controlled ARM64 interface tests. Native Direct3D rendering and hardware DWM composition remain unverified. |
+| Windows desktop | The experimental D3D10 UMD opened a native NVK device in **.133** direct-DDI testing. Clear/readback hit a rejected submission; hardware DWM composition remains pending. [Evidence](docs/D3D_UMD_RESULT.md). |
 
 The driver uses dynamically allocated shared memory with a **512 MiB**
 adapter ceiling. Windows manages residency and budgets through VidMm.

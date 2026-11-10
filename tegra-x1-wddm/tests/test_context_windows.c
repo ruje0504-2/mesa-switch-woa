@@ -842,11 +842,20 @@ static __declspec(noinline) void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRI
     CHECK(abi.info.version==1 && abi.info.size==48 && !abi.info.reserved);
     CHECK(abi.info.memory_budget_bytes==UINT64_C(536870912));
     CHECK(abi.info.vendor==0x10de && abi.info.chipset==0x12e && abi.info.sm==53 && abi.info.gr_class==0xb197);
-    CHECK(abi.info.flags==(e->AdapterIdentityReady?TG_GPU_ADAPTER_LUID_VALID:0u));
-    CHECK(!(abi.info.flags&TG_GPU_ADAPTER_NATIVE_SUBMIT));
+    CHECK(abi.info.flags==(e->AdapterIdentityReady?(TG_GPU_ADAPTER_LUID_VALID|
+          (e->PagingOnly?0u:TG_GPU_ADAPTER_NATIVE_SUBMIT)):0u));
     CHECK(abi.info.luid_low==(e->AdapterIdentityReady?e->AdapterLuid.LowPart:0u));
     CHECK(abi.info.luid_high==(e->AdapterIdentityReady?e->AdapterLuid.HighPart:0));
     for(i=0;i<sizeof(abi.guard);++i)CHECK(abi.guard[i]==0xa5);
+    const BOOLEAN saved_paging=e->PagingOnly,saved_identity=e->AdapterIdentityReady;
+    e->PagingOnly=TRUE;e->AdapterIdentityReady=TRUE;
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)) && abi.info.flags==TG_GPU_ADAPTER_LUID_VALID);
+    e->PagingOnly=FALSE;
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)) &&
+          abi.info.flags==(TG_GPU_ADAPTER_LUID_VALID|TG_GPU_ADAPTER_NATIVE_SUBMIT));
+    e->AdapterIdentityReady=FALSE;
+    CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)) && !abi.info.flags);
+    e->PagingOnly=saved_paging;e->AdapterIdentityReady=saved_identity;
     a.OutputDataSize=sizeof(abi.info)-1;
     CHECK(d->DxgkDdiQueryAdapterInfo(e,&a)==STATUS_BUFFER_TOO_SMALL);
     a.OutputDataSize=sizeof(abi);a.InputDataSize=sizeof(request)-1;

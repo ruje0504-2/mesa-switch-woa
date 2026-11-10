@@ -3,25 +3,27 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Current work: D3D UMD/DWM.** The NVK-backed D3D10 UMD target now builds,
-selects Zink by the runtime adapter's LUID, and passes three controlled ARM64
-interface/lifetime tests on the Switch. It is not installed: native D3D
-rendering, runtime shared resources and presentation remain to be validated
-and connected. See the [UMD result and next steps](D3D_UMD_RESULT.md).
+**Current work: D3D UMD/DWM.** The .133 direct-DDI trial opens the NVK UMD
+adapter/device on GM20B LUID `9493e`. A native submission completes, but the
+first clear/readback fails after KMD rejection of fence `163`, 592 bytes,
+with `c000000d`. The rejecting rule still needs identification. UMD mapping
+now reports device loss instead of returning stale data; that fix passes a
+controlled ARM64 test. See the [UMD result and next steps](D3D_UMD_RESULT.md).
 
 The .132 trial passes 16 KiB NT-handle
 storage sharing between two KMT devices on GM20B, including CPU readback
 after releasing the producer and closing the exported handle. Both device
 budgets return to zero. The matched adapter/active VidPN LUID is `949ff`.
-D3D UMD device creation, shared-image rendering/synchronization and DWM
+D3D runtime integration, shared-image rendering/synchronization and DWM
 composition remain pending. DXVK remains a compatibility and code-reuse
 candidate. See the [shared-storage result](SHARED_STORAGE_RESULT.md).
-After testing, .59 Code 0, the original ACPI/driver hashes and unchanged
-AC/DC display/sleep settings were verified. The start permit and test tasks
-have been removed.
+After .133 testing, .59 Code 0, the original ACPI/driver hashes and unchanged
+AC/DC display/sleep settings were verified. The start permit, test tasks and
+temporary ICD registration have been removed.
 
 | Driver | Result | Remaining work |
 | --- | --- | --- |
+| 0.1.0.133 | Code 0, matched LUID `9493e`, native-submit flag, real NVK UMD adapter/device and texture creation. Native fence `14f` completes with Reference `131` and proof mask 7. Fence `163` is rejected with `c000000d`; all 4,096 first-pass pixels mismatch. | Identify and fix the 592-byte submission rejection, then repeat native clear/draw/readback. No DWM or Vulkan presentation pass. |
 | 0.1.0.132 | Code 0, LUID `949ff`, successful section-backed shared storage and 4,096 matching data words before/after producer release and NT-handle closure. GDI fence 23 completed with proof mask 7. | Cross-device GPU rendering/completion, native D3D UMD/DWM, and Win32 `vkcube`. The storage probe submits no drawing work. |
 | 0.1.0.130 | Code 0, GM20B LUID `8e7d4`, matching active VidPN, completed GDI copies, successful MPO3 and native scanout at `fb9c7000`. Pixel readback and the user confirm visible RGB bars on the internal panel. | DWM exits with `MILERR_NO_HARDWARE_DEVICE`; D3D11 device creation on GM20B returns `DXGI_ERROR_UNSUPPORTED`, while WARP succeeds. Continuous desktop refresh remains unresolved. See [native startup result](NATIVE_STARTUP_RESULT.md). |
 | 0.1.0.121 | The timing callback returned link success with a nonzero change ID. GM20B LUID `962ec` reached 720x1280, 60 Hz mode setup and successful shared-primary allocation creation. | Windows restarted later. The normal journal filled before the first failure; the next boot was gated to Code 43. Stable native presentation remains open. See [display timing result](DISPLAY_TIMING_RESULT.md). |

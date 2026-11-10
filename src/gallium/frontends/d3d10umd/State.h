@@ -151,6 +151,18 @@ SetError(D3D10DDI_HDEVICE hDevice, HRESULT hr)
    }
 }
 
+static inline bool
+CheckDeviceRemoved(D3D10DDI_HDEVICE hDevice)
+{
+   struct pipe_context *pipe = CastPipeContext(hDevice);
+   if (pipe->get_device_reset_status &&
+       pipe->get_device_reset_status(pipe) != PIPE_NO_RESET) {
+      SetError(hDevice, D3DDDIERR_DEVICEREMOVED);
+      return true;
+   }
+   return false;
+}
+
 
 struct Resource
 {

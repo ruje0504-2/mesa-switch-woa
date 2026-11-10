@@ -18,6 +18,10 @@ static HRESULT resource_error;
 static bool allocate_resource;
 static unsigned resources;
 static pipe_resource buffer = {};
+static bool device_removed, remove_during_map;
+static unsigned maps, unmaps;
+static pipe_transfer transfer = {};
+static unsigned char mapped_bytes[16];
 
 static void APIENTRY set_error(D3D10DDI_HRTCORELAYER, HRESULT error)
 {
@@ -70,7 +74,19 @@ d3d10_create_screen(HANDLE, const D3DDDI_ADAPTERCALLBACKS *, pipe_screen **resul
       context.set_framebuffer_state = [](pipe_context *, const pipe_framebuffer_state *) {};
       context.set_sample_mask = [](pipe_context *, unsigned) {};
       context.set_sampler_views = [](pipe_context *, mesa_shader_stage, unsigned, unsigned, unsigned, pipe_sampler_view **) {};
-      context.buffer_map = context.texture_map = [](pipe_context *, pipe_resource *, unsigned, unsigned, const pipe_box *, pipe_transfer **) -> void * { return NULL; };
+      context.get_device_reset_status = [](pipe_context *) {
+         return device_removed ? PIPE_GUILTY_CONTEXT_RESET : PIPE_NO_RESET;
+      };
+      context.buffer_map = context.texture_map = [](pipe_context *, pipe_resource *, unsigned, unsigned, const pipe_box *, pipe_transfer **out) -> void * {
+         ++maps;
+         if (!remove_during_map) return NULL;
+         device_removed = true;
+         *out = &transfer;
+         return mapped_bytes;
+      };
+      context.buffer_unmap = context.texture_unmap = [](pipe_context *, pipe_transfer *t) {
+         CHECK(t == &transfer); ++unmaps;
+      };
       return &context;
    };
    *result = &screen;
@@ -142,11 +158,24 @@ int main(void)
    functions.pfnCreateResource(create.hDrvDevice, &resource, handle, {});
    CHECK(resource_error == E_OUTOFMEMORY && !resources); /* Initial texture map fails. */
    resource.pInitialDataUP = NULL;
+   resource.Usage = D3D10_DDI_USAGE_STAGING;
+   resource.MapFlags = D3D10_DDI_CPU_ACCESS_READ;
    resource_error = S_OK;
    functions.pfnCreateResource(create.hDrvDevice, &resource, handle, {});
    CHECK(resource_error == S_OK && resources == 1);
+   const unsigned previous_maps = maps;
+   device_removed = true;
+   D3D10DDI_MAPPED_SUBRESOURCE mapped;
+   memset(&mapped, 0xa5, sizeof(mapped));
+   functions.pfnStagingResourceMap(create.hDrvDevice, handle, 0, D3D10_DDI_MAP_READ, 0, &mapped);
+   CHECK(resource_error == D3DDDIERR_DEVICEREMOVED && !mapped.pData && !mapped.RowPitch &&
+         !mapped.DepthPitch && maps == previous_maps);
+   resource_error = S_OK; device_removed = false; remove_during_map = true;
+   functions.pfnStagingResourceMap(create.hDrvDevice, handle, 0, D3D10_DDI_MAP_READ, 0, &mapped);
+   CHECK(resource_error == D3DDDIERR_DEVICEREMOVED && !mapped.pData &&
+         maps == previous_maps + 1 && unmaps == 1);
    functions.pfnDestroyResource(create.hDrvDevice, handle);
-   CHECK(!resources);
+   CHECK(!resources && unmaps == 1);
    free(handle.pDrvPrivate);
    DXGI_DDI_ARG_PRESENT present = {};
    present.hDevice = reinterpret_cast<DXGI_DDI_HDEVICE>(create.hDrvDevice.pDrvPrivate);

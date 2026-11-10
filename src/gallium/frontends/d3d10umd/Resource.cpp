@@ -497,6 +497,9 @@ ResourceMap(D3D10DDI_HDEVICE hDevice,                                // IN
             __out D3D10DDI_MAPPED_SUBRESOURCE *pMappedSubResource)   // OUT
 {
    LOG_ENTRYPOINT();
+   memset(pMappedSubResource, 0, sizeof *pMappedSubResource);
+   if (CheckDeviceRemoved(hDevice))
+      return;
 
    struct pipe_context *pipe = CastPipeContext(hDevice);
    Resource *pResource = CastResource(hResource);
@@ -552,6 +555,18 @@ ResourceMap(D3D10DDI_HDEVICE hDevice,                                // IN
                               usage,
                               &box,
                               &pResource->transfers[SubResource]);
+   }
+   /* Mapping may wait for an asynchronous submission. A non-NULL host
+    * pointer is not usable readback if that submission lost the device. */
+   if (CheckDeviceRemoved(hDevice)) {
+      if (map) {
+         if (pResource->buffer)
+            pipe_buffer_unmap(pipe, pResource->transfers[SubResource]);
+         else
+            pipe_texture_unmap(pipe, pResource->transfers[SubResource]);
+         pResource->transfers[SubResource] = NULL;
+      }
+      return;
    }
    if (!map) {
       DebugPrintf("%s: failed to map resource\n", __func__);
