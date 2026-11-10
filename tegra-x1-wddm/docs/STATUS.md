@@ -16,9 +16,10 @@
 The test decrements and flushes a two-attempt budget before GPU
 initialization. The .109, .110 and .111 callback records were identical.
 AutoLogger preallocation made the first two files readable in .110. The
-8 KiB buffers in .111 retained StartDevice and three diagnostics with
-`STATUS_NOT_SUPPORTED` in each permitted boot. The diagnostic events report
-the status without identifying the callback.
+.111 configuration used 8 KiB buffers with circular preallocation. Each
+of its first two ETLs retained StartDevice and three diagnostics with
+`STATUS_NOT_SUPPORTED`. These ETLs lack a final log header and the
+diagnostics do not identify the callback.
 [AutoLogger file rotation](https://learn.microsoft.com/en-us/windows/win32/etw/configuring-and-starting-an-autologger-session)
 
 ## Development order
