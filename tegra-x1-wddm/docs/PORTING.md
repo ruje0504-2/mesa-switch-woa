@@ -79,11 +79,29 @@ explicit GM20B adapter and successful WARP creation. DWM reported
 adapter entry points that reject Direct3D.
 [Physical result and evidence](NATIVE_STARTUP_RESULT.md)
 
-The next implementation needs the Windows runtime's UMD DDI, rendering
-through the GM20B backend, and resources that applications and DWM can
-share. Work proceeds through adapter negotiation and device creation,
-GPU clear/draw/readback, cross-device shared surfaces and synchronization,
-then sustained composition of ordinary windows and presentation.
+An experimental D3D10 UMD target now connects the existing Gallium frontend
+to Zink/NVK. Its adapter entry point queries the runtime callback for the
+Tegra ABI, requires the native-submission capability, and selects the exact
+Vulkan device LUID. It exports no software-adapter KMT emulation. The installed
+driver still uses `no_d3d.c`; the new target is not installed by its build tool.
+
+```sh
+python3 tegra-x1-wddm/tools/build_umd.py \
+  --out build/umd --cross-file "$WINDOWS_CROSS_FILE" \
+  --wdk-include "$WDK_INCLUDE" --sdk-include "$SDK_INCLUDE"
+```
+
+Use the LLVM-MinGW/Meson environment described above. The tool stages the
+required SDK/WDK headers under the output directory and emits `TegraGpuD3D.dll`
+and three controlled Windows tests. Run `test_d3d10_nvk_adapter.exe`,
+`test_d3d10_nvk_device.exe` and
+`test_d3d10_nvk_entry.exe <absolute-TegraGpuD3D.dll-path>` on Windows.
+The tests substitute adapter callbacks or a Gallium backend and do not prove
+GPU rendering or acceptance by DWM.
+
+Next, validate native adapter/device creation and GPU clear/draw/readback,
+connect runtime allocation and shared-image metadata, then implement
+cross-device synchronization and sustained composition/presentation.
 Device and resource tests must select and report the GM20B LUID.
 The UMD must handle runtime-owned allocation and presentation callbacks,
 resource layout metadata, ownership and completion across devices.
@@ -106,12 +124,12 @@ cross-process sharing and GPU access to the imported storage are pending.
 [Physical shared-storage result](SHARED_STORAGE_RESULT.md)
 [KMT resource sharing](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtshareobjects)
 
-Mesa's existing `src/gallium/frontends/d3d10umd` supplies D3D10 DDI and
-shader-token translation code. `State.h` currently disables its D3D10.1
-and D3D11 branches. Its GDI target creates softpipe or llvmpipe screens,
-and `Resource.cpp::OpenResource` reports an error.
-Reusing it requires a GM20B rendering backend, runtime allocation and
-sharing support, and native presentation.
+Mesa's `src/gallium/frontends/d3d10umd` supplies D3D10 DDI and shader-token
+translation code. `State.h` currently disables its D3D10.1 and D3D11 branches.
+The default GDI target still creates softpipe or llvmpipe screens. The NVK
+target links Zink, but `Resource.cpp::OpenResource` still reports an error
+and runtime-owned allocation metadata is not connected. Its Present and
+SetDisplayMode callbacks return unsupported until the native bridge exists.
 [Existing frontend](../../src/gallium/frontends/d3d10umd/)
 [GDI target](../../src/gallium/targets/d3d10umd/)
 

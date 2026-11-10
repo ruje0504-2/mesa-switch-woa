@@ -830,8 +830,11 @@ if d3d_drivers_path == ''
 endif
 
 with_gallium_st_d3d10umd =  get_option('gallium-d3d10umd')
+d3d10_backend = get_option('gallium-d3d10-backend')
 if with_gallium_st_d3d10umd
-  if not with_gallium_swrast
+  if d3d10_backend == 'nvk' and (host_machine.system() != 'windows' or not with_gallium_zink)
+    error('The NVK d3d10umd target requires Windows and gallium zink.')
+  elif d3d10_backend == 'gdi' and not with_gallium_swrast
     error('The d3d10umd state tracker requires gallium softpipe/llvmpipe.')
   endif
 endif
@@ -1001,6 +1004,7 @@ endif
 with_gfx_compute = [
   with_any_opengl,
   with_any_vk,
+  with_gallium_st_d3d10umd,
   with_clc,
   with_gallium_va and with_video_encode,
   with_gallium_mediafoundation and with_video_encode,

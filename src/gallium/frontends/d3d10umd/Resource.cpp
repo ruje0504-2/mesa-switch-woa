@@ -308,7 +308,7 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
    }
 
    pResource->resource = screen->resource_create(screen, &templat);
-   if (!pResource) {
+   if (!pResource->resource) {
       DebugPrintf("%s: failed to create resource\n", __func__);
       SetError(hDevice, E_OUTOFMEMORY);
       return;
@@ -317,6 +317,12 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
    pResource->NumSubResources = pCreateResource->MipLevels * pCreateResource->ArraySize;
    pResource->transfers = (struct pipe_transfer **)calloc(pResource->NumSubResources,
                                                           sizeof *pResource->transfers);
+   if (!pResource->transfers) {
+      pResource->NumSubResources = 0;
+      pipe_resource_reference(&pResource->resource, NULL);
+      SetError(hDevice, E_OUTOFMEMORY);
+      return;
+   }
 
    if (pCreateResource->pInitialDataUP) {
       if (pResource->buffer) {
@@ -337,11 +343,14 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
                                 PIPE_MAP_UNSYNCHRONIZED,
                                 &box,
                                 &transfer);
-         assert(map);
-         if (map) {
-            memcpy(map, pInitialDataUP->pSysMem, box.width);
-            pipe_buffer_unmap(pipe, transfer);
+         if (!map) {
+            DestroyResource(hDevice, hResource);
+            memset(pResource, 0, sizeof *pResource);
+            SetError(hDevice, E_OUTOFMEMORY);
+            return;
          }
+         memcpy(map, pInitialDataUP->pSysMem, box.width);
+         pipe_buffer_unmap(pipe, transfer);
       } else {
          for (UINT SubResource = 0; SubResource < pResource->NumSubResources; ++SubResource) {
             const D3D10_DDIARG_SUBRESOURCE_UP* pInitialDataUP =
@@ -360,21 +369,24 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
                                     PIPE_MAP_UNSYNCHRONIZED,
                                     &box,
                                     &transfer);
-            assert(map);
-            if (map) {
-               for (int z = 0; z < box.depth; ++z) {
-                  uint8_t *dst = (uint8_t*)map + z*transfer->layer_stride;
-                  const uint8_t *src = (const uint8_t*)pInitialDataUP->pSysMem + z*pInitialDataUP->SysMemSlicePitch;
-                  util_copy_rect(dst,
-                                 templat.format,
-                                 transfer->stride,
-                                 0, 0, box.width, box.height,
-                                 src,
-                                 pInitialDataUP->SysMemPitch,
-                                 0, 0);
-               }
-               pipe_texture_unmap(pipe, transfer);
+            if (!map) {
+               DestroyResource(hDevice, hResource);
+               memset(pResource, 0, sizeof *pResource);
+               SetError(hDevice, E_OUTOFMEMORY);
+               return;
             }
+            for (int z = 0; z < box.depth; ++z) {
+               uint8_t *dst = (uint8_t*)map + z*transfer->layer_stride;
+               const uint8_t *src = (const uint8_t*)pInitialDataUP->pSysMem + z*pInitialDataUP->SysMemSlicePitch;
+               util_copy_rect(dst,
+                              templat.format,
+                              transfer->stride,
+                              0, 0, box.width, box.height,
+                              src,
+                              pInitialDataUP->SysMemPitch,
+                              0, 0);
+            }
+            pipe_texture_unmap(pipe, transfer);
          }
       }
    }

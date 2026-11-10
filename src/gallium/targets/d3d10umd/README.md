@@ -1,5 +1,21 @@
 # D3D10umd Readme
 
+## Tegra NVK backend
+
+`-Dgallium-d3d10umd=true -Dgallium-d3d10-backend=nvk -Dgallium-drivers=zink`
+builds an experimental hardware target. It queries the runtime's adapter
+callback for the Tegra ABI and opens Zink on that exact Vulkan device LUID.
+The KMD must enable native submissions. This target exports the D3D adapter
+entry points without the software target's KMT emulation.
+
+The frontend currently negotiates D3D10 DDIs. D3D10.1/D3D11 DDIs, runtime
+resource sharing and native presentation still need implementation. The
+hardware target returns an unsupported result from presentation callbacks;
+it does not use the GDI target's frontbuffer path. It is not a working DWM
+driver yet. [Windows build and verification](../../../../tegra-x1-wddm/docs/PORTING.md#direct3d-umd-and-dwm)
+
+## GDI software backend
+
 When compiled with `gallium-driver=llvmpipe` or `gallium-driver=softpipe` the resulting libgallium_d3d10.dll implements D3D10's software rendering interface, like WARP.
 
 It can be used directly from WLK 1.6 and WHCK 2.0 D3D10+ tests, via the -Src
@@ -60,6 +76,7 @@ may also work but not verified.
 Copy the following list of files from Windows SDK/DDK into mingw's `include` folder or `include\winddk` folder in mesa source tree:
     ```txt
     d3d10umddi.h
+    d3d11TokenizedProgramFormat.hpp
     d3dkmddi.h
     d3dkmdt.h
     d3dkmthk.h

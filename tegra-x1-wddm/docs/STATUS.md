@@ -3,7 +3,13 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Current work: D3D UMD/DWM.** The .132 trial passes 16 KiB NT-handle
+**Current work: D3D UMD/DWM.** The NVK-backed D3D10 UMD target now builds,
+selects Zink by the runtime adapter's LUID, and passes three controlled ARM64
+interface/lifetime tests on the Switch. It is not installed: native D3D
+rendering, runtime shared resources and presentation remain to be validated
+and connected. See the [UMD result and next steps](D3D_UMD_RESULT.md).
+
+The .132 trial passes 16 KiB NT-handle
 storage sharing between two KMT devices on GM20B, including CPU readback
 after releasing the producer and closing the exported handle. Both device
 budgets return to zero. The matched adapter/active VidPN LUID is `949ff`.

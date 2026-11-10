@@ -537,7 +537,8 @@ if with_tests
     dependencies : idep_mesautil,
     c_args : [c_msvc_compat_args],
   )
-  if (host_machine.system() == 'windows' and build_machine.system() != 'windows')
+  if (host_machine.system() == 'windows' and build_machine.system() != 'windows' and
+      meson.can_run_host_binaries())
     # This conversion is only required on mingw crosscompilers, otherwise we hit at least one of these issues
     # https://gitlab.freedesktop.org/mesa/mesa/-/issues/2690
     # https://gitlab.freedesktop.org/mesa/mesa/-/issues/2788

@@ -1768,7 +1768,8 @@ zink_match_adapter_luid(const struct zink_screen *screen, uint32_t pdev_count, c
    for (uint32_t i = 0; i < pdev_count; ++i) {
       VKSCR(GetPhysicalDeviceProperties2)(pdevs[i], &props);
 
-      if (!memcmp(props11.deviceLUID, &adapter_luid, sizeof(adapter_luid)))
+      if (props11.deviceLUIDValid &&
+          !memcmp(props11.deviceLUID, &adapter_luid, sizeof(adapter_luid)))
          return i;
    }
 

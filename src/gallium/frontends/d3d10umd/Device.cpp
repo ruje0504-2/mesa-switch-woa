@@ -132,11 +132,28 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
 
    struct pipe_screen *screen = pAdapter->screen;
    struct pipe_context *pipe = screen->context_create(screen, NULL, 0);
+   if (!pipe)
+      return E_OUTOFMEMORY;
    pDevice->pipe = pipe;
    pDevice->cso = cso_create_context(pipe, CSO_NO_VBUF);
+   if (!pDevice->cso) {
+      pipe->destroy(pipe);
+      pDevice->pipe = NULL;
+      return E_OUTOFMEMORY;
+   }
 
    pDevice->empty_vs = CreateEmptyShader(pDevice, MESA_SHADER_VERTEX);
    pDevice->empty_fs = CreateEmptyShader(pDevice, MESA_SHADER_FRAGMENT);
+   if (!pDevice->empty_vs || !pDevice->empty_fs) {
+      if (pDevice->empty_vs)
+         DeleteEmptyShader(pDevice, MESA_SHADER_VERTEX, pDevice->empty_vs);
+      if (pDevice->empty_fs)
+         DeleteEmptyShader(pDevice, MESA_SHADER_FRAGMENT, pDevice->empty_fs);
+      cso_destroy_context(pDevice->cso);
+      pipe->destroy(pipe);
+      memset(pDevice, 0, sizeof *pDevice);
+      return E_OUTOFMEMORY;
+   }
 
    pipe->bind_vs_state(pipe, pDevice->empty_vs);
    pipe->bind_fs_state(pipe, pDevice->empty_fs);
@@ -294,14 +311,12 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
    pCreateData->DXGIBaseDDI.pDXGIDDIBaseFunctions->pfnBlt =
       _Blt;
 
-   if (0) {
-      return S_OK;
-   } else {
-      // Tell DXGI to not use the shared resource presentation path when
-      // communicating with DWM:
-      // http://msdn.microsoft.com/en-us/library/windows/hardware/ff569887(v=vs.85).aspx
-      return DXGI_STATUS_NO_REDIRECTION;
-   }
+#ifdef D3D10_UMD_HARDWARE
+   return S_OK;
+#else
+   // The GDI software target does not use DWM's shared-resource presentation.
+   return DXGI_STATUS_NO_REDIRECTION;
+#endif
 }
 
 
@@ -352,8 +367,7 @@ DestroyDevice(D3D10DDI_HDEVICE hDevice)   // IN
 
    pipe_resource_reference(&pDevice->index_buffer, NULL);
 
-   static struct pipe_sampler_view * sampler_views[PIPE_MAX_SHADER_SAMPLER_VIEWS];
-   memset(sampler_views, 0, sizeof sampler_views);
+   struct pipe_sampler_view *sampler_views[PIPE_MAX_SHADER_SAMPLER_VIEWS] = {};
    pipe->set_sampler_views(pipe, MESA_SHADER_FRAGMENT, 0,
                            PIPE_MAX_SHADER_SAMPLER_VIEWS, 0, sampler_views);
    pipe->set_sampler_views(pipe, MESA_SHADER_VERTEX, 0,

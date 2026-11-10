@@ -40,16 +40,12 @@
 #include "util/u_memory.h"
 
 
-EXTERN_C struct pipe_screen *
-d3d10_create_screen(void);
+EXTERN_C HRESULT
+d3d10_create_screen(HANDLE hRTAdapter, const D3DDDI_ADAPTERCALLBACKS *callbacks,
+                    struct pipe_screen **screen);
 
 
 static HRESULT APIENTRY CloseAdapter(D3D10DDI_HADAPTER hAdapter);
-
-static unsigned long numAdapters = 0;
-#if 0
-static unsigned long memdbg_no = 0;
-#endif
 
 /*
  * ----------------------------------------------------------------------
@@ -65,24 +61,16 @@ static unsigned long memdbg_no = 0;
 static HRESULT
 OpenAdapterCommon(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
 {
-#if 0
-   if (numAdapters == 0) {
-      memdbg_no = debug_memory_begin();
-   }
-#endif
-   ++numAdapters;
-
    Adapter *pAdaptor = (Adapter *)calloc(sizeof *pAdaptor, 1);
    if (!pAdaptor) {
-      --numAdapters;
       return E_OUTOFMEMORY;
    }
 
-   pAdaptor->screen = d3d10_create_screen();
-   if (!pAdaptor->screen) {
+   HRESULT hr = d3d10_create_screen((HANDLE)pOpenData->hRTAdapter.handle,
+                                   pOpenData->pAdapterCallbacks, &pAdaptor->screen);
+   if (FAILED(hr)) {
       free(pAdaptor);
-      --numAdapters;
-      return E_OUTOFMEMORY;
+      return hr;
    }
 
    pOpenData->hAdapter.pDrvPrivate = pAdaptor;
@@ -262,13 +250,6 @@ CloseAdapter(D3D10DDI_HADAPTER hAdapter)  // IN
    struct pipe_screen *screen = pAdapter->screen;
    screen->destroy(screen);
    free(pAdapter);
-
-   --numAdapters;
-#if 0
-   if (numAdapters == 0) {
-      debug_memory_end(memdbg_no);
-   }
-#endif
 
    return S_OK;
 }

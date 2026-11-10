@@ -58,6 +58,11 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
 
    LOG_ENTRYPOINT();
 
+#ifdef D3D10_UMD_HARDWARE
+   /* The runtime allocation/presentation bridge is not connected yet. The
+    * software target's frontbuffer handle is not a Zink drawable. */
+   return DXGI_ERROR_UNSUPPORTED;
+#else
    struct Device *device = CastDevice(pPresentData->hDevice);
    Resource *pSrcResource = CastResource(pPresentData->hSurfaceToPresent);
 
@@ -66,6 +71,7 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
       pSrcResource->resource, 0, 0, pPresentData->pDXGIContext, 0, NULL);
 
    return S_OK;
+#endif
 }
 
 
@@ -116,7 +122,11 @@ _SetDisplayMode( DXGI_DDI_ARG_SETDISPLAYMODE *SetDisplayMode )
 {
    LOG_UNSUPPORTED_ENTRYPOINT();
 
+#ifdef D3D10_UMD_HARDWARE
+   return DXGI_ERROR_UNSUPPORTED;
+#else
    return S_OK;
+#endif
 }
 
 
