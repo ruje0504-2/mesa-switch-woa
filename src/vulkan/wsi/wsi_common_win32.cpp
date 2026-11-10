@@ -820,6 +820,18 @@ wsi_win32_queue_present(struct wsi_swapchain *drv_chain,
    if (chain->dxgi)
       return wsi_win32_queue_present_dxgi(chain, image, damage);
 
+   /* Common WSI waits before CPU presentation for software devices. For a
+    * hardware device using GDI, wait for this image's GPU copy here. */
+   if (!drv_chain->wsi->sw) {
+      VkResult result = drv_chain->wsi->WaitForFences(
+         drv_chain->device, 1, &drv_chain->fences[image_index], true, UINT64_MAX);
+      if (result != VK_SUCCESS) {
+         chain->status = result;
+         wsi_win32_set_image_idle(chain, image);
+         return result;
+      }
+   }
+
    char *ptr = (char *)image->base.cpu_map;
    char *dptr = (char *)image->sw.ppvBits;
 

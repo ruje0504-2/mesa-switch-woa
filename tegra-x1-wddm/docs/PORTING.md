@@ -67,12 +67,12 @@ Windows kernel driver. Use the pinned revision to compare Windows interfaces
 while keeping GM20B resource metadata and submission on the Tegra ABI.
 [Pinned source](https://gitlab.freedesktop.org/lfrb/mesa/-/tree/801c9763c6043f0de8408e905a5324eea06d81d7) · [Collabora's porting notes](https://www.collabora.com/news-and-blog/news-and-events/cracking-windows-open-porting-radv-to-win32.html)
 
-- **Mesa runtime and Win32 WSI.** NVK needs Win32 in its WSI platform gate
-  and `VK_KHR_win32_surface` in its instance extension table. For `vkcube`,
-  validate GM20B rendering and fence completion with Mesa's Win32 CPU
-  present path. The DXGI path requires a working D3D12 device and queue on
-  the same adapter LUID. Validate active VidPN, Tegra primary flips and
-  hardware DWM composition separately.
+- **Mesa runtime and Win32 WSI.** NVK enables the Win32 platform,
+  `VK_KHR_win32_surface` and `VK_KHR_swapchain`. Its GDI presentation path
+  waits for the GPU copy fence before reading the image. Use `vkcube` to
+  verify this on the Lite. The DXGI path requires a working D3D12 device and
+  queue on the same adapter LUID. Validate active VidPN, Tegra primary flips
+  and hardware DWM composition separately.
   [NVK gate](../../src/nouveau/vulkan/nvk_physical_device.h) · [Instance extensions](../../src/nouveau/vulkan/nvk_instance.c) · [Mesa Win32 WSI](../../src/vulkan/wsi/wsi_common_win32.cpp)
   [Monitored fence](https://gitlab.freedesktop.org/lfrb/mesa/-/commit/629e52171e03c6b7f53137236819b8f81d4eb149) · [Blit synchronization](https://gitlab.freedesktop.org/lfrb/mesa/-/commit/98efb6c0b26d6af5230ef4bed7cbd15eda6240c8) · [Win32 WSI](https://gitlab.freedesktop.org/lfrb/mesa/-/blob/801c9763c6043f0de8408e905a5324eea06d81d7/src/amd/vulkan/winsys/wddm2/radv_wddm2_wsi.c)
 - **Adapter selection and build.** Compare DXGI and DXCore enumeration
@@ -121,9 +121,9 @@ while keeping GM20B resource metadata and submission on the Tegra ABI.
   live ICD. Its current requirements include `VK_EXT_depth_clip_enable`,
   `VK_KHR_maintenance5`, `VK_KHR_maintenance6`, `VK_KHR_load_store_op_none`,
   `VK_EXT_robustness2` and `VK_EXT_transform_feedback`. The common NVK
-  source already advertises these names. Wire Win32 into NVK's platform gate
-  and verify the features, surface and swapchain on GM20B for each tested
-  process architecture. `VK_KHR_present_wait`, `VK_KHR_swapchain_maintenance1`
+  source already advertises these names. Verify the features and Win32
+  swapchain on GM20B for each tested process architecture.
+  `VK_KHR_present_wait`, `VK_KHR_swapchain_maintenance1`
   and `VK_EXT_attachment_feedback_loop_layout` are separate compatibility
   checks. Compare the RADV WSI and synchronization paths for this work.
   [DXVK driver support](https://github.com/doitsujin/dxvk/wiki/Driver-support) · [NVK platform gate](../../src/nouveau/vulkan/nvk_physical_device.h)

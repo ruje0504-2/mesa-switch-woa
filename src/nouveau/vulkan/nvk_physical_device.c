@@ -184,7 +184,7 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .KHR_pipeline_executable_properties = true,
       .KHR_pipeline_library = true,
 #ifdef NVK_USE_WSI_PLATFORM
-#ifndef __SWITCH__
+#if !defined(__SWITCH__) && !defined(VK_USE_PLATFORM_WIN32_KHR)
       .KHR_present_id = true,
       .KHR_present_id2 = true,
       .KHR_present_wait = true,
@@ -291,7 +291,7 @@ nvk_get_device_extensions(const struct nvk_instance *instance,
       .EXT_pipeline_robustness = true,
       .EXT_physical_device_drm = !DETECT_OS_WINDOWS,
       .EXT_post_depth_coverage = info->cls_eng3d >= MAXWELL_B,
-#ifdef NVK_USE_WSI_PLATFORM
+#if defined(NVK_USE_WSI_PLATFORM) && !defined(VK_USE_PLATFORM_WIN32_KHR)
       .EXT_present_timing = true,
 #endif
       .EXT_primitive_topology_list_restart = true,
@@ -564,7 +564,7 @@ nvk_get_device_features(const struct nv_device_info *info,
       .pipelineExecutableInfo = true,
 
 #ifdef NVK_USE_WSI_PLATFORM
-#ifndef __SWITCH__
+#if !defined(__SWITCH__) && !defined(VK_USE_PLATFORM_WIN32_KHR)
       /* VK_KHR_present_id */
       .presentId = true,
 
@@ -840,7 +840,7 @@ nvk_get_device_features(const struct nv_device_info *info,
       .shaderSMBuiltins = true,
 
 #ifdef NVK_USE_WSI_PLATFORM
-#ifndef __SWITCH__
+#if !defined(__SWITCH__) && !defined(VK_USE_PLATFORM_WIN32_KHR)
       /* VK_KHR_present_id2 */
       .presentId2 = true,
 
