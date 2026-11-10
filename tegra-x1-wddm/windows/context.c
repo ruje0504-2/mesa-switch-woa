@@ -259,23 +259,47 @@ VOID TgGpuDdiDpcRoutine(PVOID adapter)
     e->Dxgk.DxgkCbNotifyDpc(e->Dxgk.DeviceHandle);
 }
 
+static NTSTATUS command_context(TG_GPU_CONTEXT_ENGINE *e,HANDLE handle,TG_GPU_CONTEXT **out)
+{
+    TG_GPU_CONTEXT *c=find_context(e,handle);
+    if (!c || c->Closing || !c->Device->Process || !c->Flags.VirtualAddressing)
+        return STATUS_INVALID_PARAMETER;
+    if (!c->Root.Valid || !NT_SUCCESS(c->RootStatus))
+        return STATUS_DEVICE_NOT_READY;
+    *out=c;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS TgGpuGetCommandVa(TG_GPU_CONTEXT_ENGINE *e,HANDLE handle,struct tg_gpu_command_va *va)
+{
+    TG_GPU_CONTEXT *c;KIRQL irql;NTSTATUS status;
+    if (!e || !va) return STATUS_INVALID_PARAMETER;
+    KeAcquireSpinLock(&e->Lock,&irql);
+    status=(e->Stopping || e->Resetting || e->RecoveryPending)?STATUS_DEVICE_NOT_READY:
+        command_context(e,handle,&c);
+    if (status==STATUS_SUCCESS) {
+        const UINT64 reserved=c->Device->Process->Internal.Base;
+        *va=(struct tg_gpu_command_va){c->Root.VaLimit,reserved,reserved+TG_GPU_INTERNAL_COVERAGE};
+    }
+    KeReleaseSpinLock(&e->Lock,irql);
+    return status;
+}
+
 NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
     const DXGKARG_SUBMITCOMMANDVIRTUAL *a, const struct tg_gpu_command_info *info,
     TG_GPU_CONTEXT_WORK *w)
 {
-    TG_GPU_CONTEXT *c; KIRQL irql;struct tg_gpu_gpfifo_entry packet;
+    TG_GPU_CONTEXT *c;KIRQL irql;NTSTATUS status;struct tg_gpu_gpfifo_entry packet;
     if (!e || !a || !w || w->Context || a->NodeOrdinal || a->EngineOrdinal ||
         !a->DmaBufferSize || (a->DmaBufferSize & 3) ||
         !tg_gpu_build_gpfifo(a->DmaBufferVirtualAddress,a->DmaBufferSize/4,false,&packet))
         return STATUS_INVALID_PARAMETER;
-    KeAcquireSpinLock(&e->Lock,&irql); c=find_context(e,a->hContext);
+    KeAcquireSpinLock(&e->Lock,&irql);
     if (e->Stopping || e->Resetting || e->RecoveryPending) { KeReleaseSpinLock(&e->Lock,irql); return STATUS_DEVICE_NOT_READY; }
     if(e->Active==w || e->Notification==w) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_BUSY; }
-    if (!c || c->Closing || !c->Device->Process || !c->Flags.VirtualAddressing) {
-        KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER;
-    }
-    if(!c->Root.Valid || !NT_SUCCESS(c->RootStatus)) {
-        KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
+    status=command_context(e,a->hContext,&c);
+    if (status!=STATUS_SUCCESS) {
+        KeReleaseSpinLock(&e->Lock,irql);return status;
     }
     if(a->DmaBufferVirtualAddress>=c->Root.VaLimit || a->DmaBufferSize>c->Root.VaLimit-a->DmaBufferVirtualAddress) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
@@ -290,6 +314,11 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
     }
     if (info && info->requires_mme && !c->MmeInitialized) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
+    }
+    /* VidMm can replace the root while the immutable snapshot is decoded. */
+    if (info && info->copy_end && (info->copy_end>c->Root.VaLimit ||
+        info->reserved_base!=c->Device->Process->Internal.Base)) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
     }
     RtlZeroMemory(w,sizeof(*w));
     w->Engine=e;w->Context=c; w->Root=c->Root; w->DmaAddress=a->DmaBufferVirtualAddress;

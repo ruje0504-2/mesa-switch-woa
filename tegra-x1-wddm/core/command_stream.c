@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "command_stream.h"
+#include "copy_stream.h"
+#include "gm20b_mmu.h"
 #include "nvk_mme_programs.h"
 #include "nouveau/headers/drf.h"
 #include "nouveau/headers/nvidia/classes/clb06f.h"
@@ -76,10 +78,15 @@ static bool mme_call_allowed(uint32_t op, uint32_t method, uint32_t count,
 }
 
 bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
+                                   const struct tg_gpu_command_va *va,
                                    struct tg_gpu_command_info *info)
 {
-    struct tg_gpu_command_info stream = {0};
+    struct tg_gpu_command_info stream = {.reserved_base = va ? va->reserved_base : 0};
+    struct tg_gpu_copy_state copy = {0};
     if(!words || !bytes || (bytes&3) || ((uintptr_t)words&3))return false;
+    if (va && (!va->limit || va->limit > TG_GPU_VA_LIMIT ||
+               va->reserved_base > va->reserved_end || va->reserved_end > va->limit))
+        return false;
     const size_t word_count = bytes / sizeof(*words);
     for(size_t n=0;n<word_count;) {
         const size_t start = n;
@@ -93,6 +100,10 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
             if(!method_allowed(method) || method==NVB06F_SET_OBJECT ||
                mme_upload_span(subchannel, method, method) ||
                (subchannel == 0 && method >= NVB197_CALL_MME_MACRO(0)))return false;
+            if (subchannel == 4 && method >= 0x100 &&
+                !tg_gpu_copy_method(&copy, method, NVVAL_GET(header, NVB06F, DMA_IMMD, DATA),
+                                    va, &stream.copy_end))
+                return false;
             continue;
         }
         if((op!=NVB06F_DMA_INCR_OPCODE_VALUE && op!=NVB06F_DMA_NONINCR_OPCODE_VALUE &&
@@ -127,6 +138,18 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
             if (!mme_call_allowed(op, method, count, words + n))
                 return false;
             stream.requires_mme |= !stream.uploads_mme;
+        }
+        if (subchannel == 4) {
+            if (method == NVB06F_SET_OBJECT)
+                copy.written = 0;
+            if (method >= 0x100) {
+                for (uint32_t i = 0; i < count; i++) {
+                    if (!tg_gpu_copy_method(&copy, method, words[n + i], va, &stream.copy_end))
+                        return false;
+                    if (method < last)
+                        method += 4;
+                }
+            }
         }
         n+=count;
     }

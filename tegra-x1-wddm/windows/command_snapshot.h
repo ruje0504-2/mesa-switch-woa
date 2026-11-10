@@ -10,6 +10,7 @@ typedef struct _TG_GPU_COMMAND_SNAPSHOT {
     struct tg_gpu_command_info Info;
     UINT Words[];
 } TG_GPU_COMMAND_SNAPSHOT;
-NTSTATUS TgGpuCaptureCommandSnapshot(const DXGKARG_SUBMITCOMMANDVIRTUAL *,TG_GPU_COMMAND_SNAPSHOT **);
+NTSTATUS TgGpuCaptureCommandSnapshot(const DXGKARG_SUBMITCOMMANDVIRTUAL *,
+    const struct tg_gpu_command_va *,TG_GPU_COMMAND_SNAPSHOT **);
 VOID TgGpuFreeCommandSnapshot(TG_GPU_COMMAND_SNAPSHOT *);
 #endif

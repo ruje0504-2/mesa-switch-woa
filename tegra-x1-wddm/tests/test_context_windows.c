@@ -1213,32 +1213,32 @@ static VOID TestCommandSnapshots(void)
         .pDmaBufferPrivateData=&payload,.DmaBufferPrivateDataSize=sizeof(payload),
         .DmaBufferUmdPrivateDataSize=sizeof(payload)};
     payload.Header=(struct tg_gpu_submit_request){TG_GPU_SUBMIT_ABI,sizeof(payload),a.DmaBufferSize,0};
-    CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_SUCCESS && snapshot &&
+    CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_SUCCESS && snapshot &&
         snapshot->Bytes==TG_GPU_SUBMIT_MAX_BYTES && PoolsInUse()==pools+1 &&
         !snapshot->Info.requires_mme && !snapshot->Info.uploads_mme);
     payload.Words[0]=0x20010014;CHECK(!snapshot->Words[0]);
     TgGpuFreeCommandSnapshot(snapshot);snapshot=NULL;
-    CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_INVALID_PARAMETER && !snapshot);
+    CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_INVALID_PARAMETER && !snapshot);
     payload.Words[0]=0xa0010e00; /* SELECT_CB0 with no preceding upload. */
-    CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_SUCCESS && snapshot &&
+    CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_SUCCESS && snapshot &&
         snapshot->Info.requires_mme && !snapshot->Info.uploads_mme);
     TgGpuFreeCommandSnapshot(snapshot);snapshot=NULL;
     payload.Words[0]=0;payload.Header.reserved=1;
-    CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_INVALID_PARAMETER);
+    CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_INVALID_PARAMETER);
     payload.Header.reserved=0;payload.Header.version++;
-    CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_INVALID_PARAMETER);
+    CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_INVALID_PARAMETER);
     payload.Header.version--;payload.Header.size--;
-    CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_INVALID_PARAMETER);
+    CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_INVALID_PARAMETER);
     payload.Header.size++;a.DmaBufferUmdPrivateDataSize--;
-    CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_INVALID_PARAMETER);
+    CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_INVALID_PARAMETER);
     a.DmaBufferUmdPrivateDataSize++;a.DmaBufferPrivateDataSize--;
-    CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_INVALID_PARAMETER);
+    CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_INVALID_PARAMETER);
     a.DmaBufferPrivateDataSize++;a.DmaBufferSize+=4;
-    CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_INVALID_PARAMETER);
+    CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_INVALID_PARAMETER);
     a.DmaBufferSize-=4;fail_pool=TRUE;
-    CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_NO_MEMORY && !snapshot);fail_pool=FALSE;
+    CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_NO_MEMORY && !snapshot);fail_pool=FALSE;
     a.pDmaBufferPrivateData=NULL;
-    CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_INVALID_PARAMETER && PoolsInUse()==pools);
+    CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_INVALID_PARAMETER && PoolsInUse()==pools);
 }
 
 void start(void)
@@ -1319,6 +1319,15 @@ void start(void)
     hw.cpu_fence=fence;
     CHECK(c->Root.Valid && instance[128]==0x90000804 && instance[130]==0x07fff000);
     submit.hContext=c;
+    struct tg_gpu_command_va command_va;
+    CHECK(TgGpuGetCommandVa(&e,c,&command_va)==STATUS_SUCCESS && command_va.limit==c->Root.VaLimit);
+    CHECK(command_va.reserved_base==TG_GPU_INTERNAL_COVERAGE &&
+          command_va.reserved_end==2*TG_GPU_INTERNAL_COVERAGE);
+    struct tg_gpu_command_info copy={.copy_end=command_va.limit+1,.reserved_base=command_va.reserved_base};
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&copy,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
+    copy.copy_end=command_va.limit;
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&copy,&blocked)==STATUS_SUCCESS);
+    CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_INVALID_PARAMETER && !blocked.Context);
     CHECK(TgGpuCaptureContextWork(&e,&submit,&upload,&blocked)==STATUS_SUCCESS && blocked.UploadsMme);
     CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->MmeInitialized && !c->References);

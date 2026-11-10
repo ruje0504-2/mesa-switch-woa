@@ -124,6 +124,7 @@ DXGKDDI_DPC_ROUTINE TgGpuDdiDpcRoutine;
  */
 NTSTATUS TgGpuAcquireContextWork(TG_GPU_CONTEXT_ENGINE *,
     const DXGKARG_SUBMITCOMMANDVIRTUAL *, TG_GPU_CONTEXT_WORK *);
+NTSTATUS TgGpuGetCommandVa(TG_GPU_CONTEXT_ENGINE *,HANDLE,struct tg_gpu_command_va *);
 /* Queue admission retains the context/root without touching shared commands,
  * RAMIN or the fence. Activation occurs only when this record reaches the head.
  * A successful capture must be activated/retired or canceled exactly once.

@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 #include "command_snapshot.h"
 #define TAG 0x53674754u
-NTSTATUS TgGpuCaptureCommandSnapshot(const DXGKARG_SUBMITCOMMANDVIRTUAL *a,TG_GPU_COMMAND_SNAPSHOT **out)
+NTSTATUS TgGpuCaptureCommandSnapshot(const DXGKARG_SUBMITCOMMANDVIRTUAL *a,
+    const struct tg_gpu_command_va *va,TG_GPU_COMMAND_SNAPSHOT **out)
 {
     struct tg_gpu_submit_request request;TG_GPU_COMMAND_SNAPSHOT *s;
     PAGED_CODE();
@@ -19,7 +20,7 @@ NTSTATUS TgGpuCaptureCommandSnapshot(const DXGKARG_SUBMITCOMMANDVIRTUAL *a,TG_GP
     if(!s)return STATUS_NO_MEMORY;
     s->Bytes=request.command_bytes;
     RtlCopyMemory(s->Words,(const UCHAR *)a->pDmaBufferPrivateData+sizeof(request),s->Bytes);
-    if(!tg_gpu_inspect_command_stream(s->Words,s->Bytes,&s->Info)) {
+    if(!tg_gpu_inspect_command_stream(s->Words,s->Bytes,va,&s->Info)) {
         ExFreePoolWithTag(s,TAG);return STATUS_INVALID_PARAMETER;
     }
     *out=s;return STATUS_SUCCESS;

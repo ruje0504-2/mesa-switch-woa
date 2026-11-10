@@ -814,8 +814,17 @@ context. The KMD records initialization for that context after GPU completion,
 GR retirement and CPU fence readback. Canceled work cannot publish that state,
 and the graphics generation check rejects contexts lost to reset. Windows NVK
 waits for the push stream's existing monitored fence when creating a graphics
-queue, so later submits can use the saved MME programs. General WDDM submission
-still requires class-specific method and GPU virtual address/residency validation.
+queue, so later submits can use the saved MME programs.
+
+The B0B5 validator checks virtual pitch and block-linear transfers, remapped
+fills, zero-length flushes and semaphore releases. Each launch supplies its
+address and layout state in the captured push. NVK programs the remap and
+fill state with each transfer, including after a push-buffer split. The KMD
+checks pitch spans or the padded mip envelope against the context's root limit
+and reserved KMD range, then rechecks the limit at admission. VidMm manages
+the application mappings and residency. Graphics and compute method validation
+remain prerequisites for general WDDM application submission.
+[WDDM GpuMmu](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/gpummu-model)
 
 The .83 one-boot test exercised the new KMT bridge on the Lite, including
 aligned and fixed VA reservations, residency, event waits and GPU B0B5 copy.

@@ -53,9 +53,10 @@ mesa_src = args.mesa / "src"
 mesa_includes = [mesa_src, mesa_src / "nouveau/headers",
                  mesa_src / "nouveau/headers/nvidia/classes"]
 encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
+command_stream = [root / "core/command_stream.c", root / "core/copy_stream.c"]
 core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c", root / "core/fault.c",
         root / "core/execute.c", root / "core/submission.c", root / "core/channel.c",
-        root / "core/command_stream.c", root / "core/paging_dma.c",
+        *command_stream, root / "core/paging_dma.c",
         root / "platform/t214_mmu.c", root / "platform/t214_frontend.c",
         root / "platform/t214_gr.c", root / "platform/t214_acr.c", root / "platform/t214_pmu.c",
         root / "core/gr_firmware.c", root / "core/acr_firmware.c", root / "core/gr_image.c",
@@ -70,7 +71,7 @@ subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
 subprocess.run([str(host.resolve())], check=True)
 stream_test=args.out / "test-command-stream"
 subprocess.run([args.cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
-                *[f"-I{p}" for p in mesa_includes],str(root / "core/command_stream.c"),
+                *[f"-I{p}" for p in mesa_includes],*map(str,command_stream),
                 str(root / "tests/test_command_stream.c"),"-o",str(stream_test)],check=True)
 subprocess.run([str(stream_test.resolve())],check=True)
 power = root / "platform/t214_power.c"
@@ -139,13 +140,13 @@ subprocess.run([str(gr_image_test.resolve())],check=True)
 gr_clear_test = args.out / "test-gr-clear"
 subprocess.run([args.cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
                 *[f"-I{p}" for p in mesa_includes],
-                str(root / "core/gr_clear.c"),str(root / "core/report.c"),str(root / "core/command_stream.c"),str(encoder),
+                str(root / "core/gr_clear.c"),str(root / "core/report.c"),*map(str,command_stream),str(encoder),
                 str(root / "tests/test_gr_clear.c"),"-o",str(gr_clear_test)],check=True)
 subprocess.run([str(gr_clear_test.resolve())],check=True)
 gr_draw_test=args.out / "test-gr-draw"
 subprocess.run([args.cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
                 *[f"-I{p}" for p in mesa_includes],
-                str(root / "core/gr_draw.c"),str(root / "core/report.c"),str(root / "core/command_stream.c"),str(encoder),
+                str(root / "core/gr_draw.c"),str(root / "core/report.c"),*map(str,command_stream),str(encoder),
                 str(root / "tests/test_gr_draw.c"),"-o",str(gr_draw_test)],check=True)
 subprocess.run([str(gr_draw_test.resolve())],check=True)
 gr_context_test = args.out / "test-gr-context"

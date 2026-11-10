@@ -30,7 +30,13 @@ NTSTATUS APIENTRY TgGpuDdiSubmitCommandVirtual(HANDLE adapter,const DXGKARG_SUBM
     else {
         BOOLEAN application=!a->Flags.Paging && !a->Flags.ContextSwitch &&
             !a->Flags.NullRendering && a->DmaBufferSize;
-        status=application && !e->PagingOnly?TgGpuCaptureCommandSnapshot(a,&snapshot):STATUS_SUCCESS;
+        status=STATUS_SUCCESS;
+        if (application && !e->PagingOnly) {
+            struct tg_gpu_command_va va;
+            status=TgGpuGetCommandVa(e,a->hContext,&va);
+            if (status==STATUS_SUCCESS)
+                status=TgGpuCaptureCommandSnapshot(a,&va,&snapshot);
+        }
         if(status==STATUS_SUCCESS || status==STATUS_INVALID_PARAMETER)
             status=TgGpuQueueSubmitOrReject(q,a,reserved,snapshot,&used);
     }
