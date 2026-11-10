@@ -12,6 +12,11 @@ enum panel_mode_state {
     PanelModeUnpinned, PanelModeNative, PanelModeUnsupported
 };
 
+/* The firmware drives the panel over a fixed RGB888 DSI link. */
+static const D3DKMDT_WIRE_FORMAT_AND_PREFERENCE panel_wire_format = {
+    .Rgb = D3DKMDT_BITS_PER_COMPONENT_08,
+};
+
 static NTSTATUS acquire_path(TG_GPU_ADAPTER *adapter, D3DKMDT_HVIDPN vidpn, PANEL_PATH *path)
 {
     if (!vidpn)
@@ -156,6 +161,7 @@ static NTSTATUS add_target(const DXGK_VIDPN_INTERFACE *api, D3DKMDT_HVIDPN vidpn
     status = modes->pfnCreateNewModeInfo(set, &mode);
     if (NT_SUCCESS(status)) {
         mode->VideoSignalInfo = TgGpuPanelSignal;
+        mode->WireFormatAndPreference = panel_wire_format;
         mode->Preference = D3DKMDT_MP_PREFERRED;
         status = modes->pfnAddMode(set, mode);
         if (!NT_SUCCESS(status))
@@ -332,6 +338,12 @@ static NTSTATUS APIENTRY set_timings(HANDLE context, DXGKARG_SETTIMINGSFROMVIDPN
         return STATUS_NOT_SUPPORTED;
 
     if (path->Input.Active) {
+        D3DKMDT_WIRE_FORMAT_AND_PREFERENCE selected = path->SelectedWireFormat;
+        selected.Preference = 0; /* The OS reserves preference in this callback. */
+        if (!path->Input.PreserveInherited && (selected.Value != panel_wire_format.Value ||
+            path->OutputWireColorSpace != D3DDDI_OUTPUT_WIRE_COLOR_SPACE_G22_P709))
+            return STATUS_INVALID_PARAMETER;
+
         bool attached;
         NTSTATUS status = validate_commit(adapter, args->hFunctionalVidPn,
             path->Input.PreserveInherited != 0, &attached);
