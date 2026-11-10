@@ -260,7 +260,8 @@ VOID TgGpuDdiDpcRoutine(PVOID adapter)
 }
 
 NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
-    const DXGKARG_SUBMITCOMMANDVIRTUAL *a, TG_GPU_CONTEXT_WORK *w)
+    const DXGKARG_SUBMITCOMMANDVIRTUAL *a, const struct tg_gpu_command_info *info,
+    TG_GPU_CONTEXT_WORK *w)
 {
     TG_GPU_CONTEXT *c; KIRQL irql;struct tg_gpu_gpfifo_entry packet;
     if (!e || !a || !w || w->Context || a->NodeOrdinal || a->EngineOrdinal ||
@@ -287,11 +288,15 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
         a->DmaBufferVirtualAddress+a->DmaBufferSize>c->Device->Process->Internal.Base) {
         KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER;
     }
+    if (info && info->requires_mme && !c->MmeInitialized) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
+    }
     RtlZeroMemory(w,sizeof(*w));
     w->Engine=e;w->Context=c; w->Root=c->Root; w->DmaAddress=a->DmaBufferVirtualAddress;
     w->DmaBytes=a->DmaBufferSize; w->SubmissionFence=w->CompletionFence=a->SubmissionFenceId;
     w->InternalVa=c->Device->Process->Internal.Base;
     w->FencePhysicalAddress=(UINT64)e->Commands.SystemPhysicalAddress.QuadPart+TG_GPU_COMMAND_FENCE;
+    w->UploadsMme=info && info->uploads_mme;
     ++c->References;
     KeReleaseSpinLock(&e->Lock,irql); return STATUS_SUCCESS;
 }
@@ -367,7 +372,7 @@ NTSTATUS TgGpuAcquireContextWork(TG_GPU_CONTEXT_ENGINE *e,
     status=e->QueueOwner ? STATUS_DEVICE_BUSY : STATUS_SUCCESS;
     KeReleaseSpinLock(&e->Lock,irql);
     if(!NT_SUCCESS(status)) return status;
-    status=TgGpuCaptureContextWork(e,a,w);
+    status=TgGpuCaptureContextWork(e,a,NULL,w);
     if(!NT_SUCCESS(status)) return status;
     status=TgGpuActivateContextWork(e,w);
     if(!NT_SUCCESS(status)) (VOID)TgGpuCancelCapturedWork(e,w);
@@ -461,6 +466,8 @@ NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w
         if(*(volatile UINT32 *)((UCHAR *)e->Commands.CpuAddress+TG_GPU_COMMAND_FENCE)!=w->Expected) {
             KeReleaseSpinLock(&e->Lock,irql);return STATUS_PENDING;
         }
+        if (w->UploadsMme)
+            w->Context->MmeInitialized=TRUE;
         /* Retirement has already removed hardware references. Do not make
          * Dxgkrnl retry DestroyContext because our CPU reference lingers after
          * completion. Notification thereafter uses only this engine snapshot.

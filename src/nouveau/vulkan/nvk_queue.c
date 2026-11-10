@@ -573,6 +573,11 @@ nvk_queue_init_context_state(struct nvk_queue *queue)
    }
 
    result = nvk_queue_push(queue, &push);
+#ifdef _WIN32
+   /* The KMD admits later MME calls after this context's upload retires. */
+   if (result == VK_SUCCESS && (queue->engines & NVKMD_ENGINE_3D))
+      result = nvk_mem_stream_sync(dev, &queue->push_stream, queue->exec_ctx);
+#endif
 #ifdef __SWITCH__
    if (result == VK_SUCCESS && zbc_programmed)
       nvk_queue_commit_zbc_state(queue, &zbc_state);

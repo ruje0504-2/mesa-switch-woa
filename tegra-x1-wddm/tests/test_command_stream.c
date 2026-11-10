@@ -69,6 +69,26 @@ static void test_mme_calls(void)
     assert(!tg_gpu_validate_command_stream(span, sizeof(span)));
 }
 
+static void test_mme_order(void)
+{
+    const uint32_t call[] = {0xa0010000u | (NVB197_CALL_MME_MACRO(NVK_MME_SELECT_CB0) >> 2), 0};
+    uint32_t stream[(sizeof(tg_gpu_nvk_mme_init) + sizeof(call)) / sizeof(uint32_t)];
+    struct tg_gpu_command_info info;
+
+    assert(tg_gpu_inspect_command_stream(call, sizeof(call), &info));
+    assert(info.requires_mme && !info.uploads_mme);
+
+    memcpy(stream, tg_gpu_nvk_mme_init, sizeof(tg_gpu_nvk_mme_init));
+    memcpy(stream + sizeof(tg_gpu_nvk_mme_init) / sizeof(*stream), call, sizeof(call));
+    assert(tg_gpu_inspect_command_stream(stream, sizeof(stream), &info));
+    assert(!info.requires_mme && info.uploads_mme);
+
+    memcpy(stream, call, sizeof(call));
+    memcpy(stream + sizeof(call) / sizeof(*stream), tg_gpu_nvk_mme_init, sizeof(tg_gpu_nvk_mme_init));
+    assert(tg_gpu_inspect_command_stream(stream, sizeof(stream), &info));
+    assert(info.requires_mme && info.uploads_mme);
+}
+
 int main(void)
 {
     uint32_t w[16]={0x20010000,0xb197,0x20020100,0x20010014,0xdeadbeef,0};
@@ -110,5 +130,6 @@ int main(void)
     w[0]=0x20000040;assert(!tg_gpu_validate_command_stream(w,4)); /* Zero count. */
     test_mme_upload();
     test_mme_calls();
+    test_mme_order();
     puts("Linear B06F packets, object bindings, reference isolation and MME validation passed");return 0;
 }

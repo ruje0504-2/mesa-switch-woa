@@ -117,7 +117,7 @@ static NTSTATUS queue_submit(TG_GPU_WORK_QUEUE *q,const DXGKARG_SUBMITCOMMANDVIR
         RtlZeroMemory(entry,sizeof(*entry));
         status=(a->Flags.ContextSwitch || a->Flags.NullRendering || !a->DmaBufferSize)?
             TgGpuCaptureSoftwareWork(q->Engine,a,&entry->Work):
-            TgGpuCaptureContextWork(q->Engine,a,&entry->Work);
+            TgGpuCaptureContextWork(q->Engine,a,snapshot?&snapshot->Info:NULL,&entry->Work);
         if(NT_SUCCESS(status) && snapshot) {
             entry->Snapshot=snapshot;
             entry->Work.DmaAddress=entry->Work.InternalVa+TG_GPU_COMMAND_CAPTURE;

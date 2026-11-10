@@ -4,6 +4,7 @@
 #include "root_table.h"
 #include "internal_va.h"
 #include "../core/channel.h"
+#include "../core/command_stream.h"
 #include "../platform/t214_clock.h"
 #include "adapter_abi.h"
 #include "graphics.h"
@@ -42,7 +43,7 @@ struct _TG_GPU_CONTEXT {
     NTSTATUS RootStatus;
     UINT References;
     UINT GraphicsGeneration,ContextId;
-    BOOLEAN Closing;
+    BOOLEAN Closing,MmeInitialized;
 };
 struct _TG_GPU_CONTEXT_ENGINE {
     DXGKRNL_INTERFACE Dxgk;
@@ -85,7 +86,7 @@ struct _TG_GPU_CONTEXT_WORK {
     UINT DmaBytes, SubmissionFence, CompletionFence, Expected;
     BOOLEAN Signaling, Notified, Prepared, HardwareBusy, Submitted, Attempted, Retired, CompletionReady, Paging;
     BOOLEAN Software,Rejected,Preemption;
-    BOOLEAN GpuCompleted,CpuCompleted;
+    BOOLEAN GpuCompleted,CpuCompleted,UploadsMme;
     UINT PagingOffset, PagingBytes, PagingCursor, PagingDmaBytes;
     BOOLEAN PagingStarted;
 };
@@ -128,7 +129,8 @@ NTSTATUS TgGpuAcquireContextWork(TG_GPU_CONTEXT_ENGINE *,
  * A successful capture must be activated/retired or canceled exactly once.
  */
 NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *,
-    const DXGKARG_SUBMITCOMMANDVIRTUAL *, TG_GPU_CONTEXT_WORK *);
+    const DXGKARG_SUBMITCOMMANDVIRTUAL *, const struct tg_gpu_command_info *,
+    TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuCapturePagingContext(TG_GPU_CONTEXT_ENGINE *,HANDLE,TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);
 NTSTATUS TgGpuCancelCapturedWork(TG_GPU_CONTEXT_ENGINE *, TG_GPU_CONTEXT_WORK *);

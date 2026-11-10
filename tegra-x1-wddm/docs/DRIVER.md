@@ -807,9 +807,15 @@ GM20B macro calls use a complete ONEINCR packet and the slot numbers shared
 with NVK. The KMD checks the parameter count and the bounds of the clear
 layers, vertex binding, viewport and render target arguments. NVK always
 supplies two clear parameters, including for multiview. GPU-fed parameter
-continuations require a separate submit path. General WDDM submission also
-requires per-context MME initialization, class-specific method and GPU virtual
-address/residency validation.
+continuations require a separate submit path.
+
+A macro call before the upload in its packet requires an initialized graphics
+context. The KMD records initialization for that context after GPU completion,
+GR retirement and CPU fence readback. Canceled work cannot publish that state,
+and the graphics generation check rejects contexts lost to reset. Windows NVK
+waits for the push stream's existing monitored fence when creating a graphics
+queue, so later submits can use the saved MME programs. General WDDM submission
+still requires class-specific method and GPU virtual address/residency validation.
 
 The .83 one-boot test exercised the new KMT bridge on the Lite, including
 aligned and fixed VA reservations, residency, event waits and GPU B0B5 copy.

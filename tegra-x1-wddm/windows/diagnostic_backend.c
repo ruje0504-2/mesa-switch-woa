@@ -481,7 +481,7 @@ NTSTATUS TgGpuRunDiagnosticBackend(TG_GPU_DIAGNOSTIC_BACKEND **state,
     b->QueueInitialized=b->Queue.Engine==&b->Engine;if(!NT_SUCCESS(status))goto done;
     ++b->Progress.restarts;
     old_submit.hContext=b->Context;old_submit.DmaBufferVirtualAddress=USER_VA;old_submit.DmaBufferSize=4;
-    status=TgGpuCaptureContextWork(&b->Engine,&old_submit,&lost);
+    status=TgGpuCaptureContextWork(&b->Engine,&old_submit,NULL,&lost);
     if(status!=STATUS_DEVICE_NOT_READY) {
         if(status==STATUS_SUCCESS)(VOID)TgGpuCancelCapturedWork(&b->Engine,&lost);
         status=STATUS_DEVICE_DATA_ERROR;goto done;

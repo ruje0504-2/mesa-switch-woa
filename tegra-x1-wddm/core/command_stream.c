@@ -75,8 +75,10 @@ static bool mme_call_allowed(uint32_t op, uint32_t method, uint32_t count,
     }
 }
 
-bool tg_gpu_validate_command_stream(const uint32_t *words,size_t bytes)
+bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
+                                   struct tg_gpu_command_info *info)
 {
+    struct tg_gpu_command_info stream = {0};
     if(!words || !bytes || (bytes&3) || ((uintptr_t)words&3))return false;
     const size_t word_count = bytes / sizeof(*words);
     for(size_t n=0;n<word_count;) {
@@ -117,13 +119,18 @@ bool tg_gpu_validate_command_stream(const uint32_t *words,size_t bytes)
                 if (words[start + i] != tg_gpu_nvk_mme_init[i])
                     return false;
             }
+            stream.uploads_mme = true;
             n = start + mme_words;
             continue;
         }
-        if (subchannel == 0 && last >= NVB197_CALL_MME_MACRO(0) &&
-            !mme_call_allowed(op, method, count, words + n))
-            return false;
+        if (subchannel == 0 && last >= NVB197_CALL_MME_MACRO(0)) {
+            if (!mme_call_allowed(op, method, count, words + n))
+                return false;
+            stream.requires_mme |= !stream.uploads_mme;
+        }
         n+=count;
     }
+    if (info)
+        *info = stream;
     return true;
 }

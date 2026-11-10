@@ -1214,10 +1214,15 @@ static VOID TestCommandSnapshots(void)
         .DmaBufferUmdPrivateDataSize=sizeof(payload)};
     payload.Header=(struct tg_gpu_submit_request){TG_GPU_SUBMIT_ABI,sizeof(payload),a.DmaBufferSize,0};
     CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_SUCCESS && snapshot &&
-        snapshot->Bytes==TG_GPU_SUBMIT_MAX_BYTES && PoolsInUse()==pools+1);
+        snapshot->Bytes==TG_GPU_SUBMIT_MAX_BYTES && PoolsInUse()==pools+1 &&
+        !snapshot->Info.requires_mme && !snapshot->Info.uploads_mme);
     payload.Words[0]=0x20010014;CHECK(!snapshot->Words[0]);
     TgGpuFreeCommandSnapshot(snapshot);snapshot=NULL;
     CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_INVALID_PARAMETER && !snapshot);
+    payload.Words[0]=0xa0010e00; /* SELECT_CB0 with no preceding upload. */
+    CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_SUCCESS && snapshot &&
+        snapshot->Info.requires_mme && !snapshot->Info.uploads_mme);
+    TgGpuFreeCommandSnapshot(snapshot);snapshot=NULL;
     payload.Words[0]=0;payload.Header.reserved=1;
     CHECK(TgGpuCaptureCommandSnapshot(&a,&snapshot)==STATUS_INVALID_PARAMETER);
     payload.Header.reserved=0;payload.Header.version++;
@@ -1251,6 +1256,7 @@ void start(void)
     DXGKARG_SUBMITCOMMANDVIRTUAL submit={.DmaBufferVirtualAddress=0x10000,.DmaBufferSize=40,.SubmissionFenceId=7};
     DXGKARG_QUERYCURRENTFENCE query={0};
     TG_GPU_CONTEXT *c,*c2; TG_GPU_CONTEXT_WORK work={0},blocked={0};
+    const struct tg_gpu_command_info upload={.uploads_mme=true},call={.requires_mme=true};
     struct tg_gpu_power power={.owned=true,.ready=true,.stage=TG_GPU_STAGE_READY,
         .pmic_address=0x33,.original_enable=0x40,.original_voltage=50};
     struct tg_gpu_clock clock={0};
@@ -1312,10 +1318,15 @@ void start(void)
     fence=(UINT32 *)((UCHAR *)e.Commands.CpuAddress+TG_GPU_COMMAND_FENCE);
     hw.cpu_fence=fence;
     CHECK(c->Root.Valid && instance[128]==0x90000804 && instance[130]==0x07fff000);
-    submit.hContext=c;CHECK(NT_SUCCESS(TgGpuAcquireContextWork(&e,&submit,&work)));
+    submit.hContext=c;
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_INVALID_PARAMETER && !blocked.Context);
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&upload,&blocked)==STATUS_SUCCESS && blocked.UploadsMme);
+    CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->MmeInitialized && !c->References);
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&upload,&work)==STATUS_SUCCESS && work.UploadsMme);
+    CHECK(TgGpuActivateContextWork(&e,&work)==STATUS_SUCCESS);
     CHECK(work.Root.Valid && c->References==1 && work.FencePhysicalAddress==0x91002048);
     CHECK(*fence==~work.Expected && instance[0x800/4]==0);
-    CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY);
+    CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY && !c->MmeInitialized);
     ((UINT64 *)table)[1]=0; /* VidMm made the reserved root entry invalid */
     CHECK(NT_SUCCESS(TgGpuPrepareContextWork(&e,&work)));
     TestGraphicsImage(&e,c,&((TG_GPU_PROCESS *)process.hKmdProcess)->Internal);
@@ -1325,7 +1336,7 @@ void start(void)
     CHECK(TgGpuPrepareContextWork(&e,&work)==STATUS_INVALID_DEVICE_STATE);
     CHECK(TgGpuAcquireContextWork(&e,&submit,&blocked)==STATUS_DEVICE_BUSY && !blocked.Context);
     CHECK(ddi.DxgkDdiDestroyContext(c)==STATUS_DEVICE_BUSY);
-    CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY && !interrupts);
+    CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_DEVICE_NOT_READY && !interrupts && !c->MmeInitialized);
     before=hw.reads+hw.writes;
     CHECK(TgGpuSubmitContextWork(&e,&work,&io,&power)==STATUS_DEVICE_NOT_READY);
     CHECK(!work.Attempted && !e.Channel.referenced && hw.reads+hw.writes==before);
@@ -1364,8 +1375,9 @@ void start(void)
     CHECK(*fence==work.Expected && hw.flushes==6);hw.delay_reference=FALSE;
     fail_sync=TRUE;CHECK(TgGpuSignalContextWork(&e,&work)==STATUS_UNSUCCESSFUL && !work.Notified);
     CHECK(!interrupts && !c->References && !work.Context && e.Notification==&work);
+    CHECK(c->MmeInitialized && !c2->MmeInitialized);
     CHECK(TgGpuInitializeWorkQueue(&queue,&e)==STATUS_DEVICE_BUSY && !e.QueueOwner);
-    CHECK(TgGpuCaptureContextWork(&e,&submit,&work)==STATUS_DEVICE_BUSY);
+    CHECK(TgGpuCaptureContextWork(&e,&submit,NULL,&work)==STATUS_DEVICE_BUSY);
     fail_sync=FALSE;expected_fence=7;notify_context=c;notify_references=0;
     CHECK(NT_SUCCESS(TgGpuSignalContextWork(&e,&work)) && work.Notified);
     CHECK(interrupts==1 && queues==1 && !c->References && !e.Notification);
@@ -1376,6 +1388,8 @@ void start(void)
     CHECK(!e.Channel.referenced && !hw.inst && !hw.runlist && hw.flushes==6 && hw.tlbs==2);
     CHECK(TgGpuAcquireContextWork(&e,&submit,&work)==STATUS_DEVICE_NOT_READY); /* lost root is internal state */
     ddi.DxgkDdiSetRootPageTable(&e,&root);CHECK(c->Root.Valid && instance[130]==0x0bfff000);
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_SUCCESS);
+    CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
     root.Address.SegmentOffset=sizeof(table)-PAGE_SIZE;root.NumEntries=TG_GPU_TABLE_ENTRIES;
     ddi.DxgkDdiSetRootPageTable(&e,&root);CHECK(!c->Root.Valid);
     CHECK(TgGpuAcquireContextWork(&e,&submit,&work)==STATUS_DEVICE_NOT_READY);
@@ -1403,6 +1417,7 @@ void start(void)
     CHECK(c->GraphicsGeneration!=e.GraphicsGeneration);
     CHECK(TgGpuAcquireContextWork(&e,&submit,&work)==STATUS_DEVICE_NOT_READY);
     c=RecreateContext(&ddi,device.hDevice,&e,c,&root);submit.hContext=c;instance=c->Instance.CpuAddress;
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_INVALID_PARAMETER && !blocked.Context);
     /* Cancellation before any hardware attempt performs no MMIO and does not
      * manufacture a completed submission fence either.
      */
@@ -1469,7 +1484,7 @@ void start(void)
     CHECK(!c->References && !c2->References && !queue.Current.Context && IsListEmpty(&queue.Pending));
     CHECK(e.LastCompletedFence==11 && interrupts==3 && !e.Active && !e.Notification);
     submit.hContext=c;
-    CHECK(TgGpuCaptureContextWork(&e,&submit,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
+    CHECK(TgGpuCaptureContextWork(&e,&submit,NULL,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
     c=RecreateContext(&ddi,device.hDevice,&e,c,&root);submit.hContext=c;
     CHECK(TgGpuResumeWorkQueue(&queue,&power)==STATUS_DEVICE_NOT_READY);
     power.owned=power.ready=true;
