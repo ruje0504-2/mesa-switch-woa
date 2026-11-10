@@ -210,26 +210,31 @@ static NTSTATUS preempt_prefix(TG_GPU_WORK_QUEUE *q)
         if(owned)free_entry(entry);
     }
 }
-static bool check_texture_pool(void *data, uint64_t base, uint64_t end)
+static bool check_read_only_mapping(void *data, uint64_t base, uint64_t end)
 {
     const TG_GPU_CONTEXT_WORK *w = data;
     return TgGpuCheckReadOnlyPitchRange(w->Engine->Tables, &w->Root, base, end) != FALSE;
 }
 
-static bool check_texture_pools(TG_GPU_CONTEXT_WORK *w, const TG_GPU_COMMAND_SNAPSHOT *snapshot)
+static bool check_command_mappings(TG_GPU_CONTEXT_WORK *w, TG_GPU_COMMAND_SNAPSHOT *snapshot)
 {
-    /* DispatchGate orders earlier paging and publication of retired bindings.
-     * The queued work retains the context and its root snapshot.
+    /* DispatchGate orders paging and retirement. Resolve the next program
+     * state from the retired bindings and publish it only at completion.
      */
     for (UINT engine = 0; engine < TG_GPU_PROGRAM_ENGINES; ++engine) {
         for (UINT pool = 0; pool < TG_GPU_TEXTURE_POOLS; ++pool) {
             const struct tg_gpu_texture_pool_range *range = &w->Context->TexturePool[engine][pool];
             if (snapshot->Info.requires_texture_pool[engine][pool] &&
-                !check_texture_pool(w, range->base, range->end))
+                !check_read_only_mapping(w, range->base, range->end))
                 return false;
         }
     }
-    return tg_gpu_check_texture_pool_ranges(snapshot->Words, snapshot->Bytes, check_texture_pool, w);
+    struct tg_gpu_program_state programs = w->Context->Programs;
+    if (!tg_gpu_check_command_mappings(snapshot->Words, snapshot->Bytes, &programs,
+                                       check_read_only_mapping, w))
+        return false;
+    snapshot->Info.programs = programs;
+    return true;
 }
 
 NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io *io,
@@ -268,7 +273,7 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
         entry->Work.Context=NULL;
     }
     KeReleaseSpinLock(&q->Lock,irql);
-    const TG_GPU_COMMAND_SNAPSHOT *snapshot=q->CurrentOwned?q->CurrentOwned->Snapshot:NULL;
+    TG_GPU_COMMAND_SNAPSHOT *snapshot=q->CurrentOwned?q->CurrentOwned->Snapshot:NULL;
     const struct tg_gpu_command_info *info=snapshot?&snapshot->Info:NULL;
     status=STATUS_SUCCESS;
     if(!w->Engine) goto done;
@@ -285,7 +290,7 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
     }
     if(w->CompletionReady)goto notify;
     if(!w->Expected) {
-        if (snapshot && !check_texture_pools(w, snapshot)) {
+        if (snapshot && !check_command_mappings(w, snapshot)) {
             status=STATUS_INVALID_ADDRESS;goto done;
         }
         status=TgGpuActivateContextWork(q->Engine,w,info);

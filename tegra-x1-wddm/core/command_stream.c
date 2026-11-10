@@ -46,6 +46,21 @@ static bool method_allowed(uint32_t method)
     return method>=0x100 || method==NVB06F_SET_OBJECT || method==NVB06F_WFI;
 }
 
+static bool packet_last_method(uint32_t op, uint32_t method, uint32_t count, uint32_t *last)
+{
+    *last = method;
+    if (op == NVB06F_DMA_INCR_OPCODE_VALUE) {
+        if (count - 1 > (0x3ffc - method) / 4)
+            return false;
+        *last += (count - 1) * 4;
+    } else if (op == NVB06F_DMA_ONEINCR_OPCODE_VALUE && count > 1) {
+        if (method == 0x3ffc)
+            return false;
+        *last += 4;
+    }
+    return true;
+}
+
 bool tg_gpu_command_range_allowed(const struct tg_gpu_command_va *va, uint64_t address,
                                   uint64_t bytes, uint64_t *max_end)
 {
@@ -423,7 +438,7 @@ static bool program_region_span(uint32_t first, uint32_t last)
 
 static size_t program_region(uint32_t engine, uint32_t count, const uint32_t *args,
                              size_t remaining, const struct tg_gpu_command_va *va,
-                             struct tg_gpu_command_info *info)
+                             uint64_t *end)
 {
     uint32_t low;
     size_t used = 2;
@@ -438,18 +453,16 @@ static size_t program_region(uint32_t engine, uint32_t count, const uint32_t *ar
     } else {
         return 0;
     }
-    uint64_t end = 0;
-    if (!word_span(va, args[0], low, PROGRAM_REGION_BYTES, 1u << TG_GPU_PAGE_SHIFT, &end))
+    uint64_t limit = 0;
+    if (!word_span(va, args[0], low, PROGRAM_REGION_BYTES, 1u << TG_GPU_PAGE_SHIFT, &limit))
         return 0;
-    info->program_end[engine] = end;
-    if (end > info->va_end)
-        info->va_end = end;
+    *end = limit;
     return used;
 }
 
 static void require_program(struct tg_gpu_command_info *info, uint32_t engine)
 {
-    if (!info->program_end[engine])
+    if (!info->programs.end[engine])
         info->requires_program |= 1u << engine;
 }
 
@@ -459,10 +472,12 @@ static uint32_t pipeline_program_in_span(uint32_t first, uint32_t last)
     const uint32_t stride = NVB197_SET_PIPELINE_PROGRAM(1) - base;
     const uint32_t offset = first > base ? first - base : 0;
     const uint32_t method = base + ((offset + stride - 1) / stride) * stride;
-    return method <= last && method <= NVB197_SET_PIPELINE_PROGRAM(5) ? method : 0;
+    return method <= last && method <= NVB197_SET_PIPELINE_PROGRAM(TG_GPU_GRAPHICS_PROGRAMS - 1) ? method : 0;
 }
 
 #define B197_PROGRAM_HEADER_BYTES 80u
+#define PROGRAM_FETCH_ALIGN       128u
+#define PROGRAM_PREFETCH_GUARD    2048u
 
 /* The Windows GM20B profile has two TPCs with 64 warps each. */
 #define GM20B_TPCS 2u
@@ -471,10 +486,9 @@ static uint32_t pipeline_program_in_span(uint32_t first, uint32_t last)
 static bool program_offset(uint32_t offset, uint32_t header_bytes)
 {
     /* Leave room for the first aligned fetch and NVK's 2 KiB I-cache guard. */
-    const uint32_t instruction_alignment = 128;
     const uint64_t entry = (uint64_t)offset + header_bytes;
-    return entry % instruction_alignment == 0 &&
-           entry + instruction_alignment + 2048 <= PROGRAM_REGION_BYTES;
+    return entry % PROGRAM_FETCH_ALIGN == 0 &&
+           entry + PROGRAM_FETCH_ALIGN + PROGRAM_PREFETCH_GUARD <= PROGRAM_REGION_BYTES;
 }
 
 static bool qmd_0_6(const uint32_t *qmd, const struct tg_gpu_command_va *va,
@@ -557,10 +571,15 @@ static size_t qmd_record(const uint32_t *args, size_t remaining,
     return used && qmd_0_6(args, va, info) ? record + 1 + used : 0;
 }
 
+static size_t qmd_aligned_word(size_t first)
+{
+    return (first + TG_GPU_QMD_WORDS - 1) & ~(size_t)(TG_GPU_QMD_WORDS - 1);
+}
+
 static bool stage_qmd(uint32_t *words, size_t first, const struct tg_gpu_command_va *va,
                        uint64_t *max_end)
 {
-    const size_t aligned = (first + TG_GPU_QMD_WORDS - 1) & ~(size_t)(TG_GPU_QMD_WORDS - 1);
+    const size_t aligned = qmd_aligned_word(first);
     const size_t offset = TG_GPU_COMMAND_CAPTURE + aligned * sizeof(*words);
     const size_t end = offset + TG_GPU_QMD_WORDS * sizeof(*words);
     if (!va || !va->reserved_base || end > va->reserved_end - va->reserved_base ||
@@ -823,14 +842,7 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
         if((op!=NVB06F_DMA_INCR_OPCODE_VALUE && op!=NVB06F_DMA_NONINCR_OPCODE_VALUE &&
             op!=NVB06F_DMA_ONEINCR_OPCODE_VALUE) || !count || count>word_count-n)return false;
         if(method==NVB06F_SET_OBJECT && (count!=1 || words[n]!=nvk_class[subchannel]))return false;
-        last=method;
-        if(op==NVB06F_DMA_INCR_OPCODE_VALUE) {
-            if(count-1>(0x3ffc-method)/4)return false;
-            last=method+(count-1)*4;
-        } else if(op==NVB06F_DMA_ONEINCR_OPCODE_VALUE && count>1) {
-            if(method==0x3ffc)return false;
-            last=method+4;
-        }
+        if (!packet_last_method(op, method, count, &last)) return false;
         if (method <= NVB06F_SEMAPHORED && last >= NVB06F_SEMAPHOREA) {
             if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB06F_SEMAPHOREA ||
                 count != 4 || !host_acquire(words + n, va, &stream.va_end))
@@ -870,9 +882,12 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
         if (subchannel <= TG_GPU_PROGRAM_COMPUTE && program_region_span(method, last)) {
             if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB197_SET_PROGRAM_REGION_A)
                 return false;
-            const size_t used = program_region(subchannel, count, words + n, word_count - n, va, &stream);
+            uint64_t *end = &stream.programs.end[subchannel];
+            const size_t used = program_region(subchannel, count, words + n, word_count - n, va, end);
             if (!used)
                 return false;
+            if (*end > stream.va_end)
+                stream.va_end = *end;
             n += used;
             continue;
         }
@@ -1043,25 +1058,134 @@ bool tg_gpu_prepare_command_stream(uint32_t *words, size_t bytes,
     return bytes <= TG_GPU_COMMAND_CAPTURE_BYTES && inspect(words, words, bytes, va, info);
 }
 
-bool tg_gpu_check_texture_pool_ranges(const uint32_t *words, size_t bytes,
-                                      tg_gpu_texture_pool_check check, void *data)
+static bool shader_entry_mapped(uint64_t program_end, uint32_t offset, uint32_t header_bytes,
+                                tg_gpu_command_range_check check, void *data)
 {
-    if (!words || !bytes || (bytes & 3) || ((uintptr_t)words & 3) || !check)
+    if (program_end <= PROGRAM_REGION_BYTES || program_end > TG_GPU_VA_LIMIT ||
+        !program_offset(offset, header_bytes))
         return false;
+    const uint64_t base = program_end - PROGRAM_REGION_BYTES + offset;
+    return check(data, base, base + header_bytes + PROGRAM_FETCH_ALIGN + PROGRAM_PREFETCH_GUARD);
+}
+
+/* The last value written to a method in this packet. IMMD stores its value
+ * in the count field. In ONEINCR only the first word uses the first method.
+ */
+static uint32_t packet_value(const uint32_t *args, uint32_t op, uint32_t count,
+                             uint32_t first, uint32_t method)
+{
+    if (op == NVB06F_DMA_IMMD_OPCODE_VALUE)
+        return count;
+    if (op == NVB06F_DMA_INCR_OPCODE_VALUE)
+        return args[(method - first) / 4];
+    if (op == NVB06F_DMA_ONEINCR_OPCODE_VALUE && method == first)
+        return args[0];
+    return args[count - 1];
+}
+
+static bool graphics_draw_packet(uint32_t first, uint32_t last)
+{
+    static const uint32_t draws[] = {
+        NVB197_DRAW_ZERO_INDEX, NVB197_DRAW_VERTEX_ARRAY,
+        NVB197_DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_FIRST,
+        NVB197_DRAW_VERTEX_ARRAY_BEGIN_END_INSTANCE_SUBSEQUENT,
+        NVB197_DRAW_AUTO, NVB197_DRAW_INLINE_INDEX4X8,
+        NVB197_DRAW_INLINE_INDEX, NVB197_DRAW_INLINE_INDEX2X16,
+        NVB197_CALL_MME_MACRO(NVK_MME_DRAW), NVB197_CALL_MME_MACRO(NVK_MME_DRAW_INDEXED),
+    };
+    for (size_t i = 0; i < sizeof(draws) / sizeof(draws[0]); ++i) {
+        if (first <= draws[i] && last >= draws[i])
+            return true;
+    }
+    return first <= NVB197_DRAW_INDEX_BUFFER8_BEGIN_END_INSTANCE_SUBSEQUENT &&
+           last >= NVB197_DRAW_INDEX_BUFFER;
+}
+
+static bool graphics_program_tracking(const struct tg_gpu_program_state *state)
+{
+    return state->shadow_mode == NVB197_SET_MME_SHADOW_RAM_CONTROL_MODE_METHOD_TRACK ||
+           state->shadow_mode == NVB197_SET_MME_SHADOW_RAM_CONTROL_MODE_METHOD_TRACK_WITH_FILTER;
+}
+
+static bool check_graphics_programs(struct tg_gpu_program_state *state,
+                                    const uint32_t *args, uint32_t op, uint32_t count,
+                                    uint32_t first, uint32_t last,
+                                    tg_gpu_command_range_check check, void *data)
+{
+    const uint32_t shadow = NVB197_SET_MME_SHADOW_RAM_CONTROL;
+    if (first <= shadow && last >= shadow) {
+        const uint32_t value = packet_value(args, op, count, first, shadow);
+        state->shadow_mode = NVVAL_GET(value, NVB197, SET_MME_SHADOW_RAM_CONTROL, MODE);
+    }
+    if (graphics_draw_packet(first, last)) {
+        for (unsigned stage = 0; stage < TG_GPU_GRAPHICS_PROGRAMS; ++stage) {
+            if ((state->graphics_enabled & (1u << stage)) &&
+                !shader_entry_mapped(state->end[TG_GPU_PROGRAM_3D], state->graphics_offset[stage],
+                                     B197_PROGRAM_HEADER_BYTES, check, data))
+                return false;
+        }
+    }
+    if (last < NVB197_SET_PIPELINE_SHADER(0) ||
+        first > NVB197_SET_PIPELINE_PROGRAM(TG_GPU_GRAPHICS_PROGRAMS - 1))
+        return true;
+    for (unsigned stage = 0; stage < TG_GPU_GRAPHICS_PROGRAMS; ++stage) {
+        const uint32_t control = NVB197_SET_PIPELINE_SHADER(stage);
+        const uint32_t program = NVB197_SET_PIPELINE_PROGRAM(stage);
+        /* NVK uses shadow replay and passthrough for meta counters. Its
+         * program bindings are normal tracked writes in both modes of tracking.
+         */
+        if (first <= control && last >= control) {
+            if (!graphics_program_tracking(state))
+                return false;
+            const uint32_t value = packet_value(args, op, count, first, control);
+            const uint32_t enabled = NVVAL_GET(value, NVB197, SET_PIPELINE_SHADER, ENABLE);
+            state->graphics_enabled = (state->graphics_enabled & ~(1u << stage)) | (enabled << stage);
+        }
+        if (first <= program && last >= program) {
+            if (!graphics_program_tracking(state))
+                return false;
+            state->graphics_offset[stage] = packet_value(args, op, count, first, program);
+        }
+    }
+    return true;
+}
+
+bool tg_gpu_check_command_mappings(const uint32_t *words, size_t bytes,
+                                   struct tg_gpu_program_state *programs,
+                                   tg_gpu_command_range_check check, void *data)
+{
+    if (!words || !bytes || bytes > TG_GPU_COMMAND_CAPTURE_BYTES ||
+        (bytes & 3) || ((uintptr_t)words & 3) || !programs || !check)
+        return false;
+    struct tg_gpu_program_state state = *programs;
     const size_t word_count = bytes / sizeof(*words);
     for (size_t n = 0; n < word_count;) {
         const uint32_t header = words[n++];
-        const uint32_t op = NVVAL_GET(header, NVB06F, DMA_INCR, OPCODE);
-        if (header == NVB06F_DMA_NOP || op == NVB06F_DMA_IMMD_OPCODE_VALUE)
+        if (header == NVB06F_DMA_NOP)
             continue;
+        const uint32_t op = NVVAL_GET(header, NVB06F, DMA_INCR, OPCODE);
+        const uint32_t method = NVVAL_GET(header, NVB06F, DMA_INCR, ADDRESS) * 4;
         const uint32_t count = NVVAL_GET(header, NVB06F, DMA_INCR, COUNT);
-        if (!count || count > word_count - n ||
-            (op != NVB06F_DMA_INCR_OPCODE_VALUE && op != NVB06F_DMA_NONINCR_OPCODE_VALUE &&
-             op != NVB06F_DMA_ONEINCR_OPCODE_VALUE))
-            return false;
+        const bool immediate = op == NVB06F_DMA_IMMD_OPCODE_VALUE;
         const uint32_t subchannel = NVVAL_GET(header, NVB06F, DMA_INCR, SUBCHANNEL);
+        uint32_t last = method;
+        if (!immediate && (!count || count > word_count - n ||
+            (op != NVB06F_DMA_INCR_OPCODE_VALUE && op != NVB06F_DMA_NONINCR_OPCODE_VALUE &&
+             op != NVB06F_DMA_ONEINCR_OPCODE_VALUE) ||
+            !packet_last_method(op, method, count, &last)))
+            return false;
+        if (subchannel <= TG_GPU_PROGRAM_COMPUTE && program_region_span(method, last)) {
+            if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB197_SET_PROGRAM_REGION_A ||
+                (subchannel == TG_GPU_PROGRAM_3D && !graphics_program_tracking(&state)))
+                return false;
+            const size_t used = program_region(subchannel, count, words + n, word_count - n,
+                                               NULL, &state.end[subchannel]);
+            if (!used)
+                return false;
+            n += used;
+            continue;
+        }
         if (subchannel <= TG_GPU_PROGRAM_COMPUTE && op == NVB06F_DMA_INCR_OPCODE_VALUE && count == 3) {
-            const uint32_t method = NVVAL_GET(header, NVB06F, DMA_INCR, ADDRESS) * 4;
             const enum tg_gpu_texture_pool pool = texture_pool_in_span(method, method);
             if (pool != TG_GPU_TEXTURE_POOLS && method == texture_pool_methods[pool].base) {
                 struct tg_gpu_texture_pool_range range;
@@ -1070,7 +1194,20 @@ bool tg_gpu_check_texture_pool_ranges(const uint32_t *words, size_t bytes,
                     return false;
             }
         }
-        n += count;
+        if (subchannel == TG_GPU_PROGRAM_3D &&
+            !check_graphics_programs(&state, words + n, op, count, method, last, check, data))
+            return false;
+        if (subchannel == TG_GPU_PROGRAM_COMPUTE && method == NVB1C0_NO_OPERATION &&
+            op == NVB06F_DMA_NONINCR_OPCODE_VALUE && count == TG_GPU_QMD_RECORD_WORDS) {
+            /* Admission moved the QMD within its immutable NO_OPERATION payload. */
+            const uint32_t *qmd = words + qmd_aligned_word(n);
+            const uint32_t offset = NVVAL_MW_GET(qmd, NVB1C0, QMDV00_06, PROGRAM_OFFSET);
+            if (!shader_entry_mapped(state.end[TG_GPU_PROGRAM_COMPUTE], offset, 0, check, data))
+                return false;
+        }
+        if (!immediate)
+            n += count;
     }
+    *programs = state;
     return true;
 }

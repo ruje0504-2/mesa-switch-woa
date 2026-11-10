@@ -16,6 +16,15 @@ enum tg_gpu_program_engine {
     TG_GPU_PROGRAM_ENGINES,
 };
 
+#define TG_GPU_GRAPHICS_PROGRAMS 6u
+
+struct tg_gpu_program_state {
+    uint64_t end[TG_GPU_PROGRAM_ENGINES];
+    uint32_t graphics_offset[TG_GPU_GRAPHICS_PROGRAMS];
+    uint32_t graphics_enabled;
+    uint32_t shadow_mode;
+};
+
 enum tg_gpu_texture_pool {
     TG_GPU_TEXTURE_HEADERS,
     TG_GPU_TEXTURE_SAMPLERS,
@@ -34,7 +43,7 @@ struct tg_gpu_compute_slm {
 struct tg_gpu_command_info {
     uint64_t va_end;
     uint64_t reserved_base;
-    uint64_t program_end[TG_GPU_PROGRAM_ENGINES];
+    struct tg_gpu_program_state programs;
     struct tg_gpu_texture_pool_range texture_pool[TG_GPU_PROGRAM_ENGINES][TG_GPU_TEXTURE_POOLS];
     bool requires_texture_pool[TG_GPU_PROGRAM_ENGINES][TG_GPU_TEXTURE_POOLS];
     struct tg_gpu_compute_slm compute_slm;
@@ -64,12 +73,14 @@ bool tg_gpu_inspect_command_stream(const uint32_t *, size_t bytes,
 bool tg_gpu_prepare_command_stream(uint32_t *, size_t bytes,
                                    const struct tg_gpu_command_va *,
                                    struct tg_gpu_command_info *);
-/* Visit every pool bind in a prepared immutable snapshot, including earlier
- * binds to the same engine. Payload words are never treated as headers.
+/* Check every texture pool bind and shader entry fetch in a prepared
+ * snapshot. Programs starts at the retired context state and is updated
+ * only on success. The caller publishes it on retirement.
  */
-typedef bool (*tg_gpu_texture_pool_check)(void *, uint64_t base, uint64_t end);
-bool tg_gpu_check_texture_pool_ranges(const uint32_t *, size_t bytes,
-                                      tg_gpu_texture_pool_check, void *);
+typedef bool (*tg_gpu_command_range_check)(void *, uint64_t base, uint64_t end);
+bool tg_gpu_check_command_mappings(const uint32_t *, size_t bytes,
+                                   struct tg_gpu_program_state *,
+                                   tg_gpu_command_range_check, void *);
 bool tg_gpu_command_range_allowed(const struct tg_gpu_command_va *, uint64_t address,
                                   uint64_t bytes, uint64_t *max_end);
 

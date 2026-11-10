@@ -326,8 +326,9 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
         for (UINT engine=0;engine<TG_GPU_PROGRAM_ENGINES;engine++) {
             if (!(info->requires_program & (1u << engine)))
                 continue;
-            if (!c->ProgramEnd[engine] || c->ProgramEnd[engine]>c->Root.VaLimit) {
-                status=c->ProgramEnd[engine] ? STATUS_DEVICE_NOT_READY : STATUS_INVALID_PARAMETER;
+            const UINT64 end=c->Programs.end[engine];
+            if (!end || end>c->Root.VaLimit) {
+                status=end ? STATUS_DEVICE_NOT_READY : STATUS_INVALID_PARAMETER;
                 KeReleaseSpinLock(&e->Lock,irql);return status;
             }
         }
@@ -528,13 +529,12 @@ NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w
         if (w->UploadsMme)
             w->Context->MmeInitialized=TRUE;
         if (info) {
+            w->Context->Programs=info->programs;
             if (info->cb0_end)
                 w->Context->Cb0End=info->cb0_end;
             if (info->compute_slm.va_end)
                 w->Context->ComputeSlm=info->compute_slm;
             for (UINT engine=0;engine<TG_GPU_PROGRAM_ENGINES;engine++) {
-                if (info->program_end[engine])
-                    w->Context->ProgramEnd[engine]=info->program_end[engine];
                 for (UINT pool=0;pool<TG_GPU_TEXTURE_POOLS;pool++) {
                     if (info->texture_pool[engine][pool].end)
                         w->Context->TexturePool[engine][pool]=info->texture_pool[engine][pool];

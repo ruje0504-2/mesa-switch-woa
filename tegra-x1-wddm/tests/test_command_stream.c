@@ -240,14 +240,14 @@ static void test_report_and_acquire(void)
     assert(!tg_gpu_validate_command_stream(wait, sizeof(wait)));
 }
 
-struct pool_checks {
+struct range_checks {
     struct tg_gpu_texture_pool_range expected[2];
     unsigned next;
 };
 
-static bool check_pool_range(void *data, uint64_t base, uint64_t end)
+static bool check_range(void *data, uint64_t base, uint64_t end)
 {
-    struct pool_checks *checks = data;
+    struct range_checks *checks = data;
     if (checks->next >= 2)
         return false;
     const struct tg_gpu_texture_pool_range *range = &checks->expected[checks->next++];
@@ -298,16 +298,17 @@ static void test_texture_pools(void)
         NONINCR(0, NVB197_NO_OPERATION, 4), bind, 1, 0x1ffe0, 0,
         bind, 1, 0x40000, 0,
     };
-    struct pool_checks checks = {.expected = {
+    struct range_checks checks = {.expected = {
         {0x100010000, 0x100010080}, {0x100040000, 0x100040020},
     }};
+    struct tg_gpu_program_state programs = {0};
     assert(tg_gpu_prepare_command_stream(rebind, sizeof(rebind), &va, &info));
-    assert(tg_gpu_check_texture_pool_ranges(rebind, sizeof(rebind), check_pool_range, &checks));
+    assert(tg_gpu_check_command_mappings(rebind, sizeof(rebind), &programs, check_range, &checks));
     assert(checks.next == 2 && info.texture_pool[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_HEADERS].end ==
            checks.expected[1].end);
     checks.next = 0;
     checks.expected[0].end = 0;
-    assert(!tg_gpu_check_texture_pool_ranges(rebind, sizeof(rebind), check_pool_range, &checks));
+    assert(!tg_gpu_check_command_mappings(rebind, sizeof(rebind), &programs, check_range, &checks));
     assert(checks.next == 1);
 }
 
@@ -542,8 +543,8 @@ static void test_program_regions(void)
         INCR(0, NVB197_SET_PIPELINE_PROGRAM(5), 1), 0x1030,
     };
     assert(tg_gpu_inspect_command_stream(shader, sizeof(shader), &va, &info));
-    assert(info.va_end == va.limit && info.program_end[TG_GPU_PROGRAM_3D] == va.limit);
-    assert(!info.requires_program && !info.program_end[TG_GPU_PROGRAM_COMPUTE]);
+    assert(info.va_end == va.limit && info.programs.end[TG_GPU_PROGRAM_3D] == va.limit);
+    assert(!info.requires_program && !info.programs.end[TG_GPU_PROGRAM_COMPUTE]);
     assert(tg_gpu_inspect_command_stream(shader + 3, sizeof(shader) - 3 * sizeof(uint32_t), &va, &info));
     assert(info.requires_program == (1u << TG_GPU_PROGRAM_3D));
     shader[2] += 4096;
@@ -564,9 +565,39 @@ static void test_program_regions(void)
         IMMD(1, NVB1C0_SEND_SIGNALING_PCAS_B, 3),
     };
     assert(tg_gpu_inspect_command_stream(dispatch, sizeof(dispatch), &va, &info));
-    assert(info.program_end[TG_GPU_PROGRAM_COMPUTE] == va.limit && !info.requires_program);
+    assert(info.programs.end[TG_GPU_PROGRAM_COMPUTE] == va.limit && !info.requires_program);
     assert(tg_gpu_inspect_command_stream(dispatch + 3, sizeof(dispatch) - 3 * sizeof(uint32_t), &va, &info));
     assert(info.requires_program == (1u << TG_GPU_PROGRAM_COMPUTE));
+
+    uint32_t setup[] = {
+        INCR(0, NVB197_SET_PROGRAM_REGION_A, 2), 1, 0x40000,
+        IMMD(0, NVB197_SET_PIPELINE_SHADER(1), 0x11),
+        IMMD(0, NVB197_SET_PIPELINE_PROGRAM(1), 0x30),
+        INCR(0, NVB197_SET_PIPELINE_SHADER(5), 1), 0x51,
+        INCR(0, NVB197_SET_PIPELINE_PROGRAM(5), 1), 0x1030,
+    };
+    struct range_checks checks = {.expected = {
+        {0x100040030, 0x100040900}, {0x100041030, 0x100041900},
+    }};
+    struct tg_gpu_program_state programs = {0};
+    assert(tg_gpu_prepare_command_stream(setup, sizeof(setup), &va, &info));
+    assert(tg_gpu_check_command_mappings(setup, sizeof(setup), &programs, check_range, &checks));
+    assert(!checks.next && programs.graphics_enabled == ((1u << 1) | (1u << 5)));
+    const uint32_t draw = IMMD(0, NVB197_DRAW_VERTEX_ARRAY, 3);
+    assert(tg_gpu_check_command_mappings(&draw, sizeof(draw), &programs, check_range, &checks));
+    assert(checks.next == 2);
+
+    /* A rebind before a draw must use the new entry. Failed validation
+     * leaves the retired bindings intact. */
+    uint32_t rebind[] = {INCR(0, NVB197_SET_PIPELINE_PROGRAM(5), 1), 0x3030, draw};
+    assert(tg_gpu_prepare_command_stream(rebind, sizeof(rebind), &va, &info));
+    checks.next = 0;
+    assert(!tg_gpu_check_command_mappings(rebind, sizeof(rebind), &programs, check_range, &checks));
+    assert(checks.next == 2 && programs.graphics_offset[5] == 0x1030);
+    const uint32_t disable[] = {IMMD(0, NVB197_SET_PIPELINE_SHADER(5), 0x50), draw};
+    checks.next = 0;
+    assert(tg_gpu_check_command_mappings(disable, sizeof(disable), &programs, check_range, &checks));
+    assert(checks.next == 1 && programs.graphics_enabled == (1u << 1));
 }
 
 static void test_shader_local_memory(void)
@@ -600,7 +631,7 @@ static void test_shader_local_memory(void)
 static void test_captured_qmd(void)
 {
     enum { PCAS = 1 + TG_GPU_QMD_RECORD_WORDS };
-    const struct tg_gpu_command_va va = {0x100000000, 0x80000000, 0x80100000};
+    const struct tg_gpu_command_va va = {0x300000000, 0x80000000, 0x80100000};
     struct tg_gpu_command_info info;
     uint32_t push[PCAS + 3] = {
         NONINCR(1, NVB1C0_NO_OPERATION, TG_GPU_QMD_RECORD_WORDS),
@@ -652,6 +683,12 @@ static void test_captured_qmd(void)
     const uint64_t qmd_va = va.reserved_base + TG_GPU_COMMAND_CAPTURE + 256;
     assert(snapshot[PCAS + 1] == qmd_va >> 8 && !push[PCAS + 1]);
     assert(info.va_end == qmd_va + 256 && !memcmp(snapshot + TG_GPU_QMD_WORDS, qmd, 256));
+    struct tg_gpu_program_state programs = {.end = {[TG_GPU_PROGRAM_COMPUTE] = 0x200000000}};
+    struct range_checks checks = {.expected = {{0x10000ed80, 0x10000f600}}};
+    /* The abandoned original offset must not drive the check. */
+    NVVAL_MW_SET(snapshot + 1, NVB1C0, QMDV00_06, PROGRAM_OFFSET, 0x100);
+    assert(tg_gpu_check_command_mappings(snapshot, sizeof(snapshot), &programs, check_range, &checks));
+    assert(checks.next == 1);
 
     memcpy(snapshot, push, sizeof(push));
     assert(!tg_gpu_prepare_command_stream(snapshot, sizeof(snapshot) - 4, &va, NULL));

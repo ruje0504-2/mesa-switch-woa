@@ -1001,11 +1001,19 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
      * follows running 103 but precedes the valid null-render packet 105. */
     hardware.Engine=&e;hardware.Ready=TRUE;hardware.Power.owned=hardware.Power.ready=true;e.HardwareOwner=&hardware;
     TgGpuRegisterSubmissionDdi(&ddi);UINT pools=PoolsInUse(),accesses;
-    /* The descriptor pool crosses the two pages installed by the preceding
-     * paging fences. Its bind is captured by the real application DDI. */
-    struct {struct tg_gpu_submit_request Header;UINT Words[4];} pool_payload={
+    /* The fixture also maps the two read-only pages into a shader region
+     * at 4 GiB, outside the process's reserved internal VA.
+     */
+    ((UINT64 *)paging_tables)[1u << (32 - TG_GPU_DIRECTORY_SHIFT)]=((UINT64 *)paging_tables)[0];
+    struct {struct tg_gpu_submit_request Header;UINT Words[11];} pool_payload={
         {TG_GPU_SUBMIT_ABI,sizeof(pool_payload),sizeof(pool_payload.Words),0},
-        {0x2003055d,0,0x7fe0,1} /* SET_TEX_HEADER_POOL_A/B/C */
+        {
+            0x2003055d,0,0x7fe0,1, /* SET_TEX_HEADER_POOL_A/B/C */
+            0x20020582,1,0,        /* SET_PROGRAM_REGION_A/B */
+            0x80110810,            /* Enable vertex shader (stage 1). */
+            0x20010811,0x7fb0,     /* SET_PIPELINE_PROGRAM(1) */
+            0x8003035e,            /* DRAW_VERTEX_ARRAY */
+        }
     };
     DXGKARG_SUBMITCOMMANDVIRTUAL pool_submit={.hContext=context.hContext,.DmaBufferVirtualAddress=0x10000,
         .DmaBufferSize=sizeof(pool_payload.Words),.pDmaBufferPrivateData=&pool_payload,
@@ -1022,9 +1030,13 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_PENDING && e.LastCompletedFence==102);
     hw.gpu_fence=q.Current.Expected;expected_fence=103;notify_engine=&e;expected_driver_fence=104;
     CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_SUCCESS && e.LastCompletedFence==104);
+    const TG_GPU_CONTEXT *render_context=context.hContext;
     const struct tg_gpu_texture_pool_range *retired =
-        &((TG_GPU_CONTEXT *)context.hContext)->TexturePool[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_HEADERS];
+        &render_context->TexturePool[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_HEADERS];
     CHECK(retired->base==0x7fe0 && retired->end==0x8020);
+    CHECK(render_context->Programs.end[TG_GPU_PROGRAM_3D]==0x200000000 &&
+          render_context->Programs.graphics_enabled==(1u<<1) &&
+          render_context->Programs.graphics_offset[1]==0x7fb0);
     CHECK(interrupts==before+4 && PoolsInUse()==pools); /* no extra DMA event for 104 */
     accesses=hw.reads+hw.writes;expected_fence=expected_driver_fence=105;
     CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_SUCCESS && e.LastCompletedFence==105);
@@ -1044,6 +1056,18 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     UINT64 saved_pte=leaf[8];
     leaf[8]&=~UINT64_C(4);
     pool_submit.SubmissionFenceId=108;
+    CHECK(ddi.DxgkDdiSubmitCommandVirtual(&e,&pool_submit)==STATUS_SUCCESS && PoolsInUse()==pools+2);
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_INVALID_ADDRESS && !q.Current.Expected &&
+          !e.Active && e.LastCompletedFence==107 && hw.reads+hw.writes==accesses && interrupts==before+6);
+    CHECK(TgGpuResetWorkQueue(&q,NULL,&power,&clock)==STATUS_SUCCESS && PoolsInUse()==pools);
+    CHECK(TgGpuResumeWorkQueue(&q,&power)==STATUS_SUCCESS);
+    /* A draw without new bindings must check the retired vertex shader.
+     * Its header still fits, but the first instruction page is writable. */
+    pool_payload.Words[0]=0x8003035e;
+    pool_payload.Header=(struct tg_gpu_submit_request){TG_GPU_SUBMIT_ABI,
+        sizeof(pool_payload.Header)+sizeof(UINT),sizeof(UINT),0};
+    pool_submit.DmaBufferSize=sizeof(UINT);
+    pool_submit.DmaBufferUmdPrivateDataSize=pool_payload.Header.size;
     CHECK(ddi.DxgkDdiSubmitCommandVirtual(&e,&pool_submit)==STATUS_SUCCESS && PoolsInUse()==pools+2);
     CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_INVALID_ADDRESS && !q.Current.Expected &&
           !e.Active && e.LastCompletedFence==107 && hw.reads+hw.writes==accesses && interrupts==before+6);
@@ -1292,7 +1316,7 @@ void start(void)
     DXGKARG_QUERYCURRENTFENCE query={0};
     TG_GPU_CONTEXT *c,*c2; TG_GPU_CONTEXT_WORK work={0},blocked={0};
     const struct tg_gpu_command_info upload={.uploads_mme=true,.cb0_end=0x18800,
-        .program_end={[TG_GPU_PROGRAM_3D]=0x02000000},.compute_slm={0x10000,0x02040000},
+        .programs.end={[TG_GPU_PROGRAM_3D]=0x02000000},.compute_slm={0x10000,0x02040000},
         .texture_pool={[TG_GPU_PROGRAM_3D]={{0x02048000,0x02050000},{0x02050000,0x02060000}}}};
     const struct tg_gpu_command_info call={.requires_mme=true,.requires_cb0=true,
         .requires_program=1u << TG_GPU_PROGRAM_3D,.required_compute_slm_per_tpc=0x10000,
@@ -1372,7 +1396,7 @@ void start(void)
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_INVALID_PARAMETER && !blocked.Context);
     CHECK(TgGpuCaptureContextWork(&e,&submit,&upload,&blocked)==STATUS_SUCCESS && blocked.UploadsMme);
     CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS &&
-          !c->MmeInitialized && !c->Cb0End && !c->ProgramEnd[TG_GPU_PROGRAM_3D] &&
+          !c->MmeInitialized && !c->Cb0End && !c->Programs.end[TG_GPU_PROGRAM_3D] &&
           !c->ComputeSlm.va_end && !c->TexturePool[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_HEADERS].end &&
           !c->References);
     CHECK(TgGpuCaptureContextWork(&e,&submit,&scratch,&blocked)==STATUS_SUCCESS);
@@ -1433,8 +1457,8 @@ void start(void)
     fail_sync=TRUE;CHECK(TgGpuSignalContextWork(&e,&work,&upload)==STATUS_UNSUCCESSFUL && !work.Notified);
     CHECK(!interrupts && !c->References && !work.Context && e.Notification==&work);
     CHECK(c->MmeInitialized && c->Cb0End==upload.cb0_end && !c2->MmeInitialized && !c2->Cb0End);
-    CHECK(c->ProgramEnd[TG_GPU_PROGRAM_3D]==upload.program_end[TG_GPU_PROGRAM_3D] &&
-          !c->ProgramEnd[TG_GPU_PROGRAM_COMPUTE] && !c2->ProgramEnd[TG_GPU_PROGRAM_3D]);
+    CHECK(c->Programs.end[TG_GPU_PROGRAM_3D]==upload.programs.end[TG_GPU_PROGRAM_3D] &&
+          !c->Programs.end[TG_GPU_PROGRAM_COMPUTE] && !c2->Programs.end[TG_GPU_PROGRAM_3D]);
     CHECK(c->ComputeSlm.bytes_per_tpc==upload.compute_slm.bytes_per_tpc &&
           c->ComputeSlm.va_end==upload.compute_slm.va_end && !c2->ComputeSlm.va_end);
     CHECK(c->TexturePool[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_HEADERS].end==0x02050000 &&
@@ -1456,7 +1480,7 @@ void start(void)
     const UINT64 saved_limit=c->Root.VaLimit;
     c->Root.VaLimit=upload.cb0_end-1;
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
-    c->Root.VaLimit=upload.program_end[TG_GPU_PROGRAM_3D]-1;
+    c->Root.VaLimit=upload.programs.end[TG_GPU_PROGRAM_3D]-1;
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
     c->Root.VaLimit=upload.compute_slm.va_end-1;
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_SUCCESS);

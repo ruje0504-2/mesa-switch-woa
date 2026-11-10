@@ -44,7 +44,7 @@ struct _TG_GPU_CONTEXT {
     UINT References;
     UINT GraphicsGeneration,ContextId;
     UINT64 Cb0End;
-    UINT64 ProgramEnd[TG_GPU_PROGRAM_ENGINES];
+    struct tg_gpu_program_state Programs;
     struct tg_gpu_texture_pool_range TexturePool[TG_GPU_PROGRAM_ENGINES][TG_GPU_TEXTURE_POOLS];
     struct tg_gpu_compute_slm ComputeSlm;
     BOOLEAN Closing,MmeInitialized;

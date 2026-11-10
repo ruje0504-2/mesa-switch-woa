@@ -882,12 +882,14 @@ The payload reserves space for alignment within the existing 64 KiB limit.
 [NVIDIA Maxwell compute class](https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/compute/clb1c0.h)
 [QMD layout](https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/compute/clb1c0qmd.h)
 
-B197 and B1C0 program bases cover NVK's 4 GiB shader VA reservation. A
-completed submission makes its program region available to later work on
-that context. On Windows, NVK waits for the initialization push to retire
-on its combined graphics and compute queue. B197 pipeline offsets must
-align the first instruction and leave room for the initial fetch and NVK's
-prefetch padding. Local memory setup covers the size programmed for both
+B197 and B1C0 program bases cover NVK's 4 GiB shader VA reservation. The
+queue checks read-only pitch mappings for enabled B197 program entries at a
+draw and the relocated QMD's B1C0 entry at a dispatch. The checked range
+includes the graphics header where present, the first instruction fetch
+and NVK's prefetch padding. B197 changes take effect in packet order and
+become the context's saved bindings after GPU retirement. On Windows, NVK
+waits for the initialization push to retire on its combined graphics and
+compute queue. Local memory setup covers the size programmed for both
 TPCs and checks both compute throttle modes together. QMD scratch and CRS
 sizes determine the requirement for 64 warps per TPC. A binding in the same
 push is checked in command order. A previous binding is published at GPU
