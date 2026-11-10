@@ -174,6 +174,8 @@ NTSTATUS APIENTRY TgGpuDdiCreateContext(HANDLE device, DXGKARG_CREATECONTEXT *a)
     } else
         a->ContextInfo.DmaBufferPrivateDataSize=sizeof(TG_GPU_QUEUE_ENTRY)+
             sizeof(struct tg_gpu_submit_request)+TG_GPU_SUBMIT_MAX_BYTES;
+    /* WDDM requires a 256-entry allocation list for GDI contexts. */
+    if (a->Flags.GdiContext) a->ContextInfo.AllocationListSize=256;
     a->ContextInfo.Caps.NoPatchingRequired=a->Flags.VirtualAddressing;
     /* VidMm manages residency. No system-IOMMU capability or GDI acceleration
      * is implied by creating the object. Submission/paging dispatch is separate.

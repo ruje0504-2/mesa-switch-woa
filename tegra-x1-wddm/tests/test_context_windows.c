@@ -860,7 +860,13 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
           paging_context.ContextInfo.DmaBufferPrivateDataSize==TG_GPU_PAGING_PRIVATE_BYTES &&
           paging_context.ContextInfo.DmaBufferSegmentSet==(1u<<(TG_GPU_PAGING_APERTURE_SEGMENT-1)));
     CHECK(ddi.DxgkDdiDestroyContext(paging_context.hContext)==STATUS_SUCCESS);
+    DXGKARG_CREATECONTEXT gdi_context={.hContext=(HANDLE)104,.EngineAffinity=1,
+        .Flags={.GdiContext=1,.VirtualAddressing=1}};
+    CHECK(ddi.DxgkDdiCreateContext(device.hDevice,&gdi_context)==STATUS_SUCCESS);
+    CHECK(gdi_context.ContextInfo.AllocationListSize==256 && gdi_context.ContextInfo.Caps.NoPatchingRequired);
+    CHECK(ddi.DxgkDdiDestroyContext(gdi_context.hContext)==STATUS_SUCCESS);
     CHECK(ddi.DxgkDdiCreateContext(device.hDevice,&context)==STATUS_SUCCESS);
+    CHECK(!context.ContextInfo.AllocationListSize);
     set.hContext=context.hContext;ddi.DxgkDdiSetRootPageTable(&e,&set);
     a.UpdatePageTable=(DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE){.PageTableLevel=1,
         .UpdateMode=DXGK_PAGETABLEUPDATE_CPU_VIRTUAL,.PageTableAddress.CpuVirtual=paging_tables,
