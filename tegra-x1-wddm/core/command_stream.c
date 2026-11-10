@@ -167,13 +167,29 @@ static bool engine_report(uint32_t subchannel, const uint32_t *args,
 }
 
 /* B197 and B1C0 share the pool methods and 32-byte descriptor stride. */
-static uint32_t texture_pool_index_mask(uint32_t first, uint32_t last)
+static const struct {
+    uint32_t base, index_mask;
+} texture_pool_methods[TG_GPU_TEXTURE_POOLS] = {
+    [TG_GPU_TEXTURE_HEADERS] = {NVB197_SET_TEX_HEADER_POOL_A,
+                                DRF_MASK(NVB197_SET_TEX_HEADER_POOL_C_MAXIMUM_INDEX)},
+    [TG_GPU_TEXTURE_SAMPLERS] = {NVB197_SET_TEX_SAMPLER_POOL_A,
+                                 DRF_MASK(NVB197_SET_TEX_SAMPLER_POOL_C_MAXIMUM_INDEX)},
+};
+
+static enum tg_gpu_texture_pool texture_pool_in_span(uint32_t first, uint32_t last)
 {
-    if (first <= NVB197_SET_TEX_HEADER_POOL_C && last >= NVB197_SET_TEX_HEADER_POOL_A)
-        return DRF_MASK(NVB197_SET_TEX_HEADER_POOL_C_MAXIMUM_INDEX);
-    if (first <= NVB197_SET_TEX_SAMPLER_POOL_C && last >= NVB197_SET_TEX_SAMPLER_POOL_A)
-        return DRF_MASK(NVB197_SET_TEX_SAMPLER_POOL_C_MAXIMUM_INDEX);
-    return 0;
+    for (unsigned pool = 0; pool < TG_GPU_TEXTURE_POOLS; pool++) {
+        const uint32_t base = texture_pool_methods[pool].base;
+        if (first <= base + 8 && last >= base)
+            return pool;
+    }
+    return TG_GPU_TEXTURE_POOLS;
+}
+
+static void require_texture_pools(struct tg_gpu_command_info *info, uint32_t engine)
+{
+    for (unsigned pool = 0; pool < TG_GPU_TEXTURE_POOLS; pool++)
+        info->requires_texture_pool[engine][pool] |= !info->texture_pool_end[engine][pool];
 }
 
 static bool pcas_span(uint32_t first, uint32_t last)
@@ -773,7 +789,7 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
             }
             if (subchannel <= TG_GPU_PROGRAM_COMPUTE && (inline_upload_span(method, method) ||
                                     report_span(method, method) ||
-                                    texture_pool_index_mask(method, method) ||
+                                    texture_pool_in_span(method, method) != TG_GPU_TEXTURE_POOLS ||
                                     program_region_span(method, method) ||
                                     shader_local_memory_span(subchannel, method, method)))
                 return false;
@@ -826,15 +842,20 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
             (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB197_SET_REPORT_SEMAPHORE_A ||
              count != 4 || !engine_report(subchannel, words + n, va, &stream.va_end)))
             return false;
-        const uint32_t pool_mask = subchannel <= 1 ? texture_pool_index_mask(method, last) : 0;
-        if (pool_mask) {
+        const enum tg_gpu_texture_pool pool = subchannel <= TG_GPU_PROGRAM_COMPUTE ?
+            texture_pool_in_span(method, last) : TG_GPU_TEXTURE_POOLS;
+        if (pool != TG_GPU_TEXTURE_POOLS) {
             const uint32_t descriptor_bytes = 32;
+            uint64_t end = 0;
             if (op != NVB06F_DMA_INCR_OPCODE_VALUE || count != 3 ||
-                (method != NVB197_SET_TEX_HEADER_POOL_A && method != NVB197_SET_TEX_SAMPLER_POOL_A) ||
-                (words[n + 2] & ~pool_mask) ||
+                method != texture_pool_methods[pool].base ||
+                (words[n + 2] & ~texture_pool_methods[pool].index_mask) ||
                 !word_span(va, words[n], words[n + 1], (words[n + 2] + 1) * descriptor_bytes,
-                           descriptor_bytes, &stream.va_end))
+                           descriptor_bytes, &end))
                 return false;
+            stream.texture_pool_end[subchannel][pool] = end;
+            if (end > stream.va_end)
+                stream.va_end = end;
         }
         if (subchannel <= TG_GPU_PROGRAM_COMPUTE && program_region_span(method, last)) {
             if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB197_SET_PROGRAM_REGION_A)
@@ -861,6 +882,7 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
             if (!used || (staging && !stage_qmd(staging, n, va, &stream.va_end)))
                 return false;
             require_program(&stream, TG_GPU_PROGRAM_COMPUTE);
+            require_texture_pools(&stream, TG_GPU_PROGRAM_COMPUTE);
             n += used;
             continue;
         }
@@ -970,8 +992,10 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
             if (slot == NVK_MME_SELECT_CB0 || slot == NVK_MME_SET_ANTI_ALIAS ||
                 slot == NVK_MME_DRAW || slot == NVK_MME_DRAW_INDEXED)
                 stream.requires_cb0 |= !stream.cb0_end;
-            if (slot == NVK_MME_DRAW || slot == NVK_MME_DRAW_INDEXED)
+            if (slot == NVK_MME_DRAW || slot == NVK_MME_DRAW_INDEXED) {
                 require_program(&stream, TG_GPU_PROGRAM_3D);
+                require_texture_pools(&stream, TG_GPU_PROGRAM_3D);
+            }
             stream.requires_mme |= !stream.uploads_mme;
         }
         if (subchannel == 4) {

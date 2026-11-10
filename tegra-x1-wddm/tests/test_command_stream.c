@@ -246,7 +246,7 @@ static void test_texture_pools(void)
     struct tg_gpu_command_info info;
     uint32_t pool[] = {INCR(0, NVB197_SET_TEX_HEADER_POOL_A, 3), 1, 0x40000, 2047};
     assert(tg_gpu_inspect_command_stream(pool, sizeof(pool), &va, &info));
-    assert(info.va_end == va.limit);
+    assert(info.va_end == va.limit && info.texture_pool_end[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_HEADERS] == va.limit);
     pool[3]++;
     assert(!tg_gpu_inspect_command_stream(pool, sizeof(pool), &va, &info));
 
@@ -254,7 +254,9 @@ static void test_texture_pools(void)
     pool[2] = 0x1ffe0;
     pool[3] = 0;
     assert(tg_gpu_inspect_command_stream(pool, sizeof(pool), &va, &info));
-    assert(info.va_end == va.reserved_base);
+    assert(info.va_end == va.reserved_base &&
+           info.texture_pool_end[TG_GPU_PROGRAM_COMPUTE][TG_GPU_TEXTURE_SAMPLERS] == va.reserved_base &&
+           !info.texture_pool_end[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_SAMPLERS]);
     pool[3] = 1;
     assert(!tg_gpu_inspect_command_stream(pool, sizeof(pool), &va, &info));
     pool[3] = DRF_MASK(NVB1C0_SET_TEX_SAMPLER_POOL_C_MAXIMUM_INDEX) + 1;
@@ -592,6 +594,24 @@ static void test_captured_qmd(void)
     assert(tg_gpu_inspect_command_stream(push, sizeof(push), &va, &info));
     assert(info.va_end == 0x30800 && info.requires_program == (1u << TG_GPU_PROGRAM_COMPUTE) &&
            !info.required_compute_slm_per_tpc);
+    assert(info.requires_texture_pool[TG_GPU_PROGRAM_COMPUTE][TG_GPU_TEXTURE_HEADERS] &&
+           info.requires_texture_pool[TG_GPU_PROGRAM_COMPUTE][TG_GPU_TEXTURE_SAMPLERS]);
+    uint32_t textured[8 + PCAS + 3] = {
+        INCR(1, NVB1C0_SET_TEX_HEADER_POOL_A, 3), 0, 0x40000, 0,
+        INCR(0, NVB197_SET_TEX_SAMPLER_POOL_A, 3), 0, 0x41000, 0,
+    };
+    memcpy(textured + 8, push, sizeof(push));
+    assert(tg_gpu_inspect_command_stream(textured, sizeof(textured), &va, &info));
+    assert(!info.requires_texture_pool[TG_GPU_PROGRAM_COMPUTE][TG_GPU_TEXTURE_HEADERS] &&
+           info.requires_texture_pool[TG_GPU_PROGRAM_COMPUTE][TG_GPU_TEXTURE_SAMPLERS]);
+    textured[4] = INCR(1, NVB1C0_SET_TEX_SAMPLER_POOL_A, 3);
+    assert(tg_gpu_inspect_command_stream(textured, sizeof(textured), &va, &info));
+    assert(!info.requires_texture_pool[TG_GPU_PROGRAM_COMPUTE][TG_GPU_TEXTURE_SAMPLERS]);
+    memmove(textured + PCAS + 3, textured, 8 * sizeof(uint32_t));
+    memcpy(textured, push, sizeof(push));
+    assert(tg_gpu_inspect_command_stream(textured, sizeof(textured), &va, &info));
+    assert(info.requires_texture_pool[TG_GPU_PROGRAM_COMPUTE][TG_GPU_TEXTURE_HEADERS] &&
+           info.requires_texture_pool[TG_GPU_PROGRAM_COMPUTE][TG_GPU_TEXTURE_SAMPLERS]);
     uint32_t snapshot[PCAS + 3];
     memcpy(snapshot, push, sizeof(push));
     assert(tg_gpu_prepare_command_stream(snapshot, sizeof(snapshot), &va, &info));

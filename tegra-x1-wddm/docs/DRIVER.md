@@ -861,9 +861,12 @@ enabled with its base, block size, format and layer state in the same push.
 
 NVK's B197 and B1C0 queue-state updates supply each texture header or sampler
 pool as a complete base and inclusive maximum index. The KMD checks the full
-range of 32-byte entries. B1C0 direct dispatch pairs a QMD address with NVK's
-invalidate-and-schedule operation, with either immediate or incrementing
-encoding. Windows NVK carries the 256-byte QMD 0.6 in a no-op payload before
+range of 32-byte entries and records each engine's binding at retirement.
+NVK draw macros and captured B1C0 dispatches check earlier pool bindings
+against the context's root limit at activation. B1C0 direct dispatch pairs
+a QMD address with NVK's invalidate-and-schedule operation, with either
+immediate or incrementing encoding. Windows NVK carries the 256-byte QMD 0.6
+in a no-op payload before
 the launch. The KMD checks the descriptor's program offset, work-group
 dimensions, memory fields and constant-buffer ranges. It aligns the QMD
 inside the read-only command snapshot and patches PCAS to that GPU VA.

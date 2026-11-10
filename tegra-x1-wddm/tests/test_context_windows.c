@@ -1269,9 +1269,11 @@ void start(void)
     DXGKARG_QUERYCURRENTFENCE query={0};
     TG_GPU_CONTEXT *c,*c2; TG_GPU_CONTEXT_WORK work={0},blocked={0};
     const struct tg_gpu_command_info upload={.uploads_mme=true,.cb0_end=0x18800,
-        .program_end={[TG_GPU_PROGRAM_3D]=0x02000000},.compute_slm={0x10000,0x02040000}};
+        .program_end={[TG_GPU_PROGRAM_3D]=0x02000000},.compute_slm={0x10000,0x02040000},
+        .texture_pool_end={[TG_GPU_PROGRAM_3D]={0x02050000,0x02060000}}};
     const struct tg_gpu_command_info call={.requires_mme=true,.requires_cb0=true,
-        .requires_program=1u << TG_GPU_PROGRAM_3D,.required_compute_slm_per_tpc=0x10000};
+        .requires_program=1u << TG_GPU_PROGRAM_3D,.required_compute_slm_per_tpc=0x10000,
+        .requires_texture_pool={[TG_GPU_PROGRAM_3D]={true,true}}};
     const struct tg_gpu_command_info scratch={.required_compute_slm_per_tpc=0x10000};
     struct tg_gpu_power power={.owned=true,.ready=true,.stage=TG_GPU_STAGE_READY,
         .pmic_address=0x33,.original_enable=0x40,.original_voltage=50};
@@ -1348,7 +1350,8 @@ void start(void)
     CHECK(TgGpuCaptureContextWork(&e,&submit,&upload,&blocked)==STATUS_SUCCESS && blocked.UploadsMme);
     CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS &&
           !c->MmeInitialized && !c->Cb0End && !c->ProgramEnd[TG_GPU_PROGRAM_3D] &&
-          !c->ComputeSlm.va_end && !c->References);
+          !c->ComputeSlm.va_end && !c->TexturePoolEnd[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_HEADERS] &&
+          !c->References);
     CHECK(TgGpuCaptureContextWork(&e,&submit,&scratch,&blocked)==STATUS_SUCCESS);
     CHECK(TgGpuActivateContextWork(&e,&blocked,&scratch)==STATUS_INVALID_PARAMETER &&
           !blocked.Expected && !e.Active);
@@ -1411,6 +1414,10 @@ void start(void)
           !c->ProgramEnd[TG_GPU_PROGRAM_COMPUTE] && !c2->ProgramEnd[TG_GPU_PROGRAM_3D]);
     CHECK(c->ComputeSlm.bytes_per_tpc==upload.compute_slm.bytes_per_tpc &&
           c->ComputeSlm.va_end==upload.compute_slm.va_end && !c2->ComputeSlm.va_end);
+    CHECK(c->TexturePoolEnd[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_HEADERS]==0x02050000 &&
+          c->TexturePoolEnd[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_SAMPLERS]==0x02060000 &&
+          !c->TexturePoolEnd[TG_GPU_PROGRAM_COMPUTE][TG_GPU_TEXTURE_HEADERS] &&
+          !c2->TexturePoolEnd[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_HEADERS]);
     CHECK(TgGpuInitializeWorkQueue(&queue,&e)==STATUS_DEVICE_BUSY && !e.QueueOwner);
     CHECK(TgGpuCaptureContextWork(&e,&submit,NULL,&work)==STATUS_DEVICE_BUSY);
     fail_sync=FALSE;expected_fence=7;notify_context=c;notify_references=0;
@@ -1429,6 +1436,10 @@ void start(void)
     c->Root.VaLimit=upload.program_end[TG_GPU_PROGRAM_3D]-1;
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
     c->Root.VaLimit=upload.compute_slm.va_end-1;
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_SUCCESS);
+    CHECK(TgGpuActivateContextWork(&e,&blocked,&call)==STATUS_INVALID_PARAMETER && !blocked.Expected);
+    CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
+    c->Root.VaLimit=upload.texture_pool_end[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_SAMPLERS]-1;
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_SUCCESS);
     CHECK(TgGpuActivateContextWork(&e,&blocked,&call)==STATUS_INVALID_PARAMETER && !blocked.Expected);
     CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);

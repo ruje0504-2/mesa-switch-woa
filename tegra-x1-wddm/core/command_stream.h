@@ -16,6 +16,12 @@ enum tg_gpu_program_engine {
     TG_GPU_PROGRAM_ENGINES,
 };
 
+enum tg_gpu_texture_pool {
+    TG_GPU_TEXTURE_HEADERS,
+    TG_GPU_TEXTURE_SAMPLERS,
+    TG_GPU_TEXTURE_POOLS,
+};
+
 struct tg_gpu_compute_slm {
     uint64_t bytes_per_tpc;
     uint64_t va_end;
@@ -25,6 +31,8 @@ struct tg_gpu_command_info {
     uint64_t va_end;
     uint64_t reserved_base;
     uint64_t program_end[TG_GPU_PROGRAM_ENGINES];
+    uint64_t texture_pool_end[TG_GPU_PROGRAM_ENGINES][TG_GPU_TEXTURE_POOLS];
+    bool requires_texture_pool[TG_GPU_PROGRAM_ENGINES][TG_GPU_TEXTURE_POOLS];
     struct tg_gpu_compute_slm compute_slm;
     uint64_t required_compute_slm_per_tpc; /* Before the first binding in this stream. */
     uint32_t requires_program; /* Engines using a previously set program region. */

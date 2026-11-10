@@ -384,11 +384,21 @@ NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *
        w->Context->GraphicsGeneration!=e->GraphicsGeneration)) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
     }
-    /* A preceding SLM update can still be queued when this work is admitted. */
+    /* A preceding queue-state push can still be pending at admission. */
     if (info && info->required_compute_slm_per_tpc &&
         (info->required_compute_slm_per_tpc>w->Context->ComputeSlm.bytes_per_tpc ||
          w->Context->ComputeSlm.va_end>w->Root.VaLimit)) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
+    }
+    if (info) {
+        for (UINT engine=0;engine<TG_GPU_PROGRAM_ENGINES;engine++) {
+            for (UINT pool=0;pool<TG_GPU_TEXTURE_POOLS;pool++) {
+                const UINT64 end=w->Context->TexturePoolEnd[engine][pool];
+                if (info->requires_texture_pool[engine][pool] && (!end || end>w->Root.VaLimit)) {
+                    KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
+                }
+            }
+        }
     }
     status=TgGpuWriteRootInstance(&w->Root,&w->Context->Instance,TRUE);
     if(!NT_SUCCESS(status)) { KeReleaseSpinLock(&e->Lock,irql);return status; }
@@ -525,6 +535,10 @@ NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w
             for (UINT engine=0;engine<TG_GPU_PROGRAM_ENGINES;engine++) {
                 if (info->program_end[engine])
                     w->Context->ProgramEnd[engine]=info->program_end[engine];
+                for (UINT pool=0;pool<TG_GPU_TEXTURE_POOLS;pool++) {
+                    if (info->texture_pool_end[engine][pool])
+                        w->Context->TexturePoolEnd[engine][pool]=info->texture_pool_end[engine][pool];
+                }
             }
         }
         /* Retirement has already removed hardware references. Do not make
