@@ -886,6 +886,8 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     CHECK(ddi.DxgkDdiCreateContext(device.hDevice,&gdi_context)==STATUS_SUCCESS);
     CHECK(gdi_context.ContextInfo.AllocationListSize==256 && gdi_context.ContextInfo.Caps.NoPatchingRequired &&
           gdi_context.ContextInfo.DmaBufferPrivateDataSize==sizeof(TG_GPU_QUEUE_ENTRY));
+    /* A virtual GDI DMA pool must take VidMm's aperture allocation path. */
+    CHECK(gdi_context.ContextInfo.DmaBufferSegmentSet==(1u<<(TG_GPU_PAGING_APERTURE_SEGMENT-1)));
     CHECK(ddi.DxgkDdiDestroyContext(gdi_context.hContext)==STATUS_SUCCESS);
     CHECK(ddi.DxgkDdiCreateContext(device.hDevice,&context)==STATUS_SUCCESS);
     CHECK(!context.ContextInfo.AllocationListSize);
