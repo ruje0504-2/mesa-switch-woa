@@ -40,8 +40,8 @@ NTSTATUS TgGpuResolveRootTable(const TG_GPU_TABLE_SEGMENT *Segment,
     return STATUS_SUCCESS;
 }
 
-BOOLEAN TgGpuCheckReadOnlyPitchRange(const TG_GPU_TABLE_SEGMENT *Segment,
-    const TG_GPU_ROOT_TABLE *Root, UINT64 Base, UINT64 End)
+BOOLEAN TgGpuCheckPitchRange(const TG_GPU_TABLE_SEGMENT *Segment,
+    const TG_GPU_ROOT_TABLE *Root, UINT64 Base, UINT64 End, enum tg_gpu_pitch_access Access)
 {
     PVOID mapping;
     UINT64 address;
@@ -68,7 +68,7 @@ BOOLEAN TgGpuCheckReadOnlyPitchRange(const TG_GPU_TABLE_SEGMENT *Segment,
         const volatile UINT64 *leaf = mapping;
         for (UINT page = index.small_page; page < TG_GPU_TABLE_ENTRIES && va < End;
              ++page, va += PAGE_SIZE) {
-            if (!tg_gpu_pte_is_read_only_pitch(leaf[page]))
+            if (!tg_gpu_pte_allows_pitch_access(leaf[page], Access))
                 return FALSE;
         }
     }

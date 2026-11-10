@@ -83,6 +83,21 @@ static bool word_span(const struct tg_gpu_command_va *va, uint32_t hi, uint32_t 
            tg_gpu_command_range_allowed(va, ((uint64_t)hi << 32) | lo, bytes, max_end);
 }
 
+struct tg_gpu_checked_ranges {
+    const struct tg_gpu_command_va *va;
+    uint64_t *max_end;
+    tg_gpu_command_range_check check;
+    void *data;
+};
+
+static bool checked_word_span(const struct tg_gpu_checked_ranges *ranges, uint32_t hi, uint32_t lo,
+                              uint64_t bytes, uint32_t alignment, enum tg_gpu_pitch_access access)
+{
+    const uint64_t base = ((uint64_t)hi << 32) | lo;
+    return word_span(ranges->va, hi, lo, bytes, alignment, ranges->max_end) &&
+           (!ranges->check || ranges->check(ranges->data, base, base + bytes, access));
+}
+
 static bool host_acquire(const uint32_t *args, const struct tg_gpu_command_va *va,
                          uint64_t *max_end)
 {
@@ -102,7 +117,7 @@ static bool inline_upload_span(uint32_t first, uint32_t last)
 }
 
 static size_t inline_upload(uint32_t subchannel, const uint32_t *args, size_t remaining,
-                            const struct tg_gpu_command_va *va, uint64_t *max_end)
+                            const struct tg_gpu_checked_ranges *ranges)
 {
     if (remaining < 6 || !args[0] || (args[0] & 3) || args[1] != 1)
         return 0;
@@ -116,7 +131,7 @@ static size_t inline_upload(uint32_t subchannel, const uint32_t *args, size_t re
     const uint32_t launch = NVDEF(NVB197, LAUNCH_DMA, DST_MEMORY_LAYOUT, PITCH) |
                             NVDEF(NVB197, LAUNCH_DMA, COMPLETION_TYPE, FLUSH_ONLY);
     if (args[4] != header || args[5] != launch ||
-        !word_span(va, args[2], args[3], bytes, 4, max_end))
+        !checked_word_span(ranges, args[2], args[3], bytes, 4, TG_GPU_PITCH_WRITE))
         return 0;
     return 6 + words;
 }
@@ -491,12 +506,29 @@ static bool program_offset(uint32_t offset, uint32_t header_bytes)
            entry + PROGRAM_FETCH_ALIGN + PROGRAM_PREFETCH_GUARD <= PROGRAM_REGION_BYTES;
 }
 
-static bool qmd_0_6(const uint32_t *qmd, const struct tg_gpu_command_va *va,
+#define QMD_GET(field) NVVAL_MW_GET(qmd, NVB1C0, QMDV00_06, field)
+static bool qmd_constant_buffers(const uint32_t *qmd, const struct tg_gpu_checked_ranges *ranges)
+{
+    for (unsigned i = 0; i < 8; i++) {
+        const uint32_t lo = QMD_GET(CONSTANT_BUFFER_ADDR_LOWER(i));
+        const uint32_t hi = QMD_GET(CONSTANT_BUFFER_ADDR_UPPER(i));
+        const uint32_t bytes = QMD_GET(CONSTANT_BUFFER_SIZE(i));
+        if (QMD_GET(CONSTANT_BUFFER_VALID(i))) {
+            if (bytes > 65536 || bytes % 256 ||
+                !checked_word_span(ranges, hi, lo, bytes, 256, TG_GPU_PITCH_READ))
+                return false;
+        } else if (lo || hi || bytes) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool qmd_0_6(const uint32_t *qmd, const struct tg_gpu_checked_ranges *ranges,
                     struct tg_gpu_command_info *info)
 {
 #define QMD_WORD(field) DRF_LW_IDX(qmd, NVB1C0_QMDV00_06_##field)
 #define QMD_MASK(field) DRF_LW_SMASK(qmd, NVB1C0_QMDV00_06_##field)
-#define QMD_GET(field) NVVAL_MW_GET(qmd, NVB1C0, QMDV00_06, field)
 #define QMD_CBUF(i) \
     [QMD_WORD(CONSTANT_BUFFER_ADDR_LOWER(i))] = QMD_MASK(CONSTANT_BUFFER_ADDR_LOWER(i)), \
     [QMD_WORD(CONSTANT_BUFFER_ADDR_UPPER(i))] = QMD_MASK(CONSTANT_BUFFER_ADDR_UPPER(i)) | \
@@ -534,17 +566,8 @@ static bool qmd_0_6(const uint32_t *qmd, const struct tg_gpu_command_va *va,
         slm % 16 || crs % 512 || crs > (1u << 20))
         return false;
 
-    for (unsigned i = 0; i < 8; i++) {
-        const uint32_t lo = QMD_GET(CONSTANT_BUFFER_ADDR_LOWER(i));
-        const uint32_t hi = QMD_GET(CONSTANT_BUFFER_ADDR_UPPER(i));
-        const uint32_t bytes = QMD_GET(CONSTANT_BUFFER_SIZE(i));
-        if (QMD_GET(CONSTANT_BUFFER_VALID(i))) {
-            if (bytes > 65536 || bytes % 256 || !word_span(va, hi, lo, bytes, 256, &info->va_end))
-                return false;
-        } else if (lo || hi || bytes) {
-            return false;
-        }
-    }
+    if (!qmd_constant_buffers(qmd, ranges))
+        return false;
     const uint64_t bytes_per_tpc = ((uint64_t)slm * 32 + crs) * GM20B_WARPS_PER_TPC;
     if (info->compute_slm.va_end)
         return bytes_per_tpc <= info->compute_slm.bytes_per_tpc;
@@ -558,7 +581,7 @@ static bool qmd_0_6(const uint32_t *qmd, const struct tg_gpu_command_va *va,
 }
 
 static size_t qmd_record(const uint32_t *args, size_t remaining,
-                         const struct tg_gpu_command_va *va, struct tg_gpu_command_info *info)
+                         const struct tg_gpu_checked_ranges *ranges, struct tg_gpu_command_info *info)
 {
     const size_t record = TG_GPU_QMD_RECORD_WORDS;
     const uint32_t pcas_a = NVDEF(NVB06F, DMA_INCR, OPCODE, VALUE) |
@@ -568,7 +591,7 @@ static size_t qmd_record(const uint32_t *args, size_t remaining,
     if (remaining < record + 3 || args[record] != pcas_a || args[record + 1])
         return 0;
     const size_t used = compute_dispatch(args + record + 1, remaining - record - 1);
-    return used && qmd_0_6(args, va, info) ? record + 1 + used : 0;
+    return used && qmd_0_6(args, ranges, info) ? record + 1 + used : 0;
 }
 
 static size_t qmd_aligned_word(size_t first)
@@ -725,7 +748,7 @@ static bool cbuf_binding_value(uint32_t value, bool direct)
 }
 
 static size_t direct_cbuf_binding(const uint32_t *args, size_t remaining,
-                                  const struct tg_gpu_command_va *va, uint64_t *max_end)
+                                  const struct tg_gpu_checked_ranges *ranges)
 {
     const uint32_t alignment = 256;
     const uint32_t bytes = args[0];
@@ -743,7 +766,7 @@ static size_t direct_cbuf_binding(const uint32_t *args, size_t remaining,
                              NVVAL(NVB06F, DMA_ONEINCR, ADDRESS, NVB197_CALL_MME_MACRO(NVK_MME_SELECT_CB0) >> 2);
     if (!bind_words || !cbuf_binding_value(bind, true) || remaining - next < 2 ||
         args[next] != restore || args[next + 1] ||
-        !word_span(va, args[1], args[2], bytes, alignment, max_end))
+        !checked_word_span(ranges, args[1], args[2], bytes, alignment, TG_GPU_PITCH_READ))
         return 0;
     /* Leave SELECT_CB0 to the normal MME validation below. */
     return next;
@@ -789,6 +812,7 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
                      const struct tg_gpu_command_va *va, struct tg_gpu_command_info *info)
 {
     struct tg_gpu_command_info stream = {.reserved_base = va ? va->reserved_base : 0};
+    const struct tg_gpu_checked_ranges ranges = {.va = va, .max_end = &stream.va_end};
     struct tg_gpu_copy_state copy = {0};
     uint64_t cb0_setup_end = 0;
     bool zero_addr_ready = false;
@@ -857,8 +881,7 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
         if (subchannel <= 1 && inline_upload_span(method, last)) {
             if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB197_LINE_LENGTH_IN || count != 4)
                 return false;
-            const size_t used = inline_upload(subchannel, words + n, word_count - n,
-                                              va, &stream.va_end);
+            const size_t used = inline_upload(subchannel, words + n, word_count - n, &ranges);
             if (!used)
                 return false;
             n += used;
@@ -903,7 +926,7 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
         }
         if (subchannel == TG_GPU_PROGRAM_COMPUTE && method == NVB1C0_NO_OPERATION &&
             op == NVB06F_DMA_NONINCR_OPCODE_VALUE && count == TG_GPU_QMD_RECORD_WORDS) {
-            const size_t used = qmd_record(words + n, word_count - n, va, &stream);
+            const size_t used = qmd_record(words + n, word_count - n, &ranges, &stream);
             if (!used || (staging && !stage_qmd(staging, n, va, &stream.va_end)))
                 return false;
             require_program(&stream, TG_GPU_PROGRAM_COMPUTE);
@@ -957,7 +980,7 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
                 return false;
             if (cbuf_data_span(method, last)) {
                 if (op == NVB06F_DMA_INCR_OPCODE_VALUE && method == NVB197_SET_CONSTANT_BUFFER_SELECTOR_A && count == 3) {
-                    const size_t used = direct_cbuf_binding(words + n, word_count - n, va, &stream.va_end);
+                    const size_t used = direct_cbuf_binding(words + n, word_count - n, &ranges);
                     if (!used)
                         return false;
                     n += used;
@@ -1065,7 +1088,8 @@ static bool shader_entry_mapped(uint64_t program_end, uint32_t offset, uint32_t 
         !program_offset(offset, header_bytes))
         return false;
     const uint64_t base = program_end - PROGRAM_REGION_BYTES + offset;
-    return check(data, base, base + header_bytes + PROGRAM_FETCH_ALIGN + PROGRAM_PREFETCH_GUARD);
+    return check(data, base, base + header_bytes + PROGRAM_FETCH_ALIGN + PROGRAM_PREFETCH_GUARD,
+                 TG_GPU_PITCH_READ_ONLY);
 }
 
 /* The last value written to a method in this packet. IMMD stores its value
@@ -1158,6 +1182,8 @@ bool tg_gpu_check_command_mappings(const uint32_t *words, size_t bytes,
         (bytes & 3) || ((uintptr_t)words & 3) || !programs || !check)
         return false;
     struct tg_gpu_program_state state = *programs;
+    uint64_t max_end = 0;
+    const struct tg_gpu_checked_ranges ranges = {.max_end = &max_end, .check = check, .data = data};
     const size_t word_count = bytes / sizeof(*words);
     for (size_t n = 0; n < word_count;) {
         const uint32_t header = words[n++];
@@ -1174,6 +1200,22 @@ bool tg_gpu_check_command_mappings(const uint32_t *words, size_t bytes,
              op != NVB06F_DMA_ONEINCR_OPCODE_VALUE) ||
             !packet_last_method(op, method, count, &last)))
             return false;
+        if (subchannel <= TG_GPU_PROGRAM_COMPUTE && op == NVB06F_DMA_INCR_OPCODE_VALUE &&
+            method == NVB197_LINE_LENGTH_IN && count == 4) {
+            const size_t used = inline_upload(subchannel, words + n, word_count - n, &ranges);
+            if (!used)
+                return false;
+            n += used;
+            continue;
+        }
+        if (subchannel == TG_GPU_PROGRAM_3D && op == NVB06F_DMA_INCR_OPCODE_VALUE &&
+            method == NVB197_SET_CONSTANT_BUFFER_SELECTOR_A && count == 3) {
+            const size_t used = direct_cbuf_binding(words + n, word_count - n, &ranges);
+            if (!used)
+                return false;
+            n += used;
+            continue;
+        }
         if (subchannel <= TG_GPU_PROGRAM_COMPUTE && program_region_span(method, last)) {
             if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB197_SET_PROGRAM_REGION_A ||
                 (subchannel == TG_GPU_PROGRAM_3D && !graphics_program_tracking(&state)))
@@ -1190,7 +1232,7 @@ bool tg_gpu_check_command_mappings(const uint32_t *words, size_t bytes,
             if (pool != TG_GPU_TEXTURE_POOLS && method == texture_pool_methods[pool].base) {
                 struct tg_gpu_texture_pool_range range;
                 if (!texture_pool_range(pool, words + n, NULL, &range) ||
-                    !check(data, range.base, range.end))
+                    !check(data, range.base, range.end, TG_GPU_PITCH_READ_ONLY))
                     return false;
             }
         }
@@ -1202,7 +1244,8 @@ bool tg_gpu_check_command_mappings(const uint32_t *words, size_t bytes,
             /* Admission moved the QMD within its immutable NO_OPERATION payload. */
             const uint32_t *qmd = words + qmd_aligned_word(n);
             const uint32_t offset = NVVAL_MW_GET(qmd, NVB1C0, QMDV00_06, PROGRAM_OFFSET);
-            if (!shader_entry_mapped(state.end[TG_GPU_PROGRAM_COMPUTE], offset, 0, check, data))
+            if (!shader_entry_mapped(state.end[TG_GPU_PROGRAM_COMPUTE], offset, 0, check, data) ||
+                !qmd_constant_buffers(qmd, &ranges))
                 return false;
         }
         if (!immediate)

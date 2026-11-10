@@ -171,6 +171,22 @@ static void test_copy_stream(void)
     assert(!tg_gpu_validate_command_stream(phys_launch, sizeof(phys_launch)));
 }
 
+struct range_checks {
+    struct tg_gpu_texture_pool_range expected[2];
+    enum tg_gpu_pitch_access access[2];
+    unsigned next;
+};
+
+static bool check_range(void *data, uint64_t base, uint64_t end, enum tg_gpu_pitch_access access)
+{
+    struct range_checks *checks = data;
+    if (checks->next >= 2)
+        return false;
+    const unsigned index = checks->next++;
+    const struct tg_gpu_texture_pool_range *range = &checks->expected[index];
+    return base == range->base && end == range->end && access == checks->access[index];
+}
+
 static void test_inline_upload(void)
 {
     const uint32_t launch = NVDEF(NVB197, LAUNCH_DMA, DST_MEMORY_LAYOUT, PITCH) |
@@ -183,6 +199,10 @@ static void test_inline_upload(void)
     };
     assert(tg_gpu_inspect_command_stream(upload, sizeof(upload), &va, &info));
     assert(info.va_end == va.reserved_base);
+    struct tg_gpu_program_state programs = {0};
+    struct range_checks checks = {.expected = {{0x1fff8, 0x20000}}, .access = {TG_GPU_PITCH_WRITE}};
+    assert(tg_gpu_check_command_mappings(upload, sizeof(upload), &programs, check_range, &checks));
+    assert(checks.next == 1);
     upload[0] = INCR(1, NVB197_LINE_LENGTH_IN, 4);
     assert(!tg_gpu_validate_command_stream(upload, sizeof(upload))); /* Wrong launch subchannel. */
     upload[5] = ONEINCR(1, NVB197_LAUNCH_DMA, 3);
@@ -238,20 +258,6 @@ static void test_report_and_acquire(void)
     assert(tg_gpu_inspect_command_stream(wait, sizeof(wait), &va, &info));
     wait[4] = acquire_flags | NVDEF(NVB06F, SEMAPHORED, OPERATION, RELEASE);
     assert(!tg_gpu_validate_command_stream(wait, sizeof(wait)));
-}
-
-struct range_checks {
-    struct tg_gpu_texture_pool_range expected[2];
-    unsigned next;
-};
-
-static bool check_range(void *data, uint64_t base, uint64_t end)
-{
-    struct range_checks *checks = data;
-    if (checks->next >= 2)
-        return false;
-    const struct tg_gpu_texture_pool_range *range = &checks->expected[checks->next++];
-    return base == range->base && end == range->end;
 }
 
 static void test_texture_pools(void)
@@ -505,6 +511,10 @@ static void test_constant_buffers(void)
     };
     assert(tg_gpu_inspect_command_stream(bind, sizeof(bind), &va, &info));
     assert(info.va_end == va.limit && info.requires_cb0 && info.requires_mme);
+    struct tg_gpu_program_state programs = {0};
+    struct range_checks checks = {.expected = {{0x10004ff00, 0x100050000}}, .access = {TG_GPU_PITCH_READ}};
+    assert(tg_gpu_check_command_mappings(bind, sizeof(bind), &programs, check_range, &checks));
+    assert(checks.next == 1);
     assert(!tg_gpu_validate_command_stream(bind, sizeof(bind) - 2 * sizeof(uint32_t)));
     bind[3] = 0x20000;
     assert(!tg_gpu_inspect_command_stream(bind, sizeof(bind), &va, &info));
@@ -684,11 +694,14 @@ static void test_captured_qmd(void)
     assert(snapshot[PCAS + 1] == qmd_va >> 8 && !push[PCAS + 1]);
     assert(info.va_end == qmd_va + 256 && !memcmp(snapshot + TG_GPU_QMD_WORDS, qmd, 256));
     struct tg_gpu_program_state programs = {.end = {[TG_GPU_PROGRAM_COMPUTE] = 0x200000000}};
-    struct range_checks checks = {.expected = {{0x10000ed80, 0x10000f600}}};
+    struct range_checks checks = {
+        .expected = {{0x10000ed80, 0x10000f600}, {0x30000, 0x30800}},
+        .access = {TG_GPU_PITCH_READ_ONLY, TG_GPU_PITCH_READ},
+    };
     /* The abandoned original offset must not drive the check. */
     NVVAL_MW_SET(snapshot + 1, NVB1C0, QMDV00_06, PROGRAM_OFFSET, 0x100);
     assert(tg_gpu_check_command_mappings(snapshot, sizeof(snapshot), &programs, check_range, &checks));
-    assert(checks.next == 1);
+    assert(checks.next == 2);
 
     memcpy(snapshot, push, sizeof(push));
     assert(!tg_gpu_prepare_command_stream(snapshot, sizeof(snapshot) - 4, &va, NULL));

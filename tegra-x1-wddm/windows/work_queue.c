@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "work_queue.h"
+#include "../core/nvk_mme_programs.h"
 
 static VOID free_entry(TG_GPU_QUEUE_ENTRY *entry)
 {
@@ -210,10 +211,16 @@ static NTSTATUS preempt_prefix(TG_GPU_WORK_QUEUE *q)
         if(owned)free_entry(entry);
     }
 }
-static bool check_read_only_mapping(void *data, uint64_t base, uint64_t end)
+static bool check_mapping(void *data, uint64_t base, uint64_t end, enum tg_gpu_pitch_access access)
 {
     const TG_GPU_CONTEXT_WORK *w = data;
-    return TgGpuCheckReadOnlyPitchRange(w->Engine->Tables, &w->Root, base, end) != FALSE;
+    return TgGpuCheckPitchRange(w->Engine->Tables, &w->Root, base, end, access) != FALSE;
+}
+
+static bool check_draw_cb0(TG_GPU_CONTEXT_WORK *w, uint64_t end)
+{
+    return end > TG_GPU_NVK_DRAW_CB0_BYTES &&
+           check_mapping(w, end - TG_GPU_NVK_DRAW_CB0_BYTES, end, TG_GPU_PITCH_WRITE);
 }
 
 static bool check_command_mappings(TG_GPU_CONTEXT_WORK *w, TG_GPU_COMMAND_SNAPSHOT *snapshot)
@@ -221,17 +228,20 @@ static bool check_command_mappings(TG_GPU_CONTEXT_WORK *w, TG_GPU_COMMAND_SNAPSH
     /* DispatchGate orders paging and retirement. Resolve the next program
      * state from the retired bindings and publish it only at completion.
      */
+    if ((snapshot->Info.cb0_end && !check_draw_cb0(w, snapshot->Info.cb0_end)) ||
+        (snapshot->Info.requires_cb0 && !check_draw_cb0(w, w->Context->Cb0End)))
+        return false;
     for (UINT engine = 0; engine < TG_GPU_PROGRAM_ENGINES; ++engine) {
         for (UINT pool = 0; pool < TG_GPU_TEXTURE_POOLS; ++pool) {
             const struct tg_gpu_texture_pool_range *range = &w->Context->TexturePool[engine][pool];
             if (snapshot->Info.requires_texture_pool[engine][pool] &&
-                !check_read_only_mapping(w, range->base, range->end))
+                !check_mapping(w, range->base, range->end, TG_GPU_PITCH_READ_ONLY))
                 return false;
         }
     }
     struct tg_gpu_program_state programs = w->Context->Programs;
     if (!tg_gpu_check_command_mappings(snapshot->Words, snapshot->Bytes, &programs,
-                                       check_read_only_mapping, w))
+                                       check_mapping, w))
         return false;
     snapshot->Info.programs = programs;
     return true;

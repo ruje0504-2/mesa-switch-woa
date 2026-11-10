@@ -29,6 +29,12 @@ struct tg_gpu_va_indices {
     uint32_t small_page;
 };
 
+enum tg_gpu_pitch_access {
+    TG_GPU_PITCH_READ_ONLY,
+    TG_GPU_PITCH_READ,
+    TG_GPU_PITCH_WRITE,
+};
+
 bool tg_gpu_va_indices(uint64_t va, struct tg_gpu_va_indices *indices);
 bool tg_gpu_pte_kind_supported(uint64_t kind);
 
@@ -42,7 +48,7 @@ bool tg_gpu_pte_4k_kind(uint64_t gpu_address, bool read_only, bool gpu_uncached,
                         uint8_t kind, uint64_t *pte);
 bool tg_gpu_pde_small(uint64_t table_gpu_address, uint64_t *pde);
 bool tg_gpu_decode_pde_small(uint64_t pde, uint64_t *table_gpu_address);
-bool tg_gpu_pte_is_read_only_pitch(uint64_t pte);
+bool tg_gpu_pte_allows_pitch_access(uint64_t pte, enum tg_gpu_pitch_access access);
 bool tg_gpu_instance_pdb(uint64_t directory_gpu_address, uint64_t *pdb);
 
 #endif

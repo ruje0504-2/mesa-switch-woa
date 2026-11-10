@@ -492,7 +492,7 @@ static void TestRoot(void)
     CHECK(instance[130]==0xfffff000 && instance[131]==0xff); /* no partial RAMIN write */
 }
 
-static void TestPoolMappings(void)
+static void TestPitchMappings(void)
 {
     static _Alignas(PAGE_SIZE) UINT64 entries[3 * TG_GPU_TABLE_ENTRIES];
     const UINT64 physical = 0x90000000;
@@ -509,14 +509,18 @@ static void TestPoolMappings(void)
     CHECK(tg_gpu_pde_small(physical + TG_GPU_TABLE_BYTES, &entries[0]));
     CHECK(tg_gpu_pde_small(physical + 2 * TG_GPU_TABLE_BYTES, &entries[1]));
     CHECK(tg_gpu_pte_4k(0x80000000, true, false, &first[TG_GPU_TABLE_ENTRIES - 1]));
-    CHECK(TgGpuCheckReadOnlyPitchRange(&segment, &root, boundary - 32, boundary));
-    CHECK(!TgGpuCheckReadOnlyPitchRange(&segment, &root, boundary - 32, boundary + 32));
+    CHECK(TgGpuCheckPitchRange(&segment, &root, boundary - 32, boundary, TG_GPU_PITCH_READ_ONLY));
+    CHECK(!TgGpuCheckPitchRange(&segment, &root, boundary - 32, boundary + 32, TG_GPU_PITCH_READ));
     CHECK(tg_gpu_pte_4k(0x80001000, true, true, &second[0]));
-    CHECK(TgGpuCheckReadOnlyPitchRange(&segment, &root, boundary - 32, boundary + 32));
+    CHECK(TgGpuCheckPitchRange(&segment, &root, boundary - 32, boundary + 32, TG_GPU_PITCH_READ_ONLY));
+    CHECK(tg_gpu_pte_4k(0x80001000, false, true, &second[0]));
+    CHECK(TgGpuCheckPitchRange(&segment, &root, boundary - 32, boundary + 32, TG_GPU_PITCH_READ));
+    CHECK(!TgGpuCheckPitchRange(&segment, &root, boundary - 32, boundary + 32, TG_GPU_PITCH_WRITE));
+    CHECK(TgGpuCheckPitchRange(&segment, &root, boundary, boundary + 32, TG_GPU_PITCH_WRITE));
     CHECK(tg_gpu_pte_4k_kind(0x80001000, true, true, TG_GPU_PTE_KIND_GENERIC_16BX2, &second[0]));
-    CHECK(!TgGpuCheckReadOnlyPitchRange(&segment, &root, boundary - 32, boundary + 32));
+    CHECK(!TgGpuCheckPitchRange(&segment, &root, boundary - 32, boundary + 32, TG_GPU_PITCH_READ));
     CHECK(tg_gpu_pde_small(physical + sizeof(entries), &entries[1]));
-    CHECK(!TgGpuCheckReadOnlyPitchRange(&segment, &root, boundary - 32, boundary + 32));
+    CHECK(!TgGpuCheckPitchRange(&segment, &root, boundary - 32, boundary + 32, TG_GPU_PITCH_READ));
 }
 
 static NTSTATUS Resolve(PVOID Context, UINT Segment, UINT64 Offset, SIZE_T Bytes, UINT64 *Address)
@@ -699,7 +703,7 @@ void start(void)
     TestDisplayFlip();
     TestSegment();
     TestRoot();
-    TestPoolMappings();
+    TestPitchMappings();
     TestPagingBuffer();
     for (i = 0; i < TG_GPU_TABLE_ENTRIES; ++i) table[i] = UINT64_C(0xa5a5a5a5a5a5a5a5);
     u.PageTableAddress.CpuVirtual = table;

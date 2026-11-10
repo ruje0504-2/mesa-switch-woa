@@ -92,12 +92,15 @@ tg_gpu_decode_pde_small(uint64_t pde, uint64_t *table_gpu_address)
 }
 
 bool
-tg_gpu_pte_is_read_only_pitch(uint64_t pte)
+tg_gpu_pte_allows_pitch_access(uint64_t pte, enum tg_gpu_pitch_access access)
 {
     const uint64_t address = (pte & UINT64_C(0xfffffff0)) << 8;
+    const bool read_only = (pte & UINT64_C(4)) != 0;
     const bool gpu_uncached = (pte & (UINT64_C(1) << 32)) != 0;
+    const enum tg_gpu_pitch_access protection = read_only ? TG_GPU_PITCH_READ_ONLY : TG_GPU_PITCH_WRITE;
     uint64_t expected;
-    return tg_gpu_pte_4k(address, true, gpu_uncached, &expected) && pte == expected;
+    return (access == TG_GPU_PITCH_READ || access == protection) &&
+           tg_gpu_pte_4k(address, read_only, gpu_uncached, &expected) && pte == expected;
 }
 
 bool

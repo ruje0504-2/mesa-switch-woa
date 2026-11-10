@@ -26,8 +26,8 @@ NTSTATUS TgGpuResolveRootTable(const TG_GPU_TABLE_SEGMENT *Segment,
 /* Check an end-exclusive range at the ordered submission point. VidMm owns
  * residency. Only the uncached page-table segment is accessed by the CPU.
  */
-BOOLEAN TgGpuCheckReadOnlyPitchRange(const TG_GPU_TABLE_SEGMENT *Segment,
-    const TG_GPU_ROOT_TABLE *Root, UINT64 Base, UINT64 End);
+BOOLEAN TgGpuCheckPitchRange(const TG_GPU_TABLE_SEGMENT *Segment,
+    const TG_GPU_ROOT_TABLE *Root, UINT64 Base, UINT64 End, enum tg_gpu_pitch_access Access);
 
 /* Caller serializes this with submission and holds the context idle until
  * instance invalidation/rebind is complete. Instance is an owned uncached

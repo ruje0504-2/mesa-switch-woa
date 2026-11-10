@@ -1074,6 +1074,24 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     CHECK(TgGpuResetWorkQueue(&q,NULL,&power,&clock)==STATUS_SUCCESS && PoolsInUse()==pools);
     leaf[8]=saved_pte;
     CHECK(TgGpuResumeWorkQueue(&q,&power)==STATUS_SUCCESS);
+    /* An I2M packet cannot write an otherwise valid read-only USER page. */
+    const UINT upload[] = {
+        0x20040060,4,1,0,0x9000, /* LINE_LENGTH_IN, one row and destination. */
+        0xa002006c,0x11,0x1234,  /* LAUNCH_DMA and LOAD_INLINE_DATA. */
+    };
+    RtlCopyMemory(pool_payload.Words,upload,sizeof(upload));
+    pool_payload.Header=(struct tg_gpu_submit_request){TG_GPU_SUBMIT_ABI,
+        sizeof(pool_payload.Header)+sizeof(upload),sizeof(upload),0};
+    pool_submit.DmaBufferSize=sizeof(upload);
+    pool_submit.DmaBufferUmdPrivateDataSize=pool_payload.Header.size;
+    saved_pte=leaf[9];
+    leaf[9]|=UINT64_C(4);
+    CHECK(ddi.DxgkDdiSubmitCommandVirtual(&e,&pool_submit)==STATUS_SUCCESS && PoolsInUse()==pools+2);
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_INVALID_ADDRESS && !q.Current.Expected &&
+          !e.Active && e.LastCompletedFence==107 && hw.reads+hw.writes==accesses && interrupts==before+6);
+    CHECK(TgGpuResetWorkQueue(&q,NULL,&power,&clock)==STATUS_SUCCESS && PoolsInUse()==pools);
+    leaf[9]=saved_pte;
+    CHECK(TgGpuResumeWorkQueue(&q,&power)==STATUS_SUCCESS);
     /* A second submission can use the unused tail of the same DMA buffer.
      * Failed TLB invalidation pins its slot until reset proves isolation. */
     a.DmaBufferWriteOffset=144;

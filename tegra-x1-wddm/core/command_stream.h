@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "gm20b_mmu.h"
 
 struct tg_gpu_command_va {
     uint64_t limit;
@@ -73,11 +74,12 @@ bool tg_gpu_inspect_command_stream(const uint32_t *, size_t bytes,
 bool tg_gpu_prepare_command_stream(uint32_t *, size_t bytes,
                                    const struct tg_gpu_command_va *,
                                    struct tg_gpu_command_info *);
-/* Check every texture pool bind and shader entry fetch in a prepared
- * snapshot. Programs starts at the retired context state and is updated
- * only on success. The caller publishes it on retirement.
+/* Check texture pools, shader entries, inline uploads and direct constant
+ * buffers in a prepared snapshot. Programs starts at the retired context
+ * state and is updated only on success. The caller publishes it on retirement.
  */
-typedef bool (*tg_gpu_command_range_check)(void *, uint64_t base, uint64_t end);
+typedef bool (*tg_gpu_command_range_check)(void *, uint64_t base, uint64_t end,
+                                           enum tg_gpu_pitch_access);
 bool tg_gpu_check_command_mappings(const uint32_t *, size_t bytes,
                                    struct tg_gpu_program_state *,
                                    tg_gpu_command_range_check, void *);

@@ -831,9 +831,10 @@ queue, so later submits can use the saved MME programs.
 
 The same retirement step publishes the checked range of NVK's CB0 root
 table. Later graphics pushes that update it require that context's CB0 to fit
-the current root. Direct bindings validate the selected constant buffer's
-aligned address and size. Windows NVK restores CB0 in the same push, and
-inline root uploads are bounded by the generated table size.
+the current root. The queue checks for writable pitch pages in new and reused
+CB0 ranges. Direct bindings validate the selected constant buffer's aligned
+address, size and readable pitch pages. Windows NVK restores CB0 in the same
+push, and inline root uploads are bounded by the generated table size.
 
 The B0B5 validator checks virtual pitch and block-linear transfers, remapped
 fills, zero-length flushes and semaphore releases. Each launch supplies its
@@ -847,7 +848,8 @@ the application mappings and residency.
 The same GPUVA check covers B197 and B1C0 inline uploads, one- or four-word
 reports, the MME compute-invocation report, and FIFO semaphore acquires for
 events and query waits. An inline upload supplies one pitch-linear row and
-its complete data in the following increment-once packet. The KMD checks the
+its complete data in the following increment-once packet. The worker checks
+that every destination page is writable. The KMD checks the
 report operation and size and admits the read-only equality and greater-or-equal
 FIFO waits emitted by NVK.
 
@@ -878,6 +880,8 @@ immediate or incrementing encoding. Windows NVK carries the 256-byte QMD 0.6
 in a no-op payload before the launch. The KMD checks the program offset,
 work-group dimensions, memory fields and constant-buffer ranges. It aligns the QMD
 inside the read-only command snapshot and patches PCAS to that GPU VA.
+The worker checks readable pitch pages for each enabled constant buffer in
+the relocated QMD.
 The payload reserves space for alignment within the existing 64 KiB limit.
 [NVIDIA Maxwell compute class](https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/compute/clb1c0.h)
 [QMD layout](https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/compute/clb1c0qmd.h)
