@@ -20,6 +20,10 @@
 #define T214_GPU_LIC_SIZE         0x0000001C
 #define T214_GPU_LIC_NONSTALL     0x40000000u
 
+/* Hekate IPL scanout on HDH-001: 720 x 1280 x 4 bytes, pitch 2880. */
+#define T214_GPU_POST_FB_BASE     0xF5A00000
+#define T214_GPU_POST_FB_SIZE     0x00384000
+
 /* Narrow GPU power/clock registers, excluding the fan owner's CPU CAR
  * block. PLLP is read through that owner; PMIC access uses its SPB target.
  */

@@ -38,6 +38,28 @@ static void TestResources(void)
         CHECK(TgGpuReleaseResources(&dxgk,&resources)==STATUS_SUCCESS&&!resource_live);
     }
     CM_PARTIAL_RESOURCE_LIST *list=ResourceList(TRUE);
+    CM_PARTIAL_RESOURCE_DESCRIPTOR post = {0};
+    post.Type = CmResourceTypeMemory;
+    post.ShareDisposition = CmResourceShareDeviceExclusive;
+    post.u.Memory.Start.QuadPart = T214_GPU_POST_FB_BASE;
+    post.u.Memory.Length = T214_GPU_POST_FB_SIZE;
+    list->PartialDescriptors[list->Count++] = post;
+    CHECK(TgGpuAcquireResources(&dxgk,&resources)==STATUS_SUCCESS);
+    CHECK(resource_maps==T214_GPU_RESOURCE_COUNT+1);
+    CHECK(TgGpuReleaseResources(&dxgk,&resources)==STATUS_SUCCESS&&!resource_live);
+
+    list=ResourceList(TRUE);
+    list->PartialDescriptors[list->Count++] = post;
+    list->PartialDescriptors[list->Count++] = post;
+    CHECK(TgGpuAcquireResources(&dxgk,&resources)==STATUS_DEVICE_CONFIGURATION_ERROR&&!resource_maps);
+    --list->Count;
+    list->PartialDescriptors[list->Count-1].u.Memory.Length -= PAGE_SIZE;
+    CHECK(TgGpuAcquireResources(&dxgk,&resources)==STATUS_DEVICE_CONFIGURATION_ERROR&&!resource_maps);
+    list->PartialDescriptors[list->Count-1] = post;
+    list->PartialDescriptors[list->Count-1].Flags = CM_RESOURCE_MEMORY_READ_ONLY;
+    CHECK(TgGpuAcquireResources(&dxgk,&resources)==STATUS_DEVICE_CONFIGURATION_ERROR&&!resource_maps);
+
+    list=ResourceList(TRUE);
     list->PartialDescriptors[T214_GPU_RESOURCE_COUNT].u.Memory.Length=4;
     CHECK(TgGpuAcquireResources(&dxgk,&resources)==STATUS_DEVICE_CONFIGURATION_ERROR&&!resource_maps);
     ResourceList(TRUE);resource_fail_map=T214_GPU_RESOURCE_COUNT+1;

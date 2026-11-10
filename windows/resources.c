@@ -49,6 +49,7 @@ TgGpuAcquireResources(const DXGKRNL_INTERFACE *Dxgk,
     DXGK_DEVICE_INFO info = {0};
     PCM_PARTIAL_RESOURCE_LIST list;
     ULONG i, memoryMask = 0, interruptCount = 0;
+    BOOLEAN hasPostFramebuffer = FALSE;
     NTSTATUS status;
     PAGED_CODE();
 
@@ -61,15 +62,24 @@ TgGpuAcquireResources(const DXGKRNL_INTERFACE *Dxgk,
     status = Dxgk->DxgkCbGetDeviceInformation(Dxgk->DeviceHandle, &info);
     if (!NT_SUCCESS(status))
         return status;
-    /* The single ACPI render node supplies GPU and narrow power resources.
-     * The POST framebuffer and CPU clock block belong to their own drivers.
-     */
+    /* GPU0 supplies render and narrow power resources. The optional POST
+     * aperture is validated here. Mapping it requires display ownership. */
     if (!info.TranslatedResourceList || info.TranslatedResourceList->Count != 1)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     list = &info.TranslatedResourceList->List[0].PartialResourceList;
     for (i = 0; i < list->Count; ++i) {
         const CM_PARTIAL_RESOURCE_DESCRIPTOR *resource = &list->PartialDescriptors[i];
         if (resource->Type == CmResourceTypeMemory) {
+            if (resource->u.Memory.Start.QuadPart == T214_GPU_POST_FB_BASE) {
+                if (hasPostFramebuffer ||
+                    resource->u.Memory.Length != T214_GPU_POST_FB_SIZE ||
+                    resource->ShareDisposition != CmResourceShareDeviceExclusive ||
+                    (resource->Flags & (CM_RESOURCE_MEMORY_READ_ONLY |
+                                        CM_RESOURCE_MEMORY_WRITE_ONLY)) != 0)
+                    return STATUS_DEVICE_CONFIGURATION_ERROR;
+                hasPostFramebuffer = TRUE;
+                continue;
+            }
             if(resource->u.Memory.Start.QuadPart==T214_GPU_LIC_BASE) {
                 if(resource->u.Memory.Length!=T214_GPU_LIC_SIZE ||
                    resource->ShareDisposition!=CmResourceShareDeviceExclusive || Resources->Lic.Type)
