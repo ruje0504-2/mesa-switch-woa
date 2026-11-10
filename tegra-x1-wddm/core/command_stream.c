@@ -163,6 +163,51 @@ static bool engine_report(uint32_t subchannel, const uint32_t *args,
     return valid && word_span(va, args[0], args[1], bytes, bytes, max_end);
 }
 
+/* B197 and B1C0 share the pool methods and 32-byte descriptor stride. */
+static uint32_t texture_pool_index_mask(uint32_t first, uint32_t last)
+{
+    if (first <= NVB197_SET_TEX_HEADER_POOL_C && last >= NVB197_SET_TEX_HEADER_POOL_A)
+        return DRF_MASK(NVB197_SET_TEX_HEADER_POOL_C_MAXIMUM_INDEX);
+    if (first <= NVB197_SET_TEX_SAMPLER_POOL_C && last >= NVB197_SET_TEX_SAMPLER_POOL_A)
+        return DRF_MASK(NVB197_SET_TEX_SAMPLER_POOL_C_MAXIMUM_INDEX);
+    return 0;
+}
+
+static bool pcas_span(uint32_t first, uint32_t last)
+{
+    return first <= NVB1C0_SEND_SIGNALING_PCAS_B && last >= NVB1C0_SEND_PCAS_A;
+}
+
+static size_t compute_dispatch(const uint32_t *args, size_t remaining,
+                               const struct tg_gpu_command_va *va, uint64_t *max_end)
+{
+    const uint32_t launch = NVDEF(NVB1C0, SEND_SIGNALING_PCAS_B, INVALIDATE, TRUE) |
+                            NVDEF(NVB1C0, SEND_SIGNALING_PCAS_B, SCHEDULE, TRUE);
+    const uint32_t method = NVB1C0_SEND_SIGNALING_PCAS_B >> 2;
+    const uint32_t immediate = NVDEF(NVB06F, DMA_IMMD, OPCODE, VALUE) |
+                               NVVAL(NVB06F, DMA_IMMD, SUBCHANNEL, 1) |
+                               NVVAL(NVB06F, DMA_IMMD, ADDRESS, method) |
+                               NVVAL(NVB06F, DMA_IMMD, DATA, launch);
+    const uint32_t incrementing = NVDEF(NVB06F, DMA_INCR, OPCODE, VALUE) |
+                                  NVVAL(NVB06F, DMA_INCR, SUBCHANNEL, 1) |
+                                  NVVAL(NVB06F, DMA_INCR, ADDRESS, method) |
+                                  NVVAL(NVB06F, DMA_INCR, COUNT, 1);
+    if (remaining < 2)
+        return 0;
+    size_t used;
+    if (args[1] == immediate)
+        used = 2;
+    else if (remaining >= 3 && args[1] == incrementing && args[2] == launch)
+        used = 3;
+    else
+        return 0;
+
+    /* SEND_PCAS_A encodes the address in 256-byte units.
+     * NVK's QMD 0.6 is 64 dwords.
+     */
+    return tg_gpu_command_range_allowed(va, (uint64_t)args[0] << 8, 256, max_end) ? used : 0;
+}
+
 static bool mme_upload_span(uint32_t subchannel, uint32_t first, uint32_t last)
 {
     return subchannel == 0 && first <= NVB197_LOAD_MME_START_ADDRESS_RAM &&
@@ -224,7 +269,11 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
             if(!method_allowed(method) || method==NVB06F_SET_OBJECT ||
                mme_upload_span(subchannel, method, method) ||
                (subchannel == 0 && method >= NVB197_CALL_MME_MACRO(0)))return false;
-            if (subchannel <= 1 && (inline_upload_span(method, method) || report_span(method, method)))
+            if (subchannel <= 1 && (inline_upload_span(method, method) ||
+                                    report_span(method, method) ||
+                                    texture_pool_index_mask(method, method)))
+                return false;
+            if (subchannel == 1 && pcas_span(method, method))
                 return false;
             if (subchannel == 4 && method >= 0x100 &&
                 !tg_gpu_copy_method(&copy, method, NVVAL_GET(header, NVB06F, DMA_IMMD, DATA),
@@ -268,6 +317,25 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
             (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB197_SET_REPORT_SEMAPHORE_A ||
              count != 4 || !engine_report(subchannel, words + n, va, &stream.va_end)))
             return false;
+        const uint32_t pool_mask = subchannel <= 1 ? texture_pool_index_mask(method, last) : 0;
+        if (pool_mask) {
+            const uint32_t descriptor_bytes = 32;
+            if (op != NVB06F_DMA_INCR_OPCODE_VALUE || count != 3 ||
+                (method != NVB197_SET_TEX_HEADER_POOL_A && method != NVB197_SET_TEX_SAMPLER_POOL_A) ||
+                (words[n + 2] & ~pool_mask) ||
+                !word_span(va, words[n], words[n + 1], (words[n + 2] + 1) * descriptor_bytes,
+                           descriptor_bytes, &stream.va_end))
+                return false;
+        }
+        if (subchannel == 1 && pcas_span(method, last)) {
+            if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB1C0_SEND_PCAS_A || count != 1)
+                return false;
+            const size_t used = compute_dispatch(words + n, word_count - n, va, &stream.va_end);
+            if (!used)
+                return false;
+            n += used;
+            continue;
+        }
         if (mme_upload_span(subchannel, method, last)) {
             /* NVK uploads its programs and their slot bindings together. */
             const size_t mme_words = sizeof(tg_gpu_nvk_mme_init) / sizeof(*words);

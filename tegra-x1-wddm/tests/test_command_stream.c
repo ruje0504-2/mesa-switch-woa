@@ -5,6 +5,7 @@
 #include "nouveau/headers/nvidia/classes/clb06f.h"
 #include "nouveau/headers/nvidia/classes/clb0b5.h"
 #include "nouveau/headers/nvidia/classes/clb197.h"
+#include "nouveau/headers/nvidia/classes/clb1c0.h"
 #include "nouveau/vulkan/nvk_mme_slots.h"
 #include <assert.h>
 #include <stdio.h>
@@ -93,9 +94,10 @@ static void test_mme_order(void)
 }
 
 #define INCR(subchannel, method, count) (0x20000000u | ((subchannel) << 13) | ((count) << 16) | ((method) >> 2))
+#define IMMD(subchannel, method, data) (0x80000000u | ((subchannel) << 13) | ((data) << 16) | ((method) >> 2))
 #define ONEINCR(subchannel, method, count) (0xa0000000u | ((subchannel) << 13) | ((count) << 16) | ((method) >> 2))
 #define CE_INCR(method, count) INCR(4, NVB0B5_##method, count)
-#define CE_IMMD(method, data) (0x80008000u | ((data) << 16) | (NVB0B5_##method >> 2))
+#define CE_IMMD(method, data) IMMD(4, NVB0B5_##method, data)
 
 static void test_copy_stream(void)
 {
@@ -236,6 +238,76 @@ static void test_report_and_acquire(void)
     assert(!tg_gpu_validate_command_stream(wait, sizeof(wait)));
 }
 
+static void test_texture_pools(void)
+{
+    const struct tg_gpu_command_va va = {0x100050000, 0x100020000, 0x100030000};
+    struct tg_gpu_command_info info;
+    uint32_t pool[] = {INCR(0, NVB197_SET_TEX_HEADER_POOL_A, 3), 1, 0x40000, 2047};
+    assert(tg_gpu_inspect_command_stream(pool, sizeof(pool), &va, &info));
+    assert(info.va_end == va.limit);
+    pool[3]++;
+    assert(!tg_gpu_inspect_command_stream(pool, sizeof(pool), &va, &info));
+
+    pool[0] = INCR(1, NVB1C0_SET_TEX_SAMPLER_POOL_A, 3);
+    pool[2] = 0x1ffe0;
+    pool[3] = 0;
+    assert(tg_gpu_inspect_command_stream(pool, sizeof(pool), &va, &info));
+    assert(info.va_end == va.reserved_base);
+    pool[3] = 1;
+    assert(!tg_gpu_inspect_command_stream(pool, sizeof(pool), &va, &info));
+    pool[3] = DRF_MASK(NVB1C0_SET_TEX_SAMPLER_POOL_C_MAXIMUM_INDEX) + 1;
+    assert(!tg_gpu_validate_command_stream(pool, sizeof(pool)));
+    pool[3] = 0;
+    pool[2] |= 4;
+    assert(!tg_gpu_validate_command_stream(pool, sizeof(pool)));
+    pool[2] &= ~4u;
+    pool[1] = 0x100;
+    assert(!tg_gpu_validate_command_stream(pool, sizeof(pool)));
+    pool[1] = 1;
+    pool[0] = ONEINCR(1, NVB1C0_SET_TEX_SAMPLER_POOL_A, 3);
+    assert(!tg_gpu_validate_command_stream(pool, sizeof(pool)));
+
+    const uint32_t standalone = IMMD(0, NVB197_SET_TEX_HEADER_POOL_C, 0);
+    const uint32_t partial[] = {INCR(1, NVB1C0_SET_TEX_SAMPLER_POOL_B, 2), 0x10000, 0};
+    assert(!tg_gpu_validate_command_stream(&standalone, sizeof(standalone)));
+    assert(!tg_gpu_validate_command_stream(partial, sizeof(partial)));
+}
+
+static void test_compute_dispatch(void)
+{
+    struct tg_gpu_command_va va = {0x100050000, 0x100020080, 0x100030000};
+    struct tg_gpu_command_info info;
+    const uint32_t launch = NVDEF(NVB1C0, SEND_SIGNALING_PCAS_B, INVALIDATE, TRUE) |
+                            NVDEF(NVB1C0, SEND_SIGNALING_PCAS_B, SCHEDULE, TRUE);
+    uint32_t dispatch[] = {
+        INCR(1, NVB1C0_SEND_PCAS_A, 1), 0x10004ff,
+        IMMD(1, NVB1C0_SEND_SIGNALING_PCAS_B, launch),
+    };
+    assert(tg_gpu_inspect_command_stream(dispatch, sizeof(dispatch), &va, &info));
+    assert(info.va_end == va.limit);
+    va.limit--;
+    assert(!tg_gpu_inspect_command_stream(dispatch, sizeof(dispatch), &va, &info));
+    va.limit++;
+    dispatch[1] = 0x1000200;
+    assert(!tg_gpu_inspect_command_stream(dispatch, sizeof(dispatch), &va, &info));
+    dispatch[1] = 0x10004ff;
+    assert(!tg_gpu_validate_command_stream(dispatch + 2, sizeof(uint32_t)));
+    dispatch[2] = IMMD(1, NVB1C0_SEND_SIGNALING_PCAS_B, launch ^ 1u);
+    assert(!tg_gpu_validate_command_stream(dispatch, sizeof(dispatch)));
+    dispatch[2] = IMMD(0, NVB1C0_SEND_SIGNALING_PCAS_B, launch);
+    assert(!tg_gpu_validate_command_stream(dispatch, sizeof(dispatch)));
+
+    const uint32_t debug[] = {
+        INCR(1, NVB1C0_SEND_PCAS_A, 1), 0x10004ff,
+        INCR(1, NVB1C0_SEND_SIGNALING_PCAS_B, 1), launch,
+    };
+    assert(tg_gpu_inspect_command_stream(debug, sizeof(debug), &va, &info));
+    assert(info.va_end == va.limit);
+    assert(!tg_gpu_validate_command_stream(debug, sizeof(debug) - sizeof(uint32_t)));
+    const uint32_t other_pcas[] = {INCR(1, NVB1C0_SEND_PCAS_B, 1), 0};
+    assert(!tg_gpu_validate_command_stream(other_pcas, sizeof(other_pcas)));
+}
+
 int main(void)
 {
     uint32_t w[16]={0x20010000,0xb197,0x20020100,0x20010014,0xdeadbeef,0};
@@ -281,5 +353,7 @@ int main(void)
     test_copy_stream();
     test_inline_upload();
     test_report_and_acquire();
-    puts("B06F packets, GM20B MME and validated copy, upload and report ranges passed");return 0;
+    test_texture_pools();
+    test_compute_dispatch();
+    puts("B06F packets, GM20B MME and command address ranges passed");return 0;
 }

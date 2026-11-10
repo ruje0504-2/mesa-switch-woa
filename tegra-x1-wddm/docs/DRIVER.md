@@ -830,8 +830,17 @@ reports, the MME compute-invocation report, and FIFO semaphore acquires for
 events and query waits. An inline upload supplies one pitch-linear row and
 its complete data in the following increment-once packet. The KMD checks the
 report operation and size and admits the read-only equality and greater-or-equal
-FIFO waits emitted by NVK. Graphics and compute state and descriptor methods
-remain prerequisites for general WDDM application submission.
+FIFO waits emitted by NVK.
+
+NVK's B197 and B1C0 queue-state updates supply each texture header or sampler
+pool as a complete base and inclusive maximum index. The KMD checks the full
+range of 32-byte entries. B1C0 direct dispatch pairs a QMD address with NVK's
+invalidate-and-schedule operation, with either immediate or incrementing
+encoding. The checked address range covers the complete 256-byte QMD 0.6.
+Validation of GPU-resident descriptor contents, shader and other engine state
+remains required for general WDDM application submission.
+[NVIDIA Maxwell compute class](https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/compute/clb1c0.h)
+[QMD layout](https://github.com/NVIDIA/open-gpu-doc/blob/master/classes/compute/clb1c0qmd.h)
 
 The .83 one-boot test exercised the new KMT bridge on the Lite, including
 aligned and fixed VA reservations, residency, event waits and GPU B0B5 copy.
