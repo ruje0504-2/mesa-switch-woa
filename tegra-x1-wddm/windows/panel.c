@@ -226,6 +226,18 @@ static NTSTATUS query_child_status(PVOID context, PDXGK_CHILD_STATUS status, BOO
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS query_device_descriptor(PVOID context, ULONG uid, PDXGK_DEVICE_DESCRIPTOR descriptor)
+{
+    const TG_GPU_ADAPTER *adapter = context;
+    PAGED_CODE();
+    if (!adapter || !descriptor || uid != adapter->Panel.Boot.TargetId)
+        return STATUS_INVALID_PARAMETER;
+    if (!adapter->Panel.Dc.owned)
+        return STATUS_DEVICE_NOT_READY;
+    /* The internal DSI panel supplies its mode through RecommendMonitorModes. */
+    return STATUS_MONITOR_NO_DESCRIPTOR;
+}
+
 static NTSTATUS APIENTRY recommend_monitor_modes(HANDLE context, const DXGKARG_RECOMMENDMONITORMODES *args)
 {
     TG_GPU_ADAPTER *adapter = context;
@@ -248,6 +260,21 @@ static NTSTATUS APIENTRY recommend_monitor_modes(HANDLE context, const DXGKARG_R
     if (!NT_SUCCESS(status))
         (VOID)modes->pfnReleaseModeInfo(args->hMonitorSourceModeSet, mode);
     return status == STATUS_GRAPHICS_MODE_ALREADY_IN_MODESET ? STATUS_SUCCESS : status;
+}
+
+static NTSTATUS APIENTRY update_monitor_link_info(HANDLE context, DXGKARG_UPDATEMONITORLINKINFO *args)
+{
+    const TG_GPU_ADAPTER *adapter = context;
+    PAGED_CODE();
+    if (!adapter || !args)
+        return STATUS_INVALID_PARAMETER;
+    if (!adapter->Panel.Dc.owned || args->VideoPresentTargetId != adapter->Panel.Boot.TargetId)
+        return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_TARGET;
+
+    /* The inherited DSI link runs fixed-rate SDR without link dithering. */
+    args->MonitorLinkInfo.Capabilities.Value = 0;
+    args->MonitorLinkInfo.DitheringSupport = (D3DKMDT_WIRE_FORMAT_AND_PREFERENCE){0};
+    return STATUS_SUCCESS;
 }
 
 static NTSTATUS APIENTRY standard_allocation(HANDLE context,
@@ -285,7 +312,9 @@ void TgGpuRegisterPanelLifecycle(DRIVER_INITIALIZATION_DATA *ddis)
     ddis->DxgkDdiStopDeviceAndReleasePostDisplayOwnership = stop_and_release;
     ddis->DxgkDdiQueryChildRelations = query_children;
     ddis->DxgkDdiQueryChildStatus = query_child_status;
+    ddis->DxgkDdiQueryDeviceDescriptor = query_device_descriptor;
     ddis->DxgkDdiRecommendMonitorModes = recommend_monitor_modes;
+    ddis->DxgkDdiUpdateMonitorLinkInfo = update_monitor_link_info;
     ddis->DxgkDdiGetStandardAllocationDriverData = standard_allocation;
     TgGpuRegisterPanelVidPn(ddis);
     TgGpuRegisterPanelScanout(ddis);

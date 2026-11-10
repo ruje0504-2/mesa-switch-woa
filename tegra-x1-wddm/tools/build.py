@@ -286,7 +286,7 @@ if build_miniport:
         display_inf = display_inf.replace("Class=ComputeAccelerator", "Class=Display")
         display_inf = display_inf.replace("{F01A9D53-3FF6-48D2-9F97-C8A7004BE10C}",
                                           "{4d36e968-e325-11ce-bfc1-08002be10318}")
-        display_inf = display_inf.replace(",0.1.0.65", ",0.1.0.101")
+        display_inf = display_inf.replace(",0.1.0.65", ",0.1.0.105")
         display_inf = display_inf.replace("Switch Lite GM20B Render Adapter (experimental)", "Tegra X1 (GM20B)")
         (dest / inf.name).write_text(display_inf)
     else:
