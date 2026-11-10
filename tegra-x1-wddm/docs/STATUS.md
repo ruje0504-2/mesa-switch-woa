@@ -9,10 +9,16 @@
 | 0.1.0.101 | `ACPI\SWOA0F01\0` appeared as **Tegra X1 (GM20B)** in the **Display** class with **OK / Code 0**. The GPU initialized, the miniport acquired the POST scanout, and the display core accepted the callbacks. | The internal adapter startup later reported `STATUS_NOT_SUPPORTED` after monitor-mode queries. The capture had no active VidPN mode commit or WDDM flip. |
 | 0.1.0.59 | The Lite was restored to the accepted diagnostic driver after the one-boot .101 test. | The experimental display miniport remains an opt-in test. |
 
-Next, establish the active internal VidPN with landscape orientation and
-confirm primary allocation and physical flip on the GM20B LUID. Then bring
-up the Direct3D user-mode path and verify DWM work retires on GM20B. For
-OpenGL compatibility, the intended userspace path is Mesa Zink over NVK.
+## Development order
+
+1. Windows desktop hardware acceleration. Establish an active landscape
+   VidPN, verify primary allocation and panel flips on the GM20B LUID, then
+   verify DWM composition retires on GM20B.
+2. Direct3D 9, 10 and 11 alongside `VK_EXT_memory_budget`,
+   `VK_EXT_pageable_device_local_memory` and `VK_KHR_maintenance5`.
+3. OpenGL compatibility through Mesa Zink over NVK.
+4. Other Vulkan extensions.
+5. Direct3D 12.
 
 Use the [build and porting guide](PORTING.md) and
 [driver contracts](DRIVER.md) for details.
