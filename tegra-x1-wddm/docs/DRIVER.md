@@ -179,7 +179,16 @@ optional CPU visibility. Ordinary GPUVA buffers currently select aperture
 segment 2 with `AccessedPhysically` clear. VidMm owns backing pages and GPU VA.
 The KMD keeps allocation metadata.
 Sizes are rounded to 4 KiB, CPU-visible memory starts write-combined, and no
-physical-access, cached/coherent, protected or scanout capability is implied.
+physical-access, CPU-cached, protected or scanout capability is implied for
+ordinary allocations. The Windows NVK host-visible type is write-combined and
+reports Vulkan `HOST_COHERENT`. Write-combined uploads and CPU-cached staging
+have different CPU access costs. Tegra X1 shares DRAM with the CPU, and cached
+CPU mappings need explicit visibility at the CPU/GPU handoff. Before adding a
+`HOST_CACHED` type, validate CPU writes read by the GPU and GPU writes read by
+the CPU through the WDDM cache maintenance path. Benchmark that mapping under
+native ARM64 and x86/x64 emulation separately.
+[Windows I/O coherency](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/allocation-usage-tracking#io-coherency) · [Tegra memory model](https://docs.nvidia.com/cuda/archive/13.2.1/cuda-for-tegra-appnote/index.html#memory-model) · [FEX write-combine analysis](https://fex-emu.com/Scourge-of-emulation/#wait-uncached-memory-needs-to-work)
+
 Bulk validation/allocation failures unwind every new object while preserving
 an existing resource. OS-reserved allocation input flags are retained.
 OpenAllocation resolves D3DKMT handles through `DxgkCbAcquireHandleData`
