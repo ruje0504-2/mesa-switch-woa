@@ -21,5 +21,5 @@
 4. Other Vulkan extensions.
 5. Direct3D 12.
 
-Use the [build and porting guide](PORTING.md) and
-[driver contracts](DRIVER.md) for details.
+Use the [build and porting guide](PORTING.md), [driver contracts](DRIVER.md)
+and [RADV Windows reuse notes](PORTING.md#radv-windows-reference) for details.

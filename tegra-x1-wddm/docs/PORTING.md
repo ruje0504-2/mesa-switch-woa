@@ -60,6 +60,48 @@ loads that ICD through `VK_LUNARG_direct_driver_loading`. Optional
 validation in the current KMD covers the tested submission stream.
 [Hardware status](STATUS.md)
 
+## RADV Windows reference
+
+Collabora's experimental `wddm2` branch pairs a Mesa Vulkan ICD with AMD's
+Windows kernel driver. Use the pinned revision to compare Windows interfaces
+while keeping GM20B resource metadata and submission on the Tegra ABI.
+[Pinned source](https://gitlab.freedesktop.org/lfrb/mesa/-/tree/801c9763c6043f0de8408e905a5324eea06d81d7) · [Collabora's porting notes](https://www.collabora.com/news-and-blog/news-and-events/cracking-windows-open-porting-radv-to-win32.html)
+
+- **Mesa runtime and Win32 WSI.** Review the monitored-fence handle sharing,
+  the platform blit semaphore and the software present fallback for reuse in
+  the current Mesa tree. The branch's DXGI hardware path asks for a D3D12
+  queue on the same adapter LUID. The Windows desktop milestone still uses
+  the Tegra WDDM VidPN, primary flips and DWM execution as separate checks.
+  [Monitored fence](https://gitlab.freedesktop.org/lfrb/mesa/-/commit/629e52171e03c6b7f53137236819b8f81d4eb149) · [Blit synchronization](https://gitlab.freedesktop.org/lfrb/mesa/-/commit/98efb6c0b26d6af5230ef4bed7cbd15eda6240c8) · [Win32 WSI](https://gitlab.freedesktop.org/lfrb/mesa/-/blob/801c9763c6043f0de8408e905a5324eea06d81d7/src/amd/vulkan/winsys/wddm2/radv_wddm2_wsi.c)
+- **Adapter selection and build.** Compare DXGI and DXCore enumeration
+  when matching a presentation adapter to NVK's existing KMT LUID. Keep
+  the SDK-backed ARM64 bridge for Windows structure layouts. Revisit the
+  branch's thunk dispatch generator if NVK needs optional KMT entry points.
+  [Adapter enumeration](https://gitlab.freedesktop.org/lfrb/mesa/-/commit/7a88cc539b31cfa94f5502b1e4592efb5f9aa08e) · [Thunk generation](https://gitlab.freedesktop.org/lfrb/mesa/-/commit/a793e2045d9fdd43ef734f8f08f5b1315656795f)
+- **KMT transport and external objects.** Compare GPU VA mapping, paging
+  fences, queue waits and signals, and NT-handle resource import with the
+  existing Windows NVK backend. Reuse the public KMT call sequences with
+  WDK types. Shared images need a Tegra layout and lifetime contract for
+  the KMD and importers. AMD allocation blobs and command streams are
+  specific to its kernel driver.
+  [Allocations and imports](https://gitlab.freedesktop.org/lfrb/mesa/-/blob/801c9763c6043f0de8408e905a5324eea06d81d7/src/amd/vulkan/winsys/wddm2/radv_wddm2_bo.c) · [Queue submission](https://gitlab.freedesktop.org/lfrb/mesa/-/blob/801c9763c6043f0de8408e905a5324eea06d81d7/src/amd/vulkan/winsys/wddm2/radv_wddm2_cs.c)
+- **`VK_EXT_memory_budget`.** NVK already exposes this extension. Use
+  RADV's `QueryVideoMemoryInfo` integration as a reference for live VidMm
+  data. Map `Budget` and `CurrentUsage` to the GM20B heaps within the 512 MiB
+  ceiling. `CurrentReservation` is a distinct WDDM value.
+  [RADV query](https://gitlab.freedesktop.org/lfrb/mesa/-/blob/801c9763c6043f0de8408e905a5324eea06d81d7/src/amd/vulkan/winsys/wddm2/radv_wddm2_winsys.c#L436) · [Windows budget fields](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_4/ns-dxgi1_4-dxgi_query_video_memory_info)
+- **`VK_EXT_pageable_device_local_memory`.** The RADV branch provides
+  examples of `MakeResident`, paging-fence waits and `Evict`. Implement and
+  verify the extension on GM20B with `VK_EXT_memory_priority`, live allocation
+  priority updates and VidMm paging under pressure before advertising it.
+  [RADV residency](https://gitlab.freedesktop.org/lfrb/mesa/-/blob/801c9763c6043f0de8408e905a5324eea06d81d7/src/amd/vulkan/winsys/wddm2/radv_wddm2_bo.c#L849) · [Vulkan requirements](https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_pageable_device_local_memory.html)
+- **`VK_KHR_maintenance5` and later extensions.** Keep NVK's shared
+  maintenance5 implementation and validate it on Windows ARM64. Revisit
+  RADV's Win32 external memory and semaphore paths and sparse VA binds when
+  evaluating the corresponding extensions. Gate support on the actual
+  GM20B capabilities and verify with targeted Vulkan CTS cases.
+  [NVK features](../../src/nouveau/vulkan/nvk_physical_device.c) · [RADV external memory](https://gitlab.freedesktop.org/lfrb/mesa/-/commit/b286bc76ca5bddf68cd9962e98484d02b9c26b5d)
+
 ## Switch Lite integration
 
 Apply the [WinX GPU patch](../integration/switch-lite/winx-gpu.patch) to
