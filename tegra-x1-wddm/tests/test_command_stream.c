@@ -2,6 +2,7 @@
 #include "../core/command_stream.h"
 #include "../core/nvk_mme_programs.h"
 #include "nouveau/headers/drf.h"
+#include "nouveau/headers/nvidia/classes/clb06f.h"
 #include "nouveau/headers/nvidia/classes/clb0b5.h"
 #include "nouveau/headers/nvidia/classes/clb197.h"
 #include "nouveau/vulkan/nvk_mme_slots.h"
@@ -91,7 +92,9 @@ static void test_mme_order(void)
     assert(info.requires_mme && info.uploads_mme);
 }
 
-#define CE_INCR(method, count) (0x20008000u | ((count) << 16) | (NVB0B5_##method >> 2))
+#define INCR(subchannel, method, count) (0x20000000u | ((subchannel) << 13) | ((count) << 16) | ((method) >> 2))
+#define ONEINCR(subchannel, method, count) (0xa0000000u | ((subchannel) << 13) | ((count) << 16) | ((method) >> 2))
+#define CE_INCR(method, count) INCR(4, NVB0B5_##method, count)
 #define CE_IMMD(method, data) (0x80008000u | ((data) << 16) | (NVB0B5_##method >> 2))
 
 static void test_copy_stream(void)
@@ -109,7 +112,7 @@ static void test_copy_stream(void)
         CE_IMMD(LAUNCH_DMA, dma | multi | src_pitch | dst_pitch),
     };
     assert(tg_gpu_inspect_command_stream(pitch, sizeof(pitch), &va, &info));
-    assert(info.copy_end == va.limit && info.reserved_base == va.reserved_base);
+    assert(info.va_end == va.limit && info.reserved_base == va.reserved_base);
     va.limit--;
     assert(!tg_gpu_inspect_command_stream(pitch, sizeof(pitch), &va, &info));
     va.limit++;
@@ -123,7 +126,7 @@ static void test_copy_stream(void)
         CE_IMMD(LAUNCH_DMA, dma | multi | dst_pitch),
     };
     assert(tg_gpu_inspect_command_stream(tiled, sizeof(tiled), &va, &info));
-    assert(info.copy_end == 0x50140);
+    assert(info.va_end == 0x50140);
     const struct tg_gpu_command_va tile_padding = {0x60000, 0x11f00, 0x12000};
     assert(!tg_gpu_inspect_command_stream(tiled, sizeof(tiled), &tile_padding, &info));
     tiled[14] = 3; /* Layer must be below depth. */
@@ -136,21 +139,21 @@ static void test_copy_stream(void)
         CE_IMMD(LAUNCH_DMA, dma | multi | src_pitch | dst_pitch | remap),
     };
     assert(tg_gpu_inspect_command_stream(fill, sizeof(fill), &va, &info));
-    assert(info.copy_end == 0x50300);
+    assert(info.va_end == 0x50300);
 
     const uint32_t release[] = {
         CE_INCR(SET_SEMAPHORE_A, 3), 0, 0x50000, 1,
         CE_IMMD(LAUNCH_DMA, NVDEF(NVB0B5, LAUNCH_DMA, SEMAPHORE_TYPE, RELEASE_FOUR_WORD_SEMAPHORE)),
     };
     assert(tg_gpu_inspect_command_stream(release, sizeof(release), &va, &info));
-    assert(info.copy_end == 0x50010);
+    assert(info.va_end == 0x50010);
 
     const uint32_t barrier[] = {
         CE_INCR(LINE_LENGTH_IN, 2), 0, 0,
         CE_IMMD(LAUNCH_DMA, dma | src_pitch | dst_pitch | remap),
     };
     assert(tg_gpu_inspect_command_stream(barrier, sizeof(barrier), &va, &info));
-    assert(!info.copy_end);
+    assert(!info.va_end);
 
     const uint32_t phys_method[] = {CE_INCR(SET_SRC_PHYS_MODE, 1), 0};
     assert(!tg_gpu_validate_command_stream(phys_method, sizeof(phys_method)));
@@ -162,6 +165,75 @@ static void test_copy_stream(void)
         CE_INCR(LAUNCH_DMA, 1), NVDEF(NVB0B5, LAUNCH_DMA, DST_TYPE, PHYSICAL),
     };
     assert(!tg_gpu_validate_command_stream(phys_launch, sizeof(phys_launch)));
+}
+
+static void test_inline_upload(void)
+{
+    const uint32_t launch = NVDEF(NVB197, LAUNCH_DMA, DST_MEMORY_LAYOUT, PITCH) |
+                            NVDEF(NVB197, LAUNCH_DMA, COMPLETION_TYPE, FLUSH_ONLY);
+    const struct tg_gpu_command_va va = {0x50000, 0x20000, 0x30000};
+    struct tg_gpu_command_info info;
+    uint32_t upload[] = {
+        INCR(0, NVB197_LINE_LENGTH_IN, 4), 8, 1, 0, 0x1fff8,
+        ONEINCR(0, NVB197_LAUNCH_DMA, 3), launch, 0x20010014, 0x55aa, 0,
+    };
+    assert(tg_gpu_inspect_command_stream(upload, sizeof(upload), &va, &info));
+    assert(info.va_end == va.reserved_base);
+    upload[0] = INCR(1, NVB197_LINE_LENGTH_IN, 4);
+    assert(!tg_gpu_validate_command_stream(upload, sizeof(upload))); /* Wrong launch subchannel. */
+    upload[5] = ONEINCR(1, NVB197_LAUNCH_DMA, 3);
+    assert(tg_gpu_inspect_command_stream(upload, sizeof(upload), &va, &info));
+    assert(!tg_gpu_validate_command_stream(upload, sizeof(upload) - 2 * sizeof(uint32_t)));
+    assert(!tg_gpu_validate_command_stream(upload + 5, 4 * sizeof(uint32_t)));
+    upload[1] = 4;
+    assert(!tg_gpu_validate_command_stream(upload, sizeof(upload))); /* Length and payload differ. */
+    upload[1] = 8;
+    upload[4] += 4;
+    assert(!tg_gpu_inspect_command_stream(upload, sizeof(upload), &va, &info));
+    upload[4] -= 4;
+    upload[6] = NVDEF(NVB197, LAUNCH_DMA, COMPLETION_TYPE, RELEASE_SEMAPHORE);
+    assert(!tg_gpu_validate_command_stream(upload, sizeof(upload)));
+}
+
+static void test_report_and_acquire(void)
+{
+    const struct tg_gpu_command_va va = {0x50000, 0x20000, 0x30000};
+    struct tg_gpu_command_info info;
+    uint32_t report[] = {
+        INCR(0, NVB197_SET_REPORT_SEMAPHORE_A, 4), 0, 0x4fff0, 0,
+        NVDEF(NVB197, SET_REPORT_SEMAPHORE_D, OPERATION, REPORT_ONLY) |
+        NVDEF(NVB197, SET_REPORT_SEMAPHORE_D, PIPELINE_LOCATION, ALL) |
+        NVDEF(NVB197, SET_REPORT_SEMAPHORE_D, REPORT, ZPASS_PIXEL_CNT64),
+    };
+    assert(tg_gpu_inspect_command_stream(report, sizeof(report), &va, &info));
+    assert(info.va_end == va.limit);
+    report[4] |= NVDEF(NVB197, SET_REPORT_SEMAPHORE_D, STRUCTURE_SIZE, ONE_WORD);
+    assert(!tg_gpu_validate_command_stream(report, sizeof(report)));
+    report[0] = INCR(1, NVB197_SET_REPORT_SEMAPHORE_A, 4);
+    assert(!tg_gpu_validate_command_stream(report, sizeof(report))); /* A graphics query on compute. */
+    report[4] = 0; /* Compute release with a four-word report. */
+    assert(tg_gpu_inspect_command_stream(report, sizeof(report), &va, &info));
+    report[2] = va.reserved_base;
+    assert(!tg_gpu_inspect_command_stream(report, sizeof(report), &va, &info));
+
+    uint32_t macro[] = {ONEINCR(0, NVB197_CALL_MME_MACRO(NVK_MME_WRITE_CS_INVOCATIONS), 2), 0, 0x4fff8};
+    assert(tg_gpu_inspect_command_stream(macro, sizeof(macro), &va, &info));
+    assert(info.requires_mme && info.va_end == va.limit);
+    macro[2] += 4;
+    assert(!tg_gpu_inspect_command_stream(macro, sizeof(macro), &va, &info));
+
+    const uint32_t acquire_flags = NVDEF(NVB06F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED) |
+                                   NVDEF(NVB06F, SEMAPHORED, RELEASE_SIZE, 4BYTE);
+    uint32_t wait[] = {
+        INCR(4, NVB06F_SEMAPHOREA, 4), 0, 0x4fffc, 1,
+        acquire_flags | NVDEF(NVB06F, SEMAPHORED, OPERATION, ACQUIRE),
+    };
+    assert(tg_gpu_inspect_command_stream(wait, sizeof(wait), &va, &info));
+    assert(info.va_end == va.limit);
+    wait[4] = acquire_flags | NVDEF(NVB06F, SEMAPHORED, OPERATION, ACQ_GEQ);
+    assert(tg_gpu_inspect_command_stream(wait, sizeof(wait), &va, &info));
+    wait[4] = acquire_flags | NVDEF(NVB06F, SEMAPHORED, OPERATION, RELEASE);
+    assert(!tg_gpu_validate_command_stream(wait, sizeof(wait)));
 }
 
 int main(void)
@@ -207,5 +279,7 @@ int main(void)
     test_mme_calls();
     test_mme_order();
     test_copy_stream();
-    puts("B06F packets, GM20B MME and B0B5 copy validation passed");return 0;
+    test_inline_upload();
+    test_report_and_acquire();
+    puts("B06F packets, GM20B MME and validated copy, upload and report ranges passed");return 0;
 }

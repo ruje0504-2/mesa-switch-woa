@@ -316,7 +316,7 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
     }
     /* VidMm can replace the root while the immutable snapshot is decoded. */
-    if (info && info->copy_end && (info->copy_end>c->Root.VaLimit ||
+    if (info && info->va_end && (info->va_end>c->Root.VaLimit ||
         info->reserved_base!=c->Device->Process->Internal.Base)) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
     }

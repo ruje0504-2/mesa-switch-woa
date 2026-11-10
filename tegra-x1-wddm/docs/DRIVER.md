@@ -822,9 +822,16 @@ address and layout state in the captured push. NVK programs the remap and
 fill state with each transfer, including after a push-buffer split. The KMD
 checks pitch spans or the padded mip envelope against the context's root limit
 and reserved KMD range, then rechecks the limit at admission. VidMm manages
-the application mappings and residency. Graphics and compute method validation
-remain prerequisites for general WDDM application submission.
+the application mappings and residency.
 [WDDM GpuMmu](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/gpummu-model)
+
+The same GPUVA check covers B197 and B1C0 inline uploads, one- or four-word
+reports, the MME compute-invocation report, and FIFO semaphore acquires for
+events and query waits. An inline upload supplies one pitch-linear row and
+its complete data in the following increment-once packet. The KMD checks the
+report operation and size and admits the read-only equality and greater-or-equal
+FIFO waits emitted by NVK. Graphics and compute state and descriptor methods
+remain prerequisites for general WDDM application submission.
 
 The .83 one-boot test exercised the new KMT bridge on the Lite, including
 aligned and fixed VA reservations, residency, event waits and GPU B0B5 copy.
@@ -992,11 +999,11 @@ immediate and NOP packets. NVK uses subchannels 0, 1 and 4 for GM20B graphics,
 compute and copy. A `SET_OBJECT` packet must contain the matching class ID
 with engine 0. The parser rejects unused subchannels, truncated or empty
 packets, reserved/control-flow/subdevice headers, reserved address bits, method
-wrap and host methods other than object binding and WFI. Caller-issued
-`SET_REFERENCE` is rejected, including immediate and increment-span forms.
-Data words that resemble headers are not interpreted as new packets. This is
-a packet/host-method gate; **class-specific addresses/privileges, residency and
-the remaining WDDM paths are not completed by it**. Native-submit stays unset.
+wrap and unsupported host methods. Object binding, WFI and bounded FIFO
+acquires are supported. Caller-issued `SET_REFERENCE` is rejected, including
+immediate and increment-span forms. The parser consumes data words as payload,
+even when they match packet headers. Native-submit stays unset until the
+remaining class-specific method and memory contracts are validated.
 
 Shared command backing grows from 16 to **80 KiB**: ring, completion packet,
 USERD and physical runlist retain their existing offsets/protection. The last

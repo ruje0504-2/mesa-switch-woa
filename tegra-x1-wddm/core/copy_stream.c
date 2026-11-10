@@ -21,21 +21,6 @@ static bool have(const struct tg_gpu_copy_state *state, unsigned first, unsigned
     return (state->written & mask) == mask;
 }
 
-static bool copy_span(const struct tg_gpu_command_va *va, uint64_t address,
-                      uint64_t bytes, uint64_t *max_end)
-{
-    const uint64_t limit = va ? va->limit : TG_GPU_VA_LIMIT;
-    if (!address || !bytes || address >= limit || bytes > limit - address)
-        return false;
-    const uint64_t end = address + bytes;
-    if (va && va->reserved_base < va->reserved_end &&
-        address < va->reserved_end && end > va->reserved_base)
-        return false;
-    if (end > *max_end)
-        *max_end = end;
-    return true;
-}
-
 static uint64_t align_up(uint64_t n, uint64_t alignment)
 {
     return (n + alignment - 1) & ~(alignment - 1);
@@ -58,7 +43,7 @@ static bool copy_surface(const struct tg_gpu_copy_state *state, bool source, boo
         const uint64_t last_row = (uint64_t)(lines - 1) * r[stride];
         const uint64_t row_bytes = (uint64_t)units * element_bytes;
         return last_row < TG_GPU_VA_LIMIT && row_bytes <= TG_GPU_VA_LIMIT - last_row &&
-               copy_span(va, address, last_row + row_bytes, max_end);
+               tg_gpu_command_range_allowed(va, address, last_row + row_bytes, max_end);
     }
 
     const unsigned tile = source ? SRC_TILE : DST_TILE;
@@ -86,7 +71,7 @@ static bool copy_surface(const struct tg_gpu_copy_state *state, bool source, boo
     const uint64_t layers = align_up(depth, 1u << depth_log2);
     if (row > TG_GPU_VA_LIMIT / rows || row * rows > TG_GPU_VA_LIMIT / layers)
         return false;
-    return copy_span(va, address, row * rows * layers, max_end);
+    return tg_gpu_command_range_allowed(va, address, row * rows * layers, max_end);
 }
 
 static bool copy_launch(const struct tg_gpu_copy_state *state, uint32_t launch,
@@ -110,7 +95,7 @@ static bool copy_launch(const struct tg_gpu_copy_state *state, uint32_t launch,
         const uint32_t bytes = semaphore == NVB0B5_LAUNCH_DMA_SEMAPHORE_TYPE_RELEASE_ONE_WORD_SEMAPHORE ? 4 : 16;
         const uint64_t address = ((uint64_t)r[SEM_HI] << 32) | r[SEM_LO];
         if (!have(state, SEM_HI, 3) || (address & (bytes - 1)) ||
-            !copy_span(va, address, bytes, max_end))
+            !tg_gpu_command_range_allowed(va, address, bytes, max_end))
             return false;
     }
     if (transfer == NVB0B5_LAUNCH_DMA_DATA_TRANSFER_TYPE_NONE)

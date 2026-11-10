@@ -43,6 +43,126 @@ static bool method_allowed(uint32_t method)
     return method>=0x100 || method==NVB06F_SET_OBJECT || method==NVB06F_WFI;
 }
 
+bool tg_gpu_command_range_allowed(const struct tg_gpu_command_va *va, uint64_t address,
+                                  uint64_t bytes, uint64_t *max_end)
+{
+    const uint64_t limit = va ? va->limit : TG_GPU_VA_LIMIT;
+    if (!address || !bytes || address >= limit || bytes > limit - address)
+        return false;
+    const uint64_t end = address + bytes;
+    if (va && va->reserved_base < va->reserved_end &&
+        address < va->reserved_end && end > va->reserved_base)
+        return false;
+    if (end > *max_end)
+        *max_end = end;
+    return true;
+}
+
+static bool word_span(const struct tg_gpu_command_va *va, uint32_t hi, uint32_t lo,
+                      uint32_t bytes, uint32_t alignment, uint64_t *max_end)
+{
+    return hi <= UINT8_MAX && !(lo & (alignment - 1)) &&
+           tg_gpu_command_range_allowed(va, ((uint64_t)hi << 32) | lo, bytes, max_end);
+}
+
+static bool host_acquire(const uint32_t *args, const struct tg_gpu_command_va *va,
+                         uint64_t *max_end)
+{
+    const uint32_t flags = NVDEF(NVB06F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED) |
+                           NVDEF(NVB06F, SEMAPHORED, RELEASE_SIZE, 4BYTE);
+    const uint32_t equal = flags | NVDEF(NVB06F, SEMAPHORED, OPERATION, ACQUIRE);
+    const uint32_t geq = flags | NVDEF(NVB06F, SEMAPHORED, OPERATION, ACQ_GEQ);
+    return (args[3] == equal || args[3] == geq) &&
+           word_span(va, args[0], args[1], 4, 4, max_end);
+}
+
+/* The B197 graphics and B1C0 compute engines share these I2M methods. */
+static bool inline_upload_span(uint32_t first, uint32_t last)
+{
+    return (first <= NVB197_LOAD_INLINE_DATA && last >= NVB197_LINE_LENGTH_IN) ||
+           (first <= NVB197_SET_I2M_SEMAPHORE_C && last >= NVB197_SET_I2M_SEMAPHORE_A);
+}
+
+static size_t inline_upload(uint32_t subchannel, const uint32_t *args, size_t remaining,
+                            const struct tg_gpu_command_va *va, uint64_t *max_end)
+{
+    if (remaining < 6 || !args[0] || (args[0] & 3) || args[1] != 1)
+        return 0;
+    const uint32_t bytes = args[0], words = bytes / 4;
+    if (words + 1 > DRF_MASK(NVB06F_DMA_ONEINCR_COUNT) || words > remaining - 6)
+        return 0;
+    const uint32_t header = NVDEF(NVB06F, DMA_ONEINCR, OPCODE, VALUE) |
+                            NVVAL(NVB06F, DMA_ONEINCR, SUBCHANNEL, subchannel) |
+                            NVVAL(NVB06F, DMA_ONEINCR, COUNT, words + 1) |
+                            NVVAL(NVB06F, DMA_ONEINCR, ADDRESS, NVB197_LAUNCH_DMA >> 2);
+    const uint32_t launch = NVDEF(NVB197, LAUNCH_DMA, DST_MEMORY_LAYOUT, PITCH) |
+                            NVDEF(NVB197, LAUNCH_DMA, COMPLETION_TYPE, FLUSH_ONLY);
+    if (args[4] != header || args[5] != launch ||
+        !word_span(va, args[2], args[3], bytes, 4, max_end))
+        return 0;
+    return 6 + words;
+}
+
+static bool report_span(uint32_t first, uint32_t last)
+{
+    return first <= NVB197_SET_REPORT_SEMAPHORE_D && last >= NVB197_SET_REPORT_SEMAPHORE_A;
+}
+
+static bool graphics_report_control(uint32_t control, uint32_t bytes)
+{
+    const uint32_t allowed = DRF_SMASK(NVB197_SET_REPORT_SEMAPHORE_D_OPERATION) |
+                             DRF_SMASK(NVB197_SET_REPORT_SEMAPHORE_D_FLUSH_DISABLE) |
+                             DRF_SMASK(NVB197_SET_REPORT_SEMAPHORE_D_RELEASE) |
+                             DRF_SMASK(NVB197_SET_REPORT_SEMAPHORE_D_PIPELINE_LOCATION) |
+                             DRF_SMASK(NVB197_SET_REPORT_SEMAPHORE_D_REPORT) |
+                             DRF_SMASK(NVB197_SET_REPORT_SEMAPHORE_D_SUB_REPORT) |
+                             DRF_SMASK(NVB197_SET_REPORT_SEMAPHORE_D_STRUCTURE_SIZE);
+#define LOCATION_BIT(name) (1u << NVB197_SET_REPORT_SEMAPHORE_D_PIPELINE_LOCATION_##name)
+    const uint32_t locations = LOCATION_BIT(NONE) | LOCATION_BIT(DATA_ASSEMBLER) |
+        LOCATION_BIT(VERTEX_SHADER) | LOCATION_BIT(TESSELATION_INIT_SHADER) |
+        LOCATION_BIT(TESSELATION_SHADER) | LOCATION_BIT(GEOMETRY_SHADER) |
+        LOCATION_BIT(STREAMING_OUTPUT) | LOCATION_BIT(VPC) | LOCATION_BIT(ZCULL) |
+        LOCATION_BIT(PIXEL_SHADER) | LOCATION_BIT(DEPTH_TEST) | LOCATION_BIT(ALL);
+#undef LOCATION_BIT
+    const uint32_t location = NVVAL_GET(control, NVB197, SET_REPORT_SEMAPHORE_D, PIPELINE_LOCATION);
+    if ((control & ~allowed) || !(locations & (1u << location)))
+        return false;
+
+    const uint32_t operation = NVVAL_GET(control, NVB197, SET_REPORT_SEMAPHORE_D, OPERATION);
+    const uint32_t report = NVVAL_GET(control, NVB197, SET_REPORT_SEMAPHORE_D, REPORT);
+    const uint32_t sub_report = NVVAL_GET(control, NVB197, SET_REPORT_SEMAPHORE_D, SUB_REPORT);
+    if (operation == NVB197_SET_REPORT_SEMAPHORE_D_OPERATION_RELEASE)
+        return !report && !sub_report;
+    if (operation != NVB197_SET_REPORT_SEMAPHORE_D_OPERATION_REPORT_ONLY)
+        return false;
+
+#define REPORT_BIT(name) (1u << NVB197_SET_REPORT_SEMAPHORE_D_REPORT_##name)
+    const uint32_t queries = REPORT_BIT(ZPASS_PIXEL_CNT64) | REPORT_BIT(DA_VERTICES_GENERATED) |
+        REPORT_BIT(DA_PRIMITIVES_GENERATED) | REPORT_BIT(VS_INVOCATIONS) | REPORT_BIT(GS_INVOCATIONS) |
+        REPORT_BIT(GS_PRIMITIVES_GENERATED) | REPORT_BIT(CLIPPER_INVOCATIONS) |
+        REPORT_BIT(CLIPPER_PRIMITIVES_GENERATED) | REPORT_BIT(PS_INVOCATIONS) |
+        REPORT_BIT(TI_INVOCATIONS) | REPORT_BIT(TS_INVOCATIONS);
+    const uint32_t streams = REPORT_BIT(VTG_PRIMITIVES_OUT) | REPORT_BIT(STREAMING_PRIMITIVES_SUCCEEDED) |
+                             REPORT_BIT(STREAMING_PRIMITIVES_NEEDED);
+#undef REPORT_BIT
+    if (report == NVB197_SET_REPORT_SEMAPHORE_D_REPORT_STREAMING_BYTE_COUNT)
+        return bytes == 4 && sub_report < 4;
+    return bytes == 16 && ((sub_report == 0 && (queries & (1u << report))) ||
+                           (sub_report < 4 && (streams & (1u << report))));
+}
+
+static bool engine_report(uint32_t subchannel, const uint32_t *args,
+                          const struct tg_gpu_command_va *va, uint64_t *max_end)
+{
+    const uint32_t control = args[3];
+    const uint32_t bytes = NVVAL_GET(control, NVB197, SET_REPORT_SEMAPHORE_D, STRUCTURE_SIZE) ? 4 : 16;
+    const uint32_t compute_release = DRF_SMASK(NVB1C0_SET_REPORT_SEMAPHORE_D_STRUCTURE_SIZE) |
+                                     DRF_SMASK(NVB1C0_SET_REPORT_SEMAPHORE_D_FLUSH_DISABLE);
+    const bool valid = subchannel == 0 ? graphics_report_control(control, bytes) :
+                                        !(control & ~compute_release);
+    return valid && word_span(va, args[0], args[1], bytes, bytes, max_end);
+}
+
 static bool mme_upload_span(uint32_t subchannel, uint32_t first, uint32_t last)
 {
     return subchannel == 0 && first <= NVB197_LOAD_MME_START_ADDRESS_RAM &&
@@ -50,7 +170,8 @@ static bool mme_upload_span(uint32_t subchannel, uint32_t first, uint32_t last)
 }
 
 static bool mme_call_allowed(uint32_t op, uint32_t method, uint32_t count,
-                             const uint32_t *args)
+                             const uint32_t *args, const struct tg_gpu_command_va *va,
+                             uint64_t *max_end)
 {
     const uint32_t base = NVB197_CALL_MME_MACRO(0);
     if (op != NVB06F_DMA_ONEINCR_OPCODE_VALUE || method < base)
@@ -72,6 +193,9 @@ static bool mme_call_allowed(uint32_t op, uint32_t method, uint32_t count,
         return args[0] <= 8;
     case NVK_MME_SET_VIEWPORT_MIN_MAX_Z:
         return args[0] < 16;
+    case NVK_MME_WRITE_CS_INVOCATIONS:
+        /* This macro writes two adjacent one-word reports. */
+        return word_span(va, args[0], args[1], 8, 4, max_end);
     default:
         return true;
     }
@@ -100,9 +224,11 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
             if(!method_allowed(method) || method==NVB06F_SET_OBJECT ||
                mme_upload_span(subchannel, method, method) ||
                (subchannel == 0 && method >= NVB197_CALL_MME_MACRO(0)))return false;
+            if (subchannel <= 1 && (inline_upload_span(method, method) || report_span(method, method)))
+                return false;
             if (subchannel == 4 && method >= 0x100 &&
                 !tg_gpu_copy_method(&copy, method, NVVAL_GET(header, NVB06F, DMA_IMMD, DATA),
-                                    va, &stream.copy_end))
+                                    va, &stream.va_end))
                 return false;
             continue;
         }
@@ -117,10 +243,31 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
             if(method==0x3ffc)return false;
             last=method+4;
         }
+        if (method <= NVB06F_SEMAPHORED && last >= NVB06F_SEMAPHOREA) {
+            if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB06F_SEMAPHOREA ||
+                count != 4 || !host_acquire(words + n, va, &stream.va_end))
+                return false;
+            n += count;
+            continue;
+        }
         if(!method_allowed(method) || !method_allowed(last))return false;
         /* Incrementing packets can span a forbidden host register even if
          * their first and last methods are both individually permitted. */
         if(last!=method && method<0x100)return false;
+        if (subchannel <= 1 && inline_upload_span(method, last)) {
+            if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB197_LINE_LENGTH_IN || count != 4)
+                return false;
+            const size_t used = inline_upload(subchannel, words + n, word_count - n,
+                                              va, &stream.va_end);
+            if (!used)
+                return false;
+            n += used;
+            continue;
+        }
+        if (subchannel <= 1 && report_span(method, last) &&
+            (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB197_SET_REPORT_SEMAPHORE_A ||
+             count != 4 || !engine_report(subchannel, words + n, va, &stream.va_end)))
+            return false;
         if (mme_upload_span(subchannel, method, last)) {
             /* NVK uploads its programs and their slot bindings together. */
             const size_t mme_words = sizeof(tg_gpu_nvk_mme_init) / sizeof(*words);
@@ -135,7 +282,7 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
             continue;
         }
         if (subchannel == 0 && last >= NVB197_CALL_MME_MACRO(0)) {
-            if (!mme_call_allowed(op, method, count, words + n))
+            if (!mme_call_allowed(op, method, count, words + n, va, &stream.va_end))
                 return false;
             stream.requires_mme |= !stream.uploads_mme;
         }
@@ -144,7 +291,7 @@ bool tg_gpu_inspect_command_stream(const uint32_t *words, size_t bytes,
                 copy.written = 0;
             if (method >= 0x100) {
                 for (uint32_t i = 0; i < count; i++) {
-                    if (!tg_gpu_copy_method(&copy, method, words[n + i], va, &stream.copy_end))
+                    if (!tg_gpu_copy_method(&copy, method, words[n + i], va, &stream.va_end))
                         return false;
                     if (method < last)
                         method += 4;

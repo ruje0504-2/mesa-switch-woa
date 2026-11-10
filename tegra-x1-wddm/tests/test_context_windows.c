@@ -1223,6 +1223,18 @@ static VOID TestCommandSnapshots(void)
     CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_SUCCESS && snapshot &&
         snapshot->Info.requires_mme && !snapshot->Info.uploads_mme);
     TgGpuFreeCommandSnapshot(snapshot);snapshot=NULL;
+    const struct tg_gpu_command_va va={0x30000,0x20000,0x30000};
+    /* A complete FIFO event acquire, followed by the zero-filled NOPs. */
+    payload.Words[0]=0x20040004;
+    payload.Words[2]=0x1fffc;
+    payload.Words[3]=1;
+    payload.Words[4]=0x01001001;
+    CHECK(TgGpuCaptureCommandSnapshot(&a,&va,&snapshot)==STATUS_SUCCESS && snapshot &&
+        snapshot->Info.va_end==va.reserved_base && snapshot->Info.reserved_base==va.reserved_base);
+    TgGpuFreeCommandSnapshot(snapshot);snapshot=NULL;
+    payload.Words[2]=(UINT)va.reserved_base;
+    CHECK(TgGpuCaptureCommandSnapshot(&a,&va,&snapshot)==STATUS_INVALID_PARAMETER && !snapshot);
+    RtlZeroMemory(payload.Words,5*sizeof(UINT));
     payload.Words[0]=0;payload.Header.reserved=1;
     CHECK(TgGpuCaptureCommandSnapshot(&a,NULL,&snapshot)==STATUS_INVALID_PARAMETER);
     payload.Header.reserved=0;payload.Header.version++;
@@ -1323,10 +1335,10 @@ void start(void)
     CHECK(TgGpuGetCommandVa(&e,c,&command_va)==STATUS_SUCCESS && command_va.limit==c->Root.VaLimit);
     CHECK(command_va.reserved_base==TG_GPU_INTERNAL_COVERAGE &&
           command_va.reserved_end==2*TG_GPU_INTERNAL_COVERAGE);
-    struct tg_gpu_command_info copy={.copy_end=command_va.limit+1,.reserved_base=command_va.reserved_base};
-    CHECK(TgGpuCaptureContextWork(&e,&submit,&copy,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
-    copy.copy_end=command_va.limit;
-    CHECK(TgGpuCaptureContextWork(&e,&submit,&copy,&blocked)==STATUS_SUCCESS);
+    struct tg_gpu_command_info access={.va_end=command_va.limit+1,.reserved_base=command_va.reserved_base};
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&access,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
+    access.va_end=command_va.limit;
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&access,&blocked)==STATUS_SUCCESS);
     CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_INVALID_PARAMETER && !blocked.Context);
     CHECK(TgGpuCaptureContextWork(&e,&submit,&upload,&blocked)==STATUS_SUCCESS && blocked.UploadsMme);
