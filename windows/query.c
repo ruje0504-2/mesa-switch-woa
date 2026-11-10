@@ -30,6 +30,7 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
     }
     switch (a->Type) {
     case DXGKQAITYPE_DRIVERCAPS:
+    case DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION:
     case DXGKQAITYPE_UMDRIVERPRIVATE:
     case DXGKQAITYPE_QUERYSEGMENT4:
     case DXGKQAITYPE_GPUMMUCAPS:
@@ -56,7 +57,8 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
         caps.HighestAcceptableAddress.QuadPart=TG_GPU_VA_LIMIT-1;
         caps.InterruptMessageNumber=0; /* line-based */
         caps.WDDMVersion=wddm_version;
-        caps.MiscCaps.ComputeOnly=1; /* Vulkan ICD, no Direct3D or scanout UMD */
+        caps.MiscCaps.ComputeOnly=e->Tables->Scanout.Handle==NULL;
+        caps.FlipCaps.FlipOnVSyncMmIo=e->Tables->Scanout.Handle!=NULL;
         caps.GpuEngineTopology.NbAsymetricProcessingNodes=1;
         caps.SchedulingCaps.MultiEngineAware=1;
         caps.SchedulingCaps.PreemptionAware=1;
@@ -68,6 +70,14 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
         /* The single GR/CE runlist escalates active engine timeouts to the
          * adapter-wide reset rather than discarding unrelated state. */
         caps.SupportPerEngineTDR=TRUE;
+        RtlCopyMemory(a->pOutputData,&caps,sizeof(caps));
+        return STATUS_SUCCESS;
+    }
+    case DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION: {
+        const DXGK_DISPLAY_DRIVERCAPS_EXTENSION caps={0};
+        if (!e->Tables->Scanout.Handle) return STATUS_NOT_SUPPORTED;
+        status=buffers(a,0,sizeof(caps));
+        if (!NT_SUCCESS(status)) return status;
         RtlCopyMemory(a->pOutputData,&caps,sizeof(caps));
         return STATUS_SUCCESS;
     }

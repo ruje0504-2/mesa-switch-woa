@@ -259,8 +259,131 @@ done:
     }
 }
 
+static NTSTATUS validate_commit(TG_GPU_ADAPTER *adapter, D3DKMDT_HVIDPN vidpn,
+    bool inherited, bool *attached)
+{
+    PANEL_PATH path = {0};
+    NTSTATUS status = acquire_path(adapter, vidpn, &path);
+    if (!NT_SUCCESS(status))
+        return status;
+    *attached = path.Path != NULL;
+    if (!*attached)
+        return STATUS_SUCCESS;
+
+    if (!supported_path(&adapter->Panel, path.Path)) {
+        status = STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
+    } else {
+        enum panel_mode_state source, target;
+        status = pinned_source(path.VidPn, vidpn, &source);
+        if (NT_SUCCESS(status))
+            status = pinned_target(path.VidPn, vidpn, path.Path->VidPnTargetId, &target);
+        if (NT_SUCCESS(status) && (source == PanelModeUnsupported || target == PanelModeUnsupported ||
+            (!inherited && (source != PanelModeNative || target != PanelModeNative))))
+            status = STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
+    }
+    NTSTATUS release = path.Topology->pfnReleasePathInfo(path.Handle, path.Path);
+    return NT_SUCCESS(status) ? release : status;
+}
+
+static NTSTATUS APIENTRY recommend_functional(HANDLE context,
+    const DXGKARG_RECOMMENDFUNCTIONALVIDPN *args)
+{
+    PAGED_CODE();
+    if (!context || !args)
+        return STATUS_INVALID_PARAMETER;
+    /* DxgKrnl builds the initial topology from the single panel and the
+     * preferred modes enumerated by the child and cofunctional DDIs.
+     */
+    return STATUS_GRAPHICS_NO_RECOMMENDED_FUNCTIONAL_VIDPN;
+}
+
+static NTSTATUS APIENTRY commit_vidpn(HANDLE context, const DXGKARG_COMMITVIDPN *args)
+{
+    TG_GPU_ADAPTER *adapter = context;
+    PAGED_CODE();
+    if (!adapter || !args)
+        return STATUS_INVALID_PARAMETER;
+    if (args->AffectedVidPnSourceId != 0 && args->AffectedVidPnSourceId != D3DDDI_ID_ALL)
+        return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
+    bool attached;
+    NTSTATUS status = validate_commit(adapter, args->hFunctionalVidPn, false, &attached);
+    if (!NT_SUCCESS(status))
+        return status;
+    /* There is a single fixed DSI signal. The source remains on the
+     * inherited timing. An empty or powered-off path detaches scanout.
+     */
+    return TgGpuPanelSetVisibility(adapter, attached && !args->Flags.PathPoweredOff);
+}
+
+static NTSTATUS APIENTRY set_timings(HANDLE context, DXGKARG_SETTIMINGSFROMVIDPN *args)
+{
+    TG_GPU_ADAPTER *adapter = context;
+    PAGED_CODE();
+    if (!adapter || !args || !args->pResultsFlags || args->SetFlags.Value || args->PathCount > 1 ||
+        (args->PathCount && !args->pSetTimingPathInfo))
+        return STATUS_INVALID_PARAMETER;
+    args->pResultsFlags->Value = 0;
+    if (!args->PathCount)
+        return STATUS_SUCCESS;
+    DXGK_SET_TIMING_PATH_INFO *path = args->pSetTimingPathInfo;
+    if (path->VidPnTargetId != adapter->Panel.Boot.TargetId)
+        return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_TARGET;
+    if (path->Input.SyncLockGroup || path->Input.SyncLockStyle)
+        return STATUS_NOT_SUPPORTED;
+
+    if (path->Input.Active) {
+        bool attached;
+        NTSTATUS status = validate_commit(adapter, args->hFunctionalVidPn,
+            path->Input.PreserveInherited != 0, &attached);
+        if (!NT_SUCCESS(status))
+            return status;
+        if (!attached && !path->Input.PreserveInherited)
+            return STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
+    }
+    NTSTATUS status = TgGpuPanelSetVisibility(adapter, path->Input.Active != 0);
+    if (NT_SUCCESS(status)) {
+        path->OutputFlags = 0;
+        RtlZeroMemory(&path->TargetState, sizeof(path->TargetState));
+        path->DiagnosticInfo = 0;
+    }
+    return status;
+}
+
+static NTSTATUS APIENTRY source_visibility(HANDLE context,
+    const DXGKARG_SETVIDPNSOURCEVISIBILITY *args)
+{
+    PAGED_CODE();
+    if (!context || !args)
+        return STATUS_INVALID_PARAMETER;
+    if (args->VidPnSourceId != 0)
+        return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
+    return TgGpuPanelSetVisibility(context, args->Visible);
+}
+
+static NTSTATUS APIENTRY update_active_path(HANDLE context,
+    const DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH *args)
+{
+    TG_GPU_ADAPTER *adapter = context;
+    PAGED_CODE();
+    if (!adapter || !args)
+        return STATUS_INVALID_PARAMETER;
+    const D3DKMDT_VIDPN_PRESENT_PATH *path = &args->VidPnPresentPathInfo;
+    if (!supported_path(&adapter->Panel, path))
+        return STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
+    if (path->GammaRamp.Type != D3DDDI_GAMMARAMP_DEFAULT &&
+        path->GammaRamp.Type != D3DDDI_GAMMARAMP_UNINITIALIZED)
+        return STATUS_NOT_SUPPORTED;
+    /* The accepted path keeps the active identity transformation. */
+    return adapter->Panel.Dc.owned ? STATUS_SUCCESS : STATUS_DEVICE_NOT_READY;
+}
+
 void TgGpuRegisterPanelVidPn(DRIVER_INITIALIZATION_DATA *ddis)
 {
     ddis->DxgkDdiIsSupportedVidPn = is_supported;
     ddis->DxgkDdiEnumVidPnCofuncModality = enumerate_modes;
+    ddis->DxgkDdiRecommendFunctionalVidPn = recommend_functional;
+    ddis->DxgkDdiCommitVidPn = commit_vidpn;
+    ddis->DxgkDdiSetTimingsFromVidPn = set_timings;
+    ddis->DxgkDdiSetVidPnSourceVisibility = source_visibility;
+    ddis->DxgkDdiUpdateActiveVidPnPresentPath = update_active_path;
 }

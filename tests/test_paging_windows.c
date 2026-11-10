@@ -128,13 +128,16 @@ static void TestDisplayResources(void)
 struct display_model {
     ULONG regs[T214_GPU_DC_SIZE / sizeof(ULONG)];
     ULONG update, armed_address, active_address;
+    ULONG armed_options, active_options;
 };
 
 static uint32_t DisplayRead(void *context, uint32_t word)
 {
     struct display_model *model = context;
-    if (word == 0xbc0 && (model->regs[0x040] & 1))
-        return model->active_address;
+    if (model->regs[0x040] & 1) {
+        if (word == 0xbc0) return model->active_address;
+        if (word == 0xb80) return model->active_options;
+    }
     return model->regs[word];
 }
 
@@ -148,21 +151,25 @@ static void DisplayWrite(void *context, uint32_t word, uint32_t value)
         if (value == 0x100 || value == 0x200) {
             model->update = value >> 8;
             model->armed_address = model->regs[0xbc0];
+            model->armed_options = model->regs[0xb80];
         } else {
             CHECK(value == model->update && (value == 1 || value == 2));
             model->regs[word] |= value;
             model->update = 0;
         }
     } else {
-        CHECK(word == 0x038 || word == 0x039 || word == 0x040 || word == 0x043 || word == 0xbc0);
+        CHECK(word == 0x038 || word == 0x039 || word == 0x040 || word == 0x043 ||
+              word == 0xb80 || word == 0xbc0);
         model->regs[word] = value;
     }
 }
 
 static void DisplayFrame(struct display_model *model)
 {
-    if (model->regs[0x041] & 2)
+    if (model->regs[0x041] & 2) {
         model->active_address = model->armed_address;
+        model->active_options = model->armed_options;
+    }
     model->regs[0x041] = 0;
     model->regs[0x037] |= model->regs[0x039] & 4;
 }
@@ -175,6 +182,7 @@ static void TestDisplayFlip(void)
     model.regs[0x039] = 1; /* Masked context-switch source stays intact. */
     model.regs[0x037] = 1;
     model.active_address = T214_GPU_POST_FB_BASE;
+    model.active_options = model.regs[0xb80];
     const struct tg_t214_dc_io io = {&model, DisplayRead, DisplayWrite};
     struct tg_t214_dc dc = {0};
 
@@ -197,9 +205,20 @@ static void TestDisplayFlip(void)
     CHECK(tg_t214_dc_active_address(&dc) == 0xc1000000);
     CHECK(tg_t214_dc_release(&dc) == TG_T214_DC_BUSY);
 
-    CHECK(tg_t214_dc_queue_flip(&dc, T214_GPU_POST_FB_BASE) == TG_T214_DC_OK);
+    CHECK(tg_t214_dc_queue_scanout(&dc, T214_GPU_POST_FB_BASE, false) == TG_T214_DC_OK);
+    UINT64 address;
+    bool visible;
+    CHECK(!tg_t214_dc_latched_scanout(&dc, &address, &visible));
     DisplayFrame(&model);
     CHECK(tg_t214_dc_ack_vblank(&dc));
+    CHECK(tg_t214_dc_latched_scanout(&dc, &address, &visible) &&
+          address == T214_GPU_POST_FB_BASE && !visible);
+    CHECK(tg_t214_dc_release(&dc) == TG_T214_DC_BUSY);
+    CHECK(tg_t214_dc_queue_scanout(&dc, T214_GPU_POST_FB_BASE, true) == TG_T214_DC_OK);
+    DisplayFrame(&model);
+    CHECK(tg_t214_dc_ack_vblank(&dc));
+    CHECK(tg_t214_dc_latched_scanout(&dc, &address, &visible) &&
+          address == T214_GPU_POST_FB_BASE && visible);
     CHECK(tg_t214_dc_release(&dc) == TG_T214_DC_BUSY);
     DisplayFrame(&model);
     CHECK(tg_t214_dc_release(&dc) == TG_T214_DC_OK);

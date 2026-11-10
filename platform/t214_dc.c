@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "t214_dc.h"
 #include "t214_resources.h"
+#include <stddef.h>
 
 static uint32_t read_reg(const struct tg_t214_dc_io *io, uint32_t word)
 {
@@ -53,12 +54,14 @@ bool tg_t214_dc_has_boot_mode(const struct tg_t214_dc_io *io)
         !activation_pending(io);
 }
 
-static uint64_t active_address(const struct tg_t214_dc_io *io)
+static uint64_t active_address(const struct tg_t214_dc_io *io, bool *visible)
 {
     uint32_t access = read_reg(io, T214_DC_STATE_ACCESS);
     write_reg(io, T214_DC_STATE_ACCESS, access | T214_DC_READ_ACTIVE);
     uint32_t lo = read_reg(io, T214_DC_WIN_A_ADDR);
     uint32_t hi = read_reg(io, T214_DC_WIN_A_ADDR_HI);
+    if (visible)
+        *visible = (read_reg(io, T214_DC_WIN_A_OPTIONS) & T214_DC_WIN_ENABLE) != 0;
     write_reg(io, T214_DC_STATE_ACCESS, access);
     (void)read_reg(io, T214_DC_STATE_ACCESS);
     return ((uint64_t)hi << 32) | lo;
@@ -75,7 +78,7 @@ enum tg_t214_dc_result tg_t214_dc_acquire(struct tg_t214_dc *dc,
     uint32_t enable = read_reg(io, T214_DC_INT_ENABLE);
     if ((mask & enable) || ((mask | enable) & T214_DC_VBLANK_INT))
         return TG_T214_DC_BUSY;
-    if (!tg_t214_dc_has_boot_mode(io) || active_address(io) != T214_GPU_POST_FB_BASE)
+    if (!tg_t214_dc_has_boot_mode(io) || active_address(io, NULL) != T214_GPU_POST_FB_BASE)
         return TG_T214_DC_MODE_MISMATCH;
 
     uint32_t act = read_reg(io, T214_DC_REG_ACT_CONTROL);
@@ -122,10 +125,19 @@ bool tg_t214_dc_ack_vblank(struct tg_t214_dc *dc)
 
 uint64_t tg_t214_dc_active_address(struct tg_t214_dc *dc)
 {
-    return dc->owned ? active_address(&dc->io) : 0;
+    return dc->owned ? active_address(&dc->io, NULL) : 0;
 }
 
-enum tg_t214_dc_result tg_t214_dc_queue_flip(struct tg_t214_dc *dc, uint64_t address)
+bool tg_t214_dc_latched_scanout(const struct tg_t214_dc *dc, uint64_t *address, bool *visible)
+{
+    if (!dc->owned || activation_pending(&dc->io))
+        return false;
+    *address = active_address(&dc->io, visible);
+    return true;
+}
+
+static enum tg_t214_dc_result queue_scanout(struct tg_t214_dc *dc,
+    uint64_t address, const bool *visible)
 {
     if (!dc->owned || (address & 0xfffu) || address < 0x80000000u ||
         address > (UINT64_C(1) << 32) - T214_GPU_POST_FB_SIZE)
@@ -133,9 +145,24 @@ enum tg_t214_dc_result tg_t214_dc_queue_flip(struct tg_t214_dc *dc, uint64_t add
     const struct tg_t214_dc_io *io = &dc->io;
     if (activation_pending(io) || (read_reg(io, T214_DC_REG_ACT_CONTROL) & T214_DC_WIN_A_HCOUNTER))
         return TG_T214_DC_BUSY;
+    if (visible) {
+        uint32_t options = read_reg(io, T214_DC_WIN_A_OPTIONS) & ~T214_DC_WIN_ENABLE;
+        write_reg(io, T214_DC_WIN_A_OPTIONS, options | (*visible ? T214_DC_WIN_ENABLE : 0));
+    }
     write_reg(io, T214_DC_WIN_A_ADDR, (uint32_t)address);
     activate(io, T214_DC_WIN_A_ACT_REQ);
     return TG_T214_DC_OK;
+}
+
+enum tg_t214_dc_result tg_t214_dc_queue_flip(struct tg_t214_dc *dc, uint64_t address)
+{
+    return queue_scanout(dc, address, NULL);
+}
+
+enum tg_t214_dc_result tg_t214_dc_queue_scanout(struct tg_t214_dc *dc,
+    uint64_t address, bool visible)
+{
+    return queue_scanout(dc, address, &visible);
 }
 
 enum tg_t214_dc_result tg_t214_dc_release(struct tg_t214_dc *dc)
@@ -143,7 +170,10 @@ enum tg_t214_dc_result tg_t214_dc_release(struct tg_t214_dc *dc)
     if (!dc->owned)
         return TG_T214_DC_OK;
     const struct tg_t214_dc_io *io = &dc->io;
-    if (activation_pending(io) || active_address(io) != T214_GPU_POST_FB_BASE)
+    uint64_t address;
+    bool visible;
+    if (!tg_t214_dc_latched_scanout(dc, &address, &visible) ||
+        address != T214_GPU_POST_FB_BASE || !visible)
         return TG_T214_DC_BUSY;
 
     uint32_t act = read_reg(io, T214_DC_REG_ACT_CONTROL);

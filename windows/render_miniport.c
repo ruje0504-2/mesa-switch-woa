@@ -21,6 +21,17 @@ static NTSTATUS start_device(PVOID context,DXGK_START_INFO *start,
     a->Engine.PagingOnly=TRUE;
     status=TgGpuStartPlatformAdapter(a);
     record_status(L"HardwareStatus",status);
+#ifdef TG_GPU_PANEL_WDDM
+    if (!NT_SUCCESS(status)) return status;
+    status=TgGpuPanelStart(a);
+    record_status(L"PanelStatus",status);
+    if (!NT_SUCCESS(status)) {
+        NTSTATUS cleanup=TgGpuPanelStop(a);
+        if (NT_SUCCESS(cleanup)) cleanup=TgGpuDdiStopDevice(a);
+        return NT_SUCCESS(cleanup)?status:cleanup;
+    }
+    *sources=*children=1;
+#endif
     return status;
 }
 
@@ -180,6 +191,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT object,PUNICODE_STRING path)
     d.DxgkDdiFormatHistoryBuffer=format_history;
     d.DxgkDdiSetStablePowerState=set_stable_power;
     d.DxgkDdiSetVirtualMachineData=set_vm_data;
+#ifdef TG_GPU_PANEL_WDDM
+    TgGpuRegisterPanelLifecycle(&d);
+#endif
     NTSTATUS status=DxgkInitialize(object,path,&d);
     record_status(L"InitializeStatus",status);
     return status;

@@ -23,7 +23,9 @@ parser.add_argument("--lib", default="llvm-lib")
 parser.add_argument("--link", default="lld-link")
 parser.add_argument("--dlltool", default="llvm-dlltool")
 parser.add_argument("--probe", action="store_true", help="also build the opt-in KMDF probe and its SwitchFan bridge")
-parser.add_argument("--render", action="store_true", help="build the opt-in WDDM render-only package")
+miniport = parser.add_mutually_exclusive_group()
+miniport.add_argument("--render", action="store_true", help="build the opt-in MCDM package")
+miniport.add_argument("--display", action="store_true", help="build the opt-in WDDM internal panel package")
 parser.add_argument("--gr-firmware", type=Path, help="external NVIDIA tegra21x NETB_img.bin/fecs.bin/gpccs.bin directory")
 parser.add_argument("--acr-firmware", type=Path, help="external NVIDIA 32.7.6 ACR/PMU/FECS files")
 parser.add_argument("--keep-fan", action="store_true", help="with --probe, preserve the existing signed SwitchFan package")
@@ -31,15 +33,16 @@ parser.add_argument("--windows-tests", action="store_true", help="build the real
 args = parser.parse_args()
 if args.keep_fan and not args.probe:
     parser.error("--keep-fan requires --probe")
+build_miniport = args.render or args.display
 gr_names=("NETB_img.bin", "fecs.bin", "gpccs.bin")
-if (args.probe or args.render) and (not args.gr_firmware or
+if (args.probe or build_miniport) and (not args.gr_firmware or
     any(not (args.gr_firmware / n).is_file() for n in gr_names)):
-    parser.error("--probe and --render require --gr-firmware with the three external NVIDIA GR files")
+    parser.error("--probe, --render and --display require --gr-firmware with the three external NVIDIA GR files")
 acr_names=("nv_acr_ucode_prod.bin", "pmu_bl.bin", "gpmu_ucode_image.bin",
            "gpmu_ucode_desc.bin", "pmu_sig.bin", "fecs_sig.bin")
-if (args.probe or args.render) and (not args.acr_firmware or
+if (args.probe or build_miniport) and (not args.acr_firmware or
     any(not (args.acr_firmware / n).is_file() for n in acr_names)):
-    parser.error("--probe and --render require --acr-firmware with all six external NVIDIA ACR files")
+    parser.error("--probe, --render and --display require --acr-firmware with all six external NVIDIA ACR files")
 revision = subprocess.check_output(
     ["git", "-C", str(args.mesa), "rev-parse", "HEAD"], text=True).strip()
 if revision != MESA_REVISION:
@@ -166,6 +169,7 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
 objects = []
 for source in [*core, power, clock, root / "platform/t214_dc.c", root / "windows/resources.c",
                root / "windows/panel.c", root / "windows/panel_vidpn.c",
+               root / "windows/panel_scanout.c",
                root / "windows/private_memory.c", root / "windows/paging.c",
                root / "windows/table_segment.c", root / "windows/root_table.c",
                root / "windows/paging_buffer.c",root / "windows/paging_dispatch.c",
@@ -246,12 +250,13 @@ def copy_firmware(dest):
     for filename in acr_names:
         shutil.copyfile(args.acr_firmware / filename, dest / filename)
 
-if args.render:
+if build_miniport:
     dest = args.out / "kit/tegragpurender"
     dest.mkdir(parents=True, exist_ok=True)
     obj = args.out / "render_miniport.obj"
     km_lib = args.wdk_include.parent.parent / "Lib" / args.wdk_include.name / "km/ARM64"
-    subprocess.run([args.clang_cl, *flags, "/GS", f"/Fo{obj}", "--",
+    miniport_flags = ["/DTG_GPU_PANEL_WDDM=1"] if args.display else []
+    subprocess.run([args.clang_cl, *flags, *miniport_flags, "/GS", f"/Fo{obj}", "--",
                     str(root / "windows/render_miniport.c")], check=True)
     subprocess.run([args.link, "/nologo", "/driver", "/subsystem:native,10.0", "/machine:arm64",
                     "/entry:GsDriverEntry", "/include:_load_config_used", "/nodefaultlib", "/release",
@@ -272,9 +277,20 @@ if args.render:
     subprocess.run([args.link, "/nologo", "/dll", "/noentry", "/machine:arm64", "/nodefaultlib",
                     "/release", "/opt:ref", "/timestamp:0", f"/out:{dest / 'tegragpuno3d.dll'}",
                     f"/implib:{args.out / 'tegragpuno3d.lib'}", str(umd)], check=True)
-    shutil.copyfile(root / "windows/tegragpurender.inf", dest / "tegragpurender.inf")
+    inf = root / "windows/tegragpurender.inf"
+    if args.display:
+        display_inf = inf.read_text().replace("; Opt-in MCDM miniport", "; Opt-in WDDM display miniport")
+        display_inf = display_inf.replace("Class=ComputeAccelerator", "Class=Display")
+        display_inf = display_inf.replace("{F01A9D53-3FF6-48D2-9F97-C8A7004BE10C}",
+                                          "{4d36e968-e325-11ce-bfc1-08002be10318}")
+        display_inf = display_inf.replace(",0.1.0.65", ",0.1.0.99")
+        display_inf = display_inf.replace("Switch Lite GM20B Render Adapter (experimental)", "Tegra X1 (GM20B)")
+        (dest / inf.name).write_text(display_inf)
+    else:
+        shutil.copyfile(inf, dest / inf.name)
     copy_firmware(dest)
-    print(f"Unsigned MCDM package: {dest}; requires catalog generation and signing.")
+    package = "WDDM display" if args.display else "MCDM"
+    print(f"Unsigned {package} package: {dest}; requires catalog generation and signing.")
 
 if args.probe:
     kit = args.out / "kit"

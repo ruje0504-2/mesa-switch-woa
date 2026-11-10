@@ -6,9 +6,17 @@
 #include <dispmprt.h>
 #include "../platform/t214_dc.h"
 
+typedef struct _TG_GPU_PANEL_FLIP {
+    UINT64 Address;
+    ULONGLONG PresentId;
+    BOOLEAN Visible;
+} TG_GPU_PANEL_FLIP;
+
 typedef struct _TG_GPU_PANEL {
     struct tg_t214_dc Dc;
     DXGK_DISPLAY_INFORMATION Boot;
+    TG_GPU_PANEL_FLIP Pending, Displayed;
+    BOOLEAN Stopping, NotifyVBlank, NotifyMpoVBlank;
 } TG_GPU_PANEL;
 
 struct _TG_GPU_ADAPTER;
@@ -17,7 +25,13 @@ _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS TgGpuPanelStart(struct _TG_GPU_ADAPTER *adapter);
 _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS TgGpuPanelStop(struct _TG_GPU_ADAPTER *adapter);
+_IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS TgGpuPanelSetVisibility(struct _TG_GPU_ADAPTER *adapter, BOOLEAN visible);
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS TgGpuPanelSynchronize(struct _TG_GPU_ADAPTER *adapter, PKSYNCHRONIZE_ROUTINE routine,
+    PVOID context);
 void TgGpuRegisterPanelLifecycle(DRIVER_INITIALIZATION_DATA *ddis);
 void TgGpuRegisterPanelVidPn(DRIVER_INITIALIZATION_DATA *ddis);
+void TgGpuRegisterPanelScanout(DRIVER_INITIALIZATION_DATA *ddis);
 
 #endif

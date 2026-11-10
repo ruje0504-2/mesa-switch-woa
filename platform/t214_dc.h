@@ -91,10 +91,15 @@ enum tg_t214_dc_result tg_t214_dc_acquire(struct tg_t214_dc *dc,
 void tg_t214_dc_set_vblank(struct tg_t214_dc *dc, bool enabled);
 bool tg_t214_dc_ack_vblank(struct tg_t214_dc *dc);
 uint64_t tg_t214_dc_active_address(struct tg_t214_dc *dc);
+/* Read the active bank only after its pending activation has completed. */
+bool tg_t214_dc_latched_scanout(const struct tg_t214_dc *dc, uint64_t *address, bool *visible);
 /* This fixed-mode path scans a contiguous, page-aligned native surface
  * entirely below 4 GiB. The caller owns its backing and cache visibility.
  */
 enum tg_t214_dc_result tg_t214_dc_queue_flip(struct tg_t214_dc *dc, uint64_t address);
+/* Change visibility and address in the same native Window A activation. */
+enum tg_t214_dc_result tg_t214_dc_queue_scanout(struct tg_t214_dc *dc,
+    uint64_t address, bool visible);
 /* Queue and confirm the original POST address first. Retry BUSY until
  * the restore activation completes before unmapping or freeing scanout.
  */

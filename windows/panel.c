@@ -26,15 +26,16 @@ static void write_register(void *registers, uint32_t word, uint32_t value)
 typedef struct _PANEL_ACTION {
     TG_GPU_ADAPTER *Adapter;
     enum tg_t214_dc_result Result;
+    BOOLEAN Visible;
 } PANEL_ACTION;
 
-static NTSTATUS synchronize(TG_GPU_ADAPTER *adapter, PKSYNCHRONIZE_ROUTINE routine,
-    PANEL_ACTION *action)
+NTSTATUS TgGpuPanelSynchronize(TG_GPU_ADAPTER *adapter, PKSYNCHRONIZE_ROUTINE routine,
+    PVOID context)
 {
     const DXGKRNL_INTERFACE *dxgk = &adapter->Engine.Dxgk;
     BOOLEAN invoked = FALSE;
     NTSTATUS status = dxgk->DxgkCbSynchronizeExecution(dxgk->DeviceHandle,
-        routine, action, 0, &invoked);
+        routine, context, 0, &invoked);
     return NT_SUCCESS(status) && !invoked ? STATUS_UNSUCCESSFUL : status;
 }
 
@@ -55,7 +56,7 @@ NTSTATUS TgGpuPanelStart(TG_GPU_ADAPTER *adapter)
         return STATUS_INVALID_PARAMETER;
     if (adapter->Panel.Dc.owned)
         return STATUS_INVALID_DEVICE_STATE;
-    RtlZeroMemory(&adapter->Panel.Boot, sizeof(adapter->Panel.Boot));
+    RtlZeroMemory(&adapter->Panel, sizeof(adapter->Panel));
     if (!adapter->Resources.PanelAvailable || !adapter->Resources.DisplayRegisters)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     const DXGKRNL_INTERFACE *dxgk = &adapter->Engine.Dxgk;
@@ -74,8 +75,8 @@ NTSTATUS TgGpuPanelStart(TG_GPU_ADAPTER *adapter)
         (boot.ColorFormat != D3DDDIFMT_X8R8G8B8 && boot.ColorFormat != D3DDDIFMT_A8R8G8B8))
         return STATUS_DEVICE_CONFIGURATION_ERROR;
 
-    PANEL_ACTION action = {adapter, TG_T214_DC_INVALID};
-    status = synchronize(adapter, acquire_dc, &action);
+    PANEL_ACTION action = {.Adapter = adapter};
+    status = TgGpuPanelSynchronize(adapter, acquire_dc, &action);
     if (!NT_SUCCESS(status))
         return status;
     if (action.Result != TG_T214_DC_OK)
@@ -90,14 +91,61 @@ NTSTATUS TgGpuPanelStart(TG_GPU_ADAPTER *adapter)
 static BOOLEAN restore_dc(PVOID context)
 {
     PANEL_ACTION *action = context;
-    struct tg_t214_dc *dc = &action->Adapter->Panel.Dc;
-    if (tg_t214_dc_active_address(dc) != T214_GPU_POST_FB_BASE) {
-        action->Result = tg_t214_dc_queue_flip(dc, T214_GPU_POST_FB_BASE);
-        if (action->Result != TG_T214_DC_OK)
-            return TRUE;
+    TG_GPU_PANEL *panel = &action->Adapter->Panel;
+    struct tg_t214_dc *dc = &panel->Dc;
+    panel->Stopping = TRUE;
+    tg_t214_dc_set_vblank(dc, false);
+    uint64_t address;
+    bool visible;
+    action->Result = TG_T214_DC_BUSY;
+    if (tg_t214_dc_latched_scanout(dc, &address, &visible)) {
+        if (address == T214_GPU_POST_FB_BASE && visible) {
+            action->Result = tg_t214_dc_release(dc);
+        } else {
+            enum tg_t214_dc_result result = tg_t214_dc_queue_scanout(dc, T214_GPU_POST_FB_BASE, true);
+            if (result != TG_T214_DC_OK)
+                action->Result = result;
+        }
     }
-    action->Result = tg_t214_dc_release(dc);
     return TRUE;
+}
+
+static BOOLEAN set_visibility(PVOID context)
+{
+    PANEL_ACTION *action = context;
+    struct tg_t214_dc *dc = &action->Adapter->Panel.Dc;
+    uint64_t address;
+    bool visible;
+    action->Result = TG_T214_DC_BUSY;
+    if (!tg_t214_dc_latched_scanout(dc, &address, &visible))
+        return TRUE;
+    /* When blanking a source, detach its primary before VidMm can evict it. */
+    if (visible == (action->Visible != FALSE) && (visible || address == T214_GPU_POST_FB_BASE)) {
+        action->Result = TG_T214_DC_OK;
+        return TRUE;
+    }
+    enum tg_t214_dc_result result = tg_t214_dc_queue_scanout(dc, T214_GPU_POST_FB_BASE,
+        action->Visible != FALSE);
+    if (result != TG_T214_DC_OK)
+        action->Result = result;
+    return TRUE;
+}
+
+static NTSTATUS wait_for_panel(PANEL_ACTION *action, PKSYNCHRONIZE_ROUTINE routine)
+{
+    const ULONGLONG deadline = KeQueryInterruptTime() + 5000000;
+    LARGE_INTEGER delay = {.QuadPart = -10000};
+    do {
+        NTSTATUS status = TgGpuPanelSynchronize(action->Adapter, routine, action);
+        if (!NT_SUCCESS(status))
+            return status;
+        if (action->Result == TG_T214_DC_OK)
+            return STATUS_SUCCESS;
+        if (action->Result != TG_T214_DC_BUSY)
+            return STATUS_DEVICE_CONFIGURATION_ERROR;
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &delay);
+    } while (KeQueryInterruptTime() < deadline);
+    return STATUS_IO_TIMEOUT;
 }
 
 NTSTATUS TgGpuPanelStop(TG_GPU_ADAPTER *adapter)
@@ -107,20 +155,17 @@ NTSTATUS TgGpuPanelStop(TG_GPU_ADAPTER *adapter)
         return STATUS_INVALID_PARAMETER;
     if (!adapter->Panel.Dc.owned)
         return STATUS_SUCCESS;
-    PANEL_ACTION action = {adapter, TG_T214_DC_INVALID};
-    const ULONGLONG deadline = KeQueryInterruptTime() + 5000000;
-    LARGE_INTEGER delay = {.QuadPart = -10000};
-    do {
-        NTSTATUS status = synchronize(adapter, restore_dc, &action);
-        if (!NT_SUCCESS(status))
-            return status;
-        if (action.Result == TG_T214_DC_OK)
-            return STATUS_SUCCESS;
-        if (action.Result != TG_T214_DC_BUSY)
-            return STATUS_DEVICE_CONFIGURATION_ERROR;
-        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &delay);
-    } while (KeQueryInterruptTime() < deadline);
-    return STATUS_IO_TIMEOUT;
+    PANEL_ACTION action = {.Adapter = adapter};
+    return wait_for_panel(&action, restore_dc);
+}
+
+NTSTATUS TgGpuPanelSetVisibility(TG_GPU_ADAPTER *adapter, BOOLEAN visible)
+{
+    PAGED_CODE();
+    if (!adapter->Panel.Dc.owned)
+        return STATUS_DEVICE_NOT_READY;
+    PANEL_ACTION action = {.Adapter = adapter, .Visible = visible};
+    return wait_for_panel(&action, set_visibility);
 }
 
 static NTSTATUS APIENTRY stop_device(PVOID context)
@@ -243,4 +288,5 @@ void TgGpuRegisterPanelLifecycle(DRIVER_INITIALIZATION_DATA *ddis)
     ddis->DxgkDdiRecommendMonitorModes = recommend_monitor_modes;
     ddis->DxgkDdiGetStandardAllocationDriverData = standard_allocation;
     TgGpuRegisterPanelVidPn(ddis);
+    TgGpuRegisterPanelScanout(ddis);
 }
