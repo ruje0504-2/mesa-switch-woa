@@ -36,8 +36,7 @@ platform/t214_power.c and its interface/test are GPL-2.0-only, with power
 ordering adapted from Switchroot nvgpu platform_gk20a_tegra.c at
 1ae0167d360287ca78f5a2572f0de42594140312 (Copyright 2014-2019 NVIDIA), and
 MC drain ordering from Switchroot drivers/platform/tegra/mc/mc.c
-(Copyright 2010 Google and 2011-2021 NVIDIA). The repository LICENSE contains
-the GPL version 2 text. B01 rail assignments and register definitions follow
+(Copyright 2010 Google and 2011-2021 NVIDIA). See LICENSES/GPL-2.0-only.txt for the GPL version 2 text. B01 rail assignments and register definitions follow
 Switchroot's tegra210b01-nx-pmic.dtsi and CTCaer's Hekate max77812.h.
 OUT5 divider/override programming follows Switchroot clk-tegra-periph.c and
 clk-divider.c (Copyright 2012-2017 NVIDIA, GPL-2.0-only).

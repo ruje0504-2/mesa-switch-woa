@@ -298,16 +298,16 @@ if args.probe:
     wdf_inc = args.wdk_include.parent / "wdf/kmdf/1.15"
     wdf_lib = wdk_root / "Lib/wdf/kmdf/ARM64/1.15"
     km_lib = wdk_root / "Lib" / args.wdk_include.name / "km/ARM64"
-    repo = root.parents[1]
+    bridge = root / "integration/switch-lite/windows/SwitchFan"
     kflags = [*flags, "/DKMDF_VERSION_MAJOR=1", "/DKMDF_VERSION_MINOR=15",
               "/DPOOL_NX_OPTIN=1", "/DSWITCH_LITE_GPU=1", "-Wno-unused-parameter",
               "-Wno-invalid-token-paste", "-Wno-unknown-pragmas", "-Wno-ignored-attributes",
-              f"/imsvc{wdf_inc}", f"/imsvc{args.wdk_include / 'km/spb/1.0'}"]
+              f"/I{root}", f"/imsvc{wdf_inc}", f"/imsvc{args.wdk_include / 'km/spb/1.0'}"]
     support = args.out / "kmdf_support.obj"
-    subprocess.run([args.clang_cl, *kflags, f"/Fo{support}", "--", str(repo / "tools/kmdf_support.c")], check=True)
+    subprocess.run([args.clang_cl, *kflags, f"/Fo{support}", "--", str(root / "tools/kmdf_support.c")], check=True)
     packages = [("tegragpuprobe", root / "windows/probe.c", root / "windows/tegragpuprobe.inf")]
     if not args.keep_fan:
-        packages.append(("switchfan", repo / "drivers/SwitchFan/src/switchfan.c", repo / "drivers/SwitchFan/switchfan.inf"))
+        packages.append(("switchfan", bridge / "src/switchfan.c", bridge / "switchfan.inf"))
     for name, source, inf in packages:
         dest = kit / name
         dest.mkdir(parents=True, exist_ok=True)
