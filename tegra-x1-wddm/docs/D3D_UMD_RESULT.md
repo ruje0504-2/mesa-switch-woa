@@ -2,7 +2,35 @@
 
 2026-11-10, Windows 11 ARM64 23H2 on Switch Lite HDH-001.
 
-**.139 passes native D3D UMD application-shader drawing on GM20B.**
+**.140 reaches native Windows D3D11 runtime rendering; an exit-path fault remains open.**
+The runtime creates a feature-level-10_0 hardware device on GM20B LUID
+`9acf3`, loads the staged `TegraGpuD3D.dll`, and preserves that LUID on the
+resulting DXGI device. RGBA and BGRA each pass a blue clear and an SM4 red
+triangle with staging readback: four 64x64 images, 16,384 matching pixels.
+Each triangle has 1,152 red and 2,944 blue pixels at the expected positions.
+
+| .140 runtime run | Result |
+| --- | --- |
+| 19:37:35–19:37:46 UTC | All four images match and GetDeviceRemovedReason returns S_OK; process subsequently exits `c0000005`, without timeout. |
+| 19:40:49–19:41:03 UTC | Same UMD/ICD, with exception-address reporting and explicit context/device/adapter release markers in the probe. All four images match, all release markers complete, exit 0 without timeout. |
+
+The second run does not explain or establish a fix for the first access
+violation. No exception address was captured in the first run, and the
+diagnostic run did not reproduce it. The Application log query for events
+1000/1001 naming the probe or UMD returned no matching events. Stabilizing
+this exit path is the next step before runtime shared resources and DWM.
+These tests do not present windows or validate composition.
+
+The first probe attempt stopped before D3D11CreateDevice because DXGI
+reported ACPI identity words `414f5753:31304630` (`SWOA0F01`), rather than
+PCI vendor/device IDs. Selection now uses the requested LUID; the native
+UMD independently validates the private KMD's NVIDIA/GM20B identity.
+There is no automatic software fallback. The retained first native fence
+`7a`, 8,532 bytes, completes with Reference `5c` and proof mask 7. Those
+fixed journal slots belong to the first rendering run and remain unchanged
+in the diagnostic run; the pixel comparisons provide the latter's evidence.
+
+**.139 passes native direct-DDI application-shader drawing on GM20B.**
 The explicit direct-DDI probe selects matching KMT/active VidPN LUID `a2dc3`,
 opens the NVK UMD device, and checks every 64x64 RGBA pixel after three clear
 passes and two triangle passes. It runs 19:15:28–19:15:41 UTC and exits 0
@@ -29,7 +57,7 @@ has no recorded recovery/rejection/MMU fault; the pixel comparisons establish
 the drawing result. The KMD core and ICD are unchanged from .138. The UMD
 now uses CSO/u_vbuf to prevent CPU dummy vertex bindings reaching Zink.
 
-This is an offscreen direct-DDI test. D3D11CreateDevice, runtime resource
+This earlier result is an offscreen direct-DDI test. Runtime resource
 sharing, DWM composition and Win32 Vulkan presentation remain unverified.
 .137 remains the earlier native three-color clear/copy/readback baseline,
 including the QMD writable-mirror fix described below.
@@ -147,6 +175,25 @@ used to identify an unrecorded internal failure.
 
 ## Loader discovery
 
+The next-stage `nvk_d3d_runtime_check.exe` uses the Windows D3D11 runtime at
+feature level 10_0, with RGBA and BGRA clear/draw/staging-readback checks.
+On the .59 baseline at 19:27:41–19:27:42 UTC, both explicit software controls
+pass: WARP and Mesa's GDI/softpipe UMD each check 16,384 pixels with zero
+mismatches, exit 0, and no timeout. This validates the runtime probe and
+the shared D3D frontend against Windows; it is not native GPU evidence.
+The hardware mode requires a selected adapter LUID and the loaded native
+UMD, with no automatic software fallback. Shared resources and presentation
+remain outside this probe's scope.
+
+Control artifacts: `/private/tmp/t214-gpu-round/runtime-d3d.m5l_i8vc/`.
+All five returned records match device SHA256/lengths in `verified.json`.
+The probe SHA256 is
+`981ea2b71fdc1df0bfe90e836c184ed121c2eb937e8844a921f768ee3170b9ec`.
+Read-only inspection found no `System32/vulkan-1.dll`; prior diagnostic
+packages registered the no-D3D UMD. The .140 trial registers the native
+UMD for D3D10/11 and uses the app-local loader for the runtime probe.
+It does not yet package a system loader for DWM.
+
 Initial runs could not find an ICD. The loader later explicitly reports that
 these Windows processes have elevated privileges, including the task started
 with a Limited principal, so it ignores `VK_DRIVER_FILES`. Registering the
@@ -185,14 +232,32 @@ The earlier adapter, DLL-entry and device fixtures passed with commit
 `staged-hashes.json`. The frontend still negotiates D3D10 DDIs only, and its
 native presentation callbacks remain unsupported.
 
-Next, connect the Windows D3D runtime, runtime allocations, shared textures,
-synchronization and sustained DWM presentation. DXVK
+Next, identify the runtime exit-path fault, then connect runtime allocations,
+shared textures, synchronization and sustained DWM presentation. DXVK
 remains a compatibility/code-reuse reference.
 
 ## Recovery and artifacts
 
-.134 through .139 were restored to .59 Code 0, most recently at 19:22:02 UTC.
-Original ACPI/driver hashes match, tasks/permit and temporary ICD registration
+The .140 artifacts are under `/private/tmp/t214-gpu-round/runtime-ddi140.hvoc0ueo/`.
+All 39 downloaded test records and five recovery records match device
+SHA256/lengths in `physical/verified.json` and `physical/verified-recovery.json`.
+The ETL export has 158,904 records with matching
+count and record boundaries. `initial-app-manifest.json`,
+`identity-app-manifest.json` and the final local `app-manifest.json` preserve
+the three probe builds; the UMD/ICD are unchanged across them. The final
+probe SHA256 is `4662698f72bee8aa319513a492c4db3aa4f01256df34f97a586d3bb2c8bf22f0`,
+verified on the device before its successful diagnostic run.
+
+| .140 artifact | SHA256 |
+| --- | --- |
+| Signed KMD | `70585c1b1cde2155a75ea95d5c62fe5df634e8208d1be8c45147f410858e0a76` |
+| First rendering run, exit-path fault | `a23e69d659ff4b2cbd9ed413d0d404ac0cf12f5c4e28a16205848d8f8bf653a5` |
+| Diagnostic rendering run, exit 0 | `991fe93527aab233997de6b292c410a119066a99b57f65e68dc9c0cb4a1c0964` |
+| Live startup journal | `08817ee6b0ba39dbfbc04a3fceff7a62f81a35a90258e6874c8a145ff6ed96b3` |
+| ETL export | `7bb1b07f6333acf63ac409729fea319926f1e042bfc455eaf37e7e387a65df6d` |
+
+.134 through .140 were restored to .59 Code 0, most recently at 19:46:06 UTC.
+Original ACPI/driver hashes match, tasks/permit and temporary UMD/ICD registration
 are gone, and before/after power reports match. Firmware/Hekate were unchanged.
 
 The .139 artifacts are under `/private/tmp/t214-gpu-round/native-ddi139.mp3g_eov/`.

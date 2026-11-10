@@ -46,6 +46,11 @@ if with_tests and d3d10_backend == 'nvk'
     files('tests/nvk_native.cpp'),
     include_directories : [inc_src, inc_winddk],
   )
+  executable(
+    'nvk_d3d_runtime_check',
+    files('tests/nvk_runtime.cpp'),
+    dependencies : [cpp.find_library('d3d11'), cpp.find_library('dxgi')],
+  )
   test(
     'd3d10_nvk_device',
     executable(

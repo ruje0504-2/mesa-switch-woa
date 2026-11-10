@@ -3,31 +3,38 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Current work: D3D UMD/DWM.** .139 passes native direct-DDI SM4 drawing
-on GM20B LUID `a2dc3`: ordinary and indexed/scissored triangles plus three
-clear/copy/readback passes check 20,480 pixels with zero mismatches, exit 0
-and no timeout. The frontend now routes vertex input and Draw through
-Mesa CSO/u_vbuf, fixing .138's CPU dummy-buffer pointer crash in Zink.
+**Current work: D3D UMD/DWM.** .140 creates a Windows D3D11 hardware device
+at feature level 10_0 on GM20B LUID `9acf3`. RGBA/BGRA clear/draw/readback
+checks 16,384 pixels with zero mismatches. The diagnostic run releases the
+context/device/adapter and exits 0; the preceding run exits `c0000005`
+after the same successful readback. That exit-path fault remains unresolved.
+.139 remains the passing direct-DDI baseline: 20,480 matching pixels,
+ordinary and indexed/scissored SM4 draws through Mesa CSO/u_vbuf.
 See the [UMD evidence](D3D_UMD_RESULT.md).
 
-Next: Windows D3D runtime integration, runtime allocations/shared images,
-synchronization and sustained DWM presentation. The direct-DDI result does
-not test those stages or Win32 Vulkan presentation. Latest artifacts:
-`/private/tmp/t214-gpu-round/native-ddi139.mp3g_eov/`.
+Next: identify the first runtime exit-path fault, then complete runtime
+allocations/shared images, synchronization and sustained DWM presentation.
+Neither native probe tests sharing, DWM or Win32 Vulkan presentation.
+Latest artifacts: `/private/tmp/t214-gpu-round/runtime-ddi140.hvoc0ueo/`.
+
+The runtime probe also passes WARP and Mesa GDI/softpipe controls on .59
+(16,384 matching pixels each). .140 uses temporary native UMD registration
+and an app-local Vulkan loader; system-loader packaging for DWM is pending.
 
 The .132 trial passes 16 KiB NT-handle
 storage sharing between two KMT devices on GM20B, including CPU readback
 after releasing the producer and closing the exported handle. Both device
 budgets return to zero. The matched adapter/active VidPN LUID is `949ff`.
-D3D runtime integration, shared-image rendering/synchronization and DWM
+D3D runtime resource integration, shared-image rendering/synchronization and DWM
 composition remain pending. DXVK remains a compatibility and code-reuse
 candidate. See the [shared-storage result](SHARED_STORAGE_RESULT.md).
-After .139 testing, .59 Code 0, the original ACPI/driver hashes and unchanged
+After .140 testing, .59 Code 0, the original ACPI/driver hashes and unchanged
 AC/DC display/sleep settings were verified. The start permit, test tasks and
-temporary ICD registration have been removed.
+temporary UMD/ICD registration have been removed (19:46:06 UTC).
 
 | Driver | Result | Remaining work |
 | --- | --- | --- |
+| 0.1.0.140 | Code 0, matching KMT/active VidPN LUID `9acf3`, real D3D11 hardware device at feature level 10_0. Both native runs match 16,384 RGBA/BGRA pixels; first exits `c0000005`, diagnostic run exits 0 with explicit release markers. | First exit-path fault remains unidentified; runtime sharing/synchronization, DWM and Win32 `vkcube` remain pending. |
 | 0.1.0.139 | Code 0, matching KMT/active VidPN LUID `a2dc3`, 512 MiB ceiling. Three color passes and two SM4 triangle passes check 20,480 pixels with zero mismatches; exit 0 without timeout. | Windows D3D runtime/shared resources and DWM; Win32 `vkcube` remains pending. |
 | 0.1.0.138 | Three-color readback passes, then first Draw exits `c0000005`. UMD RVA `1256e4` identifies Zink writing resource metadata through a CPU dummy vertex-buffer pointer. | CSO/u_vbuf routing fix passes natively in .139. |
 | 0.1.0.137 | Code 0, matching KMT/active VidPN LUID `a3dbb`, 512 MiB ceiling. Native D3D UMD clear/copy/readback passes three colors with 12,288 matching pixels; exit 0 without timeout. | Native draw/shaders, D3D runtime/shared resources and DWM; Win32 `vkcube` remains pending. |

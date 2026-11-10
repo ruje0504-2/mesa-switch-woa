@@ -21,6 +21,16 @@ Run it only with a native-submission KMD and registered NVK ICD; elevated
 Windows processes ignore its `VK_DRIVER_FILES` override.
 This probe does not use the Windows D3D runtime or presentation callbacks.
 
+`nvk_d3d_runtime_check.exe --luid 16-hex-digits` instead calls the Windows
+`D3D11CreateDevice` runtime at feature level 10_0 and checks RGBA/BGRA clear,
+SM4 drawing and staging readback. It requires the registered native UMD,
+checks the resulting adapter LUID and loaded `TegraGpuD3D.dll`, and does not
+fall back to WARP. `--warp` and `--software path/to/gdi-reference.dll` are
+explicit software controls. No mode tests resource sharing or presentation;
+none runs as a default Meson test.
+For the experimental NVK hardware path, register the ICD as above, make the
+ARM64 Vulkan loader available and set `NVK_I_WANT_A_BROKEN_VULKAN_DRIVER=1`.
+
 ## GDI software backend
 
 When compiled with `gallium-driver=llvmpipe` or `gallium-driver=softpipe` the resulting libgallium_d3d10.dll implements D3D10's software rendering interface, like WARP.
