@@ -8,9 +8,9 @@ The long-term goal is a complete native Vulkan implementation, verified
 with version-appropriate VK-GL-CTS coverage and physical GM20B tests.
 The current milestone is the Direct3D UMD and hardware DWM composition.
 Use the current Zink/NVK UMD to light up and quickly verify desktop GPU
-acceleration, then migrate the desktop backend to DXVK. The final desktop
-UMD and DX9/10/11 game path both use DXVK over NVK/KMD; that integration
-remains pending. Zink remains the OpenGL compatibility route.
+acceleration. The DX9/10/11 game path will use DXVK over NVK/KMD. Desktop
+DXVK is deferred and requires explicit user confirmation before development.
+Zink also remains the OpenGL compatibility route.
 
 | Area | Status |
 | --- | --- |

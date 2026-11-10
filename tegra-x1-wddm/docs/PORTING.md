@@ -72,14 +72,14 @@ validation in the current KMD covers the tested submission stream.
 
 ## Direct3D UMD and DWM
 
-The user clarified the staging on 2026-11-10: **first light up and quickly
-verify desktop GPU acceleration through the current D3D UMD → Zink → NVK →
-Tegra KMD path; then migrate the desktop UMD backend to DXVK**. The final
-desktop route is **Windows D3D runtime → D3D UMD with DXVK backend → NVK →
-Tegra KMD**. The DX9/10/11 game path also uses DXVK over NVK. Implement the
-native resource, synchronization and presentation bridge for the initial
-desktop validation, preserve it for regression, and complete sustained DWM
-validation on the final DXVK backend. Zink remains the OpenGL route.
+The user clarified the staging and authorization on 2026-11-10: **first
+light up and quickly verify desktop GPU acceleration through the current
+D3D UMD → Zink → NVK → Tegra KMD path**. The DX9/10/11 game path uses DXVK
+over NVK. Desktop DXVK is deferred until the end and **requires explicit
+user confirmation before development or migration starts**. Continue the
+native resource, synchronization and presentation bridge for the authorized
+Zink desktop work and retain its result for regression. Zink also remains
+the OpenGL route.
 
 The .130 trial established visible native scanout on GM20B. The same trial
 recorded `D3D11CreateDevice` returning `DXGI_ERROR_UNSUPPORTED` for the
@@ -165,18 +165,18 @@ SetDisplayMode callbacks return unsupported until the native bridge exists.
 [Existing frontend](../../src/gallium/frontends/d3d10umd/)
 [GDI target](../../src/gallium/targets/d3d10umd/)
 
-DXVK is selected for the final desktop UMD backend and application-facing
-DX9/10/11 game path. After the Zink desktop validation stage, integrate a
+DXVK is selected for the application-facing DX9/10/11 game path. Integrate a
 pinned upstream version over NVK,
 preserve its license and attribution, and validate the Windows binary/loader
 architecture, required Vulkan features, resource synchronization and Win32
-presentation. Adapt DXVK's rendering/resource layer to the native desktop
-DDI and runtime callbacks. DXVK application rendering establishes game API
+presentation. A future desktop DXVK backend needs separate user authorization
+and native DDI/runtime integration. DXVK application rendering establishes game API
 compatibility; hardware DWM acceptance needs
 the desktop route's own device, shared-surface and sustained-composition
 evidence. Generic compatibility work is in scope; individual-game debugging
 remains outside this goal.
 [DXVK upstream](https://github.com/doitsujin/dxvk)
+[Current runtime resource investigation](D3D_RUNTIME_SHARING.md)
 
 ## deko3D Maxwell reference
 
