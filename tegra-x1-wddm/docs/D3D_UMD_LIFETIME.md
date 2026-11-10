@@ -16,8 +16,11 @@ The temporary C11 frame-pointer diagnostic DLL was not used for these runs.
 | New process | 21:05:49–21:06:02 | 16,384 matching pixels, implicit release, exit 0 |
 | New process | 21:06:57–21:07:10 | 16,384 matching pixels, implicit release, exit 0 |
 
+The .144 regression with the rebuilt ICD/UMD also matches all 16,384 pixels
+and exits normally. [Later sharing and runtime result](VULKAN_WIN32_MEMORY.md)
+
 This fixes the independently reproduced Mesa barrier defect and validates
-the native exit path under these tests. Shared resources, DWM composition
+the native exit path under these tests. D3D runtime shared resources, DWM composition
 and Win32 Vulkan presentation remain separate unverified work.
 [Barrier fix and regressions](https://github.com/ruje0504-2/mesa-switch-woa/commit/3e757c76)
 

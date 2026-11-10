@@ -12,8 +12,8 @@ Windows desktop GPU acceleration is the current development milestone.
 | --- | --- |
 | Native Vulkan | NVK rendered an offscreen triangle and read back the expected pixels and guards with driver **0.1.0.87**. A Win32 preview showed that readback. |
 | Display adapter | **0.1.0.130** reached **Code 0**, completed GDI copies and displayed verified RGB bars on the internal panel through the GM20B VidPN and native scanout. |
-| Shared storage | **0.1.0.132** passed NT-handle import and CPU readback between two devices on GM20B, including after producer release. [Test scope and evidence](tegra-x1-wddm/docs/SHARED_STORAGE_RESULT.md). |
-| Windows desktop | **0.1.0.143** passes three native D3D11 runtime runs at feature level 10_0 after a Mesa barrier lifetime fix: 49,152 matching RGBA/BGRA pixels and three normal exits. Shared resources and hardware DWM composition remain pending. [Evidence](tegra-x1-wddm/docs/D3D_UMD_RESULT.md). |
+| Shared storage | **0.1.0.144** passes Vulkan Win32 buffer/image sharing, GPU read/write after producer-device release, and re-export: 32,768 payload words plus 512 guards match. [Scope and evidence](tegra-x1-wddm/docs/VULKAN_WIN32_MEMORY.md). |
+| Windows desktop | **0.1.0.143** passes three native D3D11 runtime runs at feature level 10_0 after a Mesa barrier lifetime fix; **.144** also passes the 16,384-pixel RGBA/BGRA regression. D3D runtime sharing and hardware DWM composition remain pending. [Evidence](tegra-x1-wddm/docs/D3D_UMD_LIFETIME.md). |
 
 The Windows NVK backend uses KMT for allocations, GPU virtual addresses,
 submissions and monitored fences. The KMD uses dynamically allocated system

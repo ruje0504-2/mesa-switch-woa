@@ -108,11 +108,14 @@ processes ignore `VK_DRIVER_FILES`; the physical .133 test used a temporary
 in rollback. Normal packaging must register its ICD through the driver package.
 [Loader discovery and privilege rules](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderDriverInterface.md#driver-discovery-on-windows)
 
-The .133 test reaches native adapter/device creation and a completed native
-submission, then fails clear/readback on a later 592-byte KMD rejection.
-Resolve that command-validation failure and repeat clear/draw/readback,
-then connect runtime allocation, shared-image metadata, synchronization and
-sustained composition/presentation. [Physical DDI result](D3D_UMD_RESULT.md)
+The .143 trial passes three native Windows D3D11 runtime runs at feature
+level 10_0. RGBA/BGRA clear and SM4 triangle readback match 49,152 pixels;
+all three processes complete implicit release and exit 0. The UMD fixes
+the fallback barrier's serial return and keeps queue-finish barriers alive
+until every worker has returned. This supersedes the earlier .133 command
+rejection and the later exit faults. The next work is runtime allocation,
+shared-image metadata, synchronization and sustained composition/presentation.
+[Native runtime and lifetime evidence](D3D_UMD_LIFETIME.md)
 Device and resource tests must select and report the GM20B LUID.
 The UMD must handle runtime-owned allocation and presentation callbacks,
 resource layout metadata, ownership and completion across devices.
@@ -124,15 +127,24 @@ with NT security sharing, export an NT handle, and open it on another device.
 Import validates the allocation metadata, charges the importing device's
 budget and waits for residency. Each open has a separate resource handle,
 and the caller owns the NT handle. NVK shared storage allocations use this
-resource path. Vulkan Win32 external-memory entry points, shared-image
-layout metadata and cross-device synchronization remain to be connected.
+resource path. NVK now implements OPAQUE_WIN32 import/export, including named
+NT handles, security/access attributes and handle inheritance. It reports
+only that handle type for buffers and images; D3D texture and legacy KMT
+handles remain unsupported. The importing memory retains its own resource
+reference without consuming the caller's NT handle. Imported memory is
+registered in NVK's memory list and is not zeroed or debug-filled.
 CPU-visible shared storage uses a write-combined section and the standard
 ExistingHeap allocation path. The KMD handles the standard raw-buffer
 description and linear surface metadata. The .132 physical trial passes
 CPU readback at three ownership stages, including after producer release
-and NT-handle closure. This test uses two devices in one process on GM20B;
-cross-process sharing and GPU access to the imported storage are pending.
+and NT-handle closure. That test uses two devices in one process on GM20B.
+The separate `nvk-windows-vulkan-shared-check.exe <absolute-vulkan-1.dll>`
+probe tests buffer and optimal RGBA/BGRA image GPU access through the Vulkan
+loader, external queue-family transfers, producer-device destruction and
+re-export. It is an explicit physical test, not a default Meson test.
+Cross-process sharing, D3D runtime image metadata and DWM remain separate work.
 [Physical shared-storage result](SHARED_STORAGE_RESULT.md)
+[Win32 Vulkan memory implementation and validation](VULKAN_WIN32_MEMORY.md)
 [KMT resource sharing](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtshareobjects)
 
 Mesa's `src/gallium/frontends/d3d10umd` supplies D3D10 DDI and shader-token

@@ -9,9 +9,11 @@ exported NT handle is closed. All 4,096 words match at each ownership stage.
 Cleanup succeeds and both device budget counters return to zero.
 
 This probe uses two devices in one process on the same GM20B adapter. It
-maps both GPU addresses but submits no drawing commands. Cross-process
-sharing, GPU access to the imported storage, shared images, Vulkan Win32
-external-memory entry points and D3D UMD/DWM composition remain pending.
+maps both GPU addresses but submits no drawing commands. The later .144
+trial adds Vulkan OPAQUE_WIN32 entry points and passes GPU buffer/image
+sharing, producer-device destruction and re-export. Cross-process sharing
+and D3D UMD/DWM composition remain pending.
+[Later Vulkan sharing result](VULKAN_WIN32_MEMORY.md)
 
 ## Physical checks
 

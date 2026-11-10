@@ -24,6 +24,15 @@ The SDK layout fixture runs at compile time. The build emits the ICD DLL,
 a local ICD manifest, a controlled `test-kmt.exe` and a live adapter probe
 `nvk-windows-check.exe`. Run the latter with the absolute ICD DLL path.
 
-The currently validated workload is the offscreen GM20B triangle on a
-Switch Lite. Command validation, Win32 presentation and desktop
-integration are in development. [Matching KMD and hardware status](https://github.com/ruje0504-2/mesa-switch-woa/tree/main/tegra-x1-wddm)
+`test-kmt-shared.exe` checks shared storage, named objects and ownership with
+controlled SDK KMT substitutes. `nvk-windows-shared-check.exe` tests live KMT
+storage. `nvk-windows-vulkan-shared-check.exe <absolute-vulkan-1.dll>` tests
+native Vulkan buffer/image sharing, GPU writes and readback after releasing
+the producer, and re-export. The latter requires a registered ICD and an
+active native-submit KMD. These live probes are not default build tests.
+[Win32 memory contract and physical evidence](../../../../../tegra-x1-wddm/docs/VULKAN_WIN32_MEMORY.md)
+
+Native offscreen Vulkan and D3D11 runtime rendering at feature level 10_0
+have physical passes on Switch Lite. Win32 Vulkan presentation, D3D runtime
+shared-resource integration and sustained DWM composition remain in
+development. [Matching KMD and hardware status](https://github.com/ruje0504-2/mesa-switch-woa/tree/main/tegra-x1-wddm)

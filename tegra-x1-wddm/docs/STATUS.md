@@ -3,10 +3,17 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Current work: D3D UMD/DWM.** .143 passes three native Windows D3D11
-runtime runs at feature level 10_0 on GM20B LUID `a59ef`. RGBA/BGRA
-clear/draw/readback checks 49,152 pixels with zero mismatches; all three
-processes complete implicit release and exit 0 without timeout.
+**Current work: D3D UMD/DWM.** .144 passes native Vulkan OPAQUE_WIN32
+memory sharing on GM20B LUID `98914`. Named/unnamed buffers and optimal
+RGBA/BGRA images retain their contents after the exporting VkDevice and
+NT handle are released. GPU read/write and re-export check 32,768 payload
+words and 512 guards with zero mismatches; exit 0 without timeout.
+[Win32 Vulkan memory result](VULKAN_WIN32_MEMORY.md)
+
+The rebuilt UMD/ICD also passes a native Windows D3D11 runtime regression
+at feature level 10_0: 16,384 RGBA/BGRA clear/triangle pixels match, implicit
+release completes and the process exits 0. The preceding .143 trial passed
+three such runs, totaling 49,152 pixels.
 
 The UMD fixes a Mesa barrier lifetime error: the Windows fallback returned
 a serial result to every participant, and queue workers could destroy the
@@ -16,25 +23,26 @@ The original ARM64 control crashes without GPU use; the patched control
 passes 512 four-worker finishes and 2,048 jobs.
 [Runtime lifetime evidence](D3D_UMD_LIFETIME.md)
 
-Next: runtime allocations/shared images, synchronization and sustained DWM
-presentation, then the separate Win32 Vulkan `vkcube` test. These remain
-unverified. .143 keeps the ICD and KMD core unchanged and uses an app-local
+Next: D3D runtime allocations/shared-image metadata, synchronization and
+sustained DWM presentation, then the separate Win32 Vulkan `vkcube` test. These remain
+unverified. .144 keeps the KMD core unchanged and uses an app-local
 Vulkan loader; system-loader packaging for DWM is still pending.
-Latest artifacts: `/private/tmp/t214-gpu-round/runtime-ddi143.rvqimgbg/`.
+Latest artifacts: `/private/tmp/t214-gpu-round/external-memory144.601od71q/`.
 
 The .132 trial passes 16 KiB NT-handle
 storage sharing between two KMT devices on GM20B, including CPU readback
 after releasing the producer and closing the exported handle. Both device
 budgets return to zero. The matched adapter/active VidPN LUID is `949ff`.
-D3D runtime resource integration, shared-image rendering/synchronization and DWM
+D3D runtime resource integration, shared-texture synchronization and DWM
 composition remain pending. DXVK remains a compatibility and code-reuse
 candidate. See the [shared-storage result](SHARED_STORAGE_RESULT.md).
-After .143 testing, .59 Code 0, the original ACPI/driver hashes and unchanged
+After .144 testing, .59 Code 0, the original ACPI/driver hashes and unchanged
 AC/DC display/sleep settings were verified. The start permit, test tasks and
-temporary UMD/ICD registration have been removed (21:14:45 UTC).
+temporary UMD/ICD registration have been removed (22:00:07 UTC).
 
 | Driver | Result | Remaining work |
 | --- | --- | --- |
+| 0.1.0.144 | Code 0, matching LUID `98914`. Vulkan NT memory sharing, GPU buffer/image read/write, producer-device release and re-export pass 32,768 payload words plus 512 guards. D3D11 runtime regression matches another 16,384 pixels; both processes exit 0. | Cross-process sharing, D3D runtime resource/layout integration, DWM and Win32 `vkcube`. |
 | 0.1.0.143 | Code 0, matching LUID `a59ef`, real D3D11 runtime at feature level 10_0. Three implicit-release runs match 49,152 pixels and exit 0 after the barrier lifetime fix. | Runtime sharing/synchronization, DWM and Win32 `vkcube` remain pending. |
 | 0.1.0.142 | Code 0, matching LUID `a7cce`; 16,384 pixels match before exit `c0000005`. Raw frames reach the UMD's cnd_wait. CPU-only controls independently reproduce the barrier defects and pass after the source fix. | Native validation of the fix follows in .143. |
 | 0.1.0.141 | Code 0, matching LUID `97642`. Three native runtime runs each match 16,384 pixels; implicit release faults once and two raw-address diagnostic runs exit 0. | Barrier defect reproduced in .142 and fixed in .143. Shared resources, DWM and Win32 `vkcube` remain pending. |
