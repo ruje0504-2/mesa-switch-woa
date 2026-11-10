@@ -11,6 +11,7 @@
 #include "nak.h"
 
 struct nv_device_info;
+struct nv_push;
 
 enum nvk_mme {
    NVK_MME_SELECT_CB0,
@@ -234,6 +235,9 @@ typedef void (*nvk_mme_builder_func)(struct mme_builder *b);
 
 uint32_t *nvk_build_mme(const struct nv_device_info *devinfo,
                         enum nvk_mme mme, size_t *size_out);
+bool nvk_push_mme_programs(struct nv_push *push,
+                           const struct nv_device_info *devinfo,
+                           bool allow_privileged);
 
 void nvk_mme_select_cb0(struct mme_builder *b);
 void nvk_mme_bind_cbuf_desc(struct mme_builder *b);

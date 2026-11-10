@@ -1,7 +1,36 @@
 /* SPDX-License-Identifier: MIT */
 #include "../core/command_stream.h"
+#include "../core/nvk_mme_programs.h"
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
+
+static void test_mme_upload(void)
+{
+    enum { MME_WORDS = sizeof(tg_gpu_nvk_mme_init) / sizeof(uint32_t) };
+    uint32_t stream[2 + MME_WORDS + 1] = {0x20010000, 0xb197};
+    memcpy(stream + 2, tg_gpu_nvk_mme_init, sizeof(tg_gpu_nvk_mme_init));
+    assert(tg_gpu_validate_command_stream(stream, sizeof(stream)));
+    assert(!tg_gpu_validate_command_stream(stream, sizeof(stream) - 2 * sizeof(uint32_t)));
+
+    stream[2 + MME_WORDS] = 0x80000045; /* Immediate write to instruction RAM pointer. */
+    assert(!tg_gpu_validate_command_stream(stream, sizeof(stream)));
+    stream[2 + MME_WORDS] = 0;
+
+    stream[3] ^= 1; /* First macro slot. */
+    assert(!tg_gpu_validate_command_stream(stream, sizeof(stream)));
+    stream[3] ^= 1;
+    stream[7] ^= 1; /* First instruction. */
+    assert(!tg_gpu_validate_command_stream(stream, sizeof(stream)));
+
+    const uint32_t span[] = {0x20060044, 0, 0, 0, 0, 0, 0}; /* 0x110 through 0x124. */
+    const uint32_t oneinc[] = {0xa0020044, 0, 0}; /* 0x110 and 0x114. */
+    const uint32_t nonincr[] = {0x60010046, 0}; /* Instruction RAM alone. */
+    assert(!tg_gpu_validate_command_stream(span, sizeof(span)));
+    assert(!tg_gpu_validate_command_stream(oneinc, sizeof(oneinc)));
+    assert(!tg_gpu_validate_command_stream(nonincr, sizeof(nonincr)));
+}
+
 int main(void)
 {
     uint32_t w[16]={0x20010000,0xb197,0x20020100,0x20010014,0xdeadbeef,0};
@@ -40,5 +69,6 @@ int main(void)
     w[0]=0xe0000000;assert(!tg_gpu_validate_command_stream(w,4)); /* End segment. */
     w[0]=0xc0000040;assert(!tg_gpu_validate_command_stream(w,4)); /* Reserved. */
     w[0]=0x20000040;assert(!tg_gpu_validate_command_stream(w,4)); /* Zero count. */
-    puts("Linear B06F packets, object bindings and reference isolation passed");return 0;
+    test_mme_upload();
+    puts("Linear B06F packets, object bindings, reference isolation and MME uploads passed");return 0;
 }

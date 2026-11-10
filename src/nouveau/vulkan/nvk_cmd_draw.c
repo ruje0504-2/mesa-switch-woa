@@ -154,30 +154,8 @@ nvk_push_draw_state_init(struct nvk_queue *queue, struct nv_push *p)
       .engine_id = 0,
    });
 
-   for (uint32_t mme = 0, mme_pos = 0; mme < NVK_MME_COUNT; mme++) {
-      if (DETECT_OS_WINDOWS &&
-          (mme == NVK_MME_SET_PRIV_REG || mme == NVK_MME_SET_CONSERVATIVE_RASTER_STATE))
-         continue;
-      size_t size;
-      uint32_t *dw = nvk_build_mme(&pdev->info, mme, &size);
-      if (dw == NULL)
-         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
-
-      assert(size % sizeof(uint32_t) == 0);
-      const uint32_t num_dw = size / sizeof(uint32_t);
-
-      P_MTHD(p, NV9097, LOAD_MME_START_ADDRESS_RAM_POINTER);
-      P_NV9097_LOAD_MME_START_ADDRESS_RAM_POINTER(p, mme);
-      P_NV9097_LOAD_MME_START_ADDRESS_RAM(p, mme_pos);
-
-      P_1INC(p, NV9097, LOAD_MME_INSTRUCTION_RAM_POINTER);
-      P_NV9097_LOAD_MME_INSTRUCTION_RAM_POINTER(p, mme_pos);
-      P_INLINE_ARRAY(p, dw, num_dw);
-
-      mme_pos += num_dw;
-
-      free(dw);
-   }
+   if (!nvk_push_mme_programs(p, &pdev->info, !DETECT_OS_WINDOWS))
+      return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
 
    if (pdev->info.cls_eng3d >= TURING_A && pdev->info.cls_eng3d < BLACKWELL_A)
       P_IMMD(p, NVC597, SET_MME_DATA_FIFO_CONFIG, FIFO_SIZE_SIZE_4KB);

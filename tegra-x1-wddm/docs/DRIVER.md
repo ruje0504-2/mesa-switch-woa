@@ -789,9 +789,22 @@ backend opens that LUID, manages VidMm allocations and VA reservations, and
 submits linear NVK pushes through KMT. CPU waits and queue signals use Windows
 monitored fences. Copy-capable queues bind the GM20B copy object during
 initialization, including the upload queue. Windows keeps GPU memory in the
-UMA heap and uses the KMD's ceiling for per-device allocations. Privileged
-register-write MME programs
-and their callers are excluded from the Windows command stream.
+UMA heap and uses the KMD's ceiling for per-device allocations. The Windows
+command stream omits privileged register-write MME programs and their callers.
+
+The KMD accepts GM20B MME RAM writes as a contiguous upload of the programs
+and slots emitted by `nvk_push_mme_programs`. Regenerate the checked-in header
+when those packets change. Use a native Mesa build configured with
+`-Dvulkan-drivers=nouveau -Dbuild-tests=true`.
+
+```sh
+ninja -C "$NATIVE_MESA_BUILD" src/nouveau/vulkan/test_nvk_mme
+"$NATIVE_MESA_BUILD/src/nouveau/vulkan/test_nvk_mme" --emit-gm20b-windows-mme \
+  > tegra-x1-wddm/core/nvk_mme_programs.h
+```
+
+General WDDM submission also requires MME invocation, class-specific method
+and GPU virtual address/residency validation.
 
 The .83 one-boot test exercised the new KMT bridge on the Lite, including
 aligned and fixed VA reservations, residency, event waits and GPU B0B5 copy.
