@@ -624,11 +624,14 @@ static __declspec(noinline) void TestAdapterQueries(TG_GPU_CONTEXT_ENGINE *e,DRI
     CHECK(driver.WDDMVersion==DXGKDDI_WDDMv2_6 && driver.MiscCaps.ComputeOnly &&
           driver.GpuEngineTopology.NbAsymetricProcessingNodes==1);
     CHECK(!driver.SupportNonVGA && !driver.FlipCaps.FlipOnVSyncMmIo);
+    CHECK(!driver.PresentationCaps.Value);
     CHECK(driver.MemoryManagementCaps.GpuMmuSupported && driver.SchedulingCaps.PreemptionAware);
     CHECK(driver.SupportPerEngineTDR);
     e->Tables->Scanout=scanout;
     CHECK(NT_SUCCESS(d->DxgkDdiQueryAdapterInfo(e,&a)));
     CHECK(driver.SupportNonVGA && driver.FlipCaps.FlipOnVSyncMmIo && !driver.MiscCaps.ComputeOnly);
+    CHECK(driver.PresentationCaps.NoCacheCoherentApertureMemory &&
+          !output[1].desc.Flags.CacheCoherent && !driver.PresentationCaps.SupportKernelModeCommandBuffer);
     RtlZeroMemory(&e->Tables->Scanout,sizeof(e->Tables->Scanout));
     struct {struct tg_gpu_adapter_info info;UCHAR guard[16];} abi;
     struct tg_gpu_adapter_info request={.version=TG_GPU_ADAPTER_ABI,.size=sizeof(request)};

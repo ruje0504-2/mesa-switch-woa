@@ -72,6 +72,8 @@ NTSTATUS APIENTRY TgGpuDdiQueryAdapterInfo(HANDLE adapter, const DXGKARG_QUERYAD
         caps.MiscCaps.ComputeOnly=!display;
         caps.FlipCaps.FlipOnVSyncMmIo=display;
         caps.SupportNonVGA=display; /* The panel DDIs release POST ownership. */
+        /* QUERYSEGMENT4 exposes only a noncoherent paging aperture. */
+        caps.PresentationCaps.NoCacheCoherentApertureMemory=display;
         caps.GpuEngineTopology.NbAsymetricProcessingNodes=1;
         caps.SchedulingCaps.MultiEngineAware=1;
         caps.SchedulingCaps.PreemptionAware=1;
