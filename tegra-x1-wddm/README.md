@@ -7,6 +7,9 @@ Windows transport. Hardware verification started with Nintendo Switch Lite. [NVK
 The long-term goal is a complete native Vulkan implementation, verified
 with version-appropriate VK-GL-CTS coverage and physical GM20B tests.
 The current milestone is the Direct3D UMD and hardware DWM composition.
+Both the desktop UMD backend and DX9/10/11 game path will use DXVK over
+NVK/KMD. The current Zink/NVK D3D prototype provides the verified transition
+baseline; DXVK integration remains pending. Zink stays the OpenGL route.
 
 | Area | Status |
 | --- | --- |

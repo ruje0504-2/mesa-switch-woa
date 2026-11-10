@@ -10,6 +10,11 @@ NT handle are released. GPU read/write and re-export check 32,768 payload
 words and 512 guards with zero mismatches; exit 0 without timeout.
 [Win32 Vulkan memory result](VULKAN_WIN32_MEMORY.md)
 
+**Selected architecture: DXVK for both desktop and game Direct3D.** Adapt
+the DWM UMD to DXVK over NVK/KMD, and use DXVK over the same NVK/KMD path
+for DX9/10/11 games. The existing Zink D3D prototype is the validated
+baseline for the transition. Zink remains the OpenGL compatibility route.
+
 The rebuilt UMD/ICD also passes a native Windows D3D11 runtime regression
 at feature level 10_0: 16,384 RGBA/BGRA clear/triangle pixels match, implicit
 release completes and the process exits 0. The preceding .143 trial passed
@@ -34,8 +39,8 @@ storage sharing between two KMT devices on GM20B, including CPU readback
 after releasing the producer and closing the exported handle. Both device
 budgets return to zero. The matched adapter/active VidPN LUID is `949ff`.
 D3D runtime resource integration, shared-texture synchronization and DWM
-composition remain pending. DXVK remains a compatibility and code-reuse
-candidate. See the [shared-storage result](SHARED_STORAGE_RESULT.md).
+composition remain pending. The separate game compatibility path will use
+DXVK over NVK. See the [shared-storage result](SHARED_STORAGE_RESULT.md).
 After .144 testing, .59 Code 0, the original ACPI/driver hashes and unchanged
 AC/DC display/sleep settings were verified. The start permit, test tasks and
 temporary UMD/ICD registration have been removed (22:00:07 UTC).
@@ -136,6 +141,16 @@ physical rendering, readback and sustained-presentation tests. Track
 outstanding conformance failures and distinguish local fixtures from
 hardware results. The D3D UMD and DWM work below is an intermediate milestone.
 
+The user's latest decision (2026-11-10) is to use **DXVK for both desktop
+and game Direct3D**. Implement **Windows D3D runtime → D3D UMD with DXVK
+backend → NVK → Tegra KMD** for DWM, and **DX9/10/11 games → DXVK → NVK →
+Tegra KMD** for application compatibility. Complete the WDDM allocation,
+shared-resource, synchronization and presentation contracts needed by the
+desktop UMD. The existing Zink D3D prototype supplies regression evidence
+while the DXVK backend is integrated. Zink remains the OpenGL route.
+This supersedes the earlier Zink desktop and DXVK-candidate-only plans;
+DXVK desktop integration and game-facing presentation are not yet validated.
+
 Autonomously analyze the WDDM contracts and the Mesa/NVK, Microsoft driver
 samples, lfrb/mesa `wddm2` and deko3D sources, and implement the required changes
 in the relevant upstream and downstream code. The GPU development and
@@ -160,12 +175,13 @@ identify adaptations when reusing source.
 
 ## Development order
 
-1. Windows desktop hardware acceleration. Build the Direct3D UMD device,
+1. Windows desktop hardware acceleration through a DXVK-backed D3D UMD over NVK.
+   Build the Direct3D UMD device,
    rendering, shared-resource and synchronization paths needed by DWM on
    the GM20B LUID. Verify continuous window composition and landscape
    presentation. ARM64 Khronos `vkcube` through NVK's Win32 surface and
    swapchain remains a separate pending Vulkan test.
-2. Direct3D 9, 10 and 11 alongside `VK_EXT_memory_budget`,
+2. Direct3D 9, 10 and 11 game compatibility through DXVK over NVK, alongside `VK_EXT_memory_budget`,
    `VK_EXT_pageable_device_local_memory` and `VK_KHR_maintenance5`.
 3. OpenGL compatibility through Mesa Zink over NVK.
 4. Other Vulkan extensions.
@@ -173,6 +189,6 @@ identify adaptations when reusing source.
 
 Use the [build and porting guide](PORTING.md), [driver contracts](DRIVER.md)
 and [RADV Windows reuse notes](PORTING.md#radv-windows-reference) for details.
-DXVK is a compatibility and code-reuse candidate for the Direct3D work.
+DXVK is the selected backend for both the desktop UMD and DX9/10/11 game path.
 The native UMD and DWM requirements are tracked in the
 [Direct3D plan](PORTING.md#direct3d-umd-and-dwm).

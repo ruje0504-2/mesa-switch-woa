@@ -72,6 +72,14 @@ validation in the current KMD covers the tested submission stream.
 
 ## Direct3D UMD and DWM
 
+The selected desktop route is **Windows D3D runtime → D3D UMD with DXVK
+backend → NVK → Tegra KMD**. The user's latest decision on 2026-11-10 also
+selects DXVK over NVK for the DX9/10/11 game path. Implement the WDDM resource,
+synchronization and presentation bridge for the desktop UMD; share the native
+Vulkan/KMD foundation with the game path. The existing Zink D3D prototype
+remains the verified baseline during this transition. Zink continues to
+serve OpenGL compatibility. The evidence below predates the DXVK backend.
+
 The .130 trial established visible native scanout on GM20B. The same trial
 recorded `D3D11CreateDevice` returning `DXGI_ERROR_UNSUPPORTED` for the
 explicit GM20B adapter and successful WARP creation. DWM reported
@@ -156,14 +164,16 @@ SetDisplayMode callbacks return unsupported until the native bridge exists.
 [Existing frontend](../../src/gallium/frontends/d3d10umd/)
 [GDI target](../../src/gallium/targets/d3d10umd/)
 
-DXVK is a compatibility and code-reuse candidate. Its D3D state translation,
-shader handling and Vulkan resource management may inform this work.
-It provides application-facing Direct3D and DXGI libraries. Integrating
-those components into a Windows UMD would still require the DDI, runtime
-callbacks and shared-resource contract above. A DXVK application rendering
-successfully would establish application compatibility. Hardware DWM
-acceptance requires its own device, shared-surface and continuous
-composition evidence.
+DXVK is selected for both the desktop UMD backend and application-facing
+DX9/10/11 game path. Integrate a pinned upstream version over NVK,
+preserve its license and attribution, and validate the Windows binary/loader
+architecture, required Vulkan features, resource synchronization and Win32
+presentation. Adapt its rendering/resource layer to the desktop DDI and
+runtime callbacks. DXVK application rendering establishes game API
+compatibility; hardware DWM acceptance needs
+the desktop route's own device, shared-surface and sustained-composition
+evidence. Generic compatibility work is in scope; individual-game debugging
+remains outside this goal.
 [DXVK upstream](https://github.com/doitsujin/dxvk)
 
 ## deko3D Maxwell reference
