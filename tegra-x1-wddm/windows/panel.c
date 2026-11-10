@@ -281,37 +281,6 @@ static NTSTATUS APIENTRY update_monitor_link_info(HANDLE context, DXGKARG_UPDATE
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS APIENTRY standard_allocation(HANDLE context,
-    DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA *args)
-{
-    TG_GPU_ADAPTER *adapter = context;
-    PAGED_CODE();
-    if (!adapter || !args || args->PhysicalAdapterIndex)
-        return STATUS_INVALID_PARAMETER;
-    if (!adapter->Panel.Dc.owned)
-        return STATUS_DEVICE_NOT_READY;
-    if (args->StandardAllocationType != D3DKMDT_STANDARDALLOCATION_SHAREDPRIMARYSURFACE)
-        return STATUS_NOT_SUPPORTED;
-    const D3DKMDT_SHAREDPRIMARYSURFACEDATA *surface = args->pCreateSharedPrimarySurfaceData;
-    if (!surface || surface->VidPnSourceId != 0 ||
-        surface->Width != T214_DC_PANEL_WIDTH || surface->Height != T214_DC_PANEL_HEIGHT ||
-        (surface->Format != D3DDDIFMT_X8R8G8B8 && surface->Format != D3DDDIFMT_A8R8G8B8))
-        return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE_MODE;
-    const TG_GPU_PRIMARY_ALLOCATION_REQUEST request = {
-        .Buffer = {
-            TG_GPU_ALLOCATION_ABI,
-            TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_DISPLAY_PRIMARY,
-            T214_GPU_POST_FB_SIZE,
-        },
-        .Format = surface->Format,
-        .RefreshRate = surface->RefreshRate,
-    };
-    args->AllocationPrivateDriverDataSize = sizeof(request);
-    args->ResourcePrivateDriverDataSize = 0;
-    if (args->pAllocationPrivateDriverData)
-        RtlCopyMemory(args->pAllocationPrivateDriverData, &request, sizeof(request));
-    return STATUS_SUCCESS;
-}
 
 void TgGpuRegisterPanelLifecycle(DRIVER_INITIALIZATION_DATA *ddis)
 {
@@ -323,7 +292,7 @@ void TgGpuRegisterPanelLifecycle(DRIVER_INITIALIZATION_DATA *ddis)
     ddis->DxgkDdiQueryDeviceDescriptor = query_device_descriptor;
     ddis->DxgkDdiRecommendMonitorModes = recommend_monitor_modes;
     ddis->DxgkDdiUpdateMonitorLinkInfo = update_monitor_link_info;
-    ddis->DxgkDdiGetStandardAllocationDriverData = standard_allocation;
+    ddis->DxgkDdiGetStandardAllocationDriverData = TgGpuDdiGetStandardAllocationDriverData;
     TgGpuRegisterPanelVidPn(ddis);
     TgGpuRegisterPanelScanout(ddis);
 }

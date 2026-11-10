@@ -28,6 +28,17 @@ static TG_GPU_CONTEXT *find_context(TG_GPU_CONTEXT_ENGINE *e, HANDLE h)
     }
     return NULL;
 }
+BOOLEAN TgGpuIsGdiContext(TG_GPU_CONTEXT_ENGINE *e,HANDLE handle)
+{
+    KIRQL irql;
+    if(!e)return FALSE;
+    KeAcquireSpinLock(&e->Lock,&irql);
+    const TG_GPU_CONTEXT *c=find_context(e,handle);
+    const BOOLEAN gdi=c && !c->Closing && c->Flags.GdiContext && c->Flags.VirtualAddressing;
+    KeReleaseSpinLock(&e->Lock,irql);
+    return gdi;
+}
+
 NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *e,
     const DXGKRNL_INTERFACE *dxgk, TG_GPU_TABLE_SEGMENT *tables)
 {

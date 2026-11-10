@@ -99,6 +99,7 @@ NTSTATUS TgGpuInitializeGraphicsTemplate(TG_GPU_CONTEXT_ENGINE *,
     const struct tg_gpu_gr_work *,const struct tg_gpu_gr_context_status *);
 /* Stops admission; fails until contexts/devices/processes and work retire. */
 NTSTATUS TgGpuStopContextEngine(TG_GPU_CONTEXT_ENGINE *);
+BOOLEAN TgGpuIsGdiContext(TG_GPU_CONTEXT_ENGINE *,HANDLE);
 /* Populate only these implemented entries in a caller-owned initialization
  * table. This module does not register a display adapter by itself.
  */

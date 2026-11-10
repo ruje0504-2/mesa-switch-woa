@@ -2,6 +2,7 @@
 #include "submit_ddi.h"
 #include "work_queue.h"
 #include "hardware.h"
+#include "present.h"
 
 NTSTATUS APIENTRY TgGpuDdiSubmitCommandVirtual(HANDLE adapter,const DXGKARG_SUBMITCOMMANDVIRTUAL *a)
 {
@@ -30,7 +31,13 @@ NTSTATUS APIENTRY TgGpuDdiSubmitCommandVirtual(HANDLE adapter,const DXGKARG_SUBM
     else {
         BOOLEAN application=!a->Flags.Paging && !a->Flags.ContextSwitch &&
             !a->Flags.NullRendering && a->DmaBufferSize;
-        status=application && !e->PagingOnly?TgGpuCaptureCommandSnapshot(a,&snapshot):STATUS_SUCCESS;
+        status=STATUS_SUCCESS;
+        if(application) {
+            if(TgGpuIsGdiContext(e,a->hContext))
+                status=TgGpuCapturePresentSnapshot(e,a,&snapshot);
+            else if(!e->PagingOnly)
+                status=TgGpuCaptureCommandSnapshot(a,&snapshot);
+        }
         if(status==STATUS_SUCCESS || status==STATUS_INVALID_PARAMETER)
             status=TgGpuQueueSubmitOrReject(q,a,reserved,snapshot,&used);
     }
@@ -105,25 +112,10 @@ static NTSTATUS APIENTRY submit_legacy(HANDLE adapter, const DXGKARG_SUBMITCOMMA
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS APIENTRY present_mmio(HANDLE context, DXGKARG_PRESENT *args)
-{
-    PAGED_CODE();
-    if (!context || !args)
-        return STATUS_INVALID_PARAMETER;
-    const DXGK_PRESENTFLAGS supported = {
-        .Flip = 1, .FlipWithMultiPlaneOverlay = 1, .RedirectedFlip = 1
-    };
-    if (!args->Flags.Flip || (args->Flags.Value & ~supported.Value) ||
-        args->pDmaBuffer || args->MultipassOffset)
-        return STATUS_NOT_SUPPORTED;
-    /* DxgKrnl schedules the MMIO flip separately through the panel DDIs. */
-    return STATUS_SUCCESS;
-}
-
 void TgGpuRegisterDisplaySubmissionDdis(DRIVER_INITIALIZATION_DATA *d)
 {
     d->DxgkDdiRender = render_legacy;
     d->DxgkDdiPatch = patch_legacy;
     d->DxgkDdiSubmitCommand = submit_legacy;
-    d->DxgkDdiPresent = present_mmio;
+    d->DxgkDdiPresent = TgGpuDdiPresent;
 }

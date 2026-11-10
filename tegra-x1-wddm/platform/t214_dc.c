@@ -130,39 +130,53 @@ uint64_t tg_t214_dc_active_address(struct tg_t214_dc *dc)
 
 bool tg_t214_dc_latched_scanout(const struct tg_t214_dc *dc, uint64_t *address, bool *visible)
 {
-    if (!dc->owned || activation_pending(&dc->io))
+    if (!dc->owned || (read_reg(&dc->io,T214_DC_STATE_CONTROL)&T214_DC_WIN_A_ACT_REQ))
         return false;
     *address = active_address(&dc->io, visible);
     return true;
 }
 
 static enum tg_t214_dc_result queue_scanout(struct tg_t214_dc *dc,
-    uint64_t address, const bool *visible)
+    uint64_t address, const bool *visible, bool immediate)
 {
     if (!dc->owned || (address & 0xfffu) || address < 0x80000000u ||
         address > (UINT64_C(1) << 32) - T214_GPU_POST_FB_SIZE)
         return TG_T214_DC_INVALID;
     const struct tg_t214_dc_io *io = &dc->io;
-    if (activation_pending(io) || (read_reg(io, T214_DC_REG_ACT_CONTROL) & T214_DC_WIN_A_HCOUNTER))
+    if (activation_pending(io))
         return TG_T214_DC_BUSY;
+    uint32_t options = read_reg(io, T214_DC_WIN_A_OPTIONS);
+    const bool hcounter = immediate && (!visible || *visible == ((options & T214_DC_WIN_ENABLE) != 0));
+    const uint32_t act = read_reg(io, T214_DC_REG_ACT_CONTROL);
+    const uint32_t next = (act & ~T214_DC_WIN_A_HCOUNTER) | (hcounter ? T214_DC_WIN_A_HCOUNTER : 0);
+    uint32_t group = T214_DC_WIN_A_ACT_REQ;
+    if (next != act) {
+        write_reg(io, T214_DC_REG_ACT_CONTROL, next);
+        group |= T214_DC_GENERAL_ACT_REQ;
+    }
     if (visible) {
-        uint32_t options = read_reg(io, T214_DC_WIN_A_OPTIONS) & ~T214_DC_WIN_ENABLE;
-        write_reg(io, T214_DC_WIN_A_OPTIONS, options | (*visible ? T214_DC_WIN_ENABLE : 0));
+        write_reg(io, T214_DC_WIN_A_OPTIONS, (options & ~T214_DC_WIN_ENABLE) | (*visible ? T214_DC_WIN_ENABLE : 0));
     }
     write_reg(io, T214_DC_WIN_A_ADDR, (uint32_t)address);
-    activate(io, T214_DC_WIN_A_ACT_REQ);
+    activate(io, group);
     return TG_T214_DC_OK;
 }
 
 enum tg_t214_dc_result tg_t214_dc_queue_flip(struct tg_t214_dc *dc, uint64_t address)
 {
-    return queue_scanout(dc, address, NULL);
+    return queue_scanout(dc, address, NULL, false);
 }
 
 enum tg_t214_dc_result tg_t214_dc_queue_scanout(struct tg_t214_dc *dc,
     uint64_t address, bool visible)
 {
-    return queue_scanout(dc, address, &visible);
+    return queue_scanout(dc, address, &visible, false);
+}
+
+enum tg_t214_dc_result tg_t214_dc_queue_immediate(struct tg_t214_dc *dc,
+    uint64_t address,bool visible)
+{
+    return queue_scanout(dc,address,&visible,true);
 }
 
 enum tg_t214_dc_result tg_t214_dc_release(struct tg_t214_dc *dc)
@@ -172,7 +186,7 @@ enum tg_t214_dc_result tg_t214_dc_release(struct tg_t214_dc *dc)
     const struct tg_t214_dc_io *io = &dc->io;
     uint64_t address;
     bool visible;
-    if (!tg_t214_dc_latched_scanout(dc, &address, &visible) ||
+    if (activation_pending(io) || !tg_t214_dc_latched_scanout(dc, &address, &visible) ||
         address != T214_GPU_POST_FB_BASE || !visible)
         return TG_T214_DC_BUSY;
 

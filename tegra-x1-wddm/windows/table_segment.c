@@ -125,6 +125,15 @@ NTSTATUS TgGpuResolveTableSegment(PVOID Context, UINT SegmentId,
     return STATUS_SUCCESS;
 }
 
+NTSTATUS TgGpuResolveScanoutAddress(const TG_GPU_TABLE_SEGMENT *segment,
+    UINT64 address,SIZE_T bytes,UINT64 *device_address)
+{
+    if(!segment || address<(UINT64)segment->Scanout.SystemPhysicalAddress.QuadPart)
+        return STATUS_INVALID_ADDRESS;
+    return TgGpuResolveScanoutSegment(segment,
+        address-(UINT64)segment->Scanout.SystemPhysicalAddress.QuadPart,bytes,device_address);
+}
+
 NTSTATUS TgGpuUpdatePagingAperture(TG_GPU_TABLE_SEGMENT *Segment,
     const DXGKARG_BUILDPAGINGBUFFER *Args)
 {

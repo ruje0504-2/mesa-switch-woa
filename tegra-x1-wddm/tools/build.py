@@ -181,7 +181,7 @@ for source in [*core, power, clock, root / "platform/t214_dc.c", root / "windows
                root / "windows/graphics.c",root / "windows/hardware.c",
                root / "windows/work_queue.c", root / "windows/allocation.c",
                root / "windows/query.c", root / "windows/adapter.c",
-               root / "windows/submit_ddi.c",root / "windows/command_snapshot.c",root / "windows/recovery.c",
+               root / "windows/submit_ddi.c",root / "windows/present.c",root / "windows/command_snapshot.c",root / "windows/recovery.c",
                root / "windows/platform_io.c",root / "windows/worker.c",
                root / "windows/platform_adapter.c",root / "windows/gr_firmware_io.c",
                root / "windows/reset_backend.c",root / "windows/adapter_reset.c"]:

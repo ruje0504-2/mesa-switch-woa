@@ -10,7 +10,7 @@
  */
 #define TG_GPU_EXPLICIT_TABLE_SEGMENT 1u
 
-/* Private data for the fixed-size standard primary. The NVK buffer ABI
+/* Private data for the fixed-size standard primary and shadow. The NVK buffer ABI
  * continues to use only tg_gpu_allocation_request.
  */
 typedef struct _TG_GPU_PRIMARY_ALLOCATION_REQUEST {
@@ -27,10 +27,13 @@ DXGKDDI_CREATEALLOCATION TgGpuDdiCreateAllocation;
 DXGKDDI_DESTROYALLOCATION TgGpuDdiDestroyAllocation;
 DXGKDDI_OPENALLOCATIONINFO TgGpuDdiOpenAllocation;
 DXGKDDI_CLOSEALLOCATION TgGpuDdiCloseAllocation;
+DXGKDDI_GETSTANDARDALLOCATIONDRIVERDATA TgGpuDdiGetStandardAllocationDriverData;
 /* Check a device-specific open handle supplied by Dxgkrnl, never a UMD raw
  * pointer. This does not prove residency, pin pages or validate GPU commands.
  * The caller must hold the open object's lifetime through this operation.
  */
 NTSTATUS TgGpuValidateOpenAllocationRange(TG_GPU_DEVICE *,HANDLE,
                                          UINT64 Offset,UINT64 Bytes,BOOLEAN Write);
+NTSTATUS TgGpuGetPresentSurface(TG_GPU_DEVICE *,HANDLE,BOOLEAN,
+                                TG_GPU_PRIMARY_ALLOCATION_REQUEST *);
 #endif

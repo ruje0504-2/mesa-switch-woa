@@ -45,6 +45,8 @@ NTSTATUS TgGpuDescribeScanoutSegment(const TG_GPU_TABLE_SEGMENT *Segment,
     DXGK_SEGMENTDESCRIPTOR4 *Description);
 NTSTATUS TgGpuResolveScanoutSegment(const TG_GPU_TABLE_SEGMENT *Segment,
     UINT64 ByteOffset, SIZE_T Bytes, UINT64 *DeviceAddress);
+/* Display DDIs supply BaseAddress + allocation offset, unlike PTE page numbers. */
+NTSTATUS TgGpuResolveScanoutAddress(const TG_GPU_TABLE_SEGMENT *,UINT64,SIZE_T,UINT64 *);
 
 /* BuildPagingBuffer serializes changes with the adapter lock. VidMm owns
  * the MDL and retains residency while a mapping is used to build GPU PTEs.

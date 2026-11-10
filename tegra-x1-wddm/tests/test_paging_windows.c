@@ -148,12 +148,12 @@ static void DisplayWrite(void *context, uint32_t word, uint32_t value)
         CHECK(value == 4); /* Acknowledge only the VBlank W1C bit. */
         model->regs[word] &= ~value;
     } else if (word == 0x041) {
-        if (value == 0x100 || value == 0x200) {
+        if (value == 0x100 || value == 0x200 || value == 0x300) {
             model->update = value >> 8;
             model->armed_address = model->regs[0xbc0];
             model->armed_options = model->regs[0xb80];
         } else {
-            CHECK(value == model->update && (value == 1 || value == 2));
+            CHECK(value == model->update && (value == 1 || value == 2 || value == 3));
             model->regs[word] |= value;
             model->update = 0;
         }
@@ -172,6 +172,15 @@ static void DisplayFrame(struct display_model *model)
     }
     model->regs[0x041] = 0;
     model->regs[0x037] |= model->regs[0x039] & 4;
+}
+
+static void DisplayLine(struct display_model *model)
+{
+    if ((model->regs[0x043]&4) && (model->regs[0x041]&2)) {
+        model->active_address=model->armed_address;
+        model->active_options=model->armed_options;
+        model->regs[0x041]&=~2u;
+    }
 }
 
 static void TestDisplayFlip(void)
@@ -204,6 +213,27 @@ static void TestDisplayFlip(void)
     CHECK(tg_t214_dc_ack_vblank(&dc));
     CHECK(tg_t214_dc_active_address(&dc) == 0xc1000000);
     CHECK(tg_t214_dc_release(&dc) == TG_T214_DC_BUSY);
+
+    UINT64 immediate_address;
+    bool immediate_visible;
+    CHECK(tg_t214_dc_queue_immediate(&dc,0xc2000000,true)==TG_T214_DC_OK);
+    CHECK(model.regs[0x043]==0x454 && !tg_t214_dc_latched_scanout(&dc,&immediate_address,&immediate_visible));
+    DisplayLine(&model);
+    CHECK(model.active_address==0xc2000000);
+    CHECK(tg_t214_dc_latched_scanout(&dc,&immediate_address,&immediate_visible) &&
+          immediate_visible && model.regs[0x041]==1);
+    DisplayFrame(&model); /* Complete the counter-mode transition too. */
+    CHECK(tg_t214_dc_latched_scanout(&dc,&immediate_address,&immediate_visible) && immediate_visible);
+    CHECK(tg_t214_dc_queue_immediate(&dc,0xc3000000,true)==TG_T214_DC_OK);
+    CHECK(!tg_t214_dc_latched_scanout(&dc,&immediate_address,&immediate_visible));
+    DisplayLine(&model);
+    CHECK(tg_t214_dc_latched_scanout(&dc,&immediate_address,&immediate_visible) && immediate_address==0xc3000000);
+    CHECK(tg_t214_dc_queue_immediate(&dc,0xc3000000,false)==TG_T214_DC_OK);
+    CHECK(model.regs[0x043]==0x450);
+    DisplayLine(&model); /* Visibility changes must wait for VBlank. */
+    CHECK(!tg_t214_dc_latched_scanout(&dc,&immediate_address,&immediate_visible));
+    DisplayFrame(&model);
+    CHECK(tg_t214_dc_latched_scanout(&dc,&immediate_address,&immediate_visible) && !immediate_visible);
 
     CHECK(tg_t214_dc_queue_scanout(&dc, T214_GPU_POST_FB_BASE, false) == TG_T214_DC_OK);
     UINT64 address;
