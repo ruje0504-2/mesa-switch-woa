@@ -1012,6 +1012,11 @@ get_export_flags(struct zink_screen *screen, const struct pipe_resource *templ, 
    if (needs_export) {
       if (alloc_info->whandle && alloc_info->whandle->type == ZINK_EXTERNAL_MEMORY_HANDLE) {
          alloc_info->external = ZINK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_BIT;
+#ifdef _WIN32
+      } else if (screen->info.have_KHR_external_memory_win32 && alloc_info->whandle &&
+                 alloc_info->whandle->type == WINSYS_HANDLE_TYPE_WIN32_HANDLE) {
+         alloc_info->external = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+#endif
       } else if (screen->info.have_EXT_external_memory_dma_buf) {
          alloc_info->external = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
          alloc_info->export_types |= VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
@@ -1103,19 +1108,10 @@ allocate_bo(struct zink_screen *screen, const struct pipe_resource *templ,
    };
 
    if (alloc_info->whandle) {
-      HANDLE source_target = GetCurrentProcess();
-      HANDLE out_handle;
-
-      bool result = DuplicateHandle(source_target, alloc_info->whandle->handle, source_target, &out_handle, 0, false, DUPLICATE_SAME_ACCESS);
-
-      if (!result || !out_handle) {
-         mesa_loge("ZINK: failed to DuplicateHandle with winerr: %08x\n", (int)GetLastError());
-         return roc_fail_and_cleanup_object;
-      }
-
       imfi.pNext = NULL;
       imfi.handleType = alloc_info->external;
-      imfi.handle = out_handle;
+      /* Win32 imports retain the payload without consuming the handle. */
+      imfi.handle = alloc_info->whandle->handle;
 
       imfi.pNext = mai.pNext;
       mai.pNext = &imfi;
@@ -1285,7 +1281,7 @@ create_buffer(struct zink_screen *screen, struct zink_resource_object *obj,
    VkMemoryRequirements reqs = {0};
 
    embci.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
-   if (alloc_info->external) {
+   if (alloc_info->external || alloc_info->shared) {
       embci.pNext = bci.pNext;
       embci.handleTypes = alloc_info->export_types;
       bci.pNext = &embci;
