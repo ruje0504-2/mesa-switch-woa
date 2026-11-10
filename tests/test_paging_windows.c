@@ -24,6 +24,79 @@ static ULONG calls, failed_index;
 #define CHECK(x) do { ++failed_index; if (!(x)) ExitProcess(failed_index); } while (0)
 
 #include "resource_fixture.h"
+
+/* Native Hekate timing and direct Window A aliases, independent of the
+ * driver's definitions. The linear buffer has a 2880-byte stride.
+ */
+static ULONG boot_display[T214_GPU_DC_SIZE / sizeof(ULONG)] = {
+    [0x032] = 0x00000020,
+    [0x402] = 0x20000000,
+    [0x407] = 0x00010048,
+    [0x408] = 0x00090048,
+    [0x409] = 0x050002d0,
+    [0x40a] = 0x000a0088,
+    [0xb80] = 0x40000000,
+    [0xb83] = 0x0000000c,
+    [0xb85] = 0x050002d0,
+    [0xb86] = 0x05000b40,
+    [0xb89] = 0x10001000,
+    [0xb8a] = 0x05a00b40,
+    [0xbc0] = 0xf5a00000
+};
+
+static NTSTATUS APIENTRY MapDisplayResource(HANDLE device, PHYSICAL_ADDRESS address,
+    ULONG bytes, BOOLEAN io, BOOLEAN user, MEMORY_CACHING_TYPE cache, PVOID *out)
+{
+    if (address.QuadPart != T214_GPU_DC_BASE)
+        return ResourceMap(device, address, bytes, io, user, cache, out);
+    CHECK(device == (HANDLE)1 && !io && !user && cache == MmNonCached);
+    CHECK(bytes == sizeof(boot_display) && resource_maps == T214_GPU_RESOURCE_COUNT + 1);
+    ++resource_maps;
+    resource_live |= 1u << (T214_GPU_RESOURCE_COUNT + 1);
+    *out = boot_display;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS APIENTRY UnmapDisplayResource(HANDLE device, PVOID mapping)
+{
+    if (mapping != boot_display)
+        return ResourceUnmap(device, mapping);
+    CHECK(device == (HANDLE)1 && (resource_live & (1u << (T214_GPU_RESOURCE_COUNT + 1))));
+    resource_live &= ~(1u << (T214_GPU_RESOURCE_COUNT + 1));
+    ++resource_unmaps;
+    return STATUS_SUCCESS;
+}
+
+static void TestDisplayResources(void)
+{
+    DXGKRNL_INTERFACE dxgk = {0};
+    TG_GPU_RESOURCES resources = {0};
+    dxgk.DeviceHandle = (HANDLE)1;
+    dxgk.DxgkCbGetDeviceInformation = ResourceInfo;
+    dxgk.DxgkCbMapMemory = MapDisplayResource;
+    dxgk.DxgkCbUnmapMemory = UnmapDisplayResource;
+
+    CM_PARTIAL_RESOURCE_DESCRIPTOR display = {0};
+    display.Type = CmResourceTypeMemory;
+    display.ShareDisposition = CmResourceShareDeviceExclusive;
+    display.Flags = CM_RESOURCE_MEMORY_READ_ONLY;
+    display.u.Memory.Start.QuadPart = T214_GPU_DC_BASE;
+    display.u.Memory.Length = T214_GPU_DC_SIZE;
+    CM_PARTIAL_RESOURCE_LIST *list = ResourceList(TRUE);
+    list->PartialDescriptors[list->Count++] = display;
+
+    CHECK(TgGpuAcquireResources(&dxgk, &resources) == STATUS_SUCCESS);
+    CHECK(resources.DisplayRegisters == boot_display);
+    CHECK(TgGpuReleaseResources(&dxgk, &resources) == STATUS_SUCCESS && !resource_live);
+    CHECK(!resources.DisplayRegisters && resource_unmaps == T214_GPU_RESOURCE_COUNT + 2);
+
+    list = ResourceList(TRUE);
+    list->PartialDescriptors[list->Count++] = display;
+    boot_display[0xb8a] -= 4;
+    CHECK(TgGpuAcquireResources(&dxgk, &resources) == STATUS_DEVICE_CONFIGURATION_ERROR);
+    CHECK(!resources.DisplayRegisters && !resource_live && resource_unmaps == resource_maps);
+}
+
 static void TestResources(void)
 {
     DXGKRNL_INTERFACE dxgk={0};TG_GPU_RESOURCES resources={0};
@@ -457,6 +530,7 @@ void start(void)
     ULONG i, written;
     static const char message[] = "PASS: WDK physical system/table PTEs, multipass ordering, alias bounds and TLB failures\r\n";
     TestResources();
+    TestDisplayResources();
     TestSegment();
     TestRoot();
     TestPagingBuffer();

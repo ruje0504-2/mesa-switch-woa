@@ -29,6 +29,10 @@ typedef struct _TG_GPU_RESOURCES {
      */
     CM_PARTIAL_RESOURCE_DESCRIPTOR Lic;
     PVOID LicMapping;
+    /* Optional Display A register resource. Startup reads the inherited
+     * scanout state. Panel ownership is negotiated separately.
+     */
+    PVOID DisplayRegisters;
 } TG_GPU_RESOURCES;
 
 /* Adapter start/stop helpers following the render-only WDDM sample's

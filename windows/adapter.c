@@ -11,7 +11,7 @@
 
 static BOOLEAN mapped(const TG_GPU_ADAPTER *a)
 {
-    if(a->Resources.LicMapping)return TRUE;
+    if(a->Resources.LicMapping || a->Resources.DisplayRegisters)return TRUE;
     for(UINT i=0;i<TgGpuApertureCount;++i)if(a->Resources.Mapping[i])return TRUE;
     return FALSE;
 }
