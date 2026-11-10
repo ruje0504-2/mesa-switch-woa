@@ -2,6 +2,10 @@
 
 2026-11-10, Windows 11 ARM64 23H2 on Switch Lite HDH-001.
 
+The follow-up .141 trial reproduces the exit-path fault and improves
+exception capture. Its two later native runs exit normally, but no teardown
+fix is established. See [runtime lifetime evidence](D3D_UMD_LIFETIME.md).
+
 **.140 reaches native Windows D3D11 runtime rendering; an exit-path fault remains open.**
 The runtime creates a feature-level-10_0 hardware device on GM20B LUID
 `9acf3`, loads the staged `TegraGpuD3D.dll`, and preserves that LUID on the

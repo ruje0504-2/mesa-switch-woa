@@ -12,10 +12,19 @@ after the same successful readback. That exit-path fault remains unresolved.
 ordinary and indexed/scissored SM4 draws through Mesa CSO/u_vbuf.
 See the [UMD evidence](D3D_UMD_RESULT.md).
 
-Next: identify the first runtime exit-path fault, then complete runtime
-allocations/shared images, synchronization and sustained DWM presentation.
+Next: capture the first runtime exit-path fault's caller and synchronization
+object, then complete runtime allocations/shared images, synchronization
+and sustained DWM presentation.
 Neither native probe tests sharing, DWM or Win32 Vulkan presentation.
-Latest artifacts: `/private/tmp/t214-gpu-round/runtime-ddi140.hvoc0ueo/`.
+Latest artifacts: `/private/tmp/t214-gpu-round/runtime-ddi141.6f5gyzh6/`.
+
+.141 reproduces an access violation after the same matching pixels with
+implicit release. Its old reporter records two exceptions and an address
+in ntdll's critical-section wait routine; the original PC/caller is still
+unproven. Two raw-address diagnostic runs exit 0. The probe now also records
+a bounded ARM64 frame chain, validated by a controlled child-process fault
+on .59; the native fault has not yet been captured with that addition.
+See [runtime lifetime evidence](D3D_UMD_LIFETIME.md).
 
 The runtime probe also passes WARP and Mesa GDI/softpipe controls on .59
 (16,384 matching pixels each). .140 uses temporary native UMD registration
@@ -28,12 +37,13 @@ budgets return to zero. The matched adapter/active VidPN LUID is `949ff`.
 D3D runtime resource integration, shared-image rendering/synchronization and DWM
 composition remain pending. DXVK remains a compatibility and code-reuse
 candidate. See the [shared-storage result](SHARED_STORAGE_RESULT.md).
-After .140 testing, .59 Code 0, the original ACPI/driver hashes and unchanged
+After .141 testing, .59 Code 0, the original ACPI/driver hashes and unchanged
 AC/DC display/sleep settings were verified. The start permit, test tasks and
-temporary UMD/ICD registration have been removed (19:46:06 UTC).
+temporary UMD/ICD registration have been removed (20:12:58 UTC).
 
 | Driver | Result | Remaining work |
 | --- | --- | --- |
+| 0.1.0.141 | Code 0, matching LUID `97642`. Three native runtime runs each match 16,384 pixels; implicit release faults once and two raw-address diagnostic runs exit 0. | Capture the original fault's caller; no teardown fix established. Shared resources, DWM and Win32 `vkcube` remain pending. |
 | 0.1.0.140 | Code 0, matching KMT/active VidPN LUID `9acf3`, real D3D11 hardware device at feature level 10_0. Both native runs match 16,384 RGBA/BGRA pixels; first exits `c0000005`, diagnostic run exits 0 with explicit release markers. | First exit-path fault remains unidentified; runtime sharing/synchronization, DWM and Win32 `vkcube` remain pending. |
 | 0.1.0.139 | Code 0, matching KMT/active VidPN LUID `a2dc3`, 512 MiB ceiling. Three color passes and two SM4 triangle passes check 20,480 pixels with zero mismatches; exit 0 without timeout. | Windows D3D runtime/shared resources and DWM; Win32 `vkcube` remains pending. |
 | 0.1.0.138 | Three-color readback passes, then first Draw exits `c0000005`. UMD RVA `1256e4` identifies Zink writing resource metadata through a CPU dummy vertex-buffer pointer. | CSO/u_vbuf routing fix passes natively in .139. |

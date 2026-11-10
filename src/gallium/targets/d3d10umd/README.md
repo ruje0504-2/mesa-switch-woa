@@ -30,6 +30,11 @@ explicit software controls. No mode tests resource sharing or presentation;
 none runs as a default Meson test.
 For the experimental NVK hardware path, register the ICD as above, make the
 ARM64 Vulkan loader available and set `NVK_I_WANT_A_BROKEN_VULKAN_DRIVER=1`.
+Append `--implicit-release` to the hardware command to retain scope-exit
+ComPtr destruction while investigating the exit-path fault. Exception
+diagnostics print raw addresses and a bounded ARM64 frame-pointer chain;
+module bases are recorded before drawing, avoiding loader queries during
+failure reporting. This is not a full unwind or a teardown fix.
 
 ## GDI software backend
 

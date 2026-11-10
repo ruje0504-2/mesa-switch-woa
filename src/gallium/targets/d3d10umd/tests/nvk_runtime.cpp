@@ -19,22 +19,58 @@ using Microsoft::WRL::ComPtr;
 
 static void exception_address(const char *name, const void *address)
 {
-   HMODULE module = NULL;
-   char path[MAX_PATH] = "<unknown>";
-   if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                          static_cast<const char *>(address), &module))
-      GetModuleFileNameA(module, path, sizeof(path));
-   fprintf(stderr, "%s: %p %s+0x%llx\n", name, address, path,
-           (unsigned long long)((uintptr_t)address - (uintptr_t)module));
+   /* Do not walk the loader's module list from a teardown exception. */
+   fprintf(stderr, "%s: %p\n", name, address);
+}
+
+static void report_runtime_modules()
+{
+   const char *names[] = {"TegraGpuD3D.dll", "libvulkan_nouveau.dll", "vulkan-1.dll",
+                         "ntdll.dll", "d3d11.dll", "d3d10core.dll", "dxgi.dll",
+                         "kernelbase.dll", "ucrtbase.dll"};
+   for (const char *name : names) {
+      HMODULE module = GetModuleHandleA(name);
+      if (!module) continue;
+      const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)module;
+      const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)((const char *)module + dos->e_lfanew);
+      printf("Runtime module %s: base=%p size=%08lx\n", name, (void *)module,
+             (unsigned long)nt->OptionalHeader.SizeOfImage);
+   }
+   fflush(stdout);
 }
 
 static LONG WINAPI unhandled_exception(EXCEPTION_POINTERS *exception)
 {
-   fprintf(stderr, "Unhandled exception: %08lx\n", exception->ExceptionRecord->ExceptionCode);
+   fprintf(stderr, "Unhandled exception: %08lx thread=%lu\n",
+           exception->ExceptionRecord->ExceptionCode, GetCurrentThreadId());
+   if (exception->ExceptionRecord->NumberParameters >= 2 &&
+       (exception->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION ||
+        exception->ExceptionRecord->ExceptionCode == EXCEPTION_IN_PAGE_ERROR))
+      fprintf(stderr, "Access: operation=%llu address=%p\n",
+              (unsigned long long)exception->ExceptionRecord->ExceptionInformation[0],
+              (const void *)exception->ExceptionRecord->ExceptionInformation[1]);
    exception_address("Fault", exception->ExceptionRecord->ExceptionAddress);
 #if defined(_M_ARM64) || defined(__aarch64__)
-   exception_address("LR", (const void *)(uintptr_t)exception->ContextRecord->Lr);
+   const CONTEXT *context = exception->ContextRecord;
+   exception_address("LR", (const void *)(uintptr_t)context->Lr);
+   fprintf(stderr, "Registers: x19=%llx x20=%llx x21=%llx x22=%llx sp=%llx fp=%llx\n",
+           (unsigned long long)context->X19, (unsigned long long)context->X20,
+           (unsigned long long)context->X21, (unsigned long long)context->X22,
+           (unsigned long long)context->Sp, (unsigned long long)context->Fp);
+   /* A bounded frame-pointer chain, without invoking the loader/unwinder.
+    * Keep signed return addresses intact for offline module/PAC decoding.
+    */
+   const NT_TIB *tib = (const NT_TIB *)NtCurrentTeb();
+   const uintptr_t low = (uintptr_t)tib->StackLimit;
+   const uintptr_t high = (uintptr_t)tib->StackBase;
+   uintptr_t fp = context->Fp;
+   for (unsigned i = 0; i < 12 && high >= 16 && fp >= low && fp <= high - 16 && !(fp & 15); ++i) {
+      const volatile uintptr_t *frame = (const volatile uintptr_t *)fp;
+      const uintptr_t next = frame[0], address = frame[1];
+      fprintf(stderr, "Frame %u: fp=%p return=%p\n", i, (void *)fp, (void *)address);
+      if (next <= fp) break;
+      fp = next;
+   }
 #endif
    fflush(stderr);
    return EXCEPTION_EXECUTE_HANDLER;
@@ -150,11 +186,12 @@ static void images(ID3D11Device *device, ID3D11DeviceContext *context, DXGI_FORM
 
 int main(int argc, char **argv)
 {
-   const bool hardware = argc == 3 && !strcmp(argv[1], "--luid");
+   const bool implicit = argc == 4 && !strcmp(argv[3], "--implicit-release");
+   const bool hardware = (argc == 3 || implicit) && !strcmp(argv[1], "--luid");
    const bool software = argc == 3 && !strcmp(argv[1], "--software");
    const bool warp = argc == 2 && !strcmp(argv[1], "--warp");
    if (!hardware && !software && !warp) {
-      fprintf(stderr, "usage: %s --luid 16-hex-digits | --software dll | --warp\n", argv[0]);
+      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release] | --software dll | --warp\n", argv[0]);
       return 2;
    }
    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -219,20 +256,29 @@ int main(int argc, char **argv)
             throw std::runtime_error("NVK D3D UMD was not loaded");
          printf("Runtime UMD: %s\n", path);
       }
+      report_runtime_modules();
       images(device.Get(), context.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
       images(device.Get(), context.Get(), DXGI_FORMAT_B8G8R8A8_UNORM);
       check(device->GetDeviceRemovedReason(), "Device status after readback");
-      marker("Release runtime context");
-      context.Reset();
-      marker("Release runtime device");
-      device.Reset();
-      marker("Release runtime adapter");
-      adapter.Reset();
-      marker("Windows D3D runtime clear/draw/readback passed; sharing and presentation were not exercised");
+      if (implicit) {
+         /* Preserve the original ComPtr scope-exit release path and buffering
+          * while retaining an exception address if it fails again.
+          */
+         puts("Runtime readback complete; releasing at scope exit");
+      } else {
+         marker("Release runtime context");
+         context.Reset();
+         marker("Release runtime device");
+         device.Reset();
+         marker("Release runtime adapter");
+         adapter.Reset();
+      }
    } catch (const std::exception &e) {
       fprintf(stderr, "Runtime probe failed: %s\n", e.what());
       result = 1;
    }
    if (module) FreeLibrary(module);
+   if (!result)
+      marker("Windows D3D runtime clear/draw/readback passed; sharing and presentation were not exercised");
    return result;
 }
