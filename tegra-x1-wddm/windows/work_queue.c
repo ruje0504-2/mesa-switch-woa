@@ -210,6 +210,28 @@ static NTSTATUS preempt_prefix(TG_GPU_WORK_QUEUE *q)
         if(owned)free_entry(entry);
     }
 }
+static bool check_texture_pool(void *data, uint64_t base, uint64_t end)
+{
+    const TG_GPU_CONTEXT_WORK *w = data;
+    return TgGpuCheckReadOnlyPitchRange(w->Engine->Tables, &w->Root, base, end) != FALSE;
+}
+
+static bool check_texture_pools(TG_GPU_CONTEXT_WORK *w, const TG_GPU_COMMAND_SNAPSHOT *snapshot)
+{
+    /* DispatchGate orders earlier paging and publication of retired bindings.
+     * The queued work retains the context and its root snapshot.
+     */
+    for (UINT engine = 0; engine < TG_GPU_PROGRAM_ENGINES; ++engine) {
+        for (UINT pool = 0; pool < TG_GPU_TEXTURE_POOLS; ++pool) {
+            const struct tg_gpu_texture_pool_range *range = &w->Context->TexturePool[engine][pool];
+            if (snapshot->Info.requires_texture_pool[engine][pool] &&
+                !check_texture_pool(w, range->base, range->end))
+                return false;
+        }
+    }
+    return tg_gpu_check_texture_pool_ranges(snapshot->Words, snapshot->Bytes, check_texture_pool, w);
+}
+
 NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io *io,
                              const struct tg_gpu_power *power)
 {
@@ -263,6 +285,9 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
     }
     if(w->CompletionReady)goto notify;
     if(!w->Expected) {
+        if (snapshot && !check_texture_pools(w, snapshot)) {
+            status=STATUS_INVALID_ADDRESS;goto done;
+        }
         status=TgGpuActivateContextWork(q->Engine,w,info);
         if(status==STATUS_DEVICE_BUSY) { status=STATUS_PENDING;goto done; }
         if(!NT_SUCCESS(status)) goto done;

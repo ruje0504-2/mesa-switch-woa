@@ -40,6 +40,41 @@ NTSTATUS TgGpuResolveRootTable(const TG_GPU_TABLE_SEGMENT *Segment,
     return STATUS_SUCCESS;
 }
 
+BOOLEAN TgGpuCheckReadOnlyPitchRange(const TG_GPU_TABLE_SEGMENT *Segment,
+    const TG_GPU_ROOT_TABLE *Root, UINT64 Base, UINT64 End)
+{
+    PVOID mapping;
+    UINT64 address;
+    PAGED_CODE();
+    if (!Segment || !Root || !Root->Valid || Root->Address.SegmentId != Segment->SegmentId ||
+        Root->Entries > TG_GPU_TABLE_ENTRIES || Root->Entries > Root->Bytes / sizeof(UINT64) ||
+        Root->VaLimit != (UINT64)Root->Entries << TG_GPU_DIRECTORY_SHIFT ||
+        Base >= End || End > Root->VaLimit)
+        return FALSE;
+    if (!NT_SUCCESS(TgGpuMapTableSegment(Segment, Root->Address.SegmentOffset,
+                                        Root->Bytes, &mapping, &address)) ||
+        address != Root->DeviceAddress)
+        return FALSE;
+    const volatile UINT64 *directory = mapping;
+    const UINT64 segment_base = (UINT64)Segment->Memory.SystemPhysicalAddress.QuadPart;
+    for (UINT64 va = Base & ~(UINT64)(PAGE_SIZE - 1); va < End;) {
+        struct tg_gpu_va_indices index;
+        if (!tg_gpu_va_indices(va, &index) ||
+            !tg_gpu_decode_pde_small(directory[index.directory], &address) ||
+            address < segment_base ||
+            !NT_SUCCESS(TgGpuMapTableSegment(Segment, address - segment_base,
+                                            TG_GPU_TABLE_BYTES, &mapping, &address)))
+            return FALSE;
+        const volatile UINT64 *leaf = mapping;
+        for (UINT page = index.small_page; page < TG_GPU_TABLE_ENTRIES && va < End;
+             ++page, va += PAGE_SIZE) {
+            if (!tg_gpu_pte_is_read_only_pitch(leaf[page]))
+                return FALSE;
+        }
+    }
+    return TRUE;
+}
+
 NTSTATUS TgGpuWriteRootInstance(const TG_GPU_ROOT_TABLE *Root,
     const TG_GPU_PRIVATE_MEMORY *Instance, BOOLEAN ContextIdle)
 {

@@ -81,6 +81,26 @@ tg_gpu_pde_small(uint64_t table_gpu_address, uint64_t *pde)
 }
 
 bool
+tg_gpu_decode_pde_small(uint64_t pde, uint64_t *table_gpu_address)
+{
+    const uint64_t address = (pde >> 24) & ~UINT64_C(0xfff);
+    uint64_t expected;
+    if (!table_gpu_address || !tg_gpu_pde_small(address, &expected) || pde != expected)
+        return false;
+    *table_gpu_address = address;
+    return true;
+}
+
+bool
+tg_gpu_pte_is_read_only_pitch(uint64_t pte)
+{
+    const uint64_t address = (pte & UINT64_C(0xfffffff0)) << 8;
+    const bool gpu_uncached = (pte & (UINT64_C(1) << 32)) != 0;
+    uint64_t expected;
+    return tg_gpu_pte_4k(address, true, gpu_uncached, &expected) && pte == expected;
+}
+
+bool
 tg_gpu_instance_pdb(uint64_t directory_gpu_address, uint64_t *pdb)
 {
     if (!pdb || !page_address_valid(directory_gpu_address))

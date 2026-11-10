@@ -186,10 +186,24 @@ static enum tg_gpu_texture_pool texture_pool_in_span(uint32_t first, uint32_t la
     return TG_GPU_TEXTURE_POOLS;
 }
 
+static bool texture_pool_range(enum tg_gpu_texture_pool pool, const uint32_t *args,
+                               const struct tg_gpu_command_va *va,
+                               struct tg_gpu_texture_pool_range *range)
+{
+    const uint32_t descriptor_bytes = 32;
+    uint64_t end = 0;
+    if ((args[2] & ~texture_pool_methods[pool].index_mask) ||
+        !word_span(va, args[0], args[1], (args[2] + 1) * descriptor_bytes,
+                   descriptor_bytes, &end))
+        return false;
+    *range = (struct tg_gpu_texture_pool_range){((uint64_t)args[0] << 32) | args[1], end};
+    return true;
+}
+
 static void require_texture_pools(struct tg_gpu_command_info *info, uint32_t engine)
 {
     for (unsigned pool = 0; pool < TG_GPU_TEXTURE_POOLS; pool++)
-        info->requires_texture_pool[engine][pool] |= !info->texture_pool_end[engine][pool];
+        info->requires_texture_pool[engine][pool] |= !info->texture_pool[engine][pool].end;
 }
 
 static bool pcas_span(uint32_t first, uint32_t last)
@@ -845,17 +859,13 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
         const enum tg_gpu_texture_pool pool = subchannel <= TG_GPU_PROGRAM_COMPUTE ?
             texture_pool_in_span(method, last) : TG_GPU_TEXTURE_POOLS;
         if (pool != TG_GPU_TEXTURE_POOLS) {
-            const uint32_t descriptor_bytes = 32;
-            uint64_t end = 0;
+            struct tg_gpu_texture_pool_range *range = &stream.texture_pool[subchannel][pool];
             if (op != NVB06F_DMA_INCR_OPCODE_VALUE || count != 3 ||
                 method != texture_pool_methods[pool].base ||
-                (words[n + 2] & ~texture_pool_methods[pool].index_mask) ||
-                !word_span(va, words[n], words[n + 1], (words[n + 2] + 1) * descriptor_bytes,
-                           descriptor_bytes, &end))
+                !texture_pool_range(pool, words + n, va, range))
                 return false;
-            stream.texture_pool_end[subchannel][pool] = end;
-            if (end > stream.va_end)
-                stream.va_end = end;
+            if (range->end > stream.va_end)
+                stream.va_end = range->end;
         }
         if (subchannel <= TG_GPU_PROGRAM_COMPUTE && program_region_span(method, last)) {
             if (op != NVB06F_DMA_INCR_OPCODE_VALUE || method != NVB197_SET_PROGRAM_REGION_A)
@@ -1031,4 +1041,36 @@ bool tg_gpu_prepare_command_stream(uint32_t *words, size_t bytes,
                                    struct tg_gpu_command_info *info)
 {
     return bytes <= TG_GPU_COMMAND_CAPTURE_BYTES && inspect(words, words, bytes, va, info);
+}
+
+bool tg_gpu_check_texture_pool_ranges(const uint32_t *words, size_t bytes,
+                                      tg_gpu_texture_pool_check check, void *data)
+{
+    if (!words || !bytes || (bytes & 3) || ((uintptr_t)words & 3) || !check)
+        return false;
+    const size_t word_count = bytes / sizeof(*words);
+    for (size_t n = 0; n < word_count;) {
+        const uint32_t header = words[n++];
+        const uint32_t op = NVVAL_GET(header, NVB06F, DMA_INCR, OPCODE);
+        if (header == NVB06F_DMA_NOP || op == NVB06F_DMA_IMMD_OPCODE_VALUE)
+            continue;
+        const uint32_t count = NVVAL_GET(header, NVB06F, DMA_INCR, COUNT);
+        if (!count || count > word_count - n ||
+            (op != NVB06F_DMA_INCR_OPCODE_VALUE && op != NVB06F_DMA_NONINCR_OPCODE_VALUE &&
+             op != NVB06F_DMA_ONEINCR_OPCODE_VALUE))
+            return false;
+        const uint32_t subchannel = NVVAL_GET(header, NVB06F, DMA_INCR, SUBCHANNEL);
+        if (subchannel <= TG_GPU_PROGRAM_COMPUTE && op == NVB06F_DMA_INCR_OPCODE_VALUE && count == 3) {
+            const uint32_t method = NVVAL_GET(header, NVB06F, DMA_INCR, ADDRESS) * 4;
+            const enum tg_gpu_texture_pool pool = texture_pool_in_span(method, method);
+            if (pool != TG_GPU_TEXTURE_POOLS && method == texture_pool_methods[pool].base) {
+                struct tg_gpu_texture_pool_range range;
+                if (!texture_pool_range(pool, words + n, NULL, &range) ||
+                    !check(data, range.base, range.end))
+                    return false;
+            }
+        }
+        n += count;
+    }
+    return true;
 }

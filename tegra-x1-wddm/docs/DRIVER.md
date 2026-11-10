@@ -868,8 +868,11 @@ that permission. VidMm's read-only leaf entries map to GM20B's read-only
 PTE bit. CPU uploads use the allocation's CPU mapping.
 [WDDM GPUVA protection](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dukmdt/ns-d3dukmdt-_d3dddigpuvirtualaddress_protection_type)
 
-NVK draw macros and captured B1C0 dispatches check earlier pool bindings
-against the context's root limit at activation. B1C0 direct dispatch pairs
+After earlier paging work retires, the queue checks the captured root for
+valid, USER-readable, read-only pitch PTEs covering every texture pool bind
+in the snapshot and any retired pool bindings it uses. It walks only the
+uncached table segment. A missing or incompatible mapping enters recovery
+before activation or fence completion. B1C0 direct dispatch pairs
 a QMD address with NVK's invalidate-and-schedule operation, with either
 immediate or incrementing encoding. Windows NVK carries the 256-byte QMD 0.6
 in a no-op payload before the launch. The KMD checks the program offset,

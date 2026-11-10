@@ -393,7 +393,7 @@ NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *
     if (info) {
         for (UINT engine=0;engine<TG_GPU_PROGRAM_ENGINES;engine++) {
             for (UINT pool=0;pool<TG_GPU_TEXTURE_POOLS;pool++) {
-                const UINT64 end=w->Context->TexturePoolEnd[engine][pool];
+                const UINT64 end=w->Context->TexturePool[engine][pool].end;
                 if (info->requires_texture_pool[engine][pool] && (!end || end>w->Root.VaLimit)) {
                     KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
                 }
@@ -536,8 +536,8 @@ NTSTATUS TgGpuSignalContextWork(TG_GPU_CONTEXT_ENGINE *e, TG_GPU_CONTEXT_WORK *w
                 if (info->program_end[engine])
                     w->Context->ProgramEnd[engine]=info->program_end[engine];
                 for (UINT pool=0;pool<TG_GPU_TEXTURE_POOLS;pool++) {
-                    if (info->texture_pool_end[engine][pool])
-                        w->Context->TexturePoolEnd[engine][pool]=info->texture_pool_end[engine][pool];
+                    if (info->texture_pool[engine][pool].end)
+                        w->Context->TexturePool[engine][pool]=info->texture_pool[engine][pool];
                 }
             }
         }

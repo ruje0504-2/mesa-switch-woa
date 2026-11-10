@@ -22,6 +22,10 @@ enum tg_gpu_texture_pool {
     TG_GPU_TEXTURE_POOLS,
 };
 
+struct tg_gpu_texture_pool_range {
+    uint64_t base, end;
+};
+
 struct tg_gpu_compute_slm {
     uint64_t bytes_per_tpc;
     uint64_t va_end;
@@ -31,7 +35,7 @@ struct tg_gpu_command_info {
     uint64_t va_end;
     uint64_t reserved_base;
     uint64_t program_end[TG_GPU_PROGRAM_ENGINES];
-    uint64_t texture_pool_end[TG_GPU_PROGRAM_ENGINES][TG_GPU_TEXTURE_POOLS];
+    struct tg_gpu_texture_pool_range texture_pool[TG_GPU_PROGRAM_ENGINES][TG_GPU_TEXTURE_POOLS];
     bool requires_texture_pool[TG_GPU_PROGRAM_ENGINES][TG_GPU_TEXTURE_POOLS];
     struct tg_gpu_compute_slm compute_slm;
     uint64_t required_compute_slm_per_tpc; /* Before the first binding in this stream. */
@@ -60,6 +64,12 @@ bool tg_gpu_inspect_command_stream(const uint32_t *, size_t bytes,
 bool tg_gpu_prepare_command_stream(uint32_t *, size_t bytes,
                                    const struct tg_gpu_command_va *,
                                    struct tg_gpu_command_info *);
+/* Visit every pool bind in a prepared immutable snapshot, including earlier
+ * binds to the same engine. Payload words are never treated as headers.
+ */
+typedef bool (*tg_gpu_texture_pool_check)(void *, uint64_t base, uint64_t end);
+bool tg_gpu_check_texture_pool_ranges(const uint32_t *, size_t bytes,
+                                      tg_gpu_texture_pool_check, void *);
 bool tg_gpu_command_range_allowed(const struct tg_gpu_command_va *, uint64_t address,
                                   uint64_t bytes, uint64_t *max_end);
 

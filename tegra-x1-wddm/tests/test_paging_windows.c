@@ -492,6 +492,33 @@ static void TestRoot(void)
     CHECK(instance[130]==0xfffff000 && instance[131]==0xff); /* no partial RAMIN write */
 }
 
+static void TestPoolMappings(void)
+{
+    static _Alignas(PAGE_SIZE) UINT64 entries[3 * TG_GPU_TABLE_ENTRIES];
+    const UINT64 physical = 0x90000000;
+    const UINT64 boundary = UINT64_C(1) << TG_GPU_DIRECTORY_SHIFT;
+    const TG_GPU_TABLE_SEGMENT segment = {
+        .Memory = {(HANDLE)2, entries, {.QuadPart=physical}, sizeof(entries)},
+        .SegmentId = 1
+    };
+    const DXGKARG_SETROOTPAGETABLE set = {.Address={1,0,0}, .NumEntries=2};
+    TG_GPU_ROOT_TABLE root;
+    UINT64 *first = entries + TG_GPU_TABLE_ENTRIES;
+    UINT64 *second = first + TG_GPU_TABLE_ENTRIES;
+    CHECK(NT_SUCCESS(TgGpuResolveRootTable(&segment, &set, &root)));
+    CHECK(tg_gpu_pde_small(physical + TG_GPU_TABLE_BYTES, &entries[0]));
+    CHECK(tg_gpu_pde_small(physical + 2 * TG_GPU_TABLE_BYTES, &entries[1]));
+    CHECK(tg_gpu_pte_4k(0x80000000, true, false, &first[TG_GPU_TABLE_ENTRIES - 1]));
+    CHECK(TgGpuCheckReadOnlyPitchRange(&segment, &root, boundary - 32, boundary));
+    CHECK(!TgGpuCheckReadOnlyPitchRange(&segment, &root, boundary - 32, boundary + 32));
+    CHECK(tg_gpu_pte_4k(0x80001000, true, true, &second[0]));
+    CHECK(TgGpuCheckReadOnlyPitchRange(&segment, &root, boundary - 32, boundary + 32));
+    CHECK(tg_gpu_pte_4k_kind(0x80001000, true, true, TG_GPU_PTE_KIND_GENERIC_16BX2, &second[0]));
+    CHECK(!TgGpuCheckReadOnlyPitchRange(&segment, &root, boundary - 32, boundary + 32));
+    CHECK(tg_gpu_pde_small(physical + sizeof(entries), &entries[1]));
+    CHECK(!TgGpuCheckReadOnlyPitchRange(&segment, &root, boundary - 32, boundary + 32));
+}
+
 static NTSTATUS Resolve(PVOID Context, UINT Segment, UINT64 Offset, SIZE_T Bytes, UINT64 *Address)
 {
     UNREFERENCED_PARAMETER(Context);
@@ -672,6 +699,7 @@ void start(void)
     TestDisplayFlip();
     TestSegment();
     TestRoot();
+    TestPoolMappings();
     TestPagingBuffer();
     for (i = 0; i < TG_GPU_TABLE_ENTRIES; ++i) table[i] = UINT64_C(0xa5a5a5a5a5a5a5a5);
     u.PageTableAddress.CpuVirtual = table;

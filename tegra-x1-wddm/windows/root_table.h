@@ -23,6 +23,12 @@ SIZE_T TgGpuRootTableSize(DXGKARG_GETROOTPAGETABLESIZE *Args);
 NTSTATUS TgGpuResolveRootTable(const TG_GPU_TABLE_SEGMENT *Segment,
     const DXGKARG_SETROOTPAGETABLE *Args, TG_GPU_ROOT_TABLE *Root);
 
+/* Check an end-exclusive range at the ordered submission point. VidMm owns
+ * residency. Only the uncached page-table segment is accessed by the CPU.
+ */
+BOOLEAN TgGpuCheckReadOnlyPitchRange(const TG_GPU_TABLE_SEGMENT *Segment,
+    const TG_GPU_ROOT_TABLE *Root, UINT64 Base, UINT64 End);
+
 /* Caller serializes this with submission and holds the context idle until
  * instance invalidation/rebind is complete. Instance is an owned uncached
  * private allocation; only RAMIN PDB/VA-limit words are changed here.

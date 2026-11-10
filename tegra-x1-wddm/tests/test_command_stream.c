@@ -240,13 +240,29 @@ static void test_report_and_acquire(void)
     assert(!tg_gpu_validate_command_stream(wait, sizeof(wait)));
 }
 
+struct pool_checks {
+    struct tg_gpu_texture_pool_range expected[2];
+    unsigned next;
+};
+
+static bool check_pool_range(void *data, uint64_t base, uint64_t end)
+{
+    struct pool_checks *checks = data;
+    if (checks->next >= 2)
+        return false;
+    const struct tg_gpu_texture_pool_range *range = &checks->expected[checks->next++];
+    return base == range->base && end == range->end;
+}
+
 static void test_texture_pools(void)
 {
     const struct tg_gpu_command_va va = {0x100050000, 0x100020000, 0x100030000};
     struct tg_gpu_command_info info;
     uint32_t pool[] = {INCR(0, NVB197_SET_TEX_HEADER_POOL_A, 3), 1, 0x40000, 2047};
     assert(tg_gpu_inspect_command_stream(pool, sizeof(pool), &va, &info));
-    assert(info.va_end == va.limit && info.texture_pool_end[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_HEADERS] == va.limit);
+    assert(info.va_end == va.limit &&
+           info.texture_pool[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_HEADERS].base == 0x100040000 &&
+           info.texture_pool[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_HEADERS].end == va.limit);
     pool[3]++;
     assert(!tg_gpu_inspect_command_stream(pool, sizeof(pool), &va, &info));
 
@@ -255,8 +271,8 @@ static void test_texture_pools(void)
     pool[3] = 0;
     assert(tg_gpu_inspect_command_stream(pool, sizeof(pool), &va, &info));
     assert(info.va_end == va.reserved_base &&
-           info.texture_pool_end[TG_GPU_PROGRAM_COMPUTE][TG_GPU_TEXTURE_SAMPLERS] == va.reserved_base &&
-           !info.texture_pool_end[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_SAMPLERS]);
+           info.texture_pool[TG_GPU_PROGRAM_COMPUTE][TG_GPU_TEXTURE_SAMPLERS].end == va.reserved_base &&
+           !info.texture_pool[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_SAMPLERS].end);
     pool[3] = 1;
     assert(!tg_gpu_inspect_command_stream(pool, sizeof(pool), &va, &info));
     pool[3] = DRF_MASK(NVB1C0_SET_TEX_SAMPLER_POOL_C_MAXIMUM_INDEX) + 1;
@@ -275,6 +291,24 @@ static void test_texture_pools(void)
     const uint32_t partial[] = {INCR(1, NVB1C0_SET_TEX_SAMPLER_POOL_B, 2), 0x10000, 0};
     assert(!tg_gpu_validate_command_stream(&standalone, sizeof(standalone)));
     assert(!tg_gpu_validate_command_stream(partial, sizeof(partial)));
+
+    const uint32_t bind = INCR(0, NVB197_SET_TEX_HEADER_POOL_A, 3);
+    uint32_t rebind[] = {
+        bind, 1, 0x10000, 3,
+        NONINCR(0, NVB197_NO_OPERATION, 4), bind, 1, 0x1ffe0, 0,
+        bind, 1, 0x40000, 0,
+    };
+    struct pool_checks checks = {.expected = {
+        {0x100010000, 0x100010080}, {0x100040000, 0x100040020},
+    }};
+    assert(tg_gpu_prepare_command_stream(rebind, sizeof(rebind), &va, &info));
+    assert(tg_gpu_check_texture_pool_ranges(rebind, sizeof(rebind), check_pool_range, &checks));
+    assert(checks.next == 2 && info.texture_pool[TG_GPU_PROGRAM_3D][TG_GPU_TEXTURE_HEADERS].end ==
+           checks.expected[1].end);
+    checks.next = 0;
+    checks.expected[0].end = 0;
+    assert(!tg_gpu_check_texture_pool_ranges(rebind, sizeof(rebind), check_pool_range, &checks));
+    assert(checks.next == 1);
 }
 
 static void test_compute_dispatch(void)
