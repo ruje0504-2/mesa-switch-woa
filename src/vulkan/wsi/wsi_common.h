@@ -260,6 +260,7 @@ struct wsi_device_options {
    bool sw_device;
    bool extra_xwayland_image;
    bool emulate_24as32;
+   void *(*win32_get_d3d12_command_queue)(VkDevice device);
 };
 
 VkResult

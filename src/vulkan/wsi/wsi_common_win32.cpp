@@ -1103,7 +1103,7 @@ wsi_win32_init_wsi(struct wsi_device *wsi_device,
    wsi->alloc = alloc;
    wsi->wsi = wsi_device;
 
-   if (!wsi_device->sw) {
+   if (!wsi_device->sw && wsi_device->win32.get_d3d12_command_queue) {
       wsi->dxgi.factory = dxgi_get_factory(WSI_DEBUG & WSI_DEBUG_DXGI);
       if (!wsi->dxgi.factory) {
          vk_free(alloc, wsi);

@@ -49,6 +49,8 @@ python3 src/nouveau/vulkan/nvkmd/windows/build_icd.py \
 The script builds the checked-out Mesa source and produces a matched
 `libvulkan_nouveau.dll` and `nvk_windows_icd.json`. The ICD requires the
 matching live adapter LUID and the KMD's `NATIVE_SUBMIT` capability.
+Set `NVK_I_WANT_A_BROKEN_VULKAN_DRIVER=1` to enable enumeration of the
+experimental GM20B device.
 Use `test-kmt.exe` for the controlled KMT cases and `nvk-windows-check.exe`
 for live ICD enumeration.
 
@@ -69,10 +71,11 @@ while keeping GM20B resource metadata and submission on the Tegra ABI.
 
 - **Mesa runtime and Win32 WSI.** NVK enables the Win32 platform,
   `VK_KHR_win32_surface` and `VK_KHR_swapchain`. Its GDI presentation path
-  waits for the GPU copy fence before reading the image. Use `vkcube` to
-  verify this on the Lite. The DXGI path requires a working D3D12 device and
-  queue on the same adapter LUID. Validate active VidPN, Tegra primary flips
-  and hardware DWM composition separately.
+  waits for the GPU copy fence before reading the image. Win32 WSI initializes
+  DXGI and DComp for drivers with a D3D12 queue callback. Use `vkcube` to
+  verify the GDI path on the Lite. The DXGI path requires a working D3D12
+  device and queue on the same adapter LUID. Validate active VidPN, Tegra
+  primary flips and hardware DWM composition separately.
   [NVK gate](../../src/nouveau/vulkan/nvk_physical_device.h) · [Instance extensions](../../src/nouveau/vulkan/nvk_instance.c) · [Mesa Win32 WSI](../../src/vulkan/wsi/wsi_common_win32.cpp)
   [Monitored fence](https://gitlab.freedesktop.org/lfrb/mesa/-/commit/629e52171e03c6b7f53137236819b8f81d4eb149) · [Blit synchronization](https://gitlab.freedesktop.org/lfrb/mesa/-/commit/98efb6c0b26d6af5230ef4bed7cbd15eda6240c8) · [Win32 WSI](https://gitlab.freedesktop.org/lfrb/mesa/-/blob/801c9763c6043f0de8408e905a5324eea06d81d7/src/amd/vulkan/winsys/wddm2/radv_wddm2_wsi.c)
 - **Adapter selection and build.** Compare DXGI and DXCore enumeration

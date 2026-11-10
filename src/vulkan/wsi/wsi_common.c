@@ -88,6 +88,8 @@ wsi_device_init(struct wsi_device *wsi,
    wsi->supports_scanout = true;
    wsi->sw = device_options->sw_device || (WSI_DEBUG & WSI_DEBUG_SW);
    wsi->wants_linear = (WSI_DEBUG & WSI_DEBUG_LINEAR) != 0;
+   wsi->win32.get_d3d12_command_queue =
+      device_options->win32_get_d3d12_command_queue;
    wsi->x11.extra_xwayland_image = device_options->extra_xwayland_image;
    wsi->wayland.disable_timestamps = (WSI_DEBUG & WSI_DEBUG_NOWLTS) != 0;
    wsi->emulate_24as32 = device_options->emulate_24as32;
