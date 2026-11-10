@@ -12,9 +12,10 @@
 
 ## Development order
 
-1. Windows desktop hardware acceleration. Establish an active landscape
-   VidPN, verify primary allocation and panel flips on the GM20B LUID, then
-   verify DWM composition retires on GM20B.
+1. Windows desktop hardware acceleration. Once the Tegra X1 display adapter
+   starts with Code 0, run ARM64 Khronos `vkcube` on GM20B through the Win32
+   surface and swapchain. Verify an active landscape VidPN, primary allocation
+   and panel flips on the GM20B LUID, and DWM composition on GM20B.
 2. Direct3D 9, 10 and 11 alongside `VK_EXT_memory_budget`,
    `VK_EXT_pageable_device_local_memory` and `VK_KHR_maintenance5`.
 3. OpenGL compatibility through Mesa Zink over NVK.
