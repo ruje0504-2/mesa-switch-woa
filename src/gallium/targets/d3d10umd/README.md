@@ -26,8 +26,8 @@ This probe does not use the Windows D3D runtime or presentation callbacks.
 SM4 drawing and staging readback. It requires the registered native UMD,
 checks the resulting adapter LUID and loaded `TegraGpuD3D.dll`, and does not
 fall back to WARP. `--warp` and `--software path/to/gdi-reference.dll` are
-explicit software controls. No mode tests resource sharing or presentation;
-none runs as a default Meson test.
+explicit software controls. These rendering modes do not test resource
+sharing or presentation; none runs as a default Meson test.
 For the experimental NVK hardware path, register the ICD as above, make the
 ARM64 Vulkan loader available and set `NVK_I_WANT_A_BROKEN_VULKAN_DRIVER=1`.
 Append `--implicit-release` to the hardware command to retain scope-exit
@@ -35,6 +35,14 @@ ComPtr destruction while investigating the exit-path fault. Exception
 diagnostics print raw addresses and a bounded ARM64 frame-pointer chain;
 module bases are recorded before drawing, avoiding loader queries during
 failure reporting. This is not a full unwind or a teardown fix.
+
+`--luid 16-hex-digits --shared-contract` checks runtime resource association,
+opening and release for legacy and NT shared BGRA textures, including the
+consumer's descriptor after producer release. `--warp --shared-contract`
+provides a software control. This mode submits no drawing/copy commands and
+does not validate shared image contents or synchronization. The production
+UMD's runtime resource bridge is still incomplete.
+[Runtime contract evidence](../../../../tegra-x1-wddm/docs/D3D_RUNTIME_SHARING.md)
 
 ## GDI software backend
 

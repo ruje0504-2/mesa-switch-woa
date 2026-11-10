@@ -3,8 +3,8 @@
  */
 #include <initguid.h>
 #include <windows.h>
-#include <d3d11.h>
-#include <dxgi.h>
+#include <d3d11_1.h>
+#include <dxgi1_2.h>
 #include <wrl/client.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -92,6 +92,53 @@ static void check(HRESULT status, const char *operation)
 static uint64_t luid_value(LUID luid)
 {
    return (uint64_t)(uint32_t)luid.HighPart << 32 | luid.LowPart;
+}
+
+/* Exercise the runtime's resource association independently of rendering.
+ * Legacy shared handles and NT handles have different ownership contracts.
+ */
+static void shared_contract(ID3D11Device *producer, ID3D11Device *consumer, bool nt)
+{
+   D3D11_TEXTURE2D_DESC desc = {};
+   desc.Width = desc.Height = 64;
+   desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+   desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+   desc.Usage = D3D11_USAGE_DEFAULT;
+   desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+   desc.MiscFlags = nt ? D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX :
+                        D3D11_RESOURCE_MISC_SHARED;
+   printf("Shared contract: mode=%s flags=%08x\n", nt ? "NT" : "legacy", desc.MiscFlags);
+   fflush(stdout);
+   ComPtr<ID3D11Texture2D> original, opened;
+   check(producer->CreateTexture2D(&desc, NULL, &original), "Create shared texture");
+   HANDLE handle = NULL;
+   if (nt) {
+      ComPtr<IDXGIResource1> resource;
+      check(original.As(&resource), "Query NT resource");
+      check(resource->CreateSharedHandle(NULL, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+                                         NULL, &handle), "Create NT shared handle");
+      ComPtr<ID3D11Device1> device1;
+      HRESULT status = consumer->QueryInterface(IID_PPV_ARGS(&device1));
+      if (SUCCEEDED(status))
+         status = device1->OpenSharedResource1(handle, IID_PPV_ARGS(&opened));
+      CloseHandle(handle);
+      check(status, "Open NT shared resource");
+   } else {
+      ComPtr<IDXGIResource> resource;
+      check(original.As(&resource), "Query legacy resource");
+      check(resource->GetSharedHandle(&handle), "Get legacy shared handle");
+      /* A legacy handle is not an NT handle: never CloseHandle it. */
+      check(consumer->OpenSharedResource(handle, IID_PPV_ARGS(&opened)), "Open legacy shared resource");
+   }
+   printf("Shared contract handle=%p\n", handle);
+   fflush(stdout);
+   original.Reset();
+   D3D11_TEXTURE2D_DESC actual = {};
+   opened->GetDesc(&actual);
+   if (memcmp(&actual, &desc, sizeof(desc)))
+      throw std::runtime_error("opened resource descriptor differs");
+   opened.Reset();
+   marker(nt ? "NT resource association/open/release passed" : "Legacy resource association/open/release passed");
 }
 
 static void images(ID3D11Device *device, ID3D11DeviceContext *context, DXGI_FORMAT format)
@@ -187,11 +234,12 @@ static void images(ID3D11Device *device, ID3D11DeviceContext *context, DXGI_FORM
 int main(int argc, char **argv)
 {
    const bool implicit = argc == 4 && !strcmp(argv[3], "--implicit-release");
-   const bool hardware = (argc == 3 || implicit) && !strcmp(argv[1], "--luid");
+   const bool shared = argc > 2 && !strcmp(argv[argc - 1], "--shared-contract");
+   const bool hardware = (argc == 3 || implicit || (argc == 4 && shared)) && !strcmp(argv[1], "--luid");
    const bool software = argc == 3 && !strcmp(argv[1], "--software");
-   const bool warp = argc == 2 && !strcmp(argv[1], "--warp");
+   const bool warp = (argc == 2 || (argc == 3 && shared)) && !strcmp(argv[1], "--warp");
    if (!hardware && !software && !warp) {
-      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release] | --software dll | --warp\n", argv[0]);
+      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract] | --software dll | --warp [--shared-contract]\n", argv[0]);
       return 2;
    }
    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -257,9 +305,23 @@ int main(int argc, char **argv)
          printf("Runtime UMD: %s\n", path);
       }
       report_runtime_modules();
-      images(device.Get(), context.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
-      images(device.Get(), context.Get(), DXGI_FORMAT_B8G8R8A8_UNORM);
-      check(device->GetDeviceRemovedReason(), "Device status after readback");
+      if (shared) {
+         ComPtr<ID3D11Device> consumer;
+         ComPtr<ID3D11DeviceContext> consumer_context;
+         D3D_FEATURE_LEVEL consumer_level = {};
+         check(D3D11CreateDevice(adapter.Get(), hardware ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_WARP,
+                                NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &requested, 1,
+                                D3D11_SDK_VERSION, &consumer, &consumer_level, &consumer_context),
+                "Create sharing consumer");
+         if (consumer_level != requested) throw std::runtime_error("unexpected consumer feature level");
+         shared_contract(device.Get(), consumer.Get(), false);
+         shared_contract(device.Get(), consumer.Get(), true);
+         check(consumer->GetDeviceRemovedReason(), "Consumer status after sharing");
+      } else {
+         images(device.Get(), context.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
+         images(device.Get(), context.Get(), DXGI_FORMAT_B8G8R8A8_UNORM);
+      }
+      check(device->GetDeviceRemovedReason(), "Device status after test");
       if (implicit) {
          /* Preserve the original ComPtr scope-exit release path and buffering
           * while retaining an exception address if it fails again.
@@ -279,6 +341,7 @@ int main(int argc, char **argv)
    }
    if (module) FreeLibrary(module);
    if (!result)
-      marker("Windows D3D runtime clear/draw/readback passed; sharing and presentation were not exercised");
+      marker(shared ? "Windows D3D runtime resource association passed; GPU access and presentation were not exercised" :
+                      "Windows D3D runtime clear/draw/readback passed; sharing and presentation were not exercised");
    return result;
 }
