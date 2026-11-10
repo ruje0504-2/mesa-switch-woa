@@ -30,6 +30,8 @@ struct tg_kmt_device {
 struct tg_kmt_allocation {
    uint32_t handle;
    uint64_t size;
+   uint32_t resource;
+   uint32_t flags;
 };
 
 struct tg_kmt_va {
@@ -44,6 +46,14 @@ LONG tg_kmt_create_context(const struct tg_kmt_device *dev, uint32_t *context);
 LONG tg_kmt_destroy_context(uint32_t context);
 LONG tg_kmt_allocate(struct tg_kmt_device *dev, uint64_t size, bool cpu_visible,
                      struct tg_kmt_allocation *allocation);
+LONG tg_kmt_allocate_shared(struct tg_kmt_device *dev, uint64_t size, bool cpu_visible,
+                            struct tg_kmt_allocation *allocation);
+/* NT handles belong to the caller. An opened resource retains its own
+ * reference and is released with tg_kmt_free, including partial failures.
+ */
+LONG tg_kmt_export_memory(const struct tg_kmt_allocation *allocation, HANDLE *handle);
+LONG tg_kmt_import_memory(struct tg_kmt_device *dev, HANDLE handle,
+                          struct tg_kmt_allocation *allocation);
 LONG tg_kmt_free(struct tg_kmt_device *dev, struct tg_kmt_allocation *allocation);
 LONG tg_kmt_lock(const struct tg_kmt_device *dev,
                  const struct tg_kmt_allocation *allocation, void **cpu);

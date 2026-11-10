@@ -3,6 +3,18 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**Current work: D3D UMD/DWM.** The Windows KMT backend now implements
+NT-handle sharing for opaque storage. Its ARM64 controlled fixture passes.
+The .130 physical trial creates and imports a resource on two GM20B
+devices and maps both GPU addresses, but importing-device `D3DKMTLock2`
+returns `c000000d`, including before producer release. CPU readback and
+shared-surface composition remain unverified. See the
+[shared-storage result](SHARED_STORAGE_RESULT.md).
+The device is back on .59 Code 0 with its original ACPI table and power
+settings; the test permit and scheduled tasks have been removed.
+DXVK remains a compatibility and code-reuse candidate; the native Direct3D
+device and DWM contracts still need implementation.
+
 | Driver | Result | Remaining work |
 | --- | --- | --- |
 | 0.1.0.130 | Code 0, GM20B LUID `8e7d4`, matching active VidPN, completed GDI copies, successful MPO3 and native scanout at `fb9c7000`. Pixel readback and the user confirm visible RGB bars on the internal panel. | DWM exits with `MILERR_NO_HARDWARE_DEVICE`; D3D11 device creation on GM20B returns `DXGI_ERROR_UNSUPPORTED`, while WARP succeeds. Continuous desktop refresh remains unresolved. See [native startup result](NATIVE_STARTUP_RESULT.md). |

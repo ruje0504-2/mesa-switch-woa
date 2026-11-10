@@ -53,6 +53,14 @@ Set `NVK_I_WANT_A_BROKEN_VULKAN_DRIVER=1` to enable enumeration of the
 experimental GM20B device.
 Use `test-kmt.exe` for the controlled KMT cases and `nvk-windows-check.exe`
 for live ICD enumeration.
+`test-kmt-shared.exe` exercises the SDK-backed shared-resource lifecycle
+with controlled KMT substitutes, including repeated opens, budget limits
+and cleanup after residency failure.
+`nvk-windows-shared-check.exe <16-digit-hex-KMT-LUID>` checks live shared
+storage on the selected GM20B adapter. It maps the allocation on two KMT
+devices, closes the producer and exported NT handle, then checks all 4,096
+words through the importer's CPU mapping. This is a memory/lifetime test;
+it does not submit GPU drawing work or exercise DWM.
 
 `tegra-x1-wddm/tools/build_offscreen_triangle.py` builds the offscreen smoke test with
 Khronos Vulkan headers and the ARM64 loader and import library. Run
@@ -82,9 +90,23 @@ resource layout metadata, ownership and completion across devices.
 [Adapter DDI](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_openadapter)
 [Shared-resource DDI](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_openresource)
 
-Mesa's existing `src/gallium/frontends/d3d10umd` supplies D3D10/10.1 DDI
-and shader-token translation code. Its current GDI target creates softpipe
-or llvmpipe screens, and `Resource.cpp::OpenResource` reports an error.
+The Windows KMT backend can create a single-allocation Tegra storage resource
+with NT security sharing, export an NT handle, and open it on another device.
+Import validates the allocation metadata, charges the importing device's
+budget and waits for residency. Each open has a separate resource handle,
+and the caller owns the NT handle. NVK shared storage allocations use this
+resource path. Vulkan Win32 external-memory entry points, shared-image
+layout metadata and cross-device synchronization remain to be connected.
+The .130 physical test passes creation, import, residency and GPU VA
+mapping, but the imported CPU lock fails with `c000000d`, including before
+releasing the producer. Shared CPU readback is still open.
+[Physical shared-storage result](SHARED_STORAGE_RESULT.md)
+[KMT resource sharing](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtshareobjects)
+
+Mesa's existing `src/gallium/frontends/d3d10umd` supplies D3D10 DDI and
+shader-token translation code. `State.h` currently disables its D3D10.1
+and D3D11 branches. Its GDI target creates softpipe or llvmpipe screens,
+and `Resource.cpp::OpenResource` reports an error.
 Reusing it requires a GM20B rendering backend, runtime allocation and
 sharing support, and native presentation.
 [Existing frontend](../../src/gallium/frontends/d3d10umd/)

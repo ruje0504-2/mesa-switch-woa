@@ -174,7 +174,7 @@ win_alloc_tiled_mem(struct nvkmd_dev *dev, struct vk_object_base *log, uint64_t 
                     enum nvkmd_mem_flags flags, struct nvkmd_mem **out)
 {
    (void)tile_mode;
-   if (flags & (NVKMD_MEM_SHARED | NVKMD_MEM_VRAM))
+   if (flags & NVKMD_MEM_VRAM)
       return vk_error(log, VK_ERROR_FEATURE_NOT_PRESENT);
 
    struct nvkmd_windows_mem *mem = calloc(1, sizeof(*mem));
@@ -182,7 +182,9 @@ win_alloc_tiled_mem(struct nvkmd_dev *dev, struct vk_object_base *log, uint64_t 
       return vk_error(log, VK_ERROR_OUT_OF_HOST_MEMORY);
    struct tg_kmt_device *kmt = &nvkmd_windows_dev(dev)->kmt;
    const bool cpu_visible = flags & NVKMD_MEM_CAN_MAP;
-   LONG status = tg_kmt_allocate(kmt, size, cpu_visible, &mem->allocation);
+   LONG status = flags & NVKMD_MEM_SHARED ?
+      tg_kmt_allocate_shared(kmt, size, cpu_visible, &mem->allocation) :
+      tg_kmt_allocate(kmt, size, cpu_visible, &mem->allocation);
    if (status < 0) {
       free(mem);
       return nvkmd_windows_status(log, "KMT allocation and residency", status,

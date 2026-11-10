@@ -33,7 +33,7 @@ def main():
     p.add_argument("--sdk-include", type=Path, required=True, help="SDK Include/<version>")
     p.add_argument("--wdk-include", type=Path, required=True, help="WDK Include/<version>")
     p.add_argument("--prepare-only", action="store_true",
-                   help="compile the SDK ABI fixture and KMT bridge before configuring Mesa")
+                   help="build the SDK ABI fixture, KMT bridge and memory tests without configuring Mesa")
     a = p.parse_args()
     src = a.mesa.resolve()
     win = src / "src/nouveau/vulkan/nvkmd/windows"
@@ -48,9 +48,16 @@ def main():
         "/imsvc" + str(a.wdk_include / "km/crt"))
     run(*sdk_cc, "/Fo" + str(out / "kmt-sdk.obj"), "--", win / "test-kmt-sdk.c")
     kmt_object = out / "kmt-native.obj"
-    run(*sdk_cc, "/O2", "/GS-", "/Zl", f"/Fo{kmt_object}", "--", win / "kmt_native.c")
+    run(*sdk_cc, "/O2", "/Gy", "/GS-", "/Zl", f"/Fo{kmt_object}", "--", win / "kmt_native.c")
+    shared_test = out / "test-kmt-shared.obj"
+    run(*sdk_cc, "/O2", "/GS-", "/Zl", f"/Fo{shared_test}", "--", win / "test-kmt-shared.c")
+    run(a.cc, shared_test, kmt_object, "-Wl,--gc-sections", "-lgdi32",
+        "-o", out / "test-kmt-shared.exe")
+    run(a.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+        win / "check-shared.c", win / "kmt.c", kmt_object, "-lgdi32",
+        "-o", out / "nvk-windows-shared-check.exe")
     if a.prepare_only:
-        print(f"Validated the SDK KMT layout and compiled {kmt_object}")
+        print(f"Validated the SDK KMT layout and built the bridge and memory tests in {out}")
         return
 
     build = out / "build"
@@ -75,7 +82,8 @@ def main():
     manifest.write_text(json.dumps({"file_format_version": "1.0.0", "ICD": {
         "library_path": "./libvulkan_nouveau.dll", "api_version": "1.4.0",
     }}, indent=2) + "\n")
-    files = [dll, out / "nvk-windows-check.exe", out / "test-kmt.exe", manifest]
+    files = [dll, out / "nvk-windows-check.exe", out / "test-kmt.exe",
+             out / "test-kmt-shared.exe", out / "nvk-windows-shared-check.exe", manifest]
     (out / "manifest.json").write_text(json.dumps({
         "mesa": rev, "mesa_switch_base": REV, "build_id": digest.hexdigest(), "sdk_kmt_layout_verified": True,
         "scope": "NVK ICD with Windows KMT transport gated by the native-submit KMD flag",

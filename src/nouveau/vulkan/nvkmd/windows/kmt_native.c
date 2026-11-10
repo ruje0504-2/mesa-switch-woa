@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "kmt_native.h"
 #include <d3dkmthk.h>
+#include <winternl.h>
 #include <stdlib.h>
 #include <string.h>
 #include "allocation_abi.h"
@@ -122,20 +123,43 @@ wait_paging(const struct tg_kmt_device *dev, uint64_t target)
    return tg_kmt_wait_fences(dev, 1, &dev->paging.handle, &target, false, INFINITE);
 }
 
-LONG
-tg_kmt_allocate(struct tg_kmt_device *dev, uint64_t size, bool cpu_visible,
-                struct tg_kmt_allocation *allocation)
+static bool
+charge_memory(struct tg_kmt_device *dev, uint64_t size)
 {
-   *allocation = (struct tg_kmt_allocation){0};
    if (!size || size > dev->budget)
-      return TG_KMT_NO_VIDEO_MEMORY;
-   size = (size + TG_KMT_PAGE_SIZE - 1) & ~(TG_KMT_PAGE_SIZE - 1);
+      return false;
    AcquireSRWLockExclusive(&dev->memory_lock);
-   const bool fits = size <= dev->budget - dev->allocated;
+   const bool fits = dev->allocated <= dev->budget && size <= dev->budget - dev->allocated;
    if (fits)
       dev->allocated += size;
    ReleaseSRWLockExclusive(&dev->memory_lock);
-   if (!fits)
+   return fits;
+}
+
+static LONG
+make_resident(struct tg_kmt_device *dev, struct tg_kmt_allocation *allocation)
+{
+   D3DDDI_MAKERESIDENT resident = {
+      .hPagingQueue = dev->paging_queue, .NumAllocations = 1,
+      .AllocationList = &allocation->handle,
+   };
+   LONG status = D3DKMTMakeResident(&resident);
+   if (status >= 0)
+      status = wait_paging(dev, resident.PagingFenceValue);
+   if (status < 0)
+      tg_kmt_free(dev, allocation);
+   return status;
+}
+
+static LONG
+allocate_memory(struct tg_kmt_device *dev, uint64_t size, bool cpu_visible,
+                 bool shared, struct tg_kmt_allocation *allocation)
+{
+   *allocation = (struct tg_kmt_allocation){0};
+   if (size > UINT64_MAX - (TG_KMT_PAGE_SIZE - 1))
+      return TG_KMT_NO_VIDEO_MEMORY;
+   size = (size + TG_KMT_PAGE_SIZE - 1) & ~(TG_KMT_PAGE_SIZE - 1);
+   if (!charge_memory(dev, size))
       return TG_KMT_NO_VIDEO_MEMORY;
 
    struct tg_gpu_allocation_request request = {
@@ -146,6 +170,7 @@ tg_kmt_allocate(struct tg_kmt_device *dev, uint64_t size, bool cpu_visible,
    };
    D3DKMT_CREATEALLOCATION args = {
       .hDevice = dev->handle, .NumAllocations = 1, .pAllocationInfo2 = &info,
+      .Flags = {.CreateResource = shared, .CreateShared = shared, .NtSecuritySharing = shared},
    };
    LONG status = D3DKMTCreateAllocation2(&args);
    if (status < 0) {
@@ -154,16 +179,87 @@ tg_kmt_allocate(struct tg_kmt_device *dev, uint64_t size, bool cpu_visible,
       ReleaseSRWLockExclusive(&dev->memory_lock);
       return status;
    }
-   *allocation = (struct tg_kmt_allocation){ .handle = info.hAllocation, .size = size };
-   D3DDDI_MAKERESIDENT resident = {
-      .hPagingQueue = dev->paging_queue, .NumAllocations = 1,
-      .AllocationList = &allocation->handle,
+   *allocation = (struct tg_kmt_allocation){
+      .handle = info.hAllocation, .size = size, .resource = args.hResource, .flags = request.flags,
    };
-   status = D3DKMTMakeResident(&resident);
-   if (status >= 0)
-      status = wait_paging(dev, resident.PagingFenceValue);
+   return make_resident(dev, allocation);
+}
+
+LONG
+tg_kmt_allocate(struct tg_kmt_device *dev, uint64_t size, bool cpu_visible,
+                struct tg_kmt_allocation *allocation)
+{
+   return allocate_memory(dev, size, cpu_visible, false, allocation);
+}
+
+LONG
+tg_kmt_allocate_shared(struct tg_kmt_device *dev, uint64_t size, bool cpu_visible,
+                       struct tg_kmt_allocation *allocation)
+{
+   return allocate_memory(dev, size, cpu_visible, true, allocation);
+}
+
+LONG
+tg_kmt_export_memory(const struct tg_kmt_allocation *allocation, HANDLE *handle)
+{
+   if (!handle)
+      return TG_KMT_INVALID_PARAMETER;
+   *handle = NULL;
+   if (!allocation->resource || !allocation->handle || !allocation->size)
+      return TG_KMT_INVALID_PARAMETER;
+   OBJECT_ATTRIBUTES attributes = {.Length = sizeof(attributes)};
+   return D3DKMTShareObjects(1, &allocation->resource, &attributes,
+                             STANDARD_RIGHTS_READ | SHARED_ALLOCATION_WRITE, handle);
+}
+
+LONG
+tg_kmt_import_memory(struct tg_kmt_device *dev, HANDLE handle,
+                     struct tg_kmt_allocation *allocation)
+{
+   *allocation = (struct tg_kmt_allocation){0};
+   D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE query = {
+      .hDevice = dev->handle, .hNtHandle = handle,
+   };
+   LONG status = D3DKMTQueryResourceInfoFromNtHandle(&query);
    if (status < 0)
-      tg_kmt_free(dev, allocation);
+      return status;
+   /* Only the Tegra opaque-storage resource with one allocation belongs to
+    * this transport. D3D textures need their own layout/runtime metadata.
+    */
+   if (query.NumAllocations != 1 || query.PrivateRuntimeDataSize ||
+       query.ResourcePrivateDriverDataSize ||
+       query.TotalPrivateDriverDataSize != sizeof(struct tg_gpu_allocation_request))
+      return TG_KMT_INVALID_PARAMETER;
+
+   struct tg_gpu_allocation_request request = {0};
+   D3DDDI_OPENALLOCATIONINFO2 info = {0};
+   D3DKMT_OPENRESOURCEFROMNTHANDLE open = {
+      .hDevice = dev->handle, .hNtHandle = handle,
+      .NumAllocations = 1, .pOpenAllocationInfo2 = &info,
+      .TotalPrivateDriverDataBufferSize = sizeof(request), .pTotalPrivateDriverDataBuffer = &request,
+   };
+   status = D3DKMTOpenResourceFromNtHandle(&open);
+   if (status < 0)
+      return status;
+   allocation->handle = info.hAllocation;
+   allocation->resource = open.hResource;
+   status = TG_KMT_INVALID_PARAMETER;
+   if (!open.hResource || !info.hAllocation ||
+       open.TotalPrivateDriverDataBufferSize != sizeof(request) ||
+       info.PrivateDriverDataSize != sizeof(request) ||
+       request.version != TG_GPU_ALLOCATION_ABI ||
+       (request.flags & ~TG_GPU_ALLOCATION_CPU_VISIBLE) ||
+       !request.bytes || (request.bytes & (TG_KMT_PAGE_SIZE - 1)))
+      goto fail;
+   status = TG_KMT_NO_VIDEO_MEMORY;
+   if (!charge_memory(dev, request.bytes))
+      goto fail;
+   allocation->size = request.bytes;
+   allocation->flags = request.flags;
+   return make_resident(dev, allocation);
+
+fail:
+   tg_kmt_free(dev, allocation);
    return status;
 }
 
@@ -171,8 +267,9 @@ LONG
 tg_kmt_free(struct tg_kmt_device *dev, struct tg_kmt_allocation *allocation)
 {
    const D3DKMT_DESTROYALLOCATION2 args = {
-      .hDevice = dev->handle, .AllocationCount = 1,
-      .phAllocationList = &allocation->handle,
+      .hDevice = dev->handle, .hResource = allocation->resource,
+      .AllocationCount = allocation->resource ? 0 : 1,
+      .phAllocationList = allocation->resource ? NULL : &allocation->handle,
    };
    LONG status = D3DKMTDestroyAllocation2(&args);
    if (status >= 0) {
