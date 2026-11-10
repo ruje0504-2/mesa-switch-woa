@@ -18,19 +18,20 @@
 #include <stdio.h>
 #include <string.h>
 
+static const struct nv_device_info gm20b = {
+   .type = NV_DEVICE_TYPE_SOC,
+   .chipset = 0x12e,
+   .sm = 53,
+   .gpc_count = 1,
+   .tpc_count = 2,
+   .mp_per_tpc = 1,
+   .cls_eng3d = MAXWELL_B,
+   .cls_compute = MAXWELL_COMPUTE_B,
+};
+
 static int
 emit_gm20b_windows_mme(void)
 {
-   const struct nv_device_info gm20b = {
-      .type = NV_DEVICE_TYPE_SOC,
-      .chipset = 0x12e,
-      .sm = 53,
-      .gpc_count = 1,
-      .tpc_count = 2,
-      .mp_per_tpc = 1,
-      .cls_eng3d = MAXWELL_B,
-      .cls_compute = MAXWELL_COMPUTE_B,
-   };
    uint32_t words[4096 + 1024];
    struct nv_push push;
    nv_push_init(&push, words, ARRAY_SIZE(words), BITFIELD_BIT(SUBC_NVB197));
@@ -76,6 +77,7 @@ int main(int argc, char **argv)
    };
 
    nvk_test_all_mmes(&kepler);
+   nvk_test_all_mmes(&gm20b);
    nvk_test_all_mmes(&volta);
    nvk_test_all_mmes(&turing);
 

@@ -6,12 +6,34 @@
 #include "nouveau/headers/nvidia/classes/clb0b5.h"
 #include "nouveau/headers/nvidia/classes/clb197.h"
 #include "nouveau/headers/nvidia/classes/clb1c0.h"
+#include "nouveau/vulkan/nvk_mme_slots.h"
 
 /* NVK's 3D, compute and copy subchannels on GM20B. */
 static const uint32_t nvk_class[NVB06F_NUMBER_OF_SUBCHANNELS] = {
     [0] = MAXWELL_B,
     [1] = MAXWELL_COMPUTE_B,
     [4] = MAXWELL_DMA_COPY_A,
+};
+
+/* Complete, CPU-visible calls emitted by NVK on Windows GM20B. */
+static const uint8_t nvk_mme_call_words[NVK_MME_COUNT] = {
+    [NVK_MME_SELECT_CB0] = 1,
+    [NVK_MME_CLEAR] = 2,
+    [NVK_MME_UPDATE_WINDOW_CLIP] = 1,
+    [NVK_MME_BIND_IB] = 4,
+    [NVK_MME_BIND_VB] = 4,
+    [NVK_MME_SET_VB_ENABLES] = 1,
+    [NVK_MME_SET_VB_STRIDE] = 1,
+    [NVK_MME_SET_TESS_PARAMS] = 1,
+    [NVK_MME_SET_ANTI_ALIAS] = 1,
+    [NVK_MME_DRAW] = 5,
+    [NVK_MME_DRAW_INDEXED] = 6,
+    [NVK_MME_ADD_CS_INVOCATIONS] = 2,
+    [NVK_MME_WRITE_CS_INVOCATIONS] = 2,
+    [NVK_MME_SET_WRITE_MASK] = 2,
+    [NVK_MME_SET_VIEWPORT_MIN_MAX_Z] = 3,
+    [NVK_MME_SET_Z_CLAMP] = 1,
+    [NVK_MME_SET_STATISTICS_COUNTERS] = 2,
 };
 
 static bool method_allowed(uint32_t method)
@@ -23,6 +45,34 @@ static bool mme_upload_span(uint32_t subchannel, uint32_t first, uint32_t last)
 {
     return subchannel == 0 && first <= NVB197_LOAD_MME_START_ADDRESS_RAM &&
            last >= NVB197_LOAD_MME_INSTRUCTION_RAM_POINTER;
+}
+
+static bool mme_call_allowed(uint32_t op, uint32_t method, uint32_t count,
+                             const uint32_t *args)
+{
+    const uint32_t base = NVB197_CALL_MME_MACRO(0);
+    if (op != NVB06F_DMA_ONEINCR_OPCODE_VALUE || method < base)
+        return false;
+    const uint32_t offset = method - base;
+    const uint32_t slot = offset / 8;
+    if (offset % 8 || slot >= NVK_MME_COUNT || count != nvk_mme_call_words[slot])
+        return false;
+
+    switch (slot) {
+    case NVK_MME_CLEAR: {
+        const uint32_t base_layer = NVVAL_GET(args[0], NVB197, CLEAR_SURFACE, RT_ARRAY_INDEX);
+        const uint32_t max_layers = 2048;
+        return base_layer < max_layers && args[1] && args[1] <= max_layers - base_layer;
+    }
+    case NVK_MME_BIND_VB:
+        return args[0] < 32;
+    case NVK_MME_SET_WRITE_MASK:
+        return args[0] <= 8;
+    case NVK_MME_SET_VIEWPORT_MIN_MAX_Z:
+        return args[0] < 16;
+    default:
+        return true;
+    }
 }
 
 bool tg_gpu_validate_command_stream(const uint32_t *words,size_t bytes)
@@ -39,7 +89,8 @@ bool tg_gpu_validate_command_stream(const uint32_t *words,size_t bytes)
         if((header&(1u<<12)) || !nvk_class[subchannel])return false;
         if(op==NVB06F_DMA_IMMD_OPCODE_VALUE) {
             if(!method_allowed(method) || method==NVB06F_SET_OBJECT ||
-               mme_upload_span(subchannel, method, method))return false;
+               mme_upload_span(subchannel, method, method) ||
+               (subchannel == 0 && method >= NVB197_CALL_MME_MACRO(0)))return false;
             continue;
         }
         if((op!=NVB06F_DMA_INCR_OPCODE_VALUE && op!=NVB06F_DMA_NONINCR_OPCODE_VALUE &&
@@ -69,6 +120,9 @@ bool tg_gpu_validate_command_stream(const uint32_t *words,size_t bytes)
             n = start + mme_words;
             continue;
         }
+        if (subchannel == 0 && last >= NVB197_CALL_MME_MACRO(0) &&
+            !mme_call_allowed(op, method, count, words + n))
+            return false;
         n+=count;
     }
     return true;

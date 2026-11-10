@@ -9,8 +9,9 @@
  * and WFI. Bindings must select the GM20B class for the NVK subchannel.
  * USER code cannot write the kernel Reference marker.
  * MME RAM writes must match the NVK Windows GM20B initialization sequence.
- * MME invocation and class-specific address/privilege/residency validation
- * are still separate.
+ * MME calls require a complete parameter packet for a supported slot and
+ * bounded register indices. Class-specific address/privilege/residency
+ * validation is separate.
  */
 bool tg_gpu_validate_command_stream(const uint32_t *, size_t bytes);
 #endif

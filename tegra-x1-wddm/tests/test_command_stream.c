@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 #include "../core/command_stream.h"
 #include "../core/nvk_mme_programs.h"
+#include "nouveau/headers/nvidia/classes/clb197.h"
+#include "nouveau/vulkan/nvk_mme_slots.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -29,6 +31,42 @@ static void test_mme_upload(void)
     assert(!tg_gpu_validate_command_stream(span, sizeof(span)));
     assert(!tg_gpu_validate_command_stream(oneinc, sizeof(oneinc)));
     assert(!tg_gpu_validate_command_stream(nonincr, sizeof(nonincr)));
+}
+
+static bool check_mme_call(uint32_t slot, uint32_t count, uint32_t first, uint32_t second)
+{
+    uint32_t packet[7] = {
+        0xa0000000u | (count << 16) | (NVB197_CALL_MME_MACRO(slot) >> 2),
+        first, second,
+    };
+    assert(count < sizeof(packet) / sizeof(*packet));
+    return tg_gpu_validate_command_stream(packet, (count + 1) * sizeof(*packet));
+}
+
+static void test_mme_calls(void)
+{
+    assert(check_mme_call(NVK_MME_DRAW, 5, 0, 3));
+    assert(check_mme_call(NVK_MME_DRAW_INDEXED, 6, 0, 3));
+    assert(!check_mme_call(NVK_MME_DRAW_INDEXED, 5, 0, 3));
+    assert(!check_mme_call(NVK_MME_SET_PRIV_REG, 3, 0, 0));
+    assert(!check_mme_call(NVK_MME_COUNT, 1, 0, 0));
+
+    assert(check_mme_call(NVK_MME_CLEAR, 2, 2047u << 10, 1));
+    assert(!check_mme_call(NVK_MME_CLEAR, 1, 0x3c, 0));
+    assert(!check_mme_call(NVK_MME_CLEAR, 2, 2047u << 10, 2));
+    assert(check_mme_call(NVK_MME_BIND_VB, 4, 31, 0));
+    assert(!check_mme_call(NVK_MME_BIND_VB, 4, 32, 0));
+    assert(check_mme_call(NVK_MME_SET_WRITE_MASK, 2, 8, 0));
+    assert(!check_mme_call(NVK_MME_SET_WRITE_MASK, 2, 9, 0));
+    assert(check_mme_call(NVK_MME_SET_VIEWPORT_MIN_MAX_Z, 3, 15, 0));
+    assert(!check_mme_call(NVK_MME_SET_VIEWPORT_MIN_MAX_Z, 3, 16, 0));
+
+    const uint32_t immediate = 0x80000e00; /* CALL_MME_MACRO(0) requires ONEINCR. */
+    const uint32_t data_only[] = {0xa0010e01, 0}; /* CALL_MME_DATA(0). */
+    const uint32_t span[] = {0x20020dff, 0, 0}; /* Increment into the call range. */
+    assert(!tg_gpu_validate_command_stream(&immediate, sizeof(immediate)));
+    assert(!tg_gpu_validate_command_stream(data_only, sizeof(data_only)));
+    assert(!tg_gpu_validate_command_stream(span, sizeof(span)));
 }
 
 int main(void)
@@ -61,14 +99,16 @@ int main(void)
     w[0]=0x60020000;w[1]=w[2]=0xb197;
     assert(!tg_gpu_validate_command_stream(w,12)); /* One object binding per packet. */
     w[0]=0x20030000;assert(!tg_gpu_validate_command_stream(w,16)); /* Host span. */
-    w[0]=0x20010fff;assert(tg_gpu_validate_command_stream(w,8));
-    w[0]=0x20020fff;assert(!tg_gpu_validate_command_stream(w,12)); /* Method wrap. */
-    w[0]=0xa0020fff;assert(!tg_gpu_validate_command_stream(w,12));
-    w[0]=0x60020fff;assert(tg_gpu_validate_command_stream(w,12));
+    /* Check method wrap on the copy subchannel, outside the 3D MME range. */
+    w[0]=0x20018fff;assert(tg_gpu_validate_command_stream(w,8));
+    w[0]=0x20028fff;assert(!tg_gpu_validate_command_stream(w,12));
+    w[0]=0xa0028fff;assert(!tg_gpu_validate_command_stream(w,12));
+    w[0]=0x60028fff;assert(tg_gpu_validate_command_stream(w,12));
     w[0]=0x00010000;assert(!tg_gpu_validate_command_stream(w,4)); /* Subdevice. */
     w[0]=0xe0000000;assert(!tg_gpu_validate_command_stream(w,4)); /* End segment. */
     w[0]=0xc0000040;assert(!tg_gpu_validate_command_stream(w,4)); /* Reserved. */
     w[0]=0x20000040;assert(!tg_gpu_validate_command_stream(w,4)); /* Zero count. */
     test_mme_upload();
-    puts("Linear B06F packets, object bindings, reference isolation and MME uploads passed");return 0;
+    test_mme_calls();
+    puts("Linear B06F packets, object bindings, reference isolation and MME validation passed");return 0;
 }

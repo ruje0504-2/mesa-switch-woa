@@ -803,8 +803,13 @@ ninja -C "$NATIVE_MESA_BUILD" src/nouveau/vulkan/test_nvk_mme
   > tegra-x1-wddm/core/nvk_mme_programs.h
 ```
 
-General WDDM submission also requires MME invocation, class-specific method
-and GPU virtual address/residency validation.
+GM20B macro calls use a complete ONEINCR packet and the slot numbers shared
+with NVK. The KMD checks the parameter count and the bounds of the clear
+layers, vertex binding, viewport and render target arguments. NVK always
+supplies two clear parameters, including for multiview. GPU-fed parameter
+continuations require a separate submit path. General WDDM submission also
+requires per-context MME initialization, class-specific method and GPU virtual
+address/residency validation.
 
 The .83 one-boot test exercised the new KMT bridge on the Lite, including
 aligned and fixed VA reservations, residency, event waits and GPU B0B5 copy.
