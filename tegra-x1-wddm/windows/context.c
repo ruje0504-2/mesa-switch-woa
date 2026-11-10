@@ -28,6 +28,17 @@ static TG_GPU_CONTEXT *find_context(TG_GPU_CONTEXT_ENGINE *e, HANDLE h)
     }
     return NULL;
 }
+BOOLEAN TgGpuIsGdiContext(TG_GPU_CONTEXT_ENGINE *e,HANDLE handle)
+{
+    KIRQL irql;
+    if(!e)return FALSE;
+    KeAcquireSpinLock(&e->Lock,&irql);
+    const TG_GPU_CONTEXT *c=find_context(e,handle);
+    const BOOLEAN gdi=c && !c->Closing && c->Flags.GdiContext && c->Flags.VirtualAddressing;
+    KeReleaseSpinLock(&e->Lock,irql);
+    return gdi;
+}
+
 NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *e,
     const DXGKRNL_INTERFACE *dxgk, TG_GPU_TABLE_SEGMENT *tables)
 {
@@ -172,6 +183,10 @@ NTSTATUS APIENTRY TgGpuDdiCreateContext(HANDLE device, DXGKARG_CREATECONTEXT *a)
         a->ContextInfo.DmaBufferPrivateDataSize=TG_GPU_PAGING_PRIVATE_BYTES;
         a->ContextInfo.DmaBufferSegmentSet=1u<<(TG_GPU_PAGING_APERTURE_SEGMENT-1);
     } else if (a->Flags.GdiContext) {
+        /* VidMm creates a privileged DMA pool for the virtual GDI context.
+         * Its buffers need allocation objects for GPU VA mapping; segment
+         * set zero takes the physical contiguous-buffer path instead. */
+        a->ContextInfo.DmaBufferSegmentSet=1u<<(TG_GPU_PAGING_APERTURE_SEGMENT-1);
         /* GDI reserves only the kernel queue slot. */
         a->ContextInfo.DmaBufferPrivateDataSize=sizeof(TG_GPU_QUEUE_ENTRY);
     } else

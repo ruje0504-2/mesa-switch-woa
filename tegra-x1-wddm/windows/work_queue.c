@@ -67,20 +67,24 @@ static NTSTATUS queue_submit(TG_GPU_WORK_QUEUE *q,const DXGKARG_SUBMITCOMMANDVIR
     if(q->Paused || !NT_SUCCESS(q->Failure)) {
         KeReleaseSpinLock(&q->Lock,irql);return STATUS_DEVICE_NOT_READY;
     }
-    if(a->Flags.Value&~0xc9u){status=STATUS_NOT_SUPPORTED;goto done;}
+    /* Context ownership identifies kernel Present work. A private-data byte
+     * count does not distinguish an OS-generated Present from UMD work. */
+    const BOOLEAN kernel_present=a->Flags.Present && TgGpuIsGdiContext(q->Engine,a->hContext);
+    const UINT allowed=0xc9u|(kernel_present?2u:0u);
+    if(a->Flags.Value&~allowed){status=STATUS_NOT_SUPPORTED;goto done;}
     if(reserved && !a->Flags.ContextSwitch && !a->Flags.Paging &&
        !a->Flags.NullRendering && a->DmaBufferSize) {
         if(!snapshot || snapshot->Bytes!=a->DmaBufferSize ||
            snapshot->Bytes>TG_GPU_COMMAND_CAPTURE_BYTES) {status=STATUS_INVALID_PARAMETER;goto rejected;}
         entry=reserved;
     }
-    if(reserved && !a->DmaBufferUmdPrivateDataSize &&
+    if(reserved && (!a->DmaBufferUmdPrivateDataSize || kernel_present) &&
        (a->Flags.ContextSwitch || (!a->Flags.Paging && (a->Flags.NullRendering || !a->DmaBufferSize))) &&
        (!entry || a->DmaBufferPrivateDataSize<sizeof(*entry)))entry=reserved;
     if(!entry ||
         ((ULONG_PTR)entry&(TYPE_ALIGNMENT(TG_GPU_QUEUE_ENTRY)-1)) ||
         (entry!=reserved && a->DmaBufferPrivateDataSize<sizeof(*entry)) ||
-        (a->DmaBufferUmdPrivateDataSize && !snapshot)) {
+        (a->DmaBufferUmdPrivateDataSize && !snapshot && !kernel_present)) {
         status=STATUS_INVALID_PARAMETER;goto rejected;
     }
     if(q->CurrentPrivate==entry) { KeReleaseSpinLock(&q->Lock,irql);return STATUS_DEVICE_BUSY; }

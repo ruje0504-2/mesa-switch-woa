@@ -182,7 +182,7 @@ for source in [*core, power, clock, root / "platform/t214_dc.c", root / "windows
                root / "windows/graphics.c",root / "windows/hardware.c",
                root / "windows/work_queue.c", root / "windows/allocation.c",
                root / "windows/query.c", root / "windows/adapter.c",
-               root / "windows/submit_ddi.c",root / "windows/command_snapshot.c",root / "windows/recovery.c",
+               root / "windows/submit_ddi.c",root / "windows/present.c",root / "windows/command_snapshot.c",root / "windows/recovery.c",
                root / "windows/platform_io.c",root / "windows/worker.c",
                root / "windows/platform_adapter.c",root / "windows/gr_firmware_io.c",
                root / "windows/reset_backend.c",root / "windows/adapter_reset.c"]:
@@ -220,6 +220,13 @@ if args.windows_tests:
                     "/entry:start", "/include:_load_config_used", "/nodefaultlib", "/release", "/opt:ref", "/timestamp:0",
                     f"/out:{args.out / 'test-context.exe'}", str(context_test),
                     str(library), str(sdk_lib)], check=True)
+    timings_test = args.out / "test_panel_timings_windows.obj"
+    subprocess.run([args.clang_cl, *flags, "/clang:-funwind-tables", f"/Fo{timings_test}", "--",
+                    str(root / "tests/test_panel_timings_windows.c")], check=True)
+    subprocess.run([args.link, "/nologo", "/machine:arm64", "/subsystem:console,10.0",
+                    "/entry:start", "/include:_load_config_used", "/nodefaultlib", "/release", "/opt:ref", "/timestamp:0",
+                    f"/out:{args.out / 'test-panel-timings.exe'}", str(timings_test),
+                    str(args.out / "panel_vidpn.obj"), str(sdk_lib)], check=True)
     hardware_test=args.out / "test_hardware_windows.obj"
     subprocess.run([args.clang_cl,*flags,"/clang:-funwind-tables",f"/Fo{hardware_test}","--",
                     str(root / "tests/test_hardware_windows.c")],check=True)

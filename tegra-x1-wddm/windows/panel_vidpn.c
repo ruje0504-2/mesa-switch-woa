@@ -12,6 +12,10 @@ enum panel_mode_state {
     PanelModeUnpinned, PanelModeNative, PanelModeUnsupported
 };
 
+/* The WDK exposes DXGK_CONNECTION_STATUS values only to C++ sources. */
+enum { TgGpuLinkConfigurationSucceeded = 14 };
+static volatile LONG64 timing_change_id;
+
 /* The firmware drives the panel over a fixed RGB888 DSI link. */
 static const D3DKMDT_WIRE_FORMAT_AND_PREFERENCE panel_wire_format = {
     .Rgb = D3DKMDT_BITS_PER_COMPONENT_08,
@@ -381,8 +385,16 @@ static NTSTATUS APIENTRY set_timings(HANDLE context, DXGKARG_SETTIMINGSFROMVIDPN
     NTSTATUS status = TgGpuPanelSetVisibility(adapter, path->Input.Active != 0);
     if (NT_SUCCESS(status)) {
         path->OutputFlags = 0;
-        RtlZeroMemory(&path->TargetState, sizeof(path->TargetState));
-        path->DiagnosticInfo = 0;
+        /* SetTimings completes synchronously. DxgKrnl requires a nonzero
+         * change ID and a link-configuration result even when the DDI itself
+         * returns success. One sequence keeps IDs unique across targets. */
+        path->TargetState = (DXGK_CONNECTION_CHANGE){
+            .ConnectionChangeId = (ULONGLONG)InterlockedIncrement64(&timing_change_id),
+            .TargetId = path->VidPnTargetId,
+            .ConnectionStatus = TgGpuLinkConfigurationSucceeded,
+        };
+        /* NONE / SEAMLESS / NONE; these UINT8 enum values are C++-only too. */
+        path->DiagnosticInfo = 0x00ffffff;
     }
     return status;
 }

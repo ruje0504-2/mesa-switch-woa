@@ -29,6 +29,11 @@ NTSTATUS APIENTRY TgGpuDdiBuildPagingBuffer(HANDLE adapter,DXGKARG_BUILDPAGINGBU
     UINT64 *scratch=NULL;BOOLEAN immediate=FALSE,virtual_dma=FALSE;
     PAGED_CODE();
     if(!e || !a || !e->Tables)return STATUS_INVALID_PARAMETER;
+    if (a->Operation == DXGK_OPERATION_DISCARD_CONTENT) {
+        /* Uncompressed allocations have no content metadata to invalidate.
+         * VidMm owns residency and the contents become undefined. */
+        return TgGpuValidatePagingAllocation(e, a->DiscardContent.hAllocation, 0, 0);
+    }
     if(a->Operation==DXGK_OPERATION_MAP_APERTURE_SEGMENT ||
        a->Operation==DXGK_OPERATION_UNMAP_APERTURE_SEGMENT) {
         /* The aperture is an offset space resolved into GM20B PTEs. Its

@@ -100,6 +100,11 @@ enum tg_t214_dc_result tg_t214_dc_queue_flip(struct tg_t214_dc *dc, uint64_t add
 /* Change visibility and address in the same native Window A activation. */
 enum tg_t214_dc_result tg_t214_dc_queue_scanout(struct tg_t214_dc *dc,
     uint64_t address, bool visible);
+/* HBlank is permitted for an address-only change. Visibility changes still
+ * latch at VBlank. The caller must confirm the active bank before completing
+ * an immediate request. */
+enum tg_t214_dc_result tg_t214_dc_queue_immediate(struct tg_t214_dc *dc,
+    uint64_t address,bool visible);
 /* Queue and confirm the original POST address first. Retry BUSY until
  * the restore activation completes before unmapping or freeing scanout.
  */

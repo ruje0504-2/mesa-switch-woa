@@ -5,6 +5,9 @@
 
 | Driver | Result | Remaining work |
 | --- | --- | --- |
+| 0.1.0.130 | Code 0, GM20B LUID `8e7d4`, matching active VidPN, completed GDI copies, successful MPO3 and native scanout at `fb9c7000`. Pixel readback and the user confirm visible RGB bars on the internal panel. | DWM exits with `MILERR_NO_HARDWARE_DEVICE`; D3D11 device creation on GM20B returns `DXGI_ERROR_UNSUPPORTED`, while WARP succeeds. Continuous desktop refresh remains unresolved. See [native startup result](NATIVE_STARTUP_RESULT.md). |
+| 0.1.0.121 | The timing callback returned link success with a nonzero change ID. GM20B LUID `962ec` reached 720x1280, 60 Hz mode setup and successful shared-primary allocation creation. | Windows restarted later. The normal journal filled before the first failure; the next boot was gated to Code 43. Stable native presentation remains open. See [display timing result](DISPLAY_TIMING_RESULT.md). |
+| 0.1.0.120 | GDI DMA now uses aperture segment 2. The live adapter stayed Code 0 through the test, progressed to GPU-virtual paging submissions, and exposed GM20B LUID `8ec5d`. | The interactive probe found zero active display paths and the panel was black while SSH responded. Native desktop presentation remains unverified. See [GDI DMA pool investigation](GDI_DMA_POOL.md). |
 | 0.1.0.119 | The live driver-caps query returned `NoCacheCoherentApertureMemory` (`0x20000000`). GDI creation succeeded with 232 DMA private bytes and 256 allocation entries. | Windows restarted to BasicDisplay. Both ETLs associate the retained mode switches with BasicDisplay. |
 | 0.1.0.118 | The write-through scheduler journal retained the writer's ready marker and the successful GDI return with 256 allocation entries. | Windows restarted to BasicDisplay. The journal has no submit, preempt, recovery or reset record, and the first internal failure remains unidentified. |
 | 0.1.0.117 | Tegra StartDevice returned success with one source and one child. The GDI context returned 232 bytes of DMA private data and 256 allocation entries. | Windows restarted to BasicDisplay. The callback record contains no Tegra VidPN commit. |
@@ -19,7 +22,7 @@
 | 0.1.0.105 / .106 | The DSI link callback succeeded on hardware. The .106 trace recorded the first start and five successful VidPN enumeration calls. | A later driver load was denied by the test gate. The interactive probe saw Code 43 and the fallback display path. |
 | 0.1.0.87 | Khronos ARM64 loader and NVK submitted a Vulkan triangle through the GM20B LUID. GPU fence 27 completed. Readback matched 300 red pixels, 724 blue pixels and 128 guards. The separate Win32 GDI preview displayed the verified pixels. | Native Win32 swapchain presentation. |
 | 0.1.0.101 | `ACPI\SWOA0F01\0` appeared as **Tegra X1 (GM20B)** in the **Display** class with **OK / Code 0**. The GPU initialized, the miniport acquired the POST scanout, and the display core accepted the callbacks. | The internal adapter startup later reported `STATUS_NOT_SUPPORTED` after monitor-mode queries. The capture had no active VidPN mode commit or WDDM flip. |
-| 0.1.0.59 | After the .119 test, the Lite returned to the diagnostic driver with Code 0 and the baseline ACPI table. | Physical startup trials are on hold for a separate device investigation. |
+| 0.1.0.59 | After the .121 rollback, the Lite returned to the diagnostic driver with Code 0 and the baseline ACPI table. | Continue from .121's accepted timing and shared-primary creation, preserving first-failure evidence. |
 
 The test decrements and flushes the start budget before GPU initialization.
 The .109, .110 and .111 callback records were identical.
@@ -73,10 +76,11 @@ image. On-screen `vkcube` validation is pending.
 
 ## Development order
 
-1. Windows desktop hardware acceleration. Once the Tegra X1 display adapter
-   starts with Code 0, run ARM64 Khronos `vkcube` on GM20B through the Win32
-   surface and swapchain. Verify an active landscape VidPN, primary allocation
-   and panel flips on the GM20B LUID, and DWM composition on GM20B.
+1. Windows desktop hardware acceleration. Build the Direct3D UMD device,
+   rendering, shared-resource and synchronization paths needed by DWM on
+   the GM20B LUID. Verify continuous window composition and landscape
+   presentation. ARM64 Khronos `vkcube` through NVK's Win32 surface and
+   swapchain remains a separate pending Vulkan test.
 2. Direct3D 9, 10 and 11 alongside `VK_EXT_memory_budget`,
    `VK_EXT_pageable_device_local_memory` and `VK_KHR_maintenance5`.
 3. OpenGL compatibility through Mesa Zink over NVK.
@@ -85,3 +89,6 @@ image. On-screen `vkcube` validation is pending.
 
 Use the [build and porting guide](PORTING.md), [driver contracts](DRIVER.md)
 and [RADV Windows reuse notes](PORTING.md#radv-windows-reference) for details.
+DXVK is a compatibility and code-reuse candidate for the Direct3D work.
+The native UMD and DWM requirements are tracked in the
+[Direct3D plan](PORTING.md#direct3d-umd-and-dwm).

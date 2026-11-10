@@ -16,17 +16,45 @@ static BOOLEAN program_flip(PVOID context)
         action->Status = STATUS_DEVICE_NOT_READY;
         return TRUE;
     }
-    if (panel->Pending.PresentId) {
-        action->Status = STATUS_DEVICE_BUSY;
+    if (panel->Pending.Address) {
+        UINT64 address;
+        bool visible;
+        if (!tg_t214_dc_latched_scanout(&panel->Dc,&address,&visible) ||
+            address!=panel->Pending.Address || visible!=(panel->Pending.Visible!=FALSE)) {
+            action->Status = STATUS_DEVICE_BUSY;
+            return TRUE;
+        }
+        panel->Displayed=panel->Pending;
+        panel->Pending=(TG_GPU_PANEL_FLIP){0};
+    }
+    if (action->Flip.Immediate && panel->Displayed.Address==action->Flip.Address &&
+        panel->Displayed.Visible==action->Flip.Visible && panel->Displayed.PresentId==action->Flip.PresentId) {
+        action->Status=STATUS_SUCCESS;
         return TRUE;
     }
-    enum tg_t214_dc_result result = tg_t214_dc_queue_scanout(&panel->Dc,
-        action->Flip.Address, action->Flip.Visible != FALSE);
+    enum tg_t214_dc_result result = action->Flip.Immediate ?
+        tg_t214_dc_queue_immediate(&panel->Dc,action->Flip.Address,action->Flip.Visible!=FALSE) :
+        tg_t214_dc_queue_scanout(&panel->Dc,action->Flip.Address,action->Flip.Visible!=FALSE);
     if (result == TG_T214_DC_OK) {
         panel->Pending = action->Flip;
-        action->Status = STATUS_SUCCESS;
+        action->Status = action->Flip.Immediate ? STATUS_PENDING : STATUS_SUCCESS;
     } else {
         action->Status = result == TG_T214_DC_BUSY ? STATUS_DEVICE_BUSY : STATUS_INVALID_PARAMETER;
+    }
+    return TRUE;
+}
+
+static BOOLEAN confirm_flip(PVOID context)
+{
+    FLIP_ACTION *action=context;
+    UINT64 address;
+    bool visible;
+    action->Status=STATUS_PENDING;
+    if (tg_t214_dc_latched_scanout(&action->Panel->Dc,&address,&visible) &&
+        address==action->Flip.Address && visible==(action->Flip.Visible!=FALSE)) {
+        action->Panel->Displayed=action->Flip;
+        action->Panel->Pending=(TG_GPU_PANEL_FLIP){0};
+        action->Status=STATUS_SUCCESS;
     }
     return TRUE;
 }
@@ -42,7 +70,21 @@ static NTSTATUS flip(TG_GPU_ADAPTER *adapter, TG_GPU_PANEL_FLIP scanout)
         return action.Status;
     }
     NTSTATUS status = TgGpuPanelSynchronize(adapter, program_flip, &action);
-    return NT_SUCCESS(status) ? action.Status : status;
+    if (!NT_SUCCESS(status))return status;
+    if (!scanout.Immediate || action.Status!=STATUS_PENDING)return action.Status;
+    /* Immediate MPO requests are recalled at PASSIVE before queuing. Keep
+     * their DDI lifetime until the active bank confirms completion. Address
+     * changes usually take one scanline; visibility changes require VBlank. */
+    const ULONGLONG deadline=KeQueryInterruptTime()+500000;
+    LARGE_INTEGER interval={.QuadPart=-10000};
+    for (UINT i=0;KeQueryInterruptTime()<deadline;++i) {
+        if(i<100)KeStallExecutionProcessor(1);
+        else (VOID)KeDelayExecutionThread(KernelMode,FALSE,&interval);
+        status=TgGpuPanelSynchronize(adapter,confirm_flip,&action);
+        if(!NT_SUCCESS(status))return status;
+        if(action.Status==STATUS_SUCCESS)return STATUS_SUCCESS;
+    }
+    return STATUS_INVALID_PARAMETER;
 }
 
 static NTSTATUS APIENTRY set_primary(HANDLE context, const DXGKARG_SETVIDPNSOURCEADDRESS *args)
@@ -56,7 +98,7 @@ static NTSTATUS APIENTRY set_primary(HANDLE context, const DXGKARG_SETVIDPNSOURC
     if (args->hAllocation) {
         if (args->PrimarySegment != TG_GPU_SCANOUT_SEGMENT)
             return STATUS_NOT_SUPPORTED;
-        NTSTATUS status = TgGpuResolveScanoutSegment(&adapter->Tables,
+        NTSTATUS status = TgGpuResolveScanoutAddress(&adapter->Tables,
             (UINT64)args->PrimaryAddress.QuadPart, T214_GPU_POST_FB_SIZE, &scanout.Address);
         if (!NT_SUCCESS(status))
             return status;
@@ -98,14 +140,18 @@ static NTSTATUS APIENTRY set_primary_mpo(HANDLE context,
 
     DXGK_MULTIPLANE_OVERLAY_PLANE3 *plane = args->ppPlanes[0];
     plane->OutputFlags.Value = 0;
-    if (plane->LayerIndex != 0 || plane->InputFlags.FlipImmediate ||
-        plane->InputFlags.FlipImmediateNoTearing)
-        return STATUS_NOT_SUPPORTED;
+    if (plane->LayerIndex != 0 || plane->InputFlags.FlipImmediateNoTearing)
+        return STATUS_INVALID_PARAMETER;
     TG_GPU_PANEL_FLIP scanout = {
         .Address = T214_GPU_POST_FB_BASE,
         .PresentId = plane->PresentId,
         .Visible = plane->InputFlags.Enabled != 0,
+        .Immediate = plane->InputFlags.FlipImmediate != 0,
     };
+    if (scanout.Immediate && KeGetCurrentIrql()!=PASSIVE_LEVEL) {
+        args->OutputFlags.PrePresentNeeded=1;
+        return STATUS_RETRY;
+    }
     if (scanout.Visible) {
         if (!native_plane(&plane->PlaneAttributes) || plane->ContextCount != 1 ||
             !plane->ppContextData || !plane->ppContextData[0])
@@ -113,12 +159,13 @@ static NTSTATUS APIENTRY set_primary_mpo(HANDLE context,
         const DXGK_PRIMARYCONTEXTDATA *primary = plane->ppContextData[0];
         if (!primary->hAllocation || primary->SegmentId != TG_GPU_SCANOUT_SEGMENT)
             return STATUS_NOT_SUPPORTED;
-        NTSTATUS status = TgGpuResolveScanoutSegment(&adapter->Tables,
+        NTSTATUS status = TgGpuResolveScanoutAddress(&adapter->Tables,
             (UINT64)primary->SegmentAddress.QuadPart, T214_GPU_POST_FB_SIZE, &scanout.Address);
         if (!NT_SUCCESS(status))
             return status;
     }
-    return flip(adapter, scanout);
+    NTSTATUS status=flip(adapter, scanout);
+    return status==STATUS_DEVICE_BUSY?STATUS_RETRY:status;
 }
 
 static NTSTATUS APIENTRY check_mpo(HANDLE context, DXGKARG_CHECKMULTIPLANEOVERLAYSUPPORT3 *args)
@@ -208,17 +255,11 @@ static BOOLEAN panel_interrupt(PVOID context, ULONG message)
     }
     if (panel->NotifyVBlank) {
         const UINT64 displayed = panel->Displayed.Address;
-        const UINT64 base = (UINT64)adapter->Tables.Scanout.SystemPhysicalAddress.QuadPart;
-        /* VidSch matches a primary flip against its submitted segment offset.
-         * The inherited POST buffer lives outside that segment.
-         */
-        const UINT64 reported = displayed >= base && displayed - base < adapter->Tables.Scanout.Bytes
-            ? displayed - base : displayed;
         DXGKARGCB_NOTIFY_INTERRUPT_DATA data = {
             .InterruptType = DXGK_INTERRUPT_CRTC_VSYNC,
             .CrtcVsync = {
                 .VidPnTargetId = panel->Boot.TargetId,
-                .PhysicalAddress = {.QuadPart = (LONGLONG)reported},
+                .PhysicalAddress = {.QuadPart = (LONGLONG)displayed},
             },
         };
         dxgk->DxgkCbNotifyInterrupt(dxgk->DeviceHandle, &data);

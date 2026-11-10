@@ -9,7 +9,7 @@
 typedef struct _TG_GPU_PANEL_FLIP {
     UINT64 Address;
     ULONGLONG PresentId;
-    BOOLEAN Visible;
+    BOOLEAN Visible, Immediate;
 } TG_GPU_PANEL_FLIP;
 
 typedef struct _TG_GPU_PANEL {

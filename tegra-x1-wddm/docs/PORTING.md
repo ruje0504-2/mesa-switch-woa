@@ -62,6 +62,44 @@ loads that ICD through `VK_LUNARG_direct_driver_loading`. Optional
 validation in the current KMD covers the tested submission stream.
 [Hardware status](STATUS.md)
 
+## Direct3D UMD and DWM
+
+The .130 trial established visible native scanout on GM20B. The same trial
+recorded `D3D11CreateDevice` returning `DXGI_ERROR_UNSUPPORTED` for the
+explicit GM20B adapter and successful WARP creation. DWM reported
+`MILERR_NO_HARDWARE_DEVICE`. The installed `windows/no_d3d.c` exports
+adapter entry points that reject Direct3D.
+[Physical result and evidence](NATIVE_STARTUP_RESULT.md)
+
+The next implementation needs the Windows runtime's UMD DDI, rendering
+through the GM20B backend, and resources that applications and DWM can
+share. Work proceeds through adapter negotiation and device creation,
+GPU clear/draw/readback, cross-device shared surfaces and synchronization,
+then sustained composition of ordinary windows and presentation.
+Device and resource tests must select and report the GM20B LUID.
+The UMD must handle runtime-owned allocation and presentation callbacks,
+resource layout metadata, ownership and completion across devices.
+[Adapter DDI](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_openadapter)
+[Shared-resource DDI](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_openresource)
+
+Mesa's existing `src/gallium/frontends/d3d10umd` supplies D3D10/10.1 DDI
+and shader-token translation code. Its current GDI target creates softpipe
+or llvmpipe screens, and `Resource.cpp::OpenResource` reports an error.
+Reusing it requires a GM20B rendering backend, runtime allocation and
+sharing support, and native presentation.
+[Existing frontend](../../src/gallium/frontends/d3d10umd/)
+[GDI target](../../src/gallium/targets/d3d10umd/)
+
+DXVK is a compatibility and code-reuse candidate. Its D3D state translation,
+shader handling and Vulkan resource management may inform this work.
+It provides application-facing Direct3D and DXGI libraries. Integrating
+those components into a Windows UMD would still require the DDI, runtime
+callbacks and shared-resource contract above. A DXVK application rendering
+successfully would establish application compatibility. Hardware DWM
+acceptance requires its own device, shared-surface and continuous
+composition evidence.
+[DXVK upstream](https://github.com/doitsujin/dxvk)
+
 ## RADV Windows reference
 
 Collabora's experimental `wddm2` branch pairs a Mesa Vulkan ICD with AMD's

@@ -3,6 +3,7 @@
  * at de4a2161 and the documented Dxgkrnl contracts. See README for references.
  */
 #include "allocation.h"
+#include "adapter.h"
 #include "adapter_abi.h"
 #include "../platform/t214_dc.h"
 #include "../platform/t214_resources.h"
@@ -37,7 +38,8 @@ static NTSTATUS request(const DXGK_ALLOCATIONINFO *info,TG_GPU_PRIMARY_ALLOCATIO
     if((r->flags&~(TG_GPU_ALLOCATION_CPU_VISIBLE|TG_GPU_ALLOCATION_DISPLAY_PRIMARY)) ||
         !r->bytes || r->bytes>TG_GPU_VA_LIMIT)
         return STATUS_INVALID_PARAMETER;
-    if(size==sizeof(*desc) && (!(r->flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY) || desc->Reserved ||
+    if(size==sizeof(*desc) && (!(r->flags&TG_GPU_ALLOCATION_CPU_VISIBLE) ||
+        r->bytes!=T214_GPU_POST_FB_SIZE || desc->Reserved ||
         (desc->Format!=D3DDDIFMT_X8R8G8B8 && desc->Format!=D3DDDIFMT_A8R8G8B8)))
         return STATUS_INVALID_PARAMETER;
     return STATUS_SUCCESS;
@@ -295,6 +297,18 @@ void TgGpuRegisterAllocationDdis(DRIVER_INITIALIZATION_DATA *d)
     d->DxgkDdiOpenAllocation=TgGpuDdiOpenAllocation;
     d->DxgkDdiCloseAllocation=TgGpuDdiCloseAllocation;
 }
+NTSTATUS TgGpuGetPresentSurface(TG_GPU_DEVICE *d,HANDLE handle,BOOLEAN write,
+    TG_GPU_PRIMARY_ALLOCATION_REQUEST *desc)
+{
+    NTSTATUS status=TgGpuValidateOpenAllocationRange(d,handle,0,T214_GPU_POST_FB_SIZE,write);
+    if(!NT_SUCCESS(status) || !desc)return NT_SUCCESS(status)?STATUS_INVALID_PARAMETER:status;
+    const TG_GPU_OPEN_ALLOCATION *open=handle;
+    *desc=open->Allocation->Desc;
+    if(desc->Buffer.bytes!=T214_GPU_POST_FB_SIZE ||
+       (desc->Format!=D3DDDIFMT_X8R8G8B8 && desc->Format!=D3DDDIFMT_A8R8G8B8))
+        return STATUS_NOT_SUPPORTED;
+    return STATUS_SUCCESS;
+}
 NTSTATUS TgGpuValidatePagingAllocation(TG_GPU_CONTEXT_ENGINE *e,HANDLE handle,UINT64 offset,UINT64 bytes)
 {
     TG_GPU_ALLOCATION *a=handle;NTSTATUS status=STATUS_SUCCESS;KIRQL irql;
@@ -303,4 +317,46 @@ NTSTATUS TgGpuValidatePagingAllocation(TG_GPU_CONTEXT_ENGINE *e,HANDLE handle,UI
     if(a->Engine!=e)status=STATUS_INVALID_PARAMETER;
     else if(offset>a->Bytes || bytes>a->Bytes-offset)status=STATUS_INVALID_BUFFER_SIZE;
     KeReleaseSpinLock(&e->Lock,irql);return status;
+}
+
+NTSTATUS APIENTRY TgGpuDdiGetStandardAllocationDriverData(HANDLE context,
+    DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA *args)
+{
+    TG_GPU_ADAPTER *adapter = context;
+    PAGED_CODE();
+    if (!adapter || !args || args->PhysicalAdapterIndex)
+        return STATUS_INVALID_PARAMETER;
+    if (!adapter->Panel.Dc.owned)
+        return STATUS_DEVICE_NOT_READY;
+    const BOOLEAN primary = args->StandardAllocationType == D3DKMDT_STANDARDALLOCATION_SHAREDPRIMARYSURFACE;
+    const BOOLEAN shadow = args->StandardAllocationType == D3DKMDT_STANDARDALLOCATION_SHADOWSURFACE;
+    if (!primary && !shadow)
+        return STATUS_NOT_SUPPORTED;
+    if ((primary && (!args->pCreateSharedPrimarySurfaceData ||
+                     args->pCreateSharedPrimarySurfaceData->VidPnSourceId != 0)) ||
+        (shadow && !args->pCreateShadowSurfaceData))
+        return STATUS_INVALID_PARAMETER;
+    const UINT width = primary ? args->pCreateSharedPrimarySurfaceData->Width : args->pCreateShadowSurfaceData->Width;
+    const UINT height = primary ? args->pCreateSharedPrimarySurfaceData->Height : args->pCreateShadowSurfaceData->Height;
+    const D3DDDIFORMAT format = primary ? args->pCreateSharedPrimarySurfaceData->Format : args->pCreateShadowSurfaceData->Format;
+    if (width != T214_DC_PANEL_WIDTH || height != T214_DC_PANEL_HEIGHT ||
+        (format != D3DDDIFMT_X8R8G8B8 && format != D3DDDIFMT_A8R8G8B8))
+        return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE_MODE;
+    TG_GPU_PRIMARY_ALLOCATION_REQUEST request = {
+        .Buffer = {
+            TG_GPU_ALLOCATION_ABI,
+            TG_GPU_ALLOCATION_CPU_VISIBLE | (primary ? TG_GPU_ALLOCATION_DISPLAY_PRIMARY : 0),
+            T214_GPU_POST_FB_SIZE,
+        },
+        .Format = format,
+    };
+    if (primary)
+        request.RefreshRate = args->pCreateSharedPrimarySurfaceData->RefreshRate;
+    else
+        args->pCreateShadowSurfaceData->Pitch = T214_DC_PANEL_WIDTH * sizeof(UINT32);
+    args->AllocationPrivateDriverDataSize = sizeof(request);
+    args->ResourcePrivateDriverDataSize = 0;
+    if (args->pAllocationPrivateDriverData)
+        RtlCopyMemory(args->pAllocationPrivateDriverData, &request, sizeof(request));
+    return STATUS_SUCCESS;
 }
