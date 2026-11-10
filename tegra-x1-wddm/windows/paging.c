@@ -53,9 +53,9 @@ NTSTATUS TgGpuEncodePageTable(const DXGK_BUILDPAGINGBUFFER_UPDATEPAGETABLE *Upda
         return STATUS_NOT_SUPPORTED;
     /* NVK passes the Maxwell kind as DriverProtection on its 4 KiB GPUVA
      * mappings. Table pointers and CPU bootstrap retain pitch semantics. */
-    if (Update->DriverProtection &&
-        (Update->PageTableLevel || Update->UpdateMode != DXGK_PAGETABLEUPDATE_GPU_PHYSICAL ||
-         Update->DriverProtection != TG_GPU_PTE_KIND_GENERIC_16BX2))
+    if (!tg_gpu_pte_kind_supported(Update->DriverProtection) ||
+        (Update->DriverProtection &&
+         (Update->PageTableLevel || Update->UpdateMode != DXGK_PAGETABLEUPDATE_GPU_PHYSICAL)))
         return STATUS_NOT_SUPPORTED;
     if (!Update->PageTableLevel && Target->Size != TG_GPU_TABLE_BYTES)
         return STATUS_INVALID_PARAMETER;

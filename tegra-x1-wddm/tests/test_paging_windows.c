@@ -603,17 +603,25 @@ static void TestPagingBuffer(void)
     CHECK(!completed && step.RecordBytes==end-copy_offset && !step.Operation.fill &&
         step.Operation.source==0x1030 && step.Operation.destination==0x2030 && step.Operation.bytes==4000);
 
-    /* VidMm carries an NVK image's block-linear kind in DriverProtection. */
+    /* VidMm carries an NVK color or depth/stencil kind in DriverProtection. */
     args.pDmaBuffer=commands;args.DmaSize=sizeof(commands);
     args.UpdatePageTable.StartIndex=10;args.UpdatePageTable.NumPageTableEntries=1;
     ptes[0]=(DXGK_PTE){.Valid=1,.ReadOnly=1,.Segment=1,.PageAddress=1};
     args.UpdatePageTable.DriverProtection=0xff;
     CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_NOT_SUPPORTED && args.pDmaBuffer==commands);
-    args.UpdatePageTable.DriverProtection=TG_GPU_PTE_KIND_GENERIC_16BX2;
-    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_SUCCESS);
-    bytes=(UCHAR *)args.pDmaBuffer-commands;
-    CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed,NULL)==STATUS_SUCCESS);
-    CHECK(completed==bytes && entries[10]==((UINT64_C(0xfe)<<36)|UINT64_C(0x100900015)));
+    args.UpdatePageTable.DriverProtection=0x02; /* Compressed Z16. */
+    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_NOT_SUPPORTED && args.pDmaBuffer==commands);
+    args.UpdatePageTable.DriverProtection=0x101; /* Bits above the kind field. */
+    CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_NOT_SUPPORTED && args.pDmaBuffer==commands);
+    const UINT8 kinds[] = {0xfe, 0x01, 0x11, 0x2a, 0x46, 0x7b, 0xc3};
+    for (UINT i = 0; i < sizeof(kinds); i++) {
+        args.pDmaBuffer=commands;args.DmaSize=sizeof(commands);
+        args.UpdatePageTable.DriverProtection=kinds[i];
+        CHECK(TgGpuBuildPagingBuffer(&args,&build)==STATUS_SUCCESS);
+        bytes=(UCHAR *)args.pDmaBuffer-commands;
+        CHECK(TgGpuExecutePagingBuffer(&segment,commands,bytes,TRUE,&io,&power,&completed,NULL)==STATUS_SUCCESS);
+        CHECK(completed==bytes && entries[10]==(((UINT64)kinds[i]<<36)|UINT64_C(0x100900015)));
+    }
 
     /* Mandatory immediate initialization accepts a different CPU alias only
      * when every page resolves to the owned contiguous table span.

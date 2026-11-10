@@ -221,6 +221,12 @@ The window consumes address space and the PFN map. Ordinary physical pages
 above 4 GiB are preserved up to Tegra's bit-34 IOMMU tag. Native tests cover
 mixed system and table pages, aperture PTEs for discontiguous backing, and
 rejection of invalid trailing pages before publishing an update.
+NVK passes each image's Maxwell PTE kind through KMT's `DriverProtection`.
+The GM20B 4 KiB leaf encoder accepts the uncompressed color and depth/stencil
+kinds used by NVK, including Z16 for `vkcube`. These kinds are preserved in
+the emitted paging records. Page directories and CPU bootstrap use pitch.
+[WDK page table updates](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_buildpagingbuffer_updatepagetable)
+and [Nouveau GM20B kind table selection](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/gm20b.c).
 VidMm remains responsible for allocations within the segment; there is no
 second suballocator. The adapter must finish GPU work/drain/reset and stop
 paging before destroying the segment. Failed frees retain the tracking handle.

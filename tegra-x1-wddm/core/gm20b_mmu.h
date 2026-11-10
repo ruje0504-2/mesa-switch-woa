@@ -16,6 +16,12 @@
 #define TG_GPU_TABLE_BYTES      131072u
 #define TG_GPU_VA_LIMIT         (UINT64_C(1) << 40)
 #define TG_GPU_PTE_KIND_PITCH           0u
+#define TG_GPU_PTE_KIND_Z16            0x01u
+#define TG_GPU_PTE_KIND_S8Z24          0x11u
+#define TG_GPU_PTE_KIND_S8             0x2au
+#define TG_GPU_PTE_KIND_Z24S8          0x46u
+#define TG_GPU_PTE_KIND_ZF32           0x7bu
+#define TG_GPU_PTE_KIND_ZF32_X24S8     0xc3u
 #define TG_GPU_PTE_KIND_GENERIC_16BX2   0xfeu
 
 struct tg_gpu_va_indices {
@@ -24,6 +30,7 @@ struct tg_gpu_va_indices {
 };
 
 bool tg_gpu_va_indices(uint64_t va, struct tg_gpu_va_indices *indices);
+bool tg_gpu_pte_kind_supported(uint64_t kind);
 
 /* gpu_address is a device-visible address supplied by the DMA/IOMMU owner,
  * not a CPU pointer and not an assumed identity mapping of Windows PFNs.

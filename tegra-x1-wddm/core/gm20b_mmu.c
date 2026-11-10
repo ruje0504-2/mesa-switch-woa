@@ -23,11 +23,29 @@ tg_gpu_va_indices(uint64_t va, struct tg_gpu_va_indices *indices)
 }
 
 bool
+tg_gpu_pte_kind_supported(uint64_t kind)
+{
+    /* Uncompressed kinds used by NVK for GM20B 4 KiB mappings. */
+    switch (kind) {
+    case TG_GPU_PTE_KIND_PITCH:
+    case TG_GPU_PTE_KIND_Z16:
+    case TG_GPU_PTE_KIND_S8Z24:
+    case TG_GPU_PTE_KIND_S8:
+    case TG_GPU_PTE_KIND_Z24S8:
+    case TG_GPU_PTE_KIND_ZF32:
+    case TG_GPU_PTE_KIND_ZF32_X24S8:
+    case TG_GPU_PTE_KIND_GENERIC_16BX2:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool
 tg_gpu_pte_4k_kind(uint64_t gpu_address, bool read_only, bool gpu_uncached,
                    uint8_t kind, uint64_t *pte)
 {
-    if (!pte || !page_address_valid(gpu_address) ||
-        (kind != TG_GPU_PTE_KIND_PITCH && kind != TG_GPU_PTE_KIND_GENERIC_16BX2))
+    if (!pte || !page_address_valid(gpu_address) || !tg_gpu_pte_kind_supported(kind))
         return false;
 
     /* gk20a_vmm_aper(NCOH) returns 0 on GM20B. Using the discrete-GPU
