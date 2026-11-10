@@ -10,10 +10,11 @@ NT handle are released. GPU read/write and re-export check 32,768 payload
 words and 512 guards with zero mismatches; exit 0 without timeout.
 [Win32 Vulkan memory result](VULKAN_WIN32_MEMORY.md)
 
-**Selected architecture: DXVK for both desktop and game Direct3D.** Adapt
-the DWM UMD to DXVK over NVK/KMD, and use DXVK over the same NVK/KMD path
-for DX9/10/11 games. The existing Zink D3D prototype is the validated
-baseline for the transition. Zink remains the OpenGL compatibility route.
+**Staged architecture: validate the desktop on Zink first; use DXVK for
+the final desktop and game Direct3D backends.** Use the existing Zink/NVK
+UMD to light up hardware DWM composition and verify the native path quickly,
+then migrate the desktop UMD backend to DXVK over the same NVK/KMD foundation.
+Zink remains the OpenGL compatibility route.
 
 The rebuilt UMD/ICD also passes a native Windows D3D11 runtime regression
 at feature level 10_0: 16,384 RGBA/BGRA clear/triangle pixels match, implicit
@@ -141,15 +142,21 @@ physical rendering, readback and sustained-presentation tests. Track
 outstanding conformance failures and distinguish local fixtures from
 hardware results. The D3D UMD and DWM work below is an intermediate milestone.
 
-The user's latest decision (2026-11-10) is to use **DXVK for both desktop
-and game Direct3D**. Implement **Windows D3D runtime → D3D UMD with DXVK
-backend → NVK → Tegra KMD** for DWM, and **DX9/10/11 games → DXVK → NVK →
-Tegra KMD** for application compatibility. Complete the WDDM allocation,
-shared-resource, synchronization and presentation contracts needed by the
-desktop UMD. The existing Zink D3D prototype supplies regression evidence
-while the DXVK backend is integrated. Zink remains the OpenGL route.
-This supersedes the earlier Zink desktop and DXVK-candidate-only plans;
-DXVK desktop integration and game-facing presentation are not yet validated.
+The user's final clarification on 2026-11-10 separates the near-term
+validation route from the final backend. **First use Windows D3D runtime →
+D3D UMD → Zink → NVK → Tegra KMD to light up and quickly verify desktop GPU
+acceleration. Then migrate the desktop UMD backend to DXVK**, with the final
+route **Windows D3D runtime → D3D UMD with DXVK backend → NVK → Tegra KMD**.
+The DX9/10/11 game path also uses **DXVK → NVK → Tegra KMD**. Zink remains
+the OpenGL compatibility route.
+
+For the first stage, implement the WDDM resource/synchronization/presentation
+work needed to establish actual DWM rendering and basic desktop refresh on
+the GM20B LUID. Preserve that result as the regression baseline for the DXVK
+migration. The final DXVK desktop path must complete the native DDI and
+shared-resource contracts and pass sustained hardware composition tests.
+The shared NVK/KMD work applies to both stages; desktop DXVK integration and
+the game-facing path remain to be implemented and validated.
 
 Autonomously analyze the WDDM contracts and the Mesa/NVK, Microsoft driver
 samples, lfrb/mesa `wddm2` and deko3D sources, and implement the required changes
@@ -175,7 +182,8 @@ identify adaptations when reusing source.
 
 ## Development order
 
-1. Windows desktop hardware acceleration through a DXVK-backed D3D UMD over NVK.
+1. Quickly light up and verify desktop GPU acceleration through the current
+   Zink/NVK D3D UMD, then migrate the desktop UMD backend to DXVK over NVK.
    Build the Direct3D UMD device,
    rendering, shared-resource and synchronization paths needed by DWM on
    the GM20B LUID. Verify continuous window composition and landscape
@@ -189,6 +197,7 @@ identify adaptations when reusing source.
 
 Use the [build and porting guide](PORTING.md), [driver contracts](DRIVER.md)
 and [RADV Windows reuse notes](PORTING.md#radv-windows-reference) for details.
-DXVK is the selected backend for both the desktop UMD and DX9/10/11 game path.
+DXVK is the final backend for the desktop UMD and DX9/10/11 game path;
+Zink provides the initial desktop validation stage and OpenGL compatibility.
 The native UMD and DWM requirements are tracked in the
 [Direct3D plan](PORTING.md#direct3d-umd-and-dwm).

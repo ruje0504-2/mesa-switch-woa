@@ -72,13 +72,14 @@ validation in the current KMD covers the tested submission stream.
 
 ## Direct3D UMD and DWM
 
-The selected desktop route is **Windows D3D runtime → D3D UMD with DXVK
-backend → NVK → Tegra KMD**. The user's latest decision on 2026-11-10 also
-selects DXVK over NVK for the DX9/10/11 game path. Implement the WDDM resource,
-synchronization and presentation bridge for the desktop UMD; share the native
-Vulkan/KMD foundation with the game path. The existing Zink D3D prototype
-remains the verified baseline during this transition. Zink continues to
-serve OpenGL compatibility. The evidence below predates the DXVK backend.
+The user clarified the staging on 2026-11-10: **first light up and quickly
+verify desktop GPU acceleration through the current D3D UMD → Zink → NVK →
+Tegra KMD path; then migrate the desktop UMD backend to DXVK**. The final
+desktop route is **Windows D3D runtime → D3D UMD with DXVK backend → NVK →
+Tegra KMD**. The DX9/10/11 game path also uses DXVK over NVK. Implement the
+native resource, synchronization and presentation bridge for the initial
+desktop validation, preserve it for regression, and complete sustained DWM
+validation on the final DXVK backend. Zink remains the OpenGL route.
 
 The .130 trial established visible native scanout on GM20B. The same trial
 recorded `D3D11CreateDevice` returning `DXGI_ERROR_UNSUPPORTED` for the
@@ -164,12 +165,13 @@ SetDisplayMode callbacks return unsupported until the native bridge exists.
 [Existing frontend](../../src/gallium/frontends/d3d10umd/)
 [GDI target](../../src/gallium/targets/d3d10umd/)
 
-DXVK is selected for both the desktop UMD backend and application-facing
-DX9/10/11 game path. Integrate a pinned upstream version over NVK,
+DXVK is selected for the final desktop UMD backend and application-facing
+DX9/10/11 game path. After the Zink desktop validation stage, integrate a
+pinned upstream version over NVK,
 preserve its license and attribution, and validate the Windows binary/loader
 architecture, required Vulkan features, resource synchronization and Win32
-presentation. Adapt its rendering/resource layer to the desktop DDI and
-runtime callbacks. DXVK application rendering establishes game API
+presentation. Adapt DXVK's rendering/resource layer to the native desktop
+DDI and runtime callbacks. DXVK application rendering establishes game API
 compatibility; hardware DWM acceptance needs
 the desktop route's own device, shared-surface and sustained-composition
 evidence. Generic compatibility work is in scope; individual-game debugging

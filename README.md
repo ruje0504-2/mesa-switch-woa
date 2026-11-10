@@ -7,10 +7,10 @@ Nintendo Switch Lite (HDH-001).
 The long-term goal is a complete native Vulkan implementation, verified
 with version-appropriate VK-GL-CTS coverage and physical GM20B tests.
 Windows desktop GPU acceleration is the current development milestone.
-The selected desktop route is D3D UMD with a DXVK backend → NVK. The
-DX9/10/11 game path also uses DXVK → NVK, sharing the same Tegra KMD.
-DXVK integration is planned; the existing desktop prototype uses Zink/NVK.
-Zink remains the OpenGL compatibility route.
+First light up and quickly verify desktop GPU acceleration through the
+existing D3D UMD → Zink → NVK path. The final desktop UMD backend and the
+DX9/10/11 game path will both use DXVK over the same NVK/KMD foundation.
+DXVK integration remains pending; Zink remains the OpenGL compatibility route.
 
 | Area | Status |
 | --- | --- |
