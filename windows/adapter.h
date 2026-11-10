@@ -7,6 +7,7 @@
 #include "hardware.h"
 #include "platform_io.h"
 #include "worker.h"
+#include "panel.h"
 
 /* Enough dedicated table backing for the initial single-process Vulkan
  * triangle; application storage remains dynamically allocated system memory.
@@ -25,6 +26,7 @@ typedef struct _TG_GPU_ADAPTER {
     TG_GPU_HARDWARE Hardware;
     TG_GPU_PLATFORM Platform;
     TG_GPU_WORKER Worker;
+    TG_GPU_PANEL Panel;
     enum tg_gpu_adapter_state State;
     BOOLEAN EngineReady,QueueReady;
 } TG_GPU_ADAPTER;

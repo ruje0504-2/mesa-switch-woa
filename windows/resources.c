@@ -139,6 +139,7 @@ TgGpuAcquireResources(const DXGKRNL_INTERFACE *Dxgk,
         (interruptCount == 3 && (!hasPostFramebuffer || !display ||
                                (display->Flags & CM_RESOURCE_MEMORY_READ_ONLY))))
         return STATUS_DEVICE_CONFIGURATION_ERROR;
+    Resources->PanelAvailable = interruptCount == 3;
 
     for (i = 0; i < TgGpuApertureCount; ++i) {
         status = Dxgk->DxgkCbMapMemory(Dxgk->DeviceHandle,

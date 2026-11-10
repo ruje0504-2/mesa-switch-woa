@@ -33,6 +33,7 @@ typedef struct _TG_GPU_RESOURCES {
      * scanout state. Panel ownership is negotiated separately.
      */
     PVOID DisplayRegisters;
+    BOOLEAN PanelAvailable; /* POST range, writable registers and display IRQ. */
 } TG_GPU_RESOURCES;
 
 /* Adapter start/stop helpers following the render-only WDDM sample's

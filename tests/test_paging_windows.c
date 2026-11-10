@@ -87,7 +87,7 @@ static void TestDisplayResources(void)
     list->PartialDescriptors[list->Count++] = display;
 
     CHECK(TgGpuAcquireResources(&dxgk, &resources) == STATUS_SUCCESS);
-    CHECK(resources.DisplayRegisters == boot_display);
+    CHECK(resources.DisplayRegisters == boot_display && !resources.PanelAvailable);
     CHECK(TgGpuReleaseResources(&dxgk, &resources) == STATUS_SUCCESS && !resource_live);
     CHECK(!resources.DisplayRegisters && resource_unmaps == T214_GPU_RESOURCE_COUNT + 2);
 
@@ -119,6 +119,7 @@ static void TestDisplayResources(void)
     list->PartialDescriptors[list->Count++] = display;
     list->PartialDescriptors[list->Count++] = irq;
     CHECK(TgGpuAcquireResources(&dxgk, &resources) == STATUS_SUCCESS);
+    CHECK(resources.PanelAvailable);
     CHECK(resources.Interrupt[0].u.Interrupt.Vector == 0x200 &&
           resources.Interrupt[1].u.Interrupt.Vector == 0x201);
     CHECK(TgGpuReleaseResources(&dxgk, &resources) == STATUS_SUCCESS && !resource_live);

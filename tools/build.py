@@ -165,6 +165,7 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
          *[f"/I{p}" for p in mesa_includes], *[f"/imsvc{p}" for p in includes]]
 objects = []
 for source in [*core, power, clock, root / "platform/t214_dc.c", root / "windows/resources.c",
+               root / "windows/panel.c", root / "windows/panel_vidpn.c",
                root / "windows/private_memory.c", root / "windows/paging.c",
                root / "windows/table_segment.c", root / "windows/root_table.c",
                root / "windows/paging_buffer.c",root / "windows/paging_dispatch.c",
