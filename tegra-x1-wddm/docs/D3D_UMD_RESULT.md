@@ -2,11 +2,17 @@
 
 2026-11-10, Windows 11 ARM64 23H2 on Switch Lite HDH-001.
 
-The follow-up .141 trial reproduces the exit-path fault and improves
-exception capture. Its two later native runs exit normally, but no teardown
-fix is established. See [runtime lifetime evidence](D3D_UMD_LIFETIME.md).
+**.143 passes three native Windows D3D11 runtime runs with the barrier fix.**
+All use feature level 10_0 on GM20B LUID `a59ef`, with RGBA/BGRA clear/draw/
+readback and original implicit release. Each checks 16,384 pixels and exits
+0 without a timeout, for 49,152 matching pixels total. CPU-only controls
+reproduce the old barrier errors and pass after the source fix. The ICD and
+KMD core are unchanged. See [runtime lifetime evidence](D3D_UMD_LIFETIME.md).
 
-**.140 reaches native Windows D3D11 runtime rendering; an exit-path fault remains open.**
+The earlier .140–.141 results below precede that fix. Shared resources, DWM
+composition and Win32 Vulkan presentation remain unverified.
+
+**.140 reaches native Windows D3D11 runtime rendering before the barrier fix.**
 The runtime creates a feature-level-10_0 hardware device on GM20B LUID
 `9acf3`, loads the staged `TegraGpuD3D.dll`, and preserves that LUID on the
 resulting DXGI device. RGBA and BGRA each pass a blue clear and an SM4 red
@@ -18,11 +24,11 @@ Each triangle has 1,152 red and 2,944 blue pixels at the expected positions.
 | 19:37:35–19:37:46 UTC | All four images match and GetDeviceRemovedReason returns S_OK; process subsequently exits `c0000005`, without timeout. |
 | 19:40:49–19:41:03 UTC | Same UMD/ICD, with exception-address reporting and explicit context/device/adapter release markers in the probe. All four images match, all release markers complete, exit 0 without timeout. |
 
-The second run does not explain or establish a fix for the first access
+The second run did not explain or establish a fix for the first access
 violation. No exception address was captured in the first run, and the
 diagnostic run did not reproduce it. The Application log query for events
-1000/1001 naming the probe or UMD returned no matching events. Stabilizing
-this exit path is the next step before runtime shared resources and DWM.
+1000/1001 naming the probe or UMD returned no matching events. The later
+.142 investigation and .143 fix are linked above.
 These tests do not present windows or validate composition.
 
 The first probe attempt stopped before D3D11CreateDevice because DXGI
@@ -236,11 +242,29 @@ The earlier adapter, DLL-entry and device fixtures passed with commit
 `staged-hashes.json`. The frontend still negotiates D3D10 DDIs only, and its
 native presentation callbacks remain unsupported.
 
-Next, identify the runtime exit-path fault, then connect runtime allocations,
-shared textures, synchronization and sustained DWM presentation. DXVK
+Next, connect runtime allocations, shared textures, synchronization and
+sustained DWM presentation. DXVK
 remains a compatibility/code-reuse reference.
 
 ## Recovery and artifacts
+
+The .143 artifacts are under `/private/tmp/t214-gpu-round/runtime-ddi143.rvqimgbg/`.
+All 38 test records and five recovery records match device SHA256/lengths.
+The exported ETL has
+133,424 records with matching count and boundaries. The patched UMD is
+`fec294792c0226a282e2aa9ebf96b0dc97719059e74e2327c48a586d3ecd9d95`;
+the native probe, ICD and KMD core are unchanged from .142.
+.59 Code 0, original ACPI/driver hashes, removal of temporary UMD/ICD
+registration and test tasks/permit, and unchanged power settings were
+verified at 21:14:45 UTC after .143.
+
+| .143 artifact | SHA256 |
+| --- | --- |
+| Signed KMD | `17aa5bf2a4cbf57dc641edf179119677991790ec6d58cdaa9d19c6edf8c14544` |
+| First native run | `3d9f034d28e9513424373239b1d72a6d483846e600c14221c71ce9efcaebafa7` |
+| Second native run | `4b1f4dfcf699d8cf0b7f01b80ca61526ba38d0cd422ffffb9f08fbcf1bb1ecb2` |
+| Third native run | `89492cd813d04aa580cee9ced25934ab51a7ecd637b1ef72722ef0bb28fc8bf5` |
+| ETL export | `8f793f2b8d2ab4f91de44c1e9a6987483bea61665f51b24a44e457335373ae1e` |
 
 The .140 artifacts are under `/private/tmp/t214-gpu-round/runtime-ddi140.hvoc0ueo/`.
 All 39 downloaded test records and five recovery records match device
