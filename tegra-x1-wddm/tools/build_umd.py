@@ -59,7 +59,7 @@ def main():
     for name in names:
         shutil.copyfile(build / target / name, out / name)
     (out / "manifest.json").write_text(json.dumps({
-        "scope": "Experimental NVK D3D10 UMD, controlled fixtures, and explicit native DDI clear/readback probe",
+        "scope": "Experimental NVK D3D10 UMD, controlled fixtures, and explicit native DDI clear/draw/readback probe",
         "files": {name: hashlib.sha256((out / name).read_bytes()).hexdigest() for name in names},
     }, indent=2) + "\n")
     print(f"Built the NVK D3D UMD and controlled tests in {out}")

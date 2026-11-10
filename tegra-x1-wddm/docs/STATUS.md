@@ -3,18 +3,17 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Current work: D3D UMD/DWM.** .137 passes native direct-DDI clear/copy/readback
-on GM20B LUID `a3dbb`: all 4,096 pixels match in each of three color passes,
-exit 0, no timeout. Windows NVK uses WFI instead of writing the KMD-owned
-Reference marker; KMD stages QMDs in a separate writable data mirror while
-keeping command pages read-only. The earlier .136 DFALCON read-only fault
-is absent from this passing path. See the [UMD evidence](D3D_UMD_RESULT.md).
+**Current work: D3D UMD/DWM.** .139 passes native direct-DDI SM4 drawing
+on GM20B LUID `a2dc3`: ordinary and indexed/scissored triangles plus three
+clear/copy/readback passes check 20,480 pixels with zero mismatches, exit 0
+and no timeout. The frontend now routes vertex input and Draw through
+Mesa CSO/u_vbuf, fixing .138's CPU dummy-buffer pointer crash in Zink.
+See the [UMD evidence](D3D_UMD_RESULT.md).
 
-Next: native draw/shader validation and Windows D3D runtime integration,
-then runtime allocations/shared images, synchronization and sustained DWM
-presentation. The direct-DDI result does not test those stages or Win32
-Vulkan presentation. Latest artifacts:
-`/private/tmp/t214-gpu-round/native-ddi137.5ktxn6se/`.
+Next: Windows D3D runtime integration, runtime allocations/shared images,
+synchronization and sustained DWM presentation. The direct-DDI result does
+not test those stages or Win32 Vulkan presentation. Latest artifacts:
+`/private/tmp/t214-gpu-round/native-ddi139.mp3g_eov/`.
 
 The .132 trial passes 16 KiB NT-handle
 storage sharing between two KMT devices on GM20B, including CPU readback
@@ -23,12 +22,14 @@ budgets return to zero. The matched adapter/active VidPN LUID is `949ff`.
 D3D runtime integration, shared-image rendering/synchronization and DWM
 composition remain pending. DXVK remains a compatibility and code-reuse
 candidate. See the [shared-storage result](SHARED_STORAGE_RESULT.md).
-After .137 testing, .59 Code 0, the original ACPI/driver hashes and unchanged
+After .139 testing, .59 Code 0, the original ACPI/driver hashes and unchanged
 AC/DC display/sleep settings were verified. The start permit, test tasks and
 temporary ICD registration have been removed.
 
 | Driver | Result | Remaining work |
 | --- | --- | --- |
+| 0.1.0.139 | Code 0, matching KMT/active VidPN LUID `a2dc3`, 512 MiB ceiling. Three color passes and two SM4 triangle passes check 20,480 pixels with zero mismatches; exit 0 without timeout. | Windows D3D runtime/shared resources and DWM; Win32 `vkcube` remains pending. |
+| 0.1.0.138 | Three-color readback passes, then first Draw exits `c0000005`. UMD RVA `1256e4` identifies Zink writing resource metadata through a CPU dummy vertex-buffer pointer. | CSO/u_vbuf routing fix passes natively in .139. |
 | 0.1.0.137 | Code 0, matching KMT/active VidPN LUID `a3dbb`, 512 MiB ceiling. Native D3D UMD clear/copy/readback passes three colors with 12,288 matching pixels; exit 0 without timeout. | Native draw/shaders, D3D runtime/shared resources and DWM; Win32 `vkcube` remains pending. |
 | 0.1.0.136 | Code 0, matching LUID `97b6f`; worker recovery at fence `7d` captures MMU address `04004000`, info `1dc6`, instance `fc241`. Release logging confirms later Lock2/allocation calls return `c00002b6`. Windows subsequently restarts. | QMD mirror passes in .137; native draw and runtime/DWM integration remain. |
 | 0.1.0.135 | Code 0, matching LUID `98054`; the barrier uses WFI. Native fence `2e` completes; worker recovery at fence `43` records `c000009c`, FIFO `10000000`, MMU mask `1`. Windows later restarts. | Capture the fault address/type and fix the failing mapping; clear/readback remains unverified. |

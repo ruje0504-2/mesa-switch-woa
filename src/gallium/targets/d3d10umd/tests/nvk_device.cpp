@@ -10,7 +10,14 @@
 
 extern "C" HRESULT APIENTRY OpenAdapter10_2(D3D10DDIARG_OPENADAPTER *);
 
-static pipe_screen screen = {};
+static pipe_screen screen = {.caps = [] {
+   pipe_caps caps = {};
+   caps.max_vertex_buffers = PIPE_MAX_ATTRIBS;
+   caps.supported_prim_modes = caps.supported_prim_modes_with_restart = (1u << MESA_PRIM_COUNT) - 1;
+   caps.primitive_restart = true;
+   caps.user_vertex_buffers = false;
+   return caps;
+}()};
 static pipe_context context = {};
 static unsigned mode, shaders, contexts, screen_destroys;
 static unsigned vs, fs;
@@ -22,6 +29,8 @@ static bool device_removed, remove_during_map;
 static unsigned maps, unmaps;
 static pipe_transfer transfer = {};
 static unsigned char mapped_bytes[16];
+static unsigned vertex_elements, vertex_binds, draws;
+static unsigned vertex_element_handle;
 
 static void APIENTRY set_error(D3D10DDI_HRTCORELAYER, HRESULT error)
 {
@@ -70,7 +79,31 @@ d3d10_create_screen(HANDLE, const D3DDDI_ADAPTERCALLBACKS *, pipe_screen **resul
       context.flush = [](pipe_context *, pipe_fence_handle **, unsigned) {};
       context.set_stencil_ref = [](pipe_context *, pipe_stencil_ref) {};
       context.set_constant_buffer = [](pipe_context *, mesa_shader_stage, unsigned, const pipe_constant_buffer *) {};
-      context.set_vertex_buffers = [](pipe_context *, unsigned, const pipe_vertex_buffer *) {};
+      context.create_vertex_elements_state = [](pipe_context *, unsigned count, const pipe_vertex_element *elements) -> void * {
+         CHECK(count == 1 && elements[0].vertex_buffer_index == 0);
+         ++vertex_elements; return &vertex_element_handle;
+      };
+      context.delete_vertex_elements_state = [](pipe_context *, void *state) {
+         CHECK(state == &vertex_element_handle && vertex_elements); --vertex_elements;
+      };
+      context.set_vertex_buffers = [](pipe_context *, unsigned count, const pipe_vertex_buffer *buffers) {
+         if (!count) return;
+         CHECK(count <= PIPE_MAX_ATTRIBS && buffers[0].buffer.resource == &buffer);
+         for (unsigned i = 0; i < count; ++i) {
+            CHECK(!buffers[i].is_user_buffer);
+            if (i) CHECK(!buffers[i].buffer.resource);
+         }
+         ++vertex_binds;
+      };
+      context.draw_vbo = [](pipe_context *, const pipe_draw_info *info, unsigned,
+                            const pipe_draw_indirect_info *indirect,
+                            const pipe_draw_start_count_bias *draw, unsigned count) {
+         CHECK(vertex_binds && vertex_elements && !indirect && count == 1);
+         CHECK(info->mode == MESA_PRIM_TRIANGLES && draw[0].count == 3);
+         CHECK(info->instance_count == 1 || info->instance_count == 2);
+         if (info->index_size) CHECK(info->index_size == 2 && info->index.resource == &buffer);
+         ++draws;
+      };
       context.set_framebuffer_state = [](pipe_context *, const pipe_framebuffer_state *) {};
       context.set_sample_mask = [](pipe_context *, unsigned) {};
       context.set_sampler_views = [](pipe_context *, mesa_shader_stage, unsigned, unsigned, unsigned, pipe_sampler_view **) {};
@@ -177,13 +210,50 @@ int main(void)
    functions.pfnDestroyResource(create.hDrvDevice, handle);
    CHECK(!resources && unmaps == 1);
    free(handle.pDrvPrivate);
+   /* Hardware drivers must never receive the dummy CPU pointers in unused
+    * D3D vertex slots, including when the real bound input needs no upload.
+    */
+   device_removed = remove_during_map = false; resource_error = S_OK;
+   resource.ResourceDimension = D3D10DDIRESOURCE_BUFFER;
+   resource.Format = DXGI_FORMAT_UNKNOWN; resource.Usage = D3D10_DDI_USAGE_DEFAULT;
+   resource.BindFlags = D3D10_DDI_BIND_VERTEX_BUFFER | D3D10_DDI_BIND_INDEX_BUFFER;
+   resource.MapFlags = 0; mip.TexelWidth = 48;
+   handle.pDrvPrivate = calloc(1, functions.pfnCalcPrivateResourceSize(create.hDrvDevice, &resource));
+   CHECK(handle.pDrvPrivate);
+   functions.pfnCreateResource(create.hDrvDevice, &resource, handle, {});
+   CHECK(resource_error == S_OK && resources == 1);
+   const D3D10DDIARG_INPUT_ELEMENT_DESC element = {
+      0, 0, DXGI_FORMAT_R32G32B32A32_FLOAT, D3D10_DDI_INPUT_PER_VERTEX_DATA, 0, 0
+   };
+   const D3D10DDIARG_CREATEELEMENTLAYOUT elements = {&element, 1};
+   D3D10DDI_HELEMENTLAYOUT layout = {};
+   layout.pDrvPrivate = calloc(1, functions.pfnCalcPrivateElementLayoutSize(create.hDrvDevice, &elements));
+   CHECK(layout.pDrvPrivate);
+   functions.pfnCreateElementLayout(create.hDrvDevice, &elements, layout, {});
+   const UINT stride = 16, offset = 0;
+   functions.pfnIaSetInputLayout(create.hDrvDevice, layout);
+   functions.pfnIaSetVertexBuffers(create.hDrvDevice, 0, 1, &handle, &stride, &offset);
+   functions.pfnIaSetIndexBuffer(create.hDrvDevice, handle, DXGI_FORMAT_R16_UINT, 0);
+   functions.pfnIaSetTopology(create.hDrvDevice, D3D10_DDI_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+   functions.pfnDraw(create.hDrvDevice, 3, 0);
+   functions.pfnDrawInstanced(create.hDrvDevice, 3, 2, 0, 0);
+   functions.pfnDrawIndexed(create.hDrvDevice, 3, 0, 0);
+   functions.pfnDrawIndexedInstanced(create.hDrvDevice, 3, 2, 0, 0, 0);
+   CHECK(draws == 4 && vertex_binds && !resource_error);
+   const D3D10DDI_HRESOURCE none = {};
+   functions.pfnIaSetVertexBuffers(create.hDrvDevice, 0, 1, &none, &stride, &offset);
+   functions.pfnIaSetIndexBuffer(create.hDrvDevice, {}, DXGI_FORMAT_UNKNOWN, 0);
+   functions.pfnIaSetInputLayout(create.hDrvDevice, {});
+   functions.pfnDestroyElementLayout(create.hDrvDevice, layout); free(layout.pDrvPrivate);
+   functions.pfnDestroyResource(create.hDrvDevice, handle); free(handle.pDrvPrivate);
+   CHECK(!resources);
    DXGI_DDI_ARG_PRESENT present = {};
    present.hDevice = reinterpret_cast<DXGI_DDI_HDEVICE>(create.hDrvDevice.pDrvPrivate);
    CHECK(dxgi.pfnPresent(&present) == DXGI_ERROR_UNSUPPORTED);
    functions.pfnDestroyDevice(create.hDrvDevice);
-   CHECK(!contexts && !shaders);
+   CHECK(!contexts && !shaders && !vertex_elements);
    free(create.hDrvDevice.pDrvPrivate);
    CHECK(adapter_functions.pfnCloseAdapter(open.hAdapter) == S_OK && screen_destroys == 1);
-   puts("D3D UMD adapter/device negotiation, failure cleanup and destruction pass (controlled Gallium backend)");
+   puts("D3D UMD device/loss cleanup and four draw paths with GPU-only vertex buffers pass (controlled Gallium backend)");
    return 0;
 }

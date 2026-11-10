@@ -14,9 +14,11 @@ hardware target returns an unsupported result from presentation callbacks;
 it does not use the GDI target's frontbuffer path. It is not a working DWM
 driver yet. [Windows build and verification](../../../../tegra-x1-wddm/docs/PORTING.md#direct3d-umd-and-dwm)
 
-`nvk_d3d_check.exe` explicitly exercises native DDI clear/copy/readback on a
-selected KMT LUID. Run it only with a native-submission KMD and registered
-NVK ICD; elevated Windows processes ignore its `VK_DRIVER_FILES` override.
+`nvk_d3d_check.exe` explicitly exercises native DDI clear/copy/readback and
+SM4 vertex/pixel shaders with ordinary and indexed/scissored triangle draws
+on a selected KMT LUID. Every pixel is checked against the expected image.
+Run it only with a native-submission KMD and registered NVK ICD; elevated
+Windows processes ignore its `VK_DRIVER_FILES` override.
 This probe does not use the Windows D3D runtime or presentation callbacks.
 
 ## GDI software backend

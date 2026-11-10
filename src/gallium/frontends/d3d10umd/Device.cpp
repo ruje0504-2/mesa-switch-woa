@@ -135,7 +135,10 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
    if (!pipe)
       return E_OUTOFMEMORY;
    pDevice->pipe = pipe;
-   pDevice->cso = cso_create_context(pipe, CSO_NO_VBUF);
+   /* Null D3D vertex bindings use CPU-backed zero values. Let CSO upload
+    * those (and translate unsupported formats) for hardware backends.
+    */
+   pDevice->cso = cso_create_context(pipe, 0);
    if (!pDevice->cso) {
       pipe->destroy(pipe);
       pDevice->pipe = NULL;
