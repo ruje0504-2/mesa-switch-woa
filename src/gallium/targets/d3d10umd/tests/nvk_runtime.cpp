@@ -492,17 +492,139 @@ static void sampled_images(ID3D11Device *device, ID3D11DeviceContext *context,
    if (total_mismatches) throw std::runtime_error("sampled pixel mismatch");
 }
 
+/* Nonuniform shared sampling at desktop scale. The producer has padded rows;
+ * the consumer uses translated/scaled viewports and clipped, rebound uniforms.
+ * CPU expectations are integer coordinates, independent of the shader. */
+static void shared_layout(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVEL level,
+                          ID3D11Device *consumer, DXGI_FORMAT format)
+{
+   ComPtr<ID3D11Device> producer;
+   ComPtr<ID3D11DeviceContext> pc, cc;
+   D3D_FEATURE_LEVEL actual = {};
+   check(D3D11CreateDevice(adapter, hardware ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_WARP,
+      NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &level, 1, D3D11_SDK_VERSION,
+      &producer, &actual, &pc), "Create shared-layout producer");
+   if (actual != level) throw std::runtime_error("shared-layout feature level differs");
+   consumer->GetImmediateContext(&cc);
+   struct compiler_module {
+      HMODULE handle = LoadLibraryExW(L"d3dcompiler_47.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+      ~compiler_module() { if (handle) FreeLibrary(handle); }
+   } compiler;
+   if (!compiler.handle) throw std::runtime_error("system shader compiler unavailable");
+   auto compile_fn = reinterpret_cast<pD3DCompile>(GetProcAddress(compiler.handle, "D3DCompile"));
+   if (!compile_fn) throw std::runtime_error("D3DCompile unavailable");
+   auto compile = [compile_fn](const char *text) {
+      ComPtr<ID3DBlob> code, errors;
+      HRESULT hr = compile_fn(text, strlen(text), NULL, NULL, NULL, "main", "ps_4_0", 0, 0, &code, &errors);
+      if (FAILED(hr) && errors) fprintf(stderr, "%s\n", (char *)errors->GetBufferPointer());
+      check(hr, "Compile shared-layout shader"); return code;
+   };
+   auto pattern = compile(
+      "float4 main(float4 p:SV_Position):SV_Target { uint2 q=uint2(p.xy)/uint2(32,24);"
+      " return float4(q.x&1,q.y&1,(q.x^q.y)&1,1); }");
+   auto sample = compile(
+      "Texture2D<float4> image:register(t5); SamplerState pointSampler:register(s2);"
+      "cbuffer Placement:register(b3) { float4 rect; };"
+      "float4 main(float4 p:SV_Position):SV_Target { return image.Sample(pointSampler,(p.xy-rect.xy)/rect.zw); }");
+   const FLOAT vertices[3][8] = {{-1,-1,0.5f,1,1,1,1,1},{-1,3,0.5f,1,1,1,1,1},{3,-1,0.5f,1,1,1,1,1}};
+   const D3D11_INPUT_ELEMENT_DESC elements[] = {
+      {"POSITION",0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,0,D3D11_INPUT_PER_VERTEX_DATA,0},
+      {"COLOR",0,DXGI_FORMAT_R32G32B32A32_FLOAT,0,16,D3D11_INPUT_PER_VERTEX_DATA,0}};
+   auto configure = [&](ID3D11Device *d, ID3D11DeviceContext *c, ID3DBlob *pixel, bool clip) {
+      ComPtr<ID3D11VertexShader> vs; ComPtr<ID3D11PixelShader> ps;
+      ComPtr<ID3D11InputLayout> layout; ComPtr<ID3D11Buffer> vb;
+      ComPtr<ID3D11RasterizerState> raster;
+      check(d->CreateVertexShader(g_VS,sizeof(g_VS),NULL,&vs),"Create shared-layout VS");
+      check(d->CreatePixelShader(pixel->GetBufferPointer(),pixel->GetBufferSize(),NULL,&ps),"Create shared-layout PS");
+      check(d->CreateInputLayout(elements,2,g_VS,sizeof(g_VS),&layout),"Create shared-layout input");
+      D3D11_BUFFER_DESC bd={sizeof(vertices),D3D11_USAGE_IMMUTABLE,D3D11_BIND_VERTEX_BUFFER,0,0,0};
+      D3D11_SUBRESOURCE_DATA data={vertices,0,0};
+      check(d->CreateBuffer(&bd,&data,&vb),"Create shared-layout vertices");
+      D3D11_RASTERIZER_DESC rd={}; rd.FillMode=D3D11_FILL_SOLID; rd.CullMode=D3D11_CULL_NONE;
+      rd.DepthClipEnable=TRUE; rd.ScissorEnable=clip;
+      check(d->CreateRasterizerState(&rd,&raster),"Create shared-layout rasterizer");
+      UINT stride=sizeof(vertices[0]),offset=0; ID3D11Buffer *buffer=vb.Get();
+      c->IASetInputLayout(layout.Get()); c->IASetVertexBuffers(0,1,&buffer,&stride,&offset);
+      c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+      c->VSSetShader(vs.Get(),NULL,0); c->PSSetShader(ps.Get(),NULL,0); c->RSSetState(raster.Get());
+   };
+   configure(producer.Get(),pc.Get(),pattern.Get(),false);
+   configure(consumer,cc.Get(),sample.Get(),true);
+   D3D11_TEXTURE2D_DESC desc={}; desc.Width=577; desc.Height=961;
+   desc.MipLevels=desc.ArraySize=desc.SampleDesc.Count=1; desc.Format=format;
+   desc.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE; desc.MiscFlags=D3D11_RESOURCE_MISC_SHARED;
+   ComPtr<ID3D11Texture2D> original,opened,target,staging;
+   ComPtr<ID3D11RenderTargetView> source_view,target_view;
+   check(producer->CreateTexture2D(&desc,NULL,&original),"Create padded shared image");
+   check(producer->CreateRenderTargetView(original.Get(),NULL,&source_view),"Create shared pattern RTV");
+   ID3D11RenderTargetView *sv=source_view.Get(); pc->OMSetRenderTargets(1,&sv,NULL);
+   D3D11_VIEWPORT source_vp={0,0,577,961,0,1}; pc->RSSetViewports(1,&source_vp);
+   pc->Draw(3,0); pc->Flush(); check(producer->GetDeviceRemovedReason(),"Shared pattern producer status");
+   ComPtr<IDXGIResource> share; check(original.As(&share),"Query pattern sharing");
+   HANDLE handle=NULL; check(share->GetSharedHandle(&handle),"Get pattern legacy handle");
+   check(consumer->OpenSharedResource(handle,IID_PPV_ARGS(&opened)),"Open pattern shared image");
+   ComPtr<ID3D11ShaderResourceView> texture; check(consumer->CreateShaderResourceView(opened.Get(),NULL,&texture),"Create pattern SRV");
+   ID3D11ShaderResourceView *srv=texture.Get(); cc->PSSetShaderResources(5,1,&srv);
+   D3D11_SAMPLER_DESC sd={}; sd.Filter=D3D11_FILTER_MIN_MAG_MIP_POINT;
+   sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP; sd.MaxAnisotropy=1;
+   sd.ComparisonFunc=D3D11_COMPARISON_NEVER; sd.MaxLOD=D3D11_FLOAT32_MAX;
+   ComPtr<ID3D11SamplerState> sampler; check(consumer->CreateSamplerState(&sd,&sampler),"Create pattern sampler");
+   ID3D11SamplerState *sam=sampler.Get(); cc->PSSetSamplers(2,1,&sam);
+   desc.Width=720; desc.Height=1280; desc.MiscFlags=0; desc.BindFlags=D3D11_BIND_RENDER_TARGET;
+   check(consumer->CreateTexture2D(&desc,NULL,&target),"Create desktop-size layout target");
+   check(consumer->CreateRenderTargetView(target.Get(),NULL,&target_view),"Create layout target RTV");
+   desc.Usage=D3D11_USAGE_STAGING; desc.BindFlags=0; desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
+   check(consumer->CreateTexture2D(&desc,NULL,&staging),"Create layout staging");
+   D3D11_BUFFER_DESC constants={16,D3D11_USAGE_DEFAULT,D3D11_BIND_CONSTANT_BUFFER,0,0,0};
+   ComPtr<ID3D11Buffer> placement; check(consumer->CreateBuffer(&constants,NULL,&placement),"Create placement constants");
+   ID3D11Buffer *cb=placement.Get(); cc->PSSetConstantBuffers(3,1,&cb);
+   ID3D11RenderTargetView *tv=target_view.Get(); cc->OMSetRenderTargets(1,&tv,NULL);
+   const D3D11_VIEWPORT viewports[]={{41,1001,638,238,0,1},{91,17,512,700,0,1}};
+   const D3D11_RECT clips[]={{73,1113,657,1239},{110,51,550,650}};
+   for(unsigned pass=0;pass<2;++pass) {
+      const auto &vp=viewports[pass]; const auto &clip=clips[pass];
+      const FLOAT rect[]={vp.TopLeftX,vp.TopLeftY,vp.Width,vp.Height},clear[]={0,0,0,1};
+      cc->UpdateSubresource(placement.Get(),0,NULL,rect,0,0);
+      cc->RSSetViewports(1,&vp); cc->RSSetScissorRects(1,&clip);
+      cc->ClearRenderTargetView(target_view.Get(),clear); cc->Draw(3,0);
+      cc->CopyResource(staging.Get(),target.Get()); cc->Flush();
+      D3D11_MAPPED_SUBRESOURCE map={}; check(cc->Map(staging.Get(),0,D3D11_MAP_READ,0,&map),"Map shared layout pixels");
+      if(!map.pData || map.RowPitch<720*4) { cc->Unmap(staging.Get(),0); throw std::runtime_error("invalid layout readback"); }
+      unsigned mismatches=0;
+      for(unsigned y=0;y<1280;++y) for(unsigned x=0;x<720;++x) {
+         unsigned red=0,green=0,blue=0;
+         if(x>=(unsigned)clip.left && x<(unsigned)clip.right && y>=(unsigned)clip.top && y<(unsigned)clip.bottom) {
+            unsigned sx=((2*(x-(unsigned)vp.TopLeftX)+1)*577)/(2*(unsigned)vp.Width);
+            unsigned sy=((2*(y-(unsigned)vp.TopLeftY)+1)*961)/(2*(unsigned)vp.Height);
+            red=(sx/32)&1; green=(sy/24)&1; blue=red^green;
+         }
+         unsigned char expected[]={static_cast<unsigned char>((format==DXGI_FORMAT_B8G8R8A8_UNORM?blue:red)*255),
+            static_cast<unsigned char>(green*255),static_cast<unsigned char>((format==DXGI_FORMAT_B8G8R8A8_UNORM?red:blue)*255),255};
+         const auto pixel=static_cast<const unsigned char *>(map.pData)+y*map.RowPitch+x*4;
+         if(memcmp(pixel,expected,4) && mismatches++<8)
+            printf("Layout mismatch format=%u pass=%u (%u,%u): %02x%02x%02x%02x expected %02x%02x%02x%02x\n",
+               format,pass,x,y,pixel[0],pixel[1],pixel[2],pixel[3],expected[0],expected[1],expected[2],expected[3]);
+      }
+      cc->Unmap(staging.Get(),0); check(consumer->GetDeviceRemovedReason(),"Shared layout consumer status");
+      printf("Shared layout: format=%u pass=%u pixels=921600 mismatches=%u\n",format,pass,mismatches); fflush(stdout);
+      if(mismatches) throw std::runtime_error("shared layout mismatch");
+   }
+   pc->ClearState(); pc->Flush(); cc->ClearState(); cc->Flush();
+   marker("Shared nonuniform sampling, placement and clipping passed; no presentation exercised");
+}
+
 int main(int argc, char **argv)
 {
    const bool implicit = argc == 4 && !strcmp(argv[3], "--implicit-release");
    const bool shared = argc > 2 && !strcmp(argv[argc - 1], "--shared-contract");
    const bool features = argc > 2 && !strcmp(argv[argc - 1], "--feature-levels");
+   const bool layout = argc > 2 && !strcmp(argv[argc - 1], "--shared-layout");
    const bool sample = argc > 2 && !strcmp(argv[argc - 1], "--sample");
-   const bool hardware = (argc == 3 || implicit || (argc == 4 && (shared || features || sample))) && !strcmp(argv[1], "--luid");
+   const bool hardware = (argc == 3 || implicit || (argc == 4 && (shared || features || sample || layout))) && !strcmp(argv[1], "--luid");
    const bool software = (argc == 3 || (argc == 4 && (features || sample))) && !strcmp(argv[1], "--software");
-   const bool warp = (argc == 2 || (argc == 3 && (shared || features || sample))) && !strcmp(argv[1], "--warp");
+   const bool warp = (argc == 2 || (argc == 3 && (shared || features || sample || layout))) && !strcmp(argv[1], "--warp");
    if (!hardware && !software && !warp) {
-      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract|--feature-levels|--sample] | --software dll [--feature-levels|--sample] | --warp [--shared-contract|--feature-levels|--sample]\n", argv[0]);
+      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract|--shared-layout|--feature-levels|--sample] | --software dll [--feature-levels|--sample] | --warp [--shared-contract|--shared-layout|--feature-levels|--sample]\n", argv[0]);
       return 2;
    }
    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -582,6 +704,9 @@ int main(int argc, char **argv)
          shared_contract(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_B8G8R8A8_UNORM, true);
          shared_contract(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, true);
          check(device->GetDeviceRemovedReason(), "Consumer status after sharing");
+      } else if (layout) {
+         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_B8G8R8A8_UNORM);
+         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
       } else if (sample) {
          sampled_images(device.Get(), context.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
          sampled_images(device.Get(), context.Get(), DXGI_FORMAT_B8G8R8A8_UNORM);
@@ -609,7 +734,8 @@ int main(int argc, char **argv)
    }
    if (module) FreeLibrary(module);
    if (!result)
-      marker(shared ? "Windows D3D shared texture contents and producer-device lifetime passed; presentation was not exercised" :
+      marker(layout ? "Windows D3D shared nonuniform layout checks passed; presentation was not exercised" :
+             shared ? "Windows D3D shared texture contents and producer-device lifetime passed; presentation was not exercised" :
                       "Windows D3D runtime clear/draw/readback passed; sharing and presentation were not exercised");
    return result;
 }

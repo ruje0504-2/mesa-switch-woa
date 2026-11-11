@@ -14,11 +14,25 @@ static UINT64 fences[2];
 static unsigned char metadata[72], bytes[8192];
 static tg_gpu_linear_allocation_request allocation;
 static UINT expected_format = D3DDDIFMT_A8R8G8B8;
+static unsigned presents, resolved, finished;
+static bool fail_finish;
+static HRESULT present_status;
 static HANDLE dev_handle(unsigned i) { return reinterpret_cast<HANDLE>(UINT_PTR(0x10 + i)); }
 static HANDLE rt_handle(unsigned i) { return reinterpret_cast<HANDLE>(UINT_PTR(0x20 + i)); }
 static unsigned owner(HANDLE h) { CHECK(h == dev_handle(0) || h == dev_handle(1)); return UINT_PTR(h) - 0x10; }
 extern "C" void D3D10Trace(d3d10_umd_trace_event e, HRESULT, uint64_t, uint64_t)
-{ CHECK(e == D3D10_TRACE_RUNTIME_MEMORY); }
+{ CHECK(e == D3D10_TRACE_RUNTIME_MEMORY || e == D3D10_TRACE_RUNTIME_CONTEXT); }
+
+static HRESULT APIENTRY present(HANDLE h, DXGIDDICB_PRESENT *p)
+{
+   CHECK(owner(h) == 0 && p->hSrcAllocation == 0x50 && !p->hDstAllocation);
+   CHECK(p->hContext == reinterpret_cast<HANDLE>(UINT_PTR(0x90)));
+   CHECK(p->pDXGIContext == reinterpret_cast<void *>(UINT_PTR(0x12345)));
+   CHECK(!p->PrivateDriverDataSize && !p->pPrivateDriverData);
+   CHECK(resolved && finished == resolved && !fail_finish);
+   ++presents;
+   return present_status;
+}
 
 static HRESULT APIENTRY create_queue(HANDLE h, D3DDDICB_CREATEPAGINGQUEUE *q)
 {
@@ -88,9 +102,20 @@ int main()
    pipe_screen screen = {};
    screen.get_device_luid = [](pipe_screen *, char *p) { uint64_t luid = 0x123456789; memcpy(p, &luid, sizeof(luid)); };
    pipe_context pipe = {}; pipe.screen = &screen;
+   pipe.flush_resource = [](pipe_context *, pipe_resource *) { ++resolved; };
+   pipe.flush = [](pipe_context *, pipe_fence_handle **fence, unsigned) {
+      *fence = reinterpret_cast<pipe_fence_handle *>(UINT_PTR(0x88));
+   };
+   screen.fence_reference = [](pipe_screen *, pipe_fence_handle **out, pipe_fence_handle *in) { *out = in; };
+   screen.fence_finish = [](pipe_screen *, pipe_context *, pipe_fence_handle *fence, uint64_t timeout) {
+      CHECK(fence == reinterpret_cast<pipe_fence_handle *>(UINT_PTR(0x88)) && timeout == UINT64_MAX);
+      ++finished; return !fail_finish;
+   };
+   DXGI_DDI_BASE_CALLBACKS dxgi = {}; dxgi.pfnPresentCb = present;
    Device devices[2] = {};
    for (unsigned i = 0; i < 2; ++i) {
       auto &d = devices[i]; d.hDevice = dev_handle(i); d.pipe = &pipe;
+      d.hContext = reinterpret_cast<HANDLE>(UINT_PTR(0x90 + i)); d.pDXGIBaseCallbacks = &dxgi;
       auto &cb = d.KTCallbacks;
       cb.pfnAllocateCb = i == 0 ? allocate : NULL; /* Open must not allocate. */
       cb.pfnDeallocateCb = deallocate;
@@ -114,6 +139,32 @@ int main()
       const unsigned before_allocates = allocates, before_frees = frees;
       CHECK(RuntimeSharedCreate(&devices[0], &create, {rt_handle(0)}, &producer) == S_OK);
       CHECK(allocates == before_allocates + 1 && refs == 1 && queues == 1 && fences[0] == 2);
+      /* The .151 shell path presents a non-primary shared allocation with
+       * Blt. Preserve its runtime handle/token and return the callback status,
+       * including positive statuses; never signal before GPU completion. */
+      pipe_resource texture = {};
+      Resource source = {}; source.device = &devices[0]; source.resource = &texture;
+      source.runtime_memory = producer;
+      DXGI_DDI_ARG_PRESENT args = {};
+      args.hDevice = reinterpret_cast<DXGI_DDI_HDEVICE>(&devices[0]);
+      args.hSurfaceToPresent = reinterpret_cast<DXGI_DDI_HRESOURCE>(&source);
+      args.pDXGIContext = reinterpret_cast<void *>(UINT_PTR(0x12345)); args.Flags.Blt = 1;
+      const unsigned before_presents = presents;
+      present_status = S_OK;
+      CHECK(RuntimePresent(&args) == S_OK && presents == before_presents + 1);
+      present_status = E_ACCESSDENIED;
+      CHECK(RuntimePresent(&args) == E_ACCESSDENIED && presents == before_presents + 2);
+      present_status = DXGI_STATUS_OCCLUDED;
+      CHECK(RuntimePresent(&args) == DXGI_STATUS_OCCLUDED && presents == before_presents + 3);
+      fail_finish = true;
+      CHECK(RuntimePresent(&args) == D3DDDIERR_DEVICEREMOVED && presents == before_presents + 3);
+      fail_finish = false;
+      const unsigned before_resolved = resolved;
+      args.Flags.Value = 2;
+      CHECK(RuntimePresent(&args) == DXGI_ERROR_UNSUPPORTED);
+      args.Flags.Value = 3;
+      CHECK(RuntimePresent(&args) == DXGI_ERROR_UNSUPPORTED);
+      CHECK(resolved == before_resolved && presents == before_presents + 3);
       auto pm = *RuntimeResourceMemory(producer);
       CHECK(pm.size == sizeof(bytes) && RuntimeResourcePitch(producer) == 384);
       CHECK(pm.map_gpu(pm.context, 0x40000, 0, sizeof(bytes), 0, false, 0x40000, 0x10000) == VK_SUCCESS);

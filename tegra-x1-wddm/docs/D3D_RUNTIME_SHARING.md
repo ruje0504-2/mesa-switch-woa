@@ -1296,3 +1296,82 @@ the existing dynamic 512-MiB application cap. This is a bounded infrastructure
 allocation, separate from image/buffer storage. Test the native residency
 beyond the old 2-MiB limit with the same UMD/ICD, then retry real shared pixels
 and desktop composition; do not claim those results from the capacity change.
+
+### Native table-pool retest
+
+`table-pool151-native-20261111` changes only the KMD table-pool capacity from
+`.150`: `.151`, source `71322147`, signed SYS `ab14c3fc0667`. UMD `c46b59544870`,
+ICD `6e2fad99d742` and probe `10aec6cd4e44` are reused byte-for-byte. The paging
+and context fixtures pass on `.59` at 19:27:14 UTC, including mapping past the
+former boundary, the last complete table, and rejection beyond the backing.
+
+Native LUID `baff1` reaches Code 0 at 19:33:08 UTC. The real D3D probe finishes
+at 19:33:37 with exit 1, retaining these separate results:
+
+- Legacy BGRA and RGBA each match 4,096 solid-color pixels producer-to-consumer,
+  consumer-to-producer, and after producer-device release: 24,576 checks total.
+  This proves that specific shared storage/read/write/lifetime path, not
+  nonuniform sampling, geometry, composition or presentation.
+- The following NT/keyed-mutex BGRA creation returns `80070057`, so NT RGBA is
+  not reached. The complete `--shared-contract` probe remains failing.
+
+The first retained ETL contains 242,112 exported records, including 83,885 UMD
+events. It is unfinalized and omits the startup ReportSegment/DpiReportAdapter
+records; there are no reported event/buffer losses and 610 known Dwm-Core 203
+payload-size mismatches. Its export SHA256 is
+`26b1a95509c7335e95e3185d7d10676a7bbf3900db1ee9ae76a351e7c3671c89`.
+Use the retained event ordering and keep the missing head/tail limits explicit.
+
+The one adapter in the retained residency records reaches 2,883,584 bytes in
+Segment 1 (2.75 MiB, beyond the old pool), with no failed ReserveResource in
+this capture. Segment 4 peaks at 115,965,952 bytes. This validates progress past
+the previously observed table-capacity boundary, not complete GPU stability.
+
+Explorer now reaches 27 shared BGRA creations; DWM has 26 successful
+OpenResource records for 576x960 images at pitch 2304. All 26 retained Explorer
+Present calls have flags `1` (Blt), interval zero, and return `887a0004`.
+The source's RuntimePresent function rejects that flag before the runtime
+callback because it accepts only primary flips. The D3D11 journal has 26
+corresponding driver-error/device-removal records (`887a0020`). There are no
+BltDXGI callback events in this capture. Do not confuse that separate callback
+with the Blt flag on PresentDXGI.
+
+DWM retains 480 successful UMD flip Presents across 11.175 seconds of ETL event
+time; these do not establish a complete physical frame. Four window snapshots
+still place the taskbar at `(0,1232)-(720,1280)`, while Explorer's PID changes
+from 4408 to 5176. The user reports approximately three flashes: the first
+taskbar is misplaced **and incomplete**, and the later taskbar is absent. Two
+private evidence photos show those failures while wallpaper/icons remain.
+No complete native desktop, hardware landscape or cube is claimed.
+
+The last durable task stage starts desktop capture at 19:34:23; no capture or
+overall native-result file survives the further boot at 19:34:53. The retained
+probe log/result does survive and matches the earlier download. The cause of
+the subsequent startup is not investigated. `.59` Code 0, cleanup, baseline
+hashes, unchanged power settings and portrait are verified at 19:40:17–31 UTC.
+All 161 files (120,310,462 bytes), including all eight earlier copies, match
+device lengths and SHA256.
+
+The next UMD change routes Blt-mode Present for runtime-owned shared surfaces
+through the actual DXGI callback after GPU completion, preserving the allocation,
+runtime context and opaque token and returning the callback's exact result.
+The runtime may determine an unspecified destination. Native KMD copy behavior
+still needs validation; accepting the callback path is not a substitute for
+copying or rendering pixels.
+[Microsoft Present arguments](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgi_ddi_arg_present) ·
+[DXGI presentation paths](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/dxgi-presentation-path)
+
+The new callback fixture checks non-primary Blt presentation, GPU-completion
+ordering, exact runtime allocation/context/token, positive and negative callback
+statuses, and rejection of flip/mixed flags for shared storage. Existing primary
+flip tests retain their ownership checks. The new `--shared-layout` application
+probe draws a nonuniform pattern into a 577x961 shared texture (padded rows),
+then samples it on a 720x1280 target with two different translated/scaled
+viewports, scissors and constant-buffer values. It compares every output pixel
+against integer coordinate expectations in BGRA and RGBA: 3,686,400 checks if
+all four passes succeed. It does not present a desktop or replace NT testing.
+
+Both the UMD and probe compile for ARM64. The first attempt at Windows controls
+fails at SSH connection before upload or execution; a retry reports no route.
+No new native driver is installed. WARP patterned-pixel results and controlled
+callback execution remain **pending**, as does real windowed presentation.

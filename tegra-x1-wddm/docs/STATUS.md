@@ -3,6 +3,20 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**Latest `.151` result:** native LUID `baff1` completes legacy BGRA/RGBA shared
+GPU writes/readbacks in both directions and after producer-device release:
+24,576 matching pixels. The full probe exits 1 because the NT/keyed-mutex
+texture creation returns `80070057`. The user reports approximately three
+flashes, an initially misplaced and incomplete taskbar, then no taskbar; two
+photos retain wallpaper/icons with the taskbar displaced/incomplete or absent.
+The trace now exceeds the old table-pool limit (2.75 MiB resident, no retained
+ReserveResource failure). DWM opens Explorer's shared image successfully 26
+times, but all 26 Explorer Blt-mode Presents return `887a0004` at the UMD's
+flip-only guard. That is the next concrete implementation boundary.
+All 161 returned files match device lengths/hashes; `.59` Code 0, cleanup,
+unchanged power settings and portrait are verified at 19:40:17–31 UTC.
+[Native result and remaining windowed Present contract](D3D_RUNTIME_SHARING.md#native-table-pool-retest)
+
 **Latest `.150` native result (2026-11-11): page-table capacity reached.**
 On LUID `c0728`, Segment 1's 2-MiB backing reaches exactly 2 MiB resident
 before 12 paired `ReserveResource` failures (`c0000001`, all Segment 1).
@@ -46,18 +60,30 @@ pixel evidence. The candidate also retains the failing KMT API/NTSTATUS during
 device initialization. Source `be55a95b` is published on `main`.
 [Implementation and controls](D3D_RUNTIME_SHARING.md#runtime-shared-texture-bridge)
 
-**Page-table WIP:** increase the early single-process pool from 16 to 128
+**Page-table correction:** increase the early single-process pool from 16 to 128
 128-KiB tables (2 to 16 MiB). This is contiguous MMU infrastructure; application
 storage retains its existing dynamic 512-MiB cap. Host models, WDK ARM64 build
 and the paging/context controls on `.59` pass, including translations beyond
-the former limit and rejection past the new backing. `.151` native validation
-is pending.
-Reuse the exact `.150` UMD/ICD so the native change is the table-pool capacity.
+the former limit and rejection past the new backing. Source `71322147` is
+published; `.151` passes the native capacity comparison above with the exact
+same UMD/ICD as `.150`. Complete desktop rendering remains unfinished.
 
-**Next validation:** run the shared GPU contents/lifetime probe with the paired
-UMD/ICD, then inspect the complete desktop, hardware landscape and Win32
-`vkcube`. Legacy and NT-handle results must be recorded separately. Do not
-treat raising Feature Level as a fix for the observed resource failures.
+**Windowed Present WIP:** the working tree accepts the observed Blt flag for
+runtime-owned shared surfaces, completes GPU use and forwards their allocation,
+context and opaque DXGI token to the runtime callback. Primary-only validation
+still applies to flips. The ARM64 build passes. Windows callback controls have
+not run because SSH times out/no longer has a route, before uploading the new
+candidate. A new `--shared-layout` probe renders a nonuniform shared pattern
+and samples it with translated/scaled/clipped viewports and rebound constants
+on a 720x1280 target; its WARP and native runs are also pending. No candidate
+with these changes has been installed. KMD destination/copy behavior and native
+windowed Present still require validation; callback success is not pixel proof.
+
+**Next validation:** complete windowed Present, test nonuniform shared patterns,
+offset/scale/clipping and the complete desktop, then hardware landscape and
+Win32 `vkcube`. NT-handle/keyed-mutex sharing remains a separate D3D interface
+contract to implement. Do not treat raising Feature Level as a fix for the
+observed Present rejection.
 
 **Landscape remains unverified:** the preceding `.149` source-mode trial on
 LUID `bd778` still returns CCD error 1610 at 17:32:03 UTC. It applies no mode
@@ -180,13 +206,13 @@ Present and shared-image opens were unfinished at that point.
 
 **Version labels:** Device Manager shows the installed INF package's version.
 Earlier experiments reused the signed `.144` KMD while replacing the test UMD
-and ICD. The current KMD candidate is rebuilt and versioned `.150`. Standalone build manifests
+and ICD. The current KMD candidate is rebuilt and versioned `.151`. Standalone build manifests
 name their component and include a readable `artifact_id` with the DLL hash.
 The active native trial uses:
 
 | Component | Candidate identifier |
 | --- | --- |
-| Signed KMD package | `0.1.0.150` (source `be55a95b`, SYS `9b6130182f29`) |
+| Signed KMD package | `0.1.0.151` (source `71322147`, SYS `ab14c3fc0667`) |
 | D3D UMD / Zink | `runtime-shared-20261111-umd+c46b59544870` (source `be55a95b`) |
 | NVK ICD | `runtime-shared-20261111-icd+6e2fad99d742` |
 

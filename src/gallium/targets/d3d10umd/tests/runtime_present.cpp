@@ -178,7 +178,7 @@ int main()
    fail_wait = true; CHECK(_Present(&p) == D3DDDIERR_DEVICEREMOVED && presents == 3); fail_wait = false;
    unsigned before = flushes;
    p.SrcSubResourceIndex = 1; CHECK(_Present(&p) == DXGI_ERROR_UNSUPPORTED); p.SrcSubResourceIndex = 0;
-   p.Flags.Value = 1; CHECK(_Present(&p) == DXGI_ERROR_UNSUPPORTED); p.Flags.Value = 2;
+   p.Flags.Value = 3; CHECK(_Present(&p) == DXGI_ERROR_UNSUPPORTED); p.Flags.Value = 2;
    device.hContext = NULL; CHECK(_Present(&p) == DXGI_ERROR_UNSUPPORTED); device.hContext = rt_context;
    dxgi.pfnPresentCb = NULL; CHECK(_Present(&p) == DXGI_ERROR_UNSUPPORTED); dxgi.pfnPresentCb = present;
    Device foreign = {}; resources[0].device = &foreign;

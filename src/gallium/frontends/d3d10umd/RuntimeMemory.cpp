@@ -510,9 +510,12 @@ HRESULT RuntimePresent(const DXGI_DDI_ARG_PRESENT *args)
    Resource *destination = args->hDstResource ? CastResource(args->hDstResource) : NULL;
    if (source->device != device || (destination && destination->device != device))
       return E_INVALIDARG;
-   /* The KMD's native MMIO flip path accepts these runtime primaries. Its
-    * separate GDI copy context is not this UMD context; do not fake a blt. */
-   if (args->Flags.Value != 2 || args->SrcSubResourceIndex ||
+   /* DXGI selects the presentation mode behind pDXGIContext. Windowed shared
+    * surfaces arrive with Blt, even though they are not scanout primaries.
+    * Forward their real allocation after GPU completion; the runtime/KMD
+    * remains responsible for destination selection and the actual operation. */
+   const bool flip = args->Flags.Value == 2;
+   if ((!flip && args->Flags.Value != 1) || args->SrcSubResourceIndex ||
        (destination && args->DstSubResourceIndex) ||
        (unsigned)args->FlipInterval > DXGI_DDI_FLIP_INTERVAL_FOUR ||
        !device->hContext || !device->pDXGIBaseCallbacks ||
@@ -521,7 +524,7 @@ HRESULT RuntimePresent(const DXGI_DDI_ARG_PRESENT *args)
       return DXGI_ERROR_UNSUPPORTED;
    RuntimeResource *src = source->runtime_memory;
    RuntimeResource *dst = destination ? destination->runtime_memory : NULL;
-   if (!src->primary || (dst && !dst->primary)) return DXGI_ERROR_UNSUPPORTED;
+   if (flip && (!src->primary || (dst && !dst->primary))) return DXGI_ERROR_UNSUPPORTED;
    if (src->device != device->hDevice || (dst && dst->device != device->hDevice))
       return E_INVALIDARG;
    if (src->dead || !src->associated || (dst && (dst->dead || !dst->associated)))
