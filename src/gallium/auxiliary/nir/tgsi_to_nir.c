@@ -1209,19 +1209,26 @@ ttn_tex(struct ttn_compile *c, nir_def **src)
    nir_tex_instr *instr;
    nir_texop op;
    unsigned num_srcs, samp = 1, sview, i;
-   bool separate = tgsi_inst->Instruction.Opcode == TGSI_OPCODE_SAMPLE;
+   bool fetch = tgsi_inst->Instruction.Opcode == TGSI_OPCODE_SAMPLE_I;
+   bool separate = fetch || tgsi_inst->Instruction.Opcode == TGSI_OPCODE_SAMPLE;
    unsigned target = tgsi_inst->Texture.Texture;
 
    if (separate) {
       assert(tgsi_inst->Src[1].Register.File == TGSI_FILE_SAMPLER_VIEW);
-      assert(!tgsi_inst->Src[1].Register.Indirect &&
-             !tgsi_inst->Src[2].Register.Indirect);
+      assert(!tgsi_inst->Src[1].Register.Indirect);
+      assert(fetch || !tgsi_inst->Src[2].Register.Indirect);
       sview = tgsi_inst->Src[1].Register.Index;
       assert(sview < c->num_samp_types);
       target = c->samp_targets[sview];
    }
 
    switch (tgsi_inst->Instruction.Opcode) {
+   case TGSI_OPCODE_SAMPLE_I:
+      op = nir_texop_txf;
+      /* Integer loads have no sampler state. Buffer addresses also have
+       * no mip level; other targets take the integer LOD from address.w. */
+      num_srcs = target == TGSI_TEXTURE_BUFFER ? 1 : 2;
+      break;
    case TGSI_OPCODE_SAMPLE:
       op = nir_texop_tex;
       num_srcs = 1;
@@ -1300,7 +1307,7 @@ ttn_tex(struct ttn_compile *c, nir_def **src)
    }
 
    /* Deref sources */
-   num_srcs += 2;
+   num_srcs += fetch ? 1 : 2;
 
    num_srcs += tgsi_inst->Texture.NumOffsets;
 
@@ -1311,7 +1318,7 @@ ttn_tex(struct ttn_compile *c, nir_def **src)
    get_texture_info(target,
                     &instr->sampler_dim, &instr->is_shadow, &instr->is_array);
    if (separate)
-      instr->is_shadow = false; /* SAMPLE does not perform a comparison. */
+      instr->is_shadow = false; /* SAMPLE/SAMPLE_I do not compare depth. */
 
    instr->coord_components =
       glsl_get_sampler_dim_coordinate_components(instr->sampler_dim);
@@ -1319,7 +1326,7 @@ ttn_tex(struct ttn_compile *c, nir_def **src)
    if (instr->is_array)
       instr->coord_components++;
 
-   assert(tgsi_inst->Src[samp].Register.File == TGSI_FILE_SAMPLER);
+   assert(fetch || tgsi_inst->Src[samp].Register.File == TGSI_FILE_SAMPLER);
 
    /* Legacy texture instructions use one combined binding. SAMPLE keeps
     * the independently declared view and sampler-state bindings. */
@@ -1345,17 +1352,21 @@ ttn_tex(struct ttn_compile *c, nir_def **src)
                       op);
 
    nir_deref_instr *deref = nir_build_deref_var(b, var);
-   nir_deref_instr *sampler_deref = separate ?
-      nir_build_deref_var(b, get_sampler_state_var(c, tgsi_inst->Src[samp].Register.Index)) : deref;
+   if (fetch)
+      BITSET_SET(c->build.shader->info.textures_used_by_txf, sview);
 
    unsigned src_number = 0;
 
    instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_texture_deref,
                                                 &deref->def);
    src_number++;
-   instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref,
-                                                &sampler_deref->def);
-   src_number++;
+   if (!fetch) {
+      nir_deref_instr *sampler_deref = separate ?
+         nir_build_deref_var(b, get_sampler_state_var(c, tgsi_inst->Src[samp].Register.Index)) : deref;
+      instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_sampler_deref,
+                                                   &sampler_deref->def);
+      src_number++;
+   }
 
    instr->src[src_number] =
       nir_tex_src_for_ssa(nir_tex_src_coord,
@@ -1392,7 +1403,8 @@ ttn_tex(struct ttn_compile *c, nir_def **src)
       src_number++;
    }
 
-   if (tgsi_inst->Instruction.Opcode == TGSI_OPCODE_TXF) {
+   if (tgsi_inst->Instruction.Opcode == TGSI_OPCODE_TXF ||
+       (fetch && instr->sampler_dim != GLSL_SAMPLER_DIM_BUF)) {
       if (op == nir_texop_txf_ms) {
          instr->src[src_number] = nir_tex_src_for_ssa(nir_tex_src_ms_index,
                                                       ttn_channel(b, src[0], W));
@@ -2007,6 +2019,7 @@ ttn_emit_instruction(struct ttn_compile *c)
 
    case TGSI_OPCODE_TEX:
    case TGSI_OPCODE_SAMPLE:
+   case TGSI_OPCODE_SAMPLE_I:
    case TGSI_OPCODE_TXP:
    case TGSI_OPCODE_TXL:
    case TGSI_OPCODE_TXB:

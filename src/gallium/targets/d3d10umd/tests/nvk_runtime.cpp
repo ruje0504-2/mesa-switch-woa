@@ -366,7 +366,7 @@ static void images(ID3D11Device *device, ID3D11DeviceContext *context, DXGI_FORM
 /* Different t/s slots and deliberately conflicting bindings catch accidental
  * conversion to the legacy combined-sampler model. No presentation is used. */
 static void sampled_images(ID3D11Device *device, ID3D11DeviceContext *context,
-                           DXGI_FORMAT format)
+                           DXGI_FORMAT format, bool integer_load = false)
 {
    struct compiler_module {
       HMODULE handle = LoadLibraryExW(L"d3dcompiler_47.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -381,8 +381,16 @@ static void sampled_images(ID3D11Device *device, ID3D11DeviceContext *context,
       "float4 main(float4 p : SV_Position) : SV_Target {\n"
       " return image.Sample(filtering, p.xy * 0.125 + 0.25).bgra;\n"
       "}\n";
+   static const char load_source[] =
+      "Texture2D<float4> image : register(t5);\n"
+      "float4 main(float4 p : SV_Position) : SV_Target {\n"
+      " return image.Load(int3(int2(p.xy) - int2(31,31), LOAD_LEVEL), int2(1,-1)).bgra;\n"
+      "}\n";
+   const D3D_SHADER_MACRO load_defines[] = {{"LOAD_LEVEL", "1"}, {NULL, NULL}};
    ComPtr<ID3DBlob> code, errors;
-   HRESULT status = compile(source, sizeof(source) - 1, "sample-slots.hlsl", NULL, NULL,
+   HRESULT status = compile(integer_load ? load_source : source,
+                            integer_load ? sizeof(load_source) - 1 : sizeof(source) - 1,
+                            "sample-slots.hlsl", integer_load ? load_defines : NULL, NULL,
                             "main", "ps_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0,
                             &code, &errors);
    if (FAILED(status) && errors)
@@ -392,6 +400,16 @@ static void sampled_images(ID3D11Device *device, ID3D11DeviceContext *context,
    ComPtr<ID3D11PixelShader> ps;
    check(device->CreateVertexShader(g_VS, sizeof(g_VS), NULL, &vs), "Create sample VS");
    check(device->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), NULL, &ps), "Create sample PS");
+   ComPtr<ID3D11PixelShader> invalid_load_ps;
+   if (integer_load) {
+      const D3D_SHADER_MACRO invalid_defines[] = {{"LOAD_LEVEL", "3"}, {NULL, NULL}};
+      ComPtr<ID3DBlob> invalid_code;
+      check(compile(load_source, sizeof(load_source) - 1, "load-invalid-lod.hlsl",
+                     invalid_defines, NULL, "main", "ps_4_0", D3DCOMPILE_ENABLE_STRICTNESS,
+                     0, &invalid_code, &errors), "Compile out-of-range Load shader");
+      check(device->CreatePixelShader(invalid_code->GetBufferPointer(), invalid_code->GetBufferSize(),
+                                      NULL, &invalid_load_ps), "Create out-of-range Load shader");
+   }
    const FLOAT vertices[3][8] = {
       {-1, -1, 0.5f, 1, 1, 1, 1, 1},
       {-1,  3, 0.5f, 1, 1, 1, 1, 1},
@@ -423,11 +441,18 @@ static void sampled_images(ID3D11Device *device, ID3D11DeviceContext *context,
    };
    ComPtr<ID3D11Texture2D> textures[3];
    ComPtr<ID3D11ShaderResourceView> views[3];
-   desc.Width = desc.Height = 2; desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+   desc.Width = desc.Height = integer_load ? 4 : 2;
+   desc.MipLevels = integer_load ? 2 : 1;
+   desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
    desc.Usage = D3D11_USAGE_IMMUTABLE; desc.BindFlags = D3D11_BIND_SHADER_RESOURCE; desc.CPUAccessFlags = 0;
    for (unsigned i = 0; i < 3; ++i) {
-      const D3D11_SUBRESOURCE_DATA data = {texels[i], 8, 16};
-      check(device->CreateTexture2D(&desc, &data, &textures[i]), "Create sample texture");
+      uint32_t wrong_mip[16];
+      for (auto &pixel : wrong_mip) pixel = 0xffaa55cc;
+      const D3D11_SUBRESOURCE_DATA data[] = {
+         {integer_load ? wrong_mip : texels[i], integer_load ? 16u : 8u, integer_load ? 64u : 16u},
+         {texels[i], 8, 16},
+      };
+      check(device->CreateTexture2D(&desc, data, &textures[i]), "Create sample texture");
       check(device->CreateShaderResourceView(textures[i].Get(), NULL, &views[i]), "Create sample SRV");
    }
    D3D11_SAMPLER_DESC sd = {};
@@ -459,6 +484,8 @@ static void sampled_images(ID3D11Device *device, ID3D11DeviceContext *context,
       ID3D11SamplerState *filter = samplers[clamp].Get(), *wrong = samplers[!clamp].Get();
       context->PSSetShaderResources(5, 1, &texture);
       context->PSSetSamplers(2, 1, &filter); context->PSSetSamplers(5, 1, &wrong);
+      if (integer_load)
+         context->PSSetShader(pass == 1 ? invalid_load_ps.Get() : ps.Get(), NULL, 0);
       const FLOAT clear[4] = {0, 0, 0, 0};
       context->ClearRenderTargetView(view.Get(), clear); context->Draw(3, 0);
       context->CopyResource(staging.Get(), target.Get()); context->Flush();
@@ -471,10 +498,17 @@ static void sampled_images(ID3D11Device *device, ID3D11DeviceContext *context,
       for (unsigned y = 0; y < 64; ++y) {
          const volatile uint32_t *row = (const volatile uint32_t *)((const char *)map.pData + y * map.RowPitch);
          for (unsigned x = 0; x < 64; ++x) {
-            float u = (x + 0.5f) * 0.125f + 0.25f, v = (y + 0.5f) * 0.125f + 0.25f;
-            if (!clamp) { u -= floorf(u); v -= floorf(v); }
-            const unsigned tx = u >= 0.5f, ty = v >= 0.5f;
-            const uint32_t rgba = texels[palette][ty * 2 + tx];
+            uint32_t rgba;
+            if (integer_load) {
+               const int tx = (int)x - 30, ty = (int)y - 32;
+               rgba = pass == 1 || tx < 0 || tx >= 2 || ty < 0 || ty >= 2 ?
+                  0 : texels[palette][ty * 2 + tx];
+            } else {
+               float u = (x + 0.5f) * 0.125f + 0.25f, v = (y + 0.5f) * 0.125f + 0.25f;
+               if (!clamp) { u -= floorf(u); v -= floorf(v); }
+               const unsigned tx = u >= 0.5f, ty = v >= 0.5f;
+               rgba = texels[palette][ty * 2 + tx];
+            }
             const uint32_t expected = format == DXGI_FORMAT_B8G8R8A8_UNORM ? rgba :
                (rgba & 0xff00ff00u) | ((rgba & 0xffu) << 16) | ((rgba >> 16) & 0xffu);
             const uint32_t observed = row[x];
@@ -701,11 +735,12 @@ int main(int argc, char **argv)
    const bool checkpoints = variants || (argc > 2 && !strcmp(argv[argc - 1], "--shared-layout-checkpoints"));
    const bool layout = checkpoints || (argc > 2 && !strcmp(argv[argc - 1], "--shared-layout"));
    const bool sample = argc > 2 && !strcmp(argv[argc - 1], "--sample");
-   const bool hardware = (argc == 3 || implicit || (argc == 4 && (shared || features || sample || layout))) && !strcmp(argv[1], "--luid");
-   const bool software = (argc == 3 || (argc == 4 && (features || sample))) && !strcmp(argv[1], "--software");
-   const bool warp = (argc == 2 || (argc == 3 && (shared || features || sample || layout))) && !strcmp(argv[1], "--warp");
+   const bool load = argc > 2 && !strcmp(argv[argc - 1], "--load");
+   const bool hardware = (argc == 3 || implicit || (argc == 4 && (shared || features || sample || load || layout))) && !strcmp(argv[1], "--luid");
+   const bool software = (argc == 3 || (argc == 4 && (features || sample || load))) && !strcmp(argv[1], "--software");
+   const bool warp = (argc == 2 || (argc == 3 && (shared || features || sample || load || layout))) && !strcmp(argv[1], "--warp");
    if (!hardware && !software && !warp) {
-      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract|--shared-layout|--shared-layout-checkpoints|--shared-layout-variants|--feature-levels|--sample] | --software dll [--feature-levels|--sample] | --warp [--shared-contract|--shared-layout|--shared-layout-checkpoints|--shared-layout-variants|--feature-levels|--sample]\n", argv[0]);
+      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract|--shared-layout|--shared-layout-checkpoints|--shared-layout-variants|--feature-levels|--sample|--load] | --software dll [--feature-levels|--sample|--load] | --warp [--shared-contract|--shared-layout|--shared-layout-checkpoints|--shared-layout-variants|--feature-levels|--sample|--load]\n", argv[0]);
       return 2;
    }
    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -788,9 +823,9 @@ int main(int argc, char **argv)
       } else if (layout) {
          shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_B8G8R8A8_UNORM, checkpoints, variants);
          shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, checkpoints, variants);
-      } else if (sample) {
-         sampled_images(device.Get(), context.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
-         sampled_images(device.Get(), context.Get(), DXGI_FORMAT_B8G8R8A8_UNORM);
+      } else if (sample || load) {
+         sampled_images(device.Get(), context.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, load);
+         sampled_images(device.Get(), context.Get(), DXGI_FORMAT_B8G8R8A8_UNORM, load);
       } else {
          images(device.Get(), context.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
          images(device.Get(), context.Get(), DXGI_FORMAT_B8G8R8A8_UNORM);

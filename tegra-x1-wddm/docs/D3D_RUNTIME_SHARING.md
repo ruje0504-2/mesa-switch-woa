@@ -1756,3 +1756,118 @@ unconfirmed. The repeated startup task preserves the completed test and resumes
 rollback. `.59` is staged at 22:00:48 and boots at 22:01:26. Code 0, baseline
 hashes, environment/task cleanup and unchanged power are verified at 22:03:37;
 saved portrait is unchanged at 22:04:35. No native test remains running.
+
+### Physical desktop observation after the pixel pass
+
+`desktop-observe153-native-20261111` repeats the same KMD `.153`, UMD
+`e99798fa9668` and ICD `6e2fad99d742` without running the pixel probes again.
+Native LUID `b946a` reaches Code 0 at 22:16:57 UTC. The 120-second physical
+observation begins at 22:17:18. The user reports missing, displaced or
+disappearing taskbar content during this native interval. Four photos retained
+locally show an incomplete taskbar inside the desktop, followed by wallpaper
+and icons without a taskbar. Camera orientation is not evidence of a mode
+change. **Physical desktop validation fails.**
+
+Of twelve shell snapshots, eleven report a visible taskbar at the expected
+bottom rectangle `(0,1232)-(720,1280)`; one reports it hidden with a zero
+rectangle. Four distinct Explorer owners appear in sequence:
+`2184`, `3344`, `5676`, `3708`. This establishes repeated shell replacement,
+not its cause. A read-only query of the enabled Application log finds no
+event 1000/1001 between 22:16:30 and 22:20:20; absence of these records does
+not establish that the processes never crashed.
+
+The retained trace has 145 successful DWM flip callbacks and five successful
+Explorer windowed Presents, with no retained RuntimeError, ZinkFailure or
+KMD recovery event. These results coexist with the user's physical failure
+and do not override it. The controller's exit 0 at 22:19:30 means the bounded
+observation completed, not that the desktop was visually correct.
+
+All 169 returned device files (112,301,472 bytes) match their device lengths
+and SHA256. The finalized ETL contains 296,115 exported records and 85,828
+valid UMD events, with no reported event/buffer loss. Its 64-MiB circular
+capacity has overwritten the setup prefix; the retained UMD interval covers
+22:16:41.604440 through 22:19:34.260862 UTC. Do not infer completeness of the
+earlier setup from the zero loss counters. The decoder leaves 622 Dwm-Core
+event-203 records uninterpreted due to a template/payload-length mismatch.
+Raw export SHA256:
+`63f4b766d80d1438fc85013897867856a3f9d41221940515d0421eb2b7c5f123`.
+
+An additional startup occurs at 22:20:47 with the `.153` gate closed; its
+cause is unconfirmed. `automatic-result.json` contains 81 NUL bytes and
+cannot establish collection completion. Recovery stages `.59` at 22:23:35
+and boots it at 22:24:04. Code 0, baseline hashes, cleanup and unchanged power
+settings are verified at 22:27:50; saved portrait is unchanged at 22:28:33.
+This trial is finished. The subsequent archived `.147` comparison is ended
+at the user's request after they report an automatic reboot. It supplies no
+verified physical desktop pass. All 146 returned files (123,733,692 bytes)
+match device hashes; `.59` Code 0, cleanup and unchanged power are verified
+at 22:45:26 UTC and saved portrait at 22:45:52. The next investigation remains
+on `.153`, with an Explorer exception/termination capture to identify the
+shell's exit cause before further code changes.
+
+### Explorer SAMPLE_I abort
+
+`explorer-exit153-native-20261111` retains the same `.153` KMD, `e99798fa9668`
+UMD and `6e2fad99d742` ICD. A same-user ProcDump attach/cancel control on
+`.59` passes at 22:49:07 UTC with the original Explorer alive and detached.
+Native LUID `b2d44` reaches Code 0 at 22:53:22. The capture attaches to
+taskbar owner PID 356 at 22:53:45 and records its unhandled `c0000409`
+exception, parameter 7, at approximately 22:53:58 UTC. The 18,016,220-byte
+minidump matches the device hash and the later complete evidence copy:
+`9156ff67a9e7a05c872798a37ea10713310884aafaf651dc77bc04d4b7a823aa`.
+
+The ARM64 frame chain leads from Direct2D/D3D11 into `TegraGpuD3D.dll` and
+UCRT. In the exact `e99798fa9668` UMD, return RVA `0x221928` follows a call
+to `abort` at `0x221924`. The preceding code prints the unknown TGSI opcode
+whose value is retained in `w26`: `0x92`, or `TGSI_OPCODE_SAMPLE_I` (146).
+`ShaderTGSI.c` emits that opcode for D3D's integer texture `ld`; the converter
+previously handled `SAMPLE` but not `SAMPLE_I`. This directly identifies the
+captured Explorer fatal exit. It does not prove the cause of every previous
+shell replacement, the absence of Application-log events, or the numeric
+meaning of Dxgkrnl's reason-14 device cleanup records.
+
+The correction lowers `SAMPLE_I` to NIR integer texel fetch with an independent
+texture-view binding and no sampler-state binding. It preserves integer
+coordinates, array layers, the mip in address.w (ignored for buffers), texel
+offsets and result swizzle, and records `textures_used_by_txf`. The semantics
+follow the [TGSI instruction definition](https://docs.mesa3d.org/gallium/tgsi.html)
+and [D3D ld contract](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/ld--sm4---asm-).
+
+Six new translator regressions cover samplerless binding, array coordinates,
+buffer LOD omission, offset/swizzle and signed/unsigned result types. Together
+with the six existing sampling cases, all twelve pass on Windows ARM64 at
+23:08:00 UTC. The pre-fix executable prints `unknown TGSI opcode: SAMPLE_I`
+for the same new case, then requires the controller's 15-second timeout stop;
+its native process exit status is not presented as a clean reproduction.
+
+The new `--load` runtime probe uses mip 1, integer offsets, out-of-range
+coordinates and mip 3, two source patterns, and BGRA/RGBA targets. All 24,576
+WARP comparisons pass with exit 0 at 23:08:00. UMD
+`sample-i-20261111-umd+8f9a286a0e2b` also passes exact-artifact callback,
+resource and loading controls at 23:08:54, with 114 finalized valid trace
+records and no reported loss. These are controls, not native Load pixels or
+a physical desktop pass; the original known shared-sampling result is kept.
+
+The native capture completes at 22:55:56 and collection at 22:56:35. Its trace
+retains 127 successful DWM flips and five Explorer windowed Presents, but no
+UMD RuntimeError/ZinkFailure or KMD recovery event; the CPU abort is captured
+separately. An additional startup at 22:57:40 interrupts recovery, cause
+unconfirmed. `.59` is staged at 23:00:21, boots at 23:00:59 and is verified
+Code 0 with cleanup and unchanged power at 23:03:02. Saved portrait is
+unchanged at 23:06:09. All 185 files (128,614,924 bytes) match device hashes.
+
+The user separately observes the taskbar near the bottom of an upper 16:9
+region in the portrait photo. At width 720, that hypothesis predicts height
+405; this is a calculated clue, not a calibrated photo measurement. Check
+actual composition size/transform after the shader correction before changing
+the scanout registers. The captured abort alone does not explain that position.
+
+A user-requested local Gemini 4 Carbon review returned partial findings after
+CLI timeout/stream interruption. The remaining independent-view opcodes and
+the D3D-versus-Vulkan out-of-bounds semantics merit targeted follow-up. Its
+claim that shared allocations use 64-byte pitch alignment is rejected:
+`RuntimeSharedCreate` already uses 128-byte alignment. Its proposed universal
+720-wide shadow-copy failure and missing-cache root cause are not established
+by the current code or the passing 720x1280 native sampling probe. No such
+changes are included in this correction. MSAA and the remaining sampling/query
+opcodes remain unfinished; this fix does not claim complete shader conformance.

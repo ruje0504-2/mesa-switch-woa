@@ -3,6 +3,41 @@
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**Latest physical desktop result: failed.** In the 120-second `.153` viewing
+trial on LUID `b946a`, the user confirms an incomplete/displaced taskbar followed
+by its disappearance, with four photos retained locally. Most shell snapshots
+still report the taskbar at the bottom, but four distinct Explorer owners
+appear. Successful shared-pixel checks below do not establish correct DWM output.
+All 169 device files are verified; `.59` Code 0, cleanup and unchanged power
+are verified at 22:27:50 UTC, saved portrait at 22:28:33.
+[Physical observation and trace limits](D3D_RUNTIME_SHARING.md#physical-desktop-observation-after-the-pixel-pass)
+
+**Old-stack comparison ended at the user's request:**
+`desktop-147-compare-native-20261111` uses the archived `.147` KMD
+`e491932a9fd3`, UMD `79fa8169fb00` and ICD `f828845c38b7`. The user reports
+an automatic reboot before the host receives a native viewing-start record.
+All 146 returned files (123,733,692 bytes) match device hashes. `.59` Code 0,
+cleanup and unchanged power are verified at 22:45:26 UTC, saved portrait at
+22:45:52. No physical `.147` pass is established and no GPU source is reverted.
+Continue `.153` investigation with Explorer exception/termination capture
+using the unchanged pixel-tested stack.
+
+**Explorer failure identified:** `explorer-exit153-native-20261111` captures
+Explorer PID 356 aborting on native LUID `b2d44`. The exact UMD's return RVA
+`0x221928`, saved opcode register `0x92` and source identify unsupported
+`TGSI_OPCODE_SAMPLE_I` in the TGSI-to-NIR converter. This proves the captured
+process exit, not the separate taskbar-position failure. All 185 returned
+files match device hashes; `.59` Code 0, cleanup and unchanged power are
+verified at 23:03:02 UTC and saved portrait at 23:06:09.
+
+**Current WIP:** implement samplerless integer texture loads and a D3D
+`Texture.Load` pixel probe. ARM64 builds, twelve translator checks and
+24,576 WARP pixel comparisons pass; native validation is pending. The old
+translator prints `unknown TGSI opcode: SAMPLE_I` in the minimal regression
+and is stopped after its post-abort process fails to exit within the bound.
+The exact new UMD's callback/loading controls pass at 23:08:54 UTC.
+[Captured abort, correction and review limits](D3D_RUNTIME_SHARING.md#explorer-sample-i-abort)
+
 **Latest `.153` result:** `shared-usage153-native-20261111` tests UMD
 `buffer-release-v2-20261111-umd+e99798fa9668` from `931383e6`, with unchanged
 KMD/ICD and probe `5fcfd6671788`. Native LUID `af442` reaches Code 0 at
@@ -14,8 +49,8 @@ This validates the combined image-usage and buffer-ownership corrections for
 these native cases. DWM has one successful device creation, 113 successful
 resource creations and 78 successful flip callbacks spanning 72.794 seconds;
 Explorer has two successful windowed Presents. The trace retains no RuntimeError,
-ZinkFailure or KMD recovery event. Physical taskbar content is still unverified:
-the user missed the native interval and requested another viewing run.
+ZinkFailure or KMD recovery event. The user missed this native interval;
+the subsequent viewing run above establishes a physical desktop failure.
 [Native pixel results and limits](D3D_RUNTIME_SHARING.md#native-shared-sampling-and-cleanup-pass)
 
 All 167 returned files (110,632,441 bytes), including six early copies, match
@@ -25,9 +60,9 @@ completes at 21:56:46 UTC; an additional startup occurs during recovery at
 and is verified Code 0 with cleanup and unchanged power at 22:03:37. Saved
 portrait is unchanged at 22:04:35. No native test remains running.
 
-**Next:** repeat a bounded physical desktop observation with these same tested
-binaries, then complete hardware landscape and Win32 `vkcube`. The repeat is
-for the requested visible check; the successful pixel probes need not be rerun.
+**Next:** localize the remaining DWM/Explorer output failure before hardware
+landscape and Win32 `vkcube`.
+The successful shared-pixel probes need not be rerun without a relevant change.
 [Buffer ownership](D3D_RUNTIME_SHARING.md#buffer-release-ownership-correction) ·
 [Shared image usage](D3D_RUNTIME_SHARING.md#native-shared-versus-private-sampling)
 
