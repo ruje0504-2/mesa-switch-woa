@@ -40,6 +40,12 @@ libgallium_d3d10 = shared_library(
 )
 
 if with_tests and d3d10_backend == 'nvk'
+  test('d3d10_runtime_present', executable(
+    'test_d3d10_runtime_present', files('tests/runtime_present.cpp'),
+    include_directories : [inc_include, inc_src, inc_gallium, inc_gallium_aux, inc_d3d10umd, inc_winddk],
+    link_with : [libd3d10umd, libgallium],
+    dependencies : [idep_nir, idep_mesautil, idep_mesautilformat, dep_ws2_32],
+  ), suite : ['d3d10'])
   test('d3d10_runtime_primary', executable(
     'test_d3d10_runtime_primary',
     files('tests/runtime_primary.cpp', '../../frontends/d3d10umd/RuntimeMemory.cpp'),

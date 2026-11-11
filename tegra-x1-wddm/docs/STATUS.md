@@ -3,6 +3,12 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**Source WIP after `.146`:** the UMD now routes primary flips through the
+DXGI runtime callback after GPU completion. Swapchain identity rotation moves
+the real storage/owners, rebuilds views and rebinds them while preserving RT
+handles. New controlled tests are being compiled; this source has not yet
+passed a native presentation trial. Hardware landscape rotation is still pending.
+
 **Latest `.146` native result (2026-11-11):** the rebuilt KMD reaches Code 0
 on LUID `92611`; all 40,960 ordinary/sampled pixels match, and both probes
 release their devices and exit 0. The allocation identity-rotation fix passes

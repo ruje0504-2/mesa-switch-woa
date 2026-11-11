@@ -330,6 +330,60 @@ HRESULT RuntimePrimaryError(RuntimePrimary *p)
 
 const wsi_win32_memory *RuntimePrimaryMemory(RuntimePrimary *p) { return &p->memory; }
 
+HRESULT RuntimePresent(const DXGI_DDI_ARG_PRESENT *args)
+{
+   if (!args || !args->hDevice || !args->hSurfaceToPresent)
+      return E_INVALIDARG;
+   Device *device = CastDevice(args->hDevice);
+   Resource *source = CastResource(args->hSurfaceToPresent);
+   Resource *destination = args->hDstResource ? CastResource(args->hDstResource) : NULL;
+   if (source->device != device || (destination && destination->device != device))
+      return E_INVALIDARG;
+   /* The KMD's native MMIO flip path accepts these runtime primaries. Its
+    * separate GDI copy context is not this UMD context; do not fake a blt. */
+   if (args->Flags.Value != 2 || args->SrcSubResourceIndex || args->DstSubResourceIndex ||
+       (unsigned)args->FlipInterval > DXGI_DDI_FLIP_INTERVAL_FOUR ||
+       !device->hContext || !device->pDXGIBaseCallbacks ||
+       !device->pDXGIBaseCallbacks->pfnPresentCb || !source->runtime_primary ||
+       !source->resource || (destination && (!destination->runtime_primary || !destination->resource)))
+      return DXGI_ERROR_UNSUPPORTED;
+   RuntimePrimary *src = source->runtime_primary;
+   RuntimePrimary *dst = destination ? destination->runtime_primary : NULL;
+   if (src->device != device->hDevice || (dst && dst->device != device->hDevice))
+      return E_INVALIDARG;
+   if (src->dead || !src->associated || (dst && (dst->dead || !dst->associated)))
+      return D3DDDIERR_DEVICEREMOVED;
+   HRESULT hr = RuntimePrimaryFinish(device, source);
+   if (FAILED(hr)) return hr;
+   DXGIDDICB_PRESENT present = {};
+   present.hSrcAllocation = src->memory.allocation;
+   present.hDstAllocation = dst ? dst->memory.allocation : 0;
+   present.hContext = device->hContext;
+   /* DXGI owns the flags/interval protocol behind this opaque value. */
+   present.pDXGIContext = args->pDXGIContext;
+   return device->pDXGIBaseCallbacks->pfnPresentCb(device->hDevice, &present);
+}
+
+HRESULT RuntimeRotateOwnership(Device *device, Resource *const *resources, UINT count)
+{
+   if (!count || !resources[0]->runtime_primary) return S_OK;
+   for (UINT i = 0; i < count; ++i) {
+      const RuntimePrimary *p = resources[i]->runtime_primary;
+      if (!p || p->device != device->hDevice || !resources[i]->runtime_resource)
+         return E_INVALIDARG;
+      if (p->dead || !p->associated) return D3DDDIERR_DEVICEREMOVED;
+   }
+   RuntimePrimary *first = resources[0]->runtime_primary;
+   for (UINT i = 0; i + 1 < count; ++i)
+      resources[i]->runtime_primary = resources[i + 1]->runtime_primary;
+   resources[count - 1]->runtime_primary = first;
+   /* Allocation ownership moves with the Gallium storage. The runtime's
+    * resource handles stay in their original logical resource slots. */
+   for (UINT i = 0; i < count; ++i)
+      resources[i]->runtime_primary->runtime_resource = resources[i]->runtime_resource;
+   return S_OK;
+}
+
 HRESULT RuntimeDeviceCreateContext(Device *device)
 {
    const auto &cb = device->KTCallbacks;

@@ -1251,6 +1251,12 @@ CreateShaderResourceView(
    }
 
    pSRView->handle = pipe->create_sampler_view(pipe, resource, &desc);
+   pSRView->link = {};
+   if (pSRView->handle)
+      AttachResourceView(CastResource(pCreateSRView->hDrvResource),
+                         &pSRView->link, NULL, &pSRView->handle);
+   else
+      SetError(hDevice, E_OUTOFMEMORY);
 }
 
 
@@ -1333,6 +1339,12 @@ CreateShaderResourceView1(
    }
 
    pSRView->handle = pipe->create_sampler_view(pipe, resource, &desc);
+   pSRView->link = {};
+   if (pSRView->handle)
+      AttachResourceView(CastResource(pCreateSRView->hDrvResource),
+                         &pSRView->link, NULL, &pSRView->handle);
+   else
+      SetError(hDevice, E_OUTOFMEMORY);
 }
 
 
@@ -1362,6 +1374,7 @@ DestroyShaderResourceView(D3D10DDI_HDEVICE hDevice,                           //
 
    pipe->sampler_view_release(pipe, pSRView->handle);
    pSRView->handle = NULL;
+   DetachResourceView(&pSRView->link);
 }
 
 

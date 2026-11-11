@@ -295,7 +295,7 @@ int main(void)
    CHECK(!resources);
    DXGI_DDI_ARG_PRESENT present = {};
    present.hDevice = reinterpret_cast<DXGI_DDI_HDEVICE>(create.hDrvDevice.pDrvPrivate);
-   CHECK(dxgi.pfnPresent(&present) == DXGI_ERROR_UNSUPPORTED);
+   CHECK(dxgi.pfnPresent(&present) == E_INVALIDARG);
    functions.pfnDestroyDevice(create.hDrvDevice);
    CHECK(!contexts && !runtime_contexts && !shaders && !vertex_elements && !fence_refs);
    free(create.hDrvDevice.pDrvPrivate);

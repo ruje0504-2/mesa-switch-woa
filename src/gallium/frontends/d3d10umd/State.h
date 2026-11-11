@@ -171,9 +171,19 @@ CheckDeviceRemoved(D3D10DDI_HDEVICE hDevice)
 
 
 struct RuntimePrimary;
+struct Resource;
+struct ResourceViewLink {
+   Resource *owner;
+   ResourceViewLink *next;
+   pipe_surface *surface;
+   pipe_sampler_view **sampler;
+   pipe_sampler_view *replacement;
+};
 
 struct Resource
 {
+   Device *device;
+   HANDLE runtime_resource;
    DXGI_FORMAT Format;
    UINT MipLevels;
    UINT NumSubResources;
@@ -182,7 +192,27 @@ struct Resource
    struct pipe_transfer **transfers;
    struct pipe_stream_output_target *so_target;
    RuntimePrimary *runtime_primary;
+   ResourceViewLink *views;
 };
+
+static inline void
+AttachResourceView(Resource *owner, ResourceViewLink *view,
+                   pipe_surface *surface, pipe_sampler_view **sampler)
+{
+   *view = {owner, owner->views, surface, sampler, NULL};
+   owner->views = view;
+}
+
+static inline void
+DetachResourceView(ResourceViewLink *view)
+{
+   if (view->owner) {
+      auto link = &view->owner->views;
+      while (*link && *link != view) link = &(*link)->next;
+      if (*link) *link = view->next;
+   }
+   *view = {};
+}
 
 
 static inline Resource *
@@ -230,6 +260,7 @@ struct RenderTargetView
 {
    struct pipe_surface surface;
    D3D10DDI_HRTRENDERTARGETVIEW hRTRenderTargetView;
+   ResourceViewLink link;
 };
 
 
@@ -252,6 +283,7 @@ struct DepthStencilView
 {
    struct pipe_surface surface;
    D3D10DDI_HRTDEPTHSTENCILVIEW hRTDepthStencilView;
+   ResourceViewLink link;
 };
 
 
@@ -384,6 +416,7 @@ CastPipeSamplerState(D3D10DDI_HSAMPLER hSampler)
 struct ShaderResourceView
 {
    struct pipe_sampler_view *handle;
+   ResourceViewLink link;
 };
 
 

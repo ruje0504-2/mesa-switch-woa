@@ -17,6 +17,8 @@ HRESULT RuntimePrimaryDestroy(RuntimePrimary *primary);
 HRESULT RuntimePrimarySetMode(RuntimePrimary *primary, HANDLE device, UINT subresource);
 HRESULT RuntimePrimaryError(RuntimePrimary *primary);
 HRESULT RuntimePrimaryFinish(Device *device, Resource *resource);
+HRESULT RuntimePresent(const DXGI_DDI_ARG_PRESENT *args);
+HRESULT RuntimeRotateOwnership(Device *device, Resource *const *resources, UINT count);
 const wsi_win32_memory *RuntimePrimaryMemory(RuntimePrimary *primary);
 
 #endif

@@ -264,6 +264,8 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
    Resource *pResource = CastResource(hResource);
 
    memset(pResource, 0, sizeof *pResource);
+   pResource->device = CastDevice(hDevice);
+   pResource->runtime_resource = hRTResource.handle;
 
 #if 0
    if (pCreateResource->pPrimaryDesc) {
@@ -515,6 +517,7 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
       }
    }
    free(pResource->transfers);
+   while (pResource->views) DetachResourceView(pResource->views);
 
 #ifdef D3D10_UMD_HARDWARE
    /* The runtime resource is no longer valid after this DDI returns. Finish
