@@ -3,6 +3,9 @@
 #include "allocation.h"
 #include "reset_backend.h"
 #include "submit_ddi.h"
+#ifdef TG_GPU_NATIVE_TEST_VERSION
+#include "native_start_test.h"
+#endif
 
 static VOID record_status(PCWSTR name, NTSTATUS status)
 {
@@ -15,12 +18,26 @@ static NTSTATUS start_device(PVOID context,DXGK_START_INFO *start,
     DXGKRNL_INTERFACE *dxgk,ULONG *sources,ULONG *children)
 {
     TG_GPU_ADAPTER *a=context;
+#ifdef TG_GPU_NATIVE_TEST_VERSION
+    record_status(L"HardwareStatus",(NTSTATUS)MAXULONG);
+    record_status(L"PanelStatus",(NTSTATUS)MAXULONG);
+    NTSTATUS permit=TgGpuConsumeNativeStartPermit();
+    record_status(L"BootPermitStatus",permit);
+    NTSTATUS gate=NT_SUCCESS(permit)?STATUS_SUCCESS:STATUS_DEVICE_NOT_READY;
+    record_status(L"StartGateStatus",gate);
+    if(!NT_SUCCESS(gate))return gate;
+#endif
     NTSTATUS status=TgGpuDdiStartDevice(context,start,dxgk,sources,children);
     record_status(L"ResourceStatus",status);
     if (!NT_SUCCESS(status)) return status;
 
-    /* VidMm can exercise paging before the NVK command ABI is ready. */
+    /* Ordinary bring-up builds exercise paging. The explicitly gated test
+     * package also exposes the native NVK submission path after startup. */
+#ifdef TG_GPU_NATIVE_TEST_VERSION
+    a->Engine.PagingOnly=FALSE;
+#else
     a->Engine.PagingOnly=TRUE;
+#endif
     status=TgGpuStartPlatformAdapter(a);
     record_status(L"HardwareStatus",status);
 #ifdef TG_GPU_PANEL_WDDM

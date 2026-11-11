@@ -664,13 +664,15 @@ __declspec(noinline) static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU
     CHECK(NT_SUCCESS(ddi->DxgkDdiCreateAllocation(e,&create)));
     describe.hAllocation=info[0].hAllocation;
     describe.Flags.CheckDisplayMode=1;
+    /* DxgKrnl seeds Rotation with -1 before checking a display primary. */
+    describe.Rotation=(D3DDDI_ROTATION)UINT32_MAX;
     CHECK(ddi->DxgkDdiDescribeAllocation(other,&describe)==STATUS_INVALID_PARAMETER);
     CHECK(NT_SUCCESS(ddi->DxgkDdiDescribeAllocation(e,&describe)));
     CHECK(describe.hAllocation==info[0].hAllocation &&
           describe.Width==T214_DC_PANEL_WIDTH && describe.Height==T214_DC_PANEL_HEIGHT &&
           describe.Format==D3DDDIFMT_A8R8G8B8 && describe.MultisampleMethod.NumSamples==1 &&
           describe.RefreshRate.Numerator==60000 && describe.RefreshRate.Denominator==1001 &&
-          describe.Flags.CheckDisplayMode);
+          describe.Flags.CheckDisplayMode && describe.Rotation==D3DDDI_ROTATION_IDENTITY);
     CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)) && !e->AllocationBytes);
     static TG_GPU_ADAPTER surface_adapter;
     surface_adapter.Panel.Dc.owned=true;

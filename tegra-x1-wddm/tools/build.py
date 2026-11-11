@@ -6,7 +6,9 @@ Builds the static backend and optional render-only or KMDF probe packages.
 Use LLVM, the Mesa Switch source tree and official WDK/SDK Include roots.
 """
 import argparse
+import datetime
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -30,7 +32,11 @@ parser.add_argument("--gr-firmware", type=Path, help="external NVIDIA tegra21x N
 parser.add_argument("--acr-firmware", type=Path, help="external NVIDIA 32.7.6 ACR/PMU/FECS files")
 parser.add_argument("--keep-fan", action="store_true", help="with --probe, preserve the existing signed SwitchFan package")
 parser.add_argument("--windows-tests", action="store_true", help="build the real-WDK paging test executable for ARM64 Windows")
+parser.add_argument("--native-test-version", type=int, metavar="N",
+                    help="with --display, build gated native submission as package 0.1.0.N")
 args = parser.parse_args()
+if args.native_test_version is not None and (not args.display or not 1 <= args.native_test_version <= 65535):
+    parser.error("--native-test-version requires --display and a version from 1 to 65535")
 if args.keep_fan and not args.probe:
     parser.error("--keep-fan requires --probe")
 build_miniport = args.render or args.display
@@ -254,6 +260,12 @@ if args.windows_tests:
     subprocess.run([args.link,"/nologo","/machine:arm64","/subsystem:console,10.0","/entry:start",
                     "/include:_load_config_used","/nodefaultlib","/release","/opt:ref","/timestamp:0",
                     f"/out:{args.out / 'test-diagnostic.exe'}",str(diagnostic_test),str(sdk_lib)],check=True)
+    native_start_test=args.out / "test_native_start_windows.obj"
+    subprocess.run([args.clang_cl,*flags,"/clang:-funwind-tables",f"/Fo{native_start_test}","--",
+                    str(root / "tests/test_native_start_windows.c")],check=True)
+    subprocess.run([args.link,"/nologo","/machine:arm64","/subsystem:console,10.0","/entry:start",
+                    "/include:_load_config_used","/nodefaultlib","/release","/opt:ref","/timestamp:0",
+                    f"/out:{args.out / 'test-native-start.exe'}",str(native_start_test),str(sdk_lib)],check=True)
 
 def copy_firmware(dest):
     for filename in gr_names:
@@ -267,13 +279,20 @@ if build_miniport:
     obj = args.out / "render_miniport.obj"
     km_lib = args.wdk_include.parent.parent / "Lib" / args.wdk_include.name / "km/ARM64"
     miniport_flags = ["/DTG_GPU_PANEL_WDDM=1"] if args.display else []
+    test_objects = []
+    if args.native_test_version is not None:
+        miniport_flags.append(f"/DTG_GPU_NATIVE_TEST_VERSION={args.native_test_version}")
+        gate = args.out / "native_start_test.obj"
+        subprocess.run([args.clang_cl,*flags,*miniport_flags,f"/Fo{gate}","--",
+                        str(root / "windows/native_start_test.c")],check=True)
+        test_objects.append(gate)
     subprocess.run([args.clang_cl, *flags, *miniport_flags, "/GS", f"/Fo{obj}", "--",
                     str(root / "windows/render_miniport.c")], check=True)
     subprocess.run([args.link, "/nologo", "/driver", "/subsystem:native,10.0", "/machine:arm64",
                     "/entry:GsDriverEntry", "/include:_load_config_used", "/nodefaultlib", "/release",
                     "/opt:ref", "/tsaware:no", "/section:.text,ERP", "/section:.rdata,RP",
                     "/section:.data,RWP", "/section:.pdata,RP", "/section:INIT,ERD", "/timestamp:0",
-                    f"/out:{dest / 'tegragpurender.sys'}", str(obj), str(library),
+                    f"/out:{dest / 'tegragpurender.sys'}", str(obj), *map(str,test_objects), str(library),
                     *[str(km_lib / name) for name in ("displib.lib", "ntoskrnl.lib", "hal.lib",
                                                     "bufferoverflowfastfailk.lib", "libcntpr.lib")]], check=True)
     umd = args.out / "no_d3d.obj"
@@ -295,6 +314,9 @@ if build_miniport:
         display_inf = display_inf.replace("{F01A9D53-3FF6-48D2-9F97-C8A7004BE10C}",
                                           "{4d36e968-e325-11ce-bfc1-08002be10318}")
         display_inf = display_inf.replace(",0.1.0.65", ",0.1.0.105")
+        if args.native_test_version is not None:
+            version=f"{datetime.datetime.now(datetime.timezone.utc):%m/%d/%Y},0.1.0.{args.native_test_version}"
+            display_inf=re.sub(r"^DriverVer=.*$",f"DriverVer={version}",display_inf,flags=re.MULTILINE)
         display_inf = display_inf.replace("Switch Lite GM20B Render Adapter (experimental)", "Tegra X1 (GM20B)")
         (dest / inf.name).write_text(display_inf)
     else:

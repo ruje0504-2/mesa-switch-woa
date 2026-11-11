@@ -3,6 +3,28 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**Current WIP:** `DescribeAllocation` now returns identity rotation for the
+currently unrotated image layouts. This OS initializes that output to `-1`
+and rejects a different reported rotation from the active mode with
+`c01e0005`; the former whole-structure assignment returned zero instead.
+The installed .144 binary contains the byte-identical 180-byte old function.
+An ARM64 control seeded with the OS sentinel fails at the new assertion on
+the old implementation (exit 675) and passes with the fix (exit 0). Host/core
+build checks pass. The source-built `.146` package and its one-shot desktop
+gate compile and pass the ARM64 gate controls; INF/catalog validation has
+no errors or warnings. The first install reaches the expected closed gate,
+but its controller aborts before GPU startup because two capture tools were
+not copied. `.59` Code 0, portrait, cleanup and unchanged power policy are
+verified at 13:30 UTC; all 99 returned files match device hashes. The tools
+and preflight are corrected for the native rerun. Native mode-setting and
+visible desktop success remain unverified.
+
+**Final orientation requested by the user:** hardware rotation with a
+1280x720 landscape desktop, left/right controls in their normal handheld
+orientation. Validate the source dimensions, pitch, display fetch/latch and
+complete visible image together, then leave Windows in landscape. The saved
+portrait snapshot is only the recovery target during unvalidated experiments.
+
 **Latest runtime-context result (2026-11-11):** the UMD now registers a real
 D3D runtime context and completes NVK GPU work before runtime synchronization.
 On native LUID `9b7ff`, all 40,960 ordinary/sampled pixels match and both probes
@@ -157,7 +179,7 @@ remain unfinished as well.
 the user's portrait preference. Their manually corrected 720x1280,
 orientation-0 mode is saved and again matches the registry on .59 Code 0
 after the automatic trial.
-Future rollback must restore that snapshot. The mode passes non-applying
+Rollback during unvalidated experiments must restore that snapshot. The mode passes non-applying
 CCD validation on `Default`; the later `Screen-saver` desktop observation
 also requires an active-desktop check for visible GPU tests. It does not
 prove what caused the earlier black cube captures.
@@ -171,15 +193,16 @@ also returned access denied (5) on `Screen-saver`; the user then returned
 to `Default` and portrait verification passed. Remote touch dismissal is
 not established on this configuration.
 
-**Next display round includes real 90-degree landscape rotation**, as the
-user requested: implement and verify rotation with source dimensions,
+**The final display target is hardware 90-degree landscape rotation**, as the
+user reaffirmed: implement and verify rotation with source dimensions,
 stride and scanout layout, alongside the presentation work. The current
 native path still accepts only 720x1280 identity scanout. Validate complete,
 correctly oriented visible output and sustained refresh before claiming
 an on-screen pass. The user's saved portrait setting remains the rollback
-target while landscape capability is developed. The user reaffirmed
-rotation support, but withdrew the request to try rotation-register writes
-as an immediate black-screen experiment.
+target while landscape capability is developed. Once the hardware landscape
+path is verified, preserve landscape as the final system setting. The earlier
+request to avoid speculative rotation-register changes during black-screen
+diagnosis does not remove the requested hardware-rotation implementation.
 [Build and physical evidence](PORTING.md#win32-vkcube)
 
 **Current work: D3D UMD/DWM.** .144 passes native Vulkan OPAQUE_WIN32

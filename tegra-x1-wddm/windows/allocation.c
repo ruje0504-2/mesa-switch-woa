@@ -237,6 +237,9 @@ static NTSTATUS APIENTRY describe_allocation(HANDLE adapter,DXGKARG_DESCRIBEALLO
     if(buffer && ((desc->Buffer.flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY) ||
         args->Flags.CheckDisplayMode || desc->Buffer.bytes>UINT32_MAX))
         return STATUS_NOT_SUPPORTED;
+    /* Every supported image layout is unrotated. Zero is not IDENTITY;
+     * DxgKrnl compares this output to the active mode's
+     * rotation when checking a display primary. */
     *args=(DXGKARG_DESCRIBEALLOCATION){
         .hAllocation=args->hAllocation,
         .Width=buffer?(UINT)desc->Buffer.bytes:linear?allocation->Desc.Linear.Width:T214_DC_PANEL_WIDTH,
@@ -245,6 +248,7 @@ static NTSTATUS APIENTRY describe_allocation(HANDLE adapter,DXGKARG_DESCRIBEALLO
         .MultisampleMethod={.NumSamples=1},
         .RefreshRate=(linear||buffer)?(D3DDDI_RATIONAL){0}:desc->RefreshRate,
         .Flags=args->Flags,
+        .Rotation=D3DDDI_ROTATION_IDENTITY,
     };
     return STATUS_SUCCESS;
 }

@@ -506,3 +506,38 @@ no-op. Evidence and decoding artifacts are in the external build root's
 Numeric event 30, `RuntimeContext`, uses `arg0` stages 1=create, 2=destroy,
 3=GPU completion. `arg1` records a non-null returned context or completed
 fence as a boolean, not an opaque handle value; the HRESULT is preserved.
+
+### Allocation rotation compatibility
+
+Read-only inspection of this device's `dxgkrnl.sys` 10.0.22621.2792 locates
+an explicit rotation check inside `DXGDEVICE::SetDisplayMode`. Before calling
+DescribeAllocation, RVA `1494ac` initializes `CheckDisplayMode=1` and
+`Rotation=UINT32_MAX`. A returned rotation other than that sentinel is
+compared to the active mode at RVA `269ab4`; a mismatch reaches the
+`c01e0005` return at `269b04`. This is a concrete path to the observed error,
+not proof that every occurrence takes this branch. The kernel image hashes
+to `99d425e1c997eae32909fa4f37d6c8e2e846a5374c602295546c8be2547aa5e6`;
+its public symbol GUID is `797F457A-6488-C67C-8E55-B0F3E771DC32`.
+
+Our old whole-structure assignment returns Rotation=0, while all current
+image layouts are unrotated and the active portrait mode reports identity
+(1). The full 180-byte old function is byte-identical to a sequence at file
+offset 73180 in the signed `.144` SYS, whose hash is recorded above. The
+fix explicitly reports `D3DDDI_ROTATION_IDENTITY`; it neither rotates pixels
+nor advertises a new orientation. The public DescribeAllocation page calls
+Rotation reserved, so the observed OS behavior must be distinguished from
+that documentation, rather than attributed to it.
+[Allocation description](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgkarg_describeallocation)
+[Rotation values](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dukmdt/ne-d3dukmdt-_d3dddi_rotation)
+
+The real-WDK ARM64 fixture seeds the same sentinel and checks the expected
+identity result. The old implementation exits 675 at the new assertion
+(12:54:10 UTC); the fixed implementation exits 0 (13:01:39 UTC). Both run
+on `.59` with controlled kernel substitutes and no native GPU execution.
+The source-owned native startup gate's eleven cases also pass at 13:18:21
+UTC. All six returned control logs/JSON files match device SHA-256.
+The controls and binary analysis are retained externally under
+`runs/describe-rotation-control-20261111/` and
+`runs/dwm-mode-analysis-20261111/`. A newly signed `.146` package, rebuilt
+from source with the documented gate, is the native validation candidate;
+the controls alone do not establish a desktop or hardware rotation pass.

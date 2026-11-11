@@ -29,6 +29,27 @@ locally. Generate and sign the catalog and package using the ARM64 WDK and
 a signing certificate trusted by the test Windows installation. Match the
 firmware, miniport, and ICD ABI when deploying. [Driver details](DRIVER.md)
 
+For a desktop-gated native submission experiment, add
+`--display --native-test-version 146`. This builds the entry from tracked
+source, enables native submission after the startup gate, and sets the INF
+to `0.1.0.146` with the UTC build date. Regenerate and sign its catalog; do
+not reuse a catalog for different bytes. Ordinary builds retain paging-only
+bring-up. This option is an experimental deployment contract, not automatic
+installation or a production desktop claim.
+
+The controller must first establish a working interactive desktop and a
+scheduled recovery, then create the volatile service subkey
+`tegragpurender\AllowDesktopStart` and arm the first little-endian ULONG of
+`%SystemRoot%\System32\drivers\TgGpuBootTest146.bin` to 1. The file must be
+exactly 4096 bytes. Before opening hardware, the driver consumes that value
+and flushes zero to disk. A missing grant, spent permit or failed I/O returns
+a closed startup gate; `BootPermitStatus` preserves the actual NTSTATUS.
+The controller removes the volatile grant after the attempt and restores the
+previous driver/table/environment after collecting the result. The new file
+is only a one-shot permit: it does not implement the old temporary wrapper's
+4 KiB business journal. `test-native-start.exe` verifies this gate using
+controlled registry/file substitutes; it does not start the GPU.
+
 ## Mesa NVK ICD and triangle
 
 Use Meson, Ninja, Mesa's build Python dependencies, LLVM-MinGW for ARM64,
@@ -234,12 +255,30 @@ All 58 downloaded records (506,317 bytes) match device-side lengths and
 SHA-256 values. The 1,192-byte user snapshot has SHA-256
 `af56a3943261198dac51fe1631d33c7481b641171f9ed14fd79298dd39e93d48`.
 
-The user's next-round requirement is real 90-degree landscape support
-together with presentation: update source dimensions, row pitch, VidPN/MPO
-rotation contracts and actual scanout transformation consistently. The
-present identity-only KMD is not a rotation implementation. Check an
-asymmetric corner pattern, full-image contents and sustained visible output
-before the next on-screen success claim.
+The final orientation requirement is **hardware rotation and a 1280x720
+landscape desktop**, with the controls in the normal left/right handheld
+position. Leave Windows in that landscape mode after validation. Until the
+hardware path passes, the saved portrait snapshot remains the experiment's
+recovery target. Update source dimensions, row pitch, allocation description,
+VidPN/MPO rotation and actual scanout transformation together. The identity
+metadata correction is not a rotation implementation. Check an asymmetric
+corner pattern, full-image contents and sustained visible output before
+claiming the complete on-screen result.
+
+The Tegra210-specific L4T table declares column scan and packed-format
+rotation for Display A Window A. Its window programming swaps the prescaled
+axes and DDA inputs for column scan, retaining the output raster dimensions;
+this is more than changing a Windows orientation flag.
+[NVIDIA T210 feature table](https://github.com/OE4T/linux-tegra-4.9/blob/oe4t-patches-l4t-r32.7.4/nvidia/drivers/video/tegra/dc/dc_config.c)
+[NVIDIA window programming](https://github.com/OE4T/linux-tegra-4.9/blob/oe4t-patches-l4t-r32.7.4/nvidia/drivers/video/tegra/dc/window.c)
+Hekate also has a Switch-specific block-linear column-scan configuration.
+Its stride, block height and offsets belong to that framebuffer layout and
+must not be transplanted onto our current pitch-linear allocation.
+[Hekate display configuration](https://github.com/CTCaer/hekate/blob/master/bdk/display/di.inl)
+These GPL sources are hardware references, not code copied into the MIT
+driver. The outstanding implementation must select a supported layout,
+retain backing until the active bank confirms the complete geometry/address
+change, and restore the original layout on driver release.
 
 ### Present contract audit
 
