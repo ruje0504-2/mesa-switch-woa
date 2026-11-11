@@ -18,4 +18,23 @@ struct tg_gpu_allocation_request {
     uint64_t bytes;
 };
 _Static_assert(sizeof(struct tg_gpu_allocation_request)==16,"allocation ABI");
+
+/* Resource-level data precedes the UMD's image/layout descriptor. VidMm
+ * retains that descriptor for OpenResource; the KMD validates only the
+ * storage envelope. This is one atomic allocation set, as required when
+ * creating a shared D3D resource. Appending allocations would invalidate
+ * both its storage size and the retained layout descriptor.
+ *
+ * allocation_bytes is the sum of page-rounded allocation sizes. All fields
+ * are values: the UMD payload must contain no process-local pointers or
+ * handles. A resource without private data keeps the original buffer ABI.
+ */
+#define TG_GPU_RESOURCE_ABI 1u
+struct tg_gpu_resource_request {
+    uint32_t version, header_bytes;
+    uint32_t allocation_count, driver_data_bytes;
+    uint64_t allocation_bytes;
+    uint32_t reserved[2];
+};
+_Static_assert(sizeof(struct tg_gpu_resource_request)==32,"resource ABI");
 #endif

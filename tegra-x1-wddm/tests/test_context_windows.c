@@ -404,6 +404,115 @@ __declspec(noinline) static void TestLinearAllocations(TG_GPU_CONTEXT_ENGINE *e,
     CHECK(!e->AllocationBytes && PoolsInUse()==before);
 }
 
+__declspec(noinline) static void TestResourceMetadata(TG_GPU_CONTEXT_ENGINE *e,
+                                                     DRIVER_INITIALIZATION_DATA *ddi,
+                                                     TG_GPU_DEVICE *device,TG_GPU_DEVICE *peer)
+{
+    struct {
+        struct tg_gpu_resource_request Header;
+        UINT LayoutVersion,Width,Height,Format;
+    } metadata={
+        {TG_GPU_RESOURCE_ABI,sizeof(struct tg_gpu_resource_request),2,4*sizeof(UINT),8192+65536,{0,0}},
+        1,64,64,D3DDDIFMT_A8R8G8B8
+    };
+    struct tg_gpu_allocation_request requests[2]={
+        {TG_GPU_ALLOCATION_ABI,TG_GPU_ALLOCATION_CPU_VISIBLE,4097},
+        {TG_GPU_ALLOCATION_ABI,0,65536}
+    };
+    DXGK_ALLOCATIONINFO info[2]={
+        {.pPrivateDriverData=&requests[0],.PrivateDriverDataSize=sizeof(requests[0])},
+        {.pPrivateDriverData=&requests[1],.PrivateDriverDataSize=sizeof(requests[1])}
+    };
+    DXGKARG_CREATEALLOCATION create={.NumAllocations=2,.pAllocationInfo=info,
+        .Flags.Resource=1,.pPrivateDriverData=&metadata,.PrivateDriverDataSize=sizeof(metadata)};
+    const UINT before=PoolsInUse();
+    const UINT64 charged=e->AllocationBytes;
+    metadata.Header.version++;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_GRAPHICS_DRIVER_MISMATCH);
+    metadata.Header.version=TG_GPU_RESOURCE_ABI;
+    create.pPrivateDriverData=NULL;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    create.pPrivateDriverData=&metadata;create.PrivateDriverDataSize=sizeof(metadata.Header)-1;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    create.PrivateDriverDataSize=sizeof(metadata);create.Flags.Resource=0;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    create.Flags.Resource=1;metadata.Header.allocation_count=1;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    metadata.Header.allocation_count=2;metadata.Header.header_bytes--;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    metadata.Header.header_bytes=sizeof(metadata.Header);metadata.Header.driver_data_bytes=UINT32_MAX;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    metadata.Header.driver_data_bytes=sizeof(metadata)-sizeof(metadata.Header);
+    metadata.Header.reserved[1]=1;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    metadata.Header.reserved[1]=0;
+    /* Validate the page-rounded total, including both short and long claims. */
+    metadata.Header.allocation_bytes=4097+65536;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    metadata.Header.allocation_bytes=8192+65536+PAGE_SIZE;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    metadata.Header.allocation_bytes=UINT64_MAX;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    metadata.Header.allocation_bytes=8192+65536;
+    CHECK(!create.hResource && !info[0].hAllocation && !info[1].hAllocation &&
+          e->AllocationBytes==charged && PoolsInUse()==before);
+    for(UINT i=0;i<3;i++) {
+        pool_fail_after=i;
+        CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_NO_MEMORY);
+        CHECK(!create.hResource && !info[0].hAllocation && !info[1].hAllocation &&
+              e->AllocationBytes==charged && !e->Creating && PoolsInUse()==before);
+    }
+    pool_fail_after=UINT32_MAX;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_SUCCESS);
+    HANDLE handles[2]={info[0].hAllocation,info[1].hAllocation};
+    CHECK(create.hResource && handles[0] && handles[1] &&
+          e->AllocationBytes==charged+8192+65536 && PoolsInUse()==before+3);
+    CHECK(create.pPrivateDriverData==&metadata && create.PrivateDriverDataSize==sizeof(metadata) &&
+          metadata.LayoutVersion==1 && metadata.Width==64 && metadata.Height==64 &&
+          metadata.Format==D3DDDIFMT_A8R8G8B8);
+    os_allocation[1]=handles[0];os_allocation[2]=handles[1];
+    DXGK_OPENALLOCATIONINFO oi[2]={{.hAllocation=1},{.hAllocation=2}};
+    DXGKARG_OPENALLOCATION open={.NumAllocations=2,.pOpenAllocation=oi,
+        .pPrivateDriverData=&metadata,.PrivateDriverSize=sizeof(metadata)};
+    metadata.Header.allocation_bytes+=PAGE_SIZE;
+    CHECK(ddi->DxgkDdiOpenAllocation(device,&open)==STATUS_INVALID_PARAMETER);
+    metadata.Header.allocation_bytes-=PAGE_SIZE;
+    open.PrivateDriverSize=0;
+    CHECK(ddi->DxgkDdiOpenAllocation(device,&open)==STATUS_INVALID_PARAMETER);
+    open.PrivateDriverSize=sizeof(metadata);
+    pool_fail_after=1;
+    CHECK(ddi->DxgkDdiOpenAllocation(device,&open)==STATUS_NO_MEMORY);
+    CHECK(!oi[0].hDeviceSpecificAllocation && !oi[1].hDeviceSpecificAllocation &&
+          !device->OpenAllocations && !os_references[1] && !os_references[2] && PoolsInUse()==before+3);
+    pool_fail_after=UINT32_MAX;
+    CHECK(ddi->DxgkDdiOpenAllocation(device,&open)==STATUS_SUCCESS);
+    HANDLE opened[2]={oi[0].hDeviceSpecificAllocation,oi[1].hDeviceSpecificAllocation};
+    CHECK(device->OpenAllocations==2 && PoolsInUse()==before+5);
+    CHECK(TgGpuValidateOpenAllocationRange(device,opened[0],0,8192,TRUE)==STATUS_SUCCESS);
+    CHECK(TgGpuValidateOpenAllocationRange(device,opened[1],0,65536,TRUE)==STATUS_SUCCESS);
+    DXGK_OPENALLOCATIONINFO peer_info={.hAllocation=1};
+    DXGKARG_OPENALLOCATION peer_open={.NumAllocations=1,.pOpenAllocation=&peer_info,
+        .pPrivateDriverData=&metadata,.PrivateDriverSize=sizeof(metadata),.Flags.ReadOnly=1};
+    CHECK(ddi->DxgkDdiOpenAllocation(peer,&peer_open)==STATUS_SUCCESS && peer->OpenAllocations==1);
+    CHECK(TgGpuValidateOpenAllocationRange(peer,peer_info.hDeviceSpecificAllocation,0,8192,FALSE)==STATUS_SUCCESS);
+    CHECK(TgGpuValidateOpenAllocationRange(peer,peer_info.hDeviceSpecificAllocation,0,8192,TRUE)==STATUS_ACCESS_DENIED);
+    DXGKARG_CLOSEALLOCATION close={.NumAllocations=2,.pOpenHandleList=opened};
+    CHECK(ddi->DxgkDdiCloseAllocation(device,&close)==STATUS_SUCCESS && !device->OpenAllocations);
+    CHECK(TgGpuValidateOpenAllocationRange(peer,peer_info.hDeviceSpecificAllocation,0,8192,FALSE)==STATUS_SUCCESS);
+    DXGKARG_CLOSEALLOCATION peer_close={.NumAllocations=1,.pOpenHandleList=&peer_info.hDeviceSpecificAllocation};
+    CHECK(ddi->DxgkDdiCloseAllocation(peer,&peer_close)==STATUS_SUCCESS && !peer->OpenAllocations);
+    CHECK(!os_references[1] && !os_references[2] && PoolsInUse()==before+3);
+    /* A second allocation batch cannot silently invalidate retained metadata,
+     * even if it omits the resource-private header. */
+    create.PrivateDriverDataSize=0;create.pPrivateDriverData=NULL;
+    CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+    CHECK(e->AllocationBytes==charged+8192+65536 && PoolsInUse()==before+3);
+    DXGKARG_DESTROYALLOCATION destroy={.NumAllocations=2,.pAllocationList=handles,
+        .hResource=create.hResource,.Flags.DestroyResource=1};
+    CHECK(ddi->DxgkDdiDestroyAllocation(e,&destroy)==STATUS_SUCCESS);
+    CHECK(e->AllocationBytes==charged && PoolsInUse()==before);
+}
+
 __declspec(noinline) static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_ENGINE *other,
                             DRIVER_INITIALIZATION_DATA *ddi,TG_GPU_DEVICE *device)
 {
@@ -590,6 +699,7 @@ __declspec(noinline) static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU
     CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_GRAPHICS_NO_VIDEO_MEMORY);
     RtlZeroMemory(&e->Tables->Scanout,sizeof(e->Tables->Scanout));
     TestLinearAllocations(e,ddi);
+    TestResourceMetadata(e,ddi,device,second.hDevice);
     CHECK(handle_acquires==handle_releases);
     CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyDevice(second.hDevice)));
     CHECK(PoolsInUse()==before-1);

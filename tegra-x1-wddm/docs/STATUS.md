@@ -21,6 +21,14 @@ passes, but NT shared texture creation returns `E_INVALIDARG`. These are raw
 storage/association checks, not shared-image rendering. .144 remains the
 GPU rendering/sharing baseline. [Runtime contract result](D3D_RUNTIME_SHARING.md)
 
+**Current WIP (2026-11-11):** the KMD now accepts a versioned resource-level
+storage descriptor on allocation creation and open. It checks the atomic
+allocation set and retains its size/count contract across device opens.
+The ARM64 controlled fixture passes on .59, including partial-failure
+cleanup and cross-device read-only opens. This source change is not installed
+as a live driver; the D3D UMD's image-layout and memory binding bridge remains
+pending. [Implementation and validation](D3D_RUNTIME_SHARING.md#resource-metadata-work)
+
 The rebuilt UMD/ICD also passes a native Windows D3D11 runtime regression
 at feature level 10_0: 16,384 RGBA/BGRA clear/triangle pixels match, implicit
 release completes and the process exits 0. The preceding .143 trial passed
@@ -38,7 +46,10 @@ Next: D3D runtime allocations/shared-image metadata, synchronization and
 sustained DWM presentation, then the separate Win32 Vulkan `vkcube` test. These remain
 unverified. .144 keeps the KMD core unchanged and uses an app-local
 Vulkan loader; system-loader packaging for DWM is still pending.
-Latest artifacts: `/private/tmp/t214-gpu-round/external-memory144.601od71q/`.
+New build artifacts are stored under
+`/Users/rujian/.local/share/mesa-switch-woa-build/runs/`.
+The original `/private/tmp/t214-gpu-round` directory is no longer present on
+the build host; the paths in earlier reports identify their original locations.
 
 The .132 trial passes 16 KiB NT-handle
 storage sharing between two KMT devices on GM20B, including CPU readback

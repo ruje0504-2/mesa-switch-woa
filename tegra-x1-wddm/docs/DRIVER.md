@@ -200,6 +200,18 @@ read-only opens and bounds. Residency and command validation are separate.
 Native ARM64 tests cover batch rollback, resource append failure, shared opens,
 read-only/bounds rejection, duplicate close/destroy rejection, and balanced
 lookup references on both successful and partially failed opens.
+
+Resources may now carry `tg_gpu_resource_request` followed by the UMD's
+opaque image/layout descriptor. The KMD validates the 32-byte header,
+allocation count, payload length and sum of page-rounded allocation sizes
+before charging memory. It retains the storage header on the resource.
+OpenAllocation checks the header against the original resource and rejects
+mixed allocation sets. A resource carrying this data is created as one
+atomic allocation set; later appends are rejected so the stored layout
+does not silently change. Raw resources with no private data retain their
+existing allocation/append behavior. The renderer still needs to define and
+validate the image/layout payload and bind the storage to its actual image.
+[Resource metadata validation](D3D_RUNTIME_SHARING.md#resource-metadata-work)
 [Microsoft GPUVA allocation example](https://github.com/microsoft/graphics-driver-samples/blob/de4a2161991eda254013da6c18226f5ea06e4a9c/compute-only-sample/coskmd/CosKmdAdapter.cpp)
 and [handle lifetime contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkcb_acquirehandledata).
 

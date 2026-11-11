@@ -12,6 +12,8 @@
 typedef struct _TG_GPU_RESOURCE {
     TG_GPU_CONTEXT_ENGINE *Engine;
     UINT Allocations,Builders;
+    BOOLEAN FixedAllocations;
+    struct tg_gpu_resource_request Metadata;
 } TG_GPU_RESOURCE;
 typedef union _TG_GPU_ALLOCATION_DESC {
     struct tg_gpu_allocation_request Buffer;
@@ -92,37 +94,67 @@ static UINT64 allocation_size(UINT64 bytes)
     return (bytes+PAGE_SIZE-1)&~(UINT64)(PAGE_SIZE-1);
 }
 
+static NTSTATUS resource_request(const VOID *data,UINT bytes,
+                                struct tg_gpu_resource_request *desc)
+{
+    if(!data || bytes<sizeof(*desc))return STATUS_INVALID_PARAMETER;
+    RtlCopyMemory(desc,data,sizeof(*desc));
+    if(desc->version!=TG_GPU_RESOURCE_ABI)return STATUS_GRAPHICS_DRIVER_MISMATCH;
+    if(desc->header_bytes!=sizeof(*desc) || !desc->allocation_count ||
+        desc->driver_data_bytes!=bytes-sizeof(*desc) || desc->reserved[0] || desc->reserved[1] ||
+        !desc->allocation_bytes || desc->allocation_bytes>TG_GPU_MEMORY_BUDGET_BYTES)
+        return STATUS_INVALID_PARAMETER;
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATION *a)
 {
     TG_GPU_CONTEXT_ENGINE *e=adapter;TG_GPU_RESOURCE *r=NULL;
     TG_GPU_ALLOCATION_DESC desc;TG_GPU_ALLOCATION *allocation;
     NTSTATUS status;KIRQL irql;UINT i,created=0;BOOLEAN new_resource=FALSE;
-    UINT64 bytes=0, limit;
+    struct tg_gpu_resource_request resource_desc={0};
+    UINT64 bytes=0, resource_bytes=0, limit;
     if(!e || !a || !e->Tables || e->Tables->SegmentId!=TG_GPU_EXPLICIT_TABLE_SEGMENT ||
-        a->PrivateDriverDataSize || a->Flags.Reserved || (!a->Flags.Resource && a->hResource) ||
+        a->Flags.Reserved || (!a->Flags.Resource && a->hResource) ||
         (a->NumAllocations && !a->pAllocationInfo) || (!a->NumAllocations && !a->Flags.Resource))
         return STATUS_INVALID_PARAMETER;
-    limit=TG_GPU_MEMORY_BUDGET_BYTES-e->Tables->Scanout.Bytes;
     /* Validate all user descriptors before allocating or changing a resource. */
     for(i=0;i<a->NumAllocations;++i) a->pAllocationInfo[i].hAllocation=NULL;
+    if(a->PrivateDriverDataSize) {
+        if(!a->Flags.Resource || a->hResource)
+            return STATUS_INVALID_PARAMETER;
+        status=resource_request(a->pPrivateDriverData,a->PrivateDriverDataSize,&resource_desc);
+        if(!NT_SUCCESS(status))return status;
+        if(resource_desc.allocation_count!=a->NumAllocations)
+            return STATUS_INVALID_PARAMETER;
+    }
+    limit=TG_GPU_MEMORY_BUDGET_BYTES-e->Tables->Scanout.Bytes;
     for(i=0;i<a->NumAllocations;++i) {
         status=request(&a->pAllocationInfo[i],&desc);
         if(!NT_SUCCESS(status)) return status;
+        const UINT64 size=allocation_size(desc.Buffer.bytes);
+        if(a->PrivateDriverDataSize) {
+            if(size>resource_desc.allocation_bytes-resource_bytes)
+                return STATUS_INVALID_PARAMETER;
+            resource_bytes+=size;
+        }
         if(desc.Buffer.flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY) {
             /* VidMm manages residency within the already charged segment. */
             if(!e->Tables->Scanout.Handle || !(desc.Buffer.flags&TG_GPU_ALLOCATION_CPU_VISIBLE) ||
                 desc.Buffer.bytes!=T214_GPU_POST_FB_SIZE) return STATUS_INVALID_PARAMETER;
             continue;
         }
-        UINT64 size=allocation_size(desc.Buffer.bytes);
         if(size>limit-bytes) return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
         bytes+=size;
     }
+    if(a->PrivateDriverDataSize && resource_bytes!=resource_desc.allocation_bytes)
+        return STATUS_INVALID_PARAMETER;
     KeAcquireSpinLock(&e->Lock,&irql);
     if(e->Stopping) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY; }
     if(a->Flags.Resource && a->hResource) {
         r=a->hResource;
         if(r->Engine!=e) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER; }
+        if(r->FixedAllocations) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER; }
     }
     /* Charge the batch before releasing the lock so concurrent devices
      * compete for the same UMA ceiling, including in-flight creates. */
@@ -136,7 +168,8 @@ NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATI
     if(a->Flags.Resource && !r) {
         r=ExAllocatePool2(POOL_FLAG_NON_PAGED,sizeof(*r),TAG);
         if(!r) goto fail;
-        r->Engine=e;new_resource=TRUE;
+        r->Engine=e;r->FixedAllocations=a->PrivateDriverDataSize!=0;
+        r->Metadata=resource_desc;new_resource=TRUE;
     }
     for(i=0;i<a->NumAllocations;++i) {
         allocation=ExAllocatePool2(POOL_FLAG_NON_PAGED,sizeof(*allocation),TAG);
@@ -268,13 +301,19 @@ NTSTATUS APIENTRY TgGpuDdiOpenAllocation(HANDLE device,const DXGKARG_OPENALLOCAT
 {
     TG_GPU_DEVICE *d=device;TG_GPU_CONTEXT_ENGINE *e;TG_GPU_OPEN_ALLOCATION *open;
     TG_GPU_ALLOCATION *allocation;KIRQL irql;NTSTATUS status=STATUS_SUCCESS;UINT i,created=0;
+    struct tg_gpu_resource_request metadata={0};TG_GPU_RESOURCE *resource=NULL;
     DXGKARGCB_GETHANDLEDATA query={.Type=DXGK_HANDLE_ALLOCATION};
-    if(!d || !a || !a->NumAllocations || !a->pOpenAllocation || a->PrivateDriverSize ||
+    if(!d || !a || !a->NumAllocations || !a->pOpenAllocation ||
         a->Flags.Reserved) return STATUS_INVALID_PARAMETER;
     e=d->Engine;
     if(!e->Dxgk.DxgkCbAcquireHandleData || !e->Dxgk.DxgkCbReleaseHandleData)
         return STATUS_INVALID_DEVICE_STATE;
     for(i=0;i<a->NumAllocations;++i) a->pOpenAllocation[i].hDeviceSpecificAllocation=NULL;
+    if(a->PrivateDriverSize) {
+        status=resource_request(a->pPrivateDriverData,a->PrivateDriverSize,&metadata);
+        if(!NT_SUCCESS(status))return status;
+        if(a->NumAllocations>metadata.allocation_count)return STATUS_INVALID_PARAMETER;
+    }
     KeAcquireSpinLock(&e->Lock,&irql);
     if(e->Stopping) { KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY; }
     ++d->OpenAllocations;++e->Creating;KeReleaseSpinLock(&e->Lock,irql);
@@ -284,7 +323,24 @@ NTSTATUS APIENTRY TgGpuDdiOpenAllocation(HANDLE device,const DXGKARG_OPENALLOCAT
         if(!open) { status=STATUS_NO_MEMORY;break; }
         query.hObject=a->pOpenAllocation[i].hAllocation;
         allocation=e->Dxgk.DxgkCbAcquireHandleData(&query,&release.ReleaseHandle);
-        if(allocation && release.ReleaseHandle && allocation->Engine==e) {
+        BOOLEAN valid=allocation && release.ReleaseHandle && allocation->Engine==e;
+        if(valid) {
+            TG_GPU_RESOURCE *group=allocation->Resource;
+            if(group && group->FixedAllocations) {
+                /* Dxgkrnl forwards the original resource-level data here.
+                 * All opens in this call must refer to that allocation set.
+                 * The renderer owns interpretation of its trailing payload.
+                 */
+                valid=a->PrivateDriverSize && (!resource || resource==group) &&
+                    metadata.allocation_count==group->Metadata.allocation_count &&
+                    metadata.allocation_bytes==group->Metadata.allocation_bytes &&
+                    metadata.driver_data_bytes==group->Metadata.driver_data_bytes;
+                resource=group;
+            } else {
+                valid=!a->PrivateDriverSize;
+            }
+        }
+        if(valid) {
             open->Device=d;open->Allocation=allocation;open->ReadOnly=a->Flags.ReadOnly;
             KeAcquireSpinLock(&e->Lock,&irql);++allocation->Opens;++d->OpenAllocations;KeReleaseSpinLock(&e->Lock,irql);
             a->pOpenAllocation[i].hDeviceSpecificAllocation=open;++created;

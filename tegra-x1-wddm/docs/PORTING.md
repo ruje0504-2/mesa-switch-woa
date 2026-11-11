@@ -128,6 +128,10 @@ shared-image metadata, synchronization and sustained composition/presentation.
 Device and resource tests must select and report the GM20B LUID.
 The UMD must handle runtime-owned allocation and presentation callbacks,
 resource layout metadata, ownership and completion across devices.
+The KMD now accepts the versioned resource-level storage envelope, with
+controlled ARM64 coverage of create/open/cleanup. The UMD image payload and
+NVK binding remain to be connected; see the
+[current resource metadata work](D3D_RUNTIME_SHARING.md#resource-metadata-work).
 [Adapter DDI](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_openadapter)
 [Shared-resource DDI](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_openresource)
 

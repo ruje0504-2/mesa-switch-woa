@@ -86,3 +86,57 @@ Artifacts and diagnostic source:
 | Diagnostic UMD | `6f528daad49df78acf7c96a83f04eed07ac51890461ae4f11a0c3c8b4842cc86` |
 | Runtime application probe | `fd7523c45d6bedda71acb10c36571b69789e9486734324b16f3226351b77f185` |
 | Diagnostic Resource.cpp | `fa849818caac21fd3c02ba8c65a30f1c398354e4f5da82d066636ea67c063b91` |
+
+## Resource metadata work
+
+On 2026-11-11 the KMD create/open paths gain a resource-level storage
+envelope. Both previously rejected all nonempty resource-private data.
+`tg_gpu_resource_request` is a 32-byte, pointer-free header with version,
+header length, allocation count, renderer-payload length and the sum of
+page-rounded allocation sizes. Allocation creation validates it before
+charging memory or allocating objects; the KMD retains the storage header.
+The trailing renderer payload is opaque to the KMD and is not yet a defined
+or implemented D3D image-layout contract.
+
+Windows forwards the original resource-specific data to OpenAllocation.
+The KMD now accepts matching metadata, requires the opened allocations to
+belong to the same fixed allocation set, and preserves each device's
+read/write access. Later allocation appends are rejected for these fixed
+sets; resources without private data retain the original behavior.
+[CreateAllocation resource data](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgkarg_createallocation)
+[OpenAllocation resource data](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgkarg_openallocation)
+
+The D3D runtime allocation handle cannot simply be used with NVK's separate
+paging queue: MakeResident requires allocations to belong to the device
+that owns that queue. Sharing/binding must preserve device ownership and
+residency as well as the process GPU address space. The .145 legacy/NT
+handle and negotiated DDI questions remain open.
+[Residency device ownership](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dukmdt/ns-d3dukmdt-d3dddi_makeresident)
+
+The standard KMD build passes the host models and builds the ARM64 library
+and WDK fixtures. At 00:34:50 UTC, `test-context.exe` passes on the .59 Code 0
+baseline with controlled OS/GPU substitutes. Coverage includes malformed
+headers, incorrect rounded totals, create/open allocation failures, balanced
+references, cross-device read-only access after another device closes, and
+append rejection without changing existing allocations or budget charges.
+Existing buffer, shared-open and context/queue tests also pass. This is not
+a live installation or GPU execution result; the desktop image bridge and
+DWM remain pending.
+
+Executable SHA-256:
+`2cc70b21bf3c9458d0f5511cbb7f5a3ec75d91eb716db4a3f090d9380e8cb730`.
+The downloaded final report matches device-side length and SHA-256
+`19b660447c0a226c0231b380379bd0ee0891db400c95c38244068bf0ff4b09ae`.
+Artifacts, exact build command and source diff are retained under
+`/Users/rujian/.local/share/mesa-switch-woa-build/runs/resource-metadata-20261111/`.
+
+The former `/private/tmp/t214-gpu-round` host directory is no longer present.
+The C/C++ toolchain and SDK/WDK were restored into
+`/Users/rujian/.local/share/mesa-switch-woa-build/`: LLVM-MinGW 20261104 and
+SDK/WDK NuGet 10.0.26100.6584 (Include 10.0.26100.0). Download origins/hashes
+are recorded in `downloads-manifest.json`. The full Mesa/Rust/host shader
+tool build environment still needs restoration before a new UMD/ICD build.
+The two .144 native result JSON files and the .145 native result JSON were
+recovered from the device into `recovered-evidence/`; all three match the
+original verified hashes. This does not restore the former host build trees
+or the .145 diagnostic source.
