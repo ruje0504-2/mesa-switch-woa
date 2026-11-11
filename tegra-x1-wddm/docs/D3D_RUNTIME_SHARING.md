@@ -323,3 +323,127 @@ the operation; the low 32 bits contain the allocation handle when available.
 | 6 | Deallocate runtime resource |
 | 7 / 8 | CPU lock / unlock |
 | 9 / 10 | Create / destroy paging queue |
+
+## Runtime context registration
+
+The full retained kernel stream from `sampler-binding-auto-20261111` was
+reviewed after the UMD-only export. The existing native exporter produces
+252,932 complete records, including 239,158 DxgKrnl events, with an exact
+count/length match. Every DxgKrnl payload decodes to the installed provider's
+matching ID/version template without unknown layouts or trailing bytes.
+The raw export and provider metadata match device hashes. This remains a
+circular trace, not a complete boot history. Analysis artifacts are under
+`runs/dwm-mode-analysis-20261111/` in the external build root.
+
+DWM PID 460/TID 1600 records 142 `AzureTriage` events saying that a signal
+requires at least one broadcast context. They occur during the repeating
+mode/resource cycle, 7–229 ms after the preceding retained successful UMD
+SetDisplayMode. The source never registered a context with the D3D runtime:
+its NVK queue owns a separate KMT device/context. This is a concrete contract
+gap and a stronger lead than the 562 unsupported IOCTL results. Those IOCTL
+records have a zero control code in their captured stack locations and do
+not establish the cause of the DWM loop. Adapter pointers also differ across
+the visibility/flush/history records; do not attribute every kernel Present
+event to the Tegra rendering path.
+
+The working tree now creates a virtual-addressing context through
+`pfnCreateContextVirtualCb` on the real runtime device and destroys it through
+the matching callback. Creating the UMD device fails with the original
+HRESULT if registration fails. No NVK KMT handle is substituted for a runtime
+handle. Until the two owners share a GPU timeline, the UMD's Flush waits for
+its Zink/NVK fence before the runtime may signal its separate context; device
+destruction drains the GPU before destroying that runtime context. This is
+a synchronous correctness bridge with a performance cost, not a claim that
+Present or shared-image integration is finished.
+[Virtual context callback](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/nc-d3dumddi-pfnd3dddi_createcontextvirtualcb)
+[D3D10 Flush contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_flush)
+[DXGI Present context ownership](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgiddicb_present)
+
+ARM64 compilation passes. The controlled device fixture at 11:31:00 UTC
+checks callback ownership, failed-create cleanup, GPU fence waits and failed
+wait propagation, as well as existing rendering/resource cleanup. The other
+primary/adapter/entry controls pass; their finalized ETL has 57 valid events
+without recorded loss. Native candidate `runtime-context-auto-20261111`
+uses UMD artifact `runtime-primary-20261111-umd+41f76160496e`, the same ICD
+and signed .144 KMD.
+
+That first trial reaches Code 0/native LUID `9dd9e` at 11:35:11 UTC but does
+not run either pixel probe. The interactive observer fails to publish its
+fresh JSON because the automation's read temporarily denies writes. Its
+separately completed display-path records show the correct native identity;
+the gate correctly refuses the stale Code 43 snapshot. The next harness
+uses a shared read and waits for the fresh snapshot before opening its path
+log. This is a harness fix, not a changed GPU binary or relaxed identity gate.
+
+The retained kernel stream has 252,348 complete records; all 245,967 DxgKrnl
+payloads decode against the installed templates. DWM PID 764 records 316
+`SignalSynchronizationObjectFromGpu` events with `ContextCount=1`, non-null
+contexts and advancing fence values. Its UMD GPU-completion records return
+S_OK. The old empty-broadcast diagnostic is absent from this retained window,
+but the finalized UMD export reports two lost events, and the trace is
+circular. These are positive synchronization observations, not proof of
+complete startup coverage or a desktop fix. Primary/mode recreation remains.
+All 120 returned files (56,354,345 bytes) match device hashes; .59 Code 0,
+cleanup, portrait and unchanged power policy are verified at 11:39 UTC.
+
+`runtime-context-shared-auto-20261111` reuses those exact binaries and their
+verified controls. In addition to the reader fix, it records DXGI API return
+values and DWM composition/scheduling at informational level using templates
+read from the device.
+
+On native LUID `9b7ff`, the probes run at 11:54:21.950–11:54:41.669 UTC.
+All 16,384 ordinary clear/triangle pixels and 24,576 independent `t5/s2`
+sampling pixels match. Both explicitly release their context/device, return
+S_OK from GetDeviceRemovedReason and exit 0 without timeout. Their runtime
+context creation and destruction callbacks succeed. DWM PID 488 records 401
+successful GPU-completion waits and 134 successful SetDisplayMode callbacks;
+261 kernel GPU-signal events have `ContextCount=1` with non-null contexts and
+advancing fence values. No empty-broadcast diagnostic is retained. The ETL
+is finalized with 13,878 valid UMD events and no reported event/buffer loss.
+
+The full export has 253,480 records, including 228,484 DxgKrnl, 7,728 DXGI
+and 3,370 Dwm-Core events. All three providers decode with exact payload
+lengths against this OS's templates, including nested DWM structures. This
+still covers the retained circular window, not the entire startup.
+
+### Fullscreen transition boundary
+
+DWM PID 488/TID 1900 attempts SetFullscreenState(TRUE) 133 times. Both the
+DXGI operation's return event and its API return event report `887a0025`,
+`DXGI_ERROR_MODE_CHANGE_IN_PROGRESS`, on every retained complete pair. This
+is the error value, not the different success-severity status `087a0008`.
+Each attempt's output remains windowed, with null primary/output pointers;
+the corresponding swapchain is then destroyed and recreated. The UMD's
+preceding SetDisplayMode returns S_OK; the later DXGI return follows it by
+3.2–161.6 ms (median 14.0 ms). Its first journal error appears immediately
+after that DDI return. The error identifies an incomplete transition but
+does not establish which component causes it.
+[Microsoft error-code definition](https://learn.microsoft.com/en-us/windows/win32/com/com-error-codes-10)
+[SetFullscreenState contract](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiswapchain-setfullscreenstate)
+
+The swapchain requests three 720x1280 BGRA buffers, 60/1 Hz, sample count 1,
+and swap effect 1. There is no retained UMD Present/Blt/OpenResource call or
+runtime-error callback. Those absences do not prove what happened before
+the circular window. Two retained DWM HWDEVICE creation events identify
+Microsoft Basic Render Driver LUID `547d`/FL12_1; they must not be reported
+as Tegra feature-level results. The native D3D probes remain FL10_0.
+
+Capture is still black on the native `Default` desktop, with matched native
+adapter, origin (0,0), 96 DPI, portrait 720x1280 and identity rotation.
+Visible DWM composition and sustained Present are not established. The next
+investigation is transition completion and the primary/presentation contract,
+not an unsupported feature-level increase or speculative scanout-register
+change.
+
+All 145 returned files (58,992,567 bytes) match device lengths and SHA-256.
+The raw event export hashes to
+`de5210fd632314db473658c25a6c50915cdf47a7608ff80826b02089d18b868a`.
+The automatic rollback is verified at 11:58:44 UTC: .59 Code 0, original
+driver/ACPI hashes, cleared temporary tasks/registration/environment and
+unchanged power policy. Portrait restore/verification at 11:59:25 UTC is a
+no-op. Evidence and decoding artifacts are in the external build root's
+`runs/runtime-context-shared-auto-20261111/` directory.
+
+Numeric event 30, `RuntimeContext`, uses `arg0` stages 1=create, 2=destroy,
+3=GPU completion. `arg1` records a non-null returned context or completed
+fence as a boolean, not an opaque handle value; the HRESULT is preserved.

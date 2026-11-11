@@ -18,7 +18,7 @@ OpenGL compatibility route.
 | Native Vulkan | NVK rendered an offscreen triangle and read back the expected pixels and guards with driver **0.1.0.87**. A Win32 preview showed that readback. |
 | Display adapter | **0.1.0.130** reached **Code 0**, completed GDI copies and displayed verified RGB bars on the internal panel through the GM20B VidPN and native scanout. |
 | Shared storage | **0.1.0.144** passes Vulkan Win32 buffer/image sharing, GPU read/write after producer-device release, and re-export: 32,768 payload words plus 512 guards match. [Scope and evidence](tegra-x1-wddm/docs/VULKAN_WIN32_MEMORY.md). |
-| Windows desktop | Native D3D11 FL10_0 drawing, independent texture/sampler bindings and teardown pass 40,960 pixels. Runtime-owned primary allocation, residency, GPUVA import and actual SetDisplayMode callbacks now succeed. Sustained Present, visible hardware DWM composition and shared-image opens remain pending. [Evidence](tegra-x1-wddm/docs/D3D_RUNTIME_SHARING.md#runtime-primary-bridge-work). |
+| Windows desktop | Native D3D11 FL10_0 drawing, independent texture/sampler bindings and teardown pass 40,960 pixels. Runtime primary allocation, SetDisplayMode and context synchronization succeed. DWM still fails its fullscreen transition with `DXGI_ERROR_MODE_CHANGE_IN_PROGRESS`; visible composition, sustained Present and shared-image opens remain pending. [Evidence](tegra-x1-wddm/docs/D3D_RUNTIME_SHARING.md#runtime-context-registration). |
 
 Package versions above identify KMD releases. Recent tests reuse the signed
 **.144** KMD while updating UMD/Zink and NVK separately; each build manifest

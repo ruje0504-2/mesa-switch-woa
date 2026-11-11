@@ -21,7 +21,7 @@ static const char *event_name(USHORT id)
       "OpenResource", "Present", "Blt", "SetDisplayMode", "ZinkFailure", "ZinkMessage",
       "ZinkInstanceCall", "ZinkInstanceInfo", "RuntimeError", "ResourceCreateBegin",
       "ResourceCreateSize", "ResourceCreateEnd", "FormatBegin", "FormatEnd",
-      "Multisample", "DestroyDeviceBegin", "DestroyDeviceEnd", "RuntimeMemory"};
+      "Multisample", "DestroyDeviceBegin", "DestroyDeviceEnd", "RuntimeMemory", "RuntimeContext"};
    return id < ARRAYSIZE(names) ? names[id] : "unknown";
 }
 

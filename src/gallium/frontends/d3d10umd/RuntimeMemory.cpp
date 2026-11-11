@@ -330,19 +330,61 @@ HRESULT RuntimePrimaryError(RuntimePrimary *p)
 
 const wsi_win32_memory *RuntimePrimaryMemory(RuntimePrimary *p) { return &p->memory; }
 
-HRESULT RuntimePrimaryFinish(Device *device, Resource *resource)
+HRESULT RuntimeDeviceCreateContext(Device *device)
 {
-   if (!resource->runtime_primary || !resource->resource) return S_OK;
+   const auto &cb = device->KTCallbacks;
+   auto screen = device->pipe->screen;
+   if (!cb.pfnCreateContextVirtualCb || !cb.pfnDestroyContextCb ||
+       !screen->fence_finish || !screen->fence_reference)
+      return DXGI_ERROR_UNSUPPORTED;
+   /* NVK's KMT context is not registered with the D3D runtime. The runtime
+    * needs its own context for implicit synchronization and DXGI Present. */
+   D3DDDICB_CREATECONTEXTVIRTUAL args = {};
+   args.EngineAffinity = 1;
+   HRESULT hr = cb.pfnCreateContextVirtualCb(device->hDevice, &args);
+   if (SUCCEEDED(hr)) {
+      if (!args.hContext) hr = E_FAIL;
+      else device->hContext = args.hContext;
+   }
+   D3D10Trace(D3D10_TRACE_RUNTIME_CONTEXT, hr, 1, device->hContext != NULL);
+   return hr;
+}
+
+HRESULT RuntimeDeviceDestroyContext(Device *device)
+{
+   if (!device->hContext) return S_OK;
+   D3DDDICB_DESTROYCONTEXT args = {};
+   args.hContext = device->hContext;
+   HRESULT hr = device->KTCallbacks.pfnDestroyContextCb(device->hDevice, &args);
+   D3D10Trace(D3D10_TRACE_RUNTIME_CONTEXT, hr, 2, 1);
+   device->hContext = NULL;
+   return hr;
+}
+
+HRESULT RuntimeDeviceFinish(Device *device)
+{
    auto pipe = device->pipe;
    auto screen = pipe->screen;
    if (!screen->fence_finish || !screen->fence_reference) return E_FAIL;
-   if (pipe->flush_resource) pipe->flush_resource(pipe, resource->resource);
    struct pipe_fence_handle *fence = NULL;
+   /* NVK submits on a separate KMT context. Complete its work before the
+    * runtime signals the context above, so an implicit signal cannot pass
+    * pending rendering. A shared GPU fence can replace this synchronous
+    * bridge when the two context owners expose a common timeline. */
    pipe->flush(pipe, &fence, PIPE_FLUSH_HINT_FINISH);
    bool finished = fence && screen->fence_finish(screen, pipe, fence, UINT64_MAX);
    screen->fence_reference(screen, &fence, NULL);
-   if (!finished) return D3DDDIERR_DEVICEREMOVED;
+   HRESULT hr = finished ? S_OK : D3DDDIERR_DEVICEREMOVED;
    if (pipe->get_device_reset_status && pipe->get_device_reset_status(pipe) != PIPE_NO_RESET)
-      return D3DDDIERR_DEVICEREMOVED;
-   return S_OK;
+      hr = D3DDDIERR_DEVICEREMOVED;
+   D3D10Trace(D3D10_TRACE_RUNTIME_CONTEXT, hr, 3, finished);
+   return hr;
+}
+
+HRESULT RuntimePrimaryFinish(Device *device, Resource *resource)
+{
+   if (!resource->runtime_primary || !resource->resource) return S_OK;
+   if (device->pipe->flush_resource)
+      device->pipe->flush_resource(device->pipe, resource->resource);
+   return RuntimeDeviceFinish(device);
 }

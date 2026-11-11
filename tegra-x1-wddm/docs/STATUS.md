@@ -3,6 +3,22 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**Latest runtime-context result (2026-11-11):** the UMD now registers a real
+D3D runtime context and completes NVK GPU work before runtime synchronization.
+On native LUID `9b7ff`, all 40,960 ordinary/sampled pixels match and both probes
+release their devices and exit 0. DWM issues 261 GPU synchronization signals
+with nonempty context lists; its 401 recorded GPU waits return S_OK. The
+finalized trace reports no loss, and all 145 returned files match device hashes.
+.59 Code 0, cleanup, portrait and unchanged power policy are verified.
+
+**Current desktop boundary:** DWM's SetFullscreenState returns
+`887a0025` (`DXGI_ERROR_MODE_CHANGE_IN_PROGRESS`) 133 times despite successful
+UMD SetDisplayMode calls. Each attempt leaves the swapchain windowed with no
+primary and is followed by swapchain destruction/recreation. Capture on the
+verified native `Default` desktop remains black. Identify why this transition
+does not complete; Present and shared-image integration also remain unfinished.
+[Runtime context evidence and implementation](D3D_RUNTIME_SHARING.md#runtime-context-registration)
+
 **Primary bridge native result (2026-11-11):** the driver now creates the portrait
 primary through the D3D runtime, imports that same allocation into NVK through
 Mesa-internal owner callbacks, and routes SetDisplayMode to the real runtime
@@ -30,12 +46,12 @@ Present and shared-image opens remain unfinished.
 Recent experiments reuse the signed `.144` KMD while replacing the test UMD
 and ICD; they are not unchanged GPU builds. Standalone build manifests now
 name their component and include a readable `artifact_id` with the DLL hash.
-The current primary-bridge candidate uses:
+The latest runtime-context trial uses:
 
 | Component | Candidate identifier |
 | --- | --- |
 | Signed KMD package | `0.1.0.144` (reused binary) |
-| D3D UMD / Zink | `runtime-primary-20261111-umd+826085f423ab` |
+| D3D UMD / Zink | `runtime-primary-20261111-umd+41f76160496e` |
 | NVK ICD | `runtime-primary-20261111-icd-v2+f828845c38b7` |
 
 These are test-deployment identifiers. Rollback reinstalls `.59`; a future

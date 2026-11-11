@@ -31,6 +31,28 @@ static pipe_transfer transfer = {};
 static unsigned char mapped_bytes[16];
 static unsigned vertex_elements, vertex_binds, draws;
 static unsigned vertex_element_handle;
+static unsigned runtime_contexts, fence_refs, fence_waits, fence_token;
+static bool fail_context, fail_wait;
+static HANDLE runtime_device = reinterpret_cast<HANDLE>(0x123);
+static HANDLE runtime_context = reinterpret_cast<HANDLE>(0x456);
+
+static HRESULT APIENTRY create_runtime_context(HANDLE device, D3DDDICB_CREATECONTEXTVIRTUAL *args)
+{
+   CHECK(device == runtime_device && !args->NodeOrdinal && args->EngineAffinity == 1);
+   CHECK(!args->Flags.Value && !args->PrivateDriverDataSize && !args->pPrivateDriverData);
+   if (fail_context) return E_ACCESSDENIED;
+   CHECK(!runtime_contexts++);
+   args->hContext = runtime_context;
+   return S_OK;
+}
+
+static HRESULT APIENTRY destroy_runtime_context(HANDLE device, const D3DDDICB_DESTROYCONTEXT *args)
+{
+   CHECK(device == runtime_device && args->hContext == runtime_context);
+   CHECK(runtime_contexts == 1 && contexts == 1 && !fence_refs && fence_waits && !shaders);
+   --runtime_contexts;
+   return S_OK;
+}
 
 static void APIENTRY set_error(D3D10DDI_HRTCORELAYER, HRESULT error)
 {
@@ -61,6 +83,15 @@ d3d10_create_screen(HANDLE, const D3DDDI_ADAPTERCALLBACKS *, pipe_screen **resul
       return &buffer;
    };
    screen.resource_destroy = [](pipe_screen *, pipe_resource *) { CHECK(resources); --resources; };
+   screen.fence_reference = [](pipe_screen *, pipe_fence_handle **dst, pipe_fence_handle *src) {
+      if (*dst) { CHECK(*dst == reinterpret_cast<pipe_fence_handle *>(&fence_token) && fence_refs); --fence_refs; }
+      if (src) ++fence_refs;
+      *dst = src;
+   };
+   screen.fence_finish = [](pipe_screen *, pipe_context *, pipe_fence_handle *fence, uint64_t timeout) {
+      CHECK(fence == reinterpret_cast<pipe_fence_handle *>(&fence_token) && timeout == UINT64_MAX);
+      ++fence_waits; return !fail_wait;
+   };
    screen.is_format_supported = [](pipe_screen *, pipe_format, pipe_texture_target, unsigned, unsigned, unsigned) { return true; };
    screen.context_create = [](pipe_screen *screen, void *, unsigned) -> pipe_context * {
       if (!mode)
@@ -76,7 +107,9 @@ d3d10_create_screen(HANDLE, const D3DDDI_ADAPTERCALLBACKS *, pipe_screen **resul
       context.bind_vs_state = context.bind_fs_state = [](pipe_context *, void *) {};
       context.bind_blend_state = context.bind_rasterizer_state = context.bind_vs_state;
       context.bind_depth_stencil_alpha_state = context.bind_vertex_elements_state = context.bind_vs_state;
-      context.flush = [](pipe_context *, pipe_fence_handle **, unsigned) {};
+      context.flush = [](pipe_context *, pipe_fence_handle **fence, unsigned) {
+         if (fence) { *fence = reinterpret_cast<pipe_fence_handle *>(&fence_token); ++fence_refs; }
+      };
       context.set_stencil_ref = [](pipe_context *, pipe_stencil_ref) {};
       context.set_constant_buffer = [](pipe_context *, mesa_shader_stage, unsigned, const pipe_constant_buffer *) {};
       context.create_vertex_elements_state = [](pipe_context *, unsigned count, const pipe_vertex_element *elements) -> void * {
@@ -147,12 +180,15 @@ int main(void)
    const SIZE_T bytes = adapter_functions.pfnCalcPrivateDeviceSize(open.hAdapter, &size);
    CHECK(bytes);
    D3DDDI_DEVICECALLBACKS kernel_callbacks = {};
+   kernel_callbacks.pfnCreateContextVirtualCb = create_runtime_context;
+   kernel_callbacks.pfnDestroyContextCb = destroy_runtime_context;
    D3D10DDI_CORELAYER_DEVICECALLBACKS runtime_callbacks = {};
    runtime_callbacks.pfnSetErrorCb = set_error;
    DXGI_DDI_BASE_FUNCTIONS dxgi = {};
    D3D10DDI_DEVICEFUNCS functions = {};
    D3D10DDIARG_CREATEDEVICE create = {};
    create.Interface = size.Interface;
+   create.hRTDevice.handle = runtime_device;
    create.hDrvDevice.pDrvPrivate = calloc(1, bytes);
    CHECK(create.hDrvDevice.pDrvPrivate);
    create.pDeviceFuncs = &functions;
@@ -163,8 +199,18 @@ int main(void)
       CHECK(adapter_functions.pfnCreateDevice(open.hAdapter, &create) == E_OUTOFMEMORY);
       CHECK(!shaders && !contexts && !functions.pfnDestroyDevice);
    }
+   fail_context = true;
+   CHECK(adapter_functions.pfnCreateDevice(open.hAdapter, &create) == E_ACCESSDENIED);
+   CHECK(!runtime_contexts && !contexts && !shaders && !functions.pfnDestroyDevice);
+   fail_context = false;
    CHECK(adapter_functions.pfnCreateDevice(open.hAdapter, &create) == S_OK);
-   CHECK(contexts == 1 && shaders == 2 && functions.pfnCreateResource && functions.pfnDraw);
+   CHECK(contexts == 1 && runtime_contexts == 1 && shaders == 2 && functions.pfnCreateResource && functions.pfnDraw);
+   functions.pfnFlush(create.hDrvDevice);
+   CHECK(fence_waits == 1 && !fence_refs && resource_error == S_OK);
+   fail_wait = true;
+   functions.pfnFlush(create.hDrvDevice);
+   CHECK(fence_waits == 2 && !fence_refs && resource_error == D3DDDIERR_DEVICEREMOVED);
+   fail_wait = false; resource_error = S_OK;
    D3D10DDI_MIPINFO mip = {};
    mip.TexelWidth = 16;
    mip.TexelHeight = mip.TexelDepth = 1;
@@ -251,9 +297,9 @@ int main(void)
    present.hDevice = reinterpret_cast<DXGI_DDI_HDEVICE>(create.hDrvDevice.pDrvPrivate);
    CHECK(dxgi.pfnPresent(&present) == DXGI_ERROR_UNSUPPORTED);
    functions.pfnDestroyDevice(create.hDrvDevice);
-   CHECK(!contexts && !shaders && !vertex_elements);
+   CHECK(!contexts && !runtime_contexts && !shaders && !vertex_elements && !fence_refs);
    free(create.hDrvDevice.pDrvPrivate);
    CHECK(adapter_functions.pfnCloseAdapter(open.hAdapter) == S_OK && screen_destroys == 1);
-   puts("D3D UMD device/loss cleanup and four draw paths with GPU-only vertex buffers pass (controlled Gallium backend)");
+   puts("D3D UMD runtime context ownership, GPU fence completion/loss cleanup and four draw paths pass (controlled Gallium backend)");
    return 0;
 }

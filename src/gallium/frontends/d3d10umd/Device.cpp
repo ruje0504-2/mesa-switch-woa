@@ -44,6 +44,9 @@
 
 #include "Debug.h"
 #include "Trace.h"
+#ifdef D3D10_UMD_HARDWARE
+#include "RuntimeMemory.h"
+#endif
 
 #include "util/u_sampler.h"
 #include "util/u_framebuffer.h"
@@ -176,6 +179,16 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
    pDevice->KTCallbacks = *pCreateData->pKTCallbacks;
    pDevice->UMCallbacks = *pCreateData->pUMCallbacks;
    pDevice->pDXGIBaseCallbacks = pCreateData->DXGIBaseDDI.pDXGIBaseCallbacks;
+
+#ifdef D3D10_UMD_HARDWARE
+   HRESULT runtime_context = RuntimeDeviceCreateContext(pDevice);
+   if (FAILED(runtime_context)) {
+      DestroyDevice(pCreateData->hDrvDevice);
+      memset(pDevice, 0, sizeof *pDevice);
+      D3D10Trace(D3D10_TRACE_CREATE_DEVICE_RESULT, runtime_context, pCreateData->Interface, 4);
+      return runtime_context;
+   }
+#endif
 
    pDevice->draw_so_target = NULL;
 
@@ -353,7 +366,13 @@ DestroyDevice(D3D10DDI_HDEVICE hDevice)   // IN
    Device *pDevice = CastDevice(hDevice);
    struct pipe_context *pipe = pDevice->pipe;
 
-   pipe->flush(pipe, NULL, 0);
+#ifdef D3D10_UMD_HARDWARE
+   if (pDevice->hContext) {
+      HRESULT hr = RuntimeDeviceFinish(pDevice);
+      if (FAILED(hr)) SetError(hDevice, hr);
+   } else
+#endif
+      pipe->flush(pipe, NULL, 0);
 
    for (i = 0; i < PIPE_MAX_SO_BUFFERS; ++i) {
       pipe_so_target_reference(&pDevice->so_targets[i], NULL);
@@ -388,6 +407,10 @@ DestroyDevice(D3D10DDI_HDEVICE hDevice)   // IN
    pipe->set_sampler_views(pipe, MESA_SHADER_GEOMETRY, 0,
                            PIPE_MAX_SHADER_SAMPLER_VIEWS, 0, sampler_views);
 
+#ifdef D3D10_UMD_HARDWARE
+   HRESULT released = RuntimeDeviceDestroyContext(pDevice);
+   if (FAILED(released)) SetError(hDevice, released);
+#endif
    pipe->destroy(pipe);
    D3D10Trace(D3D10_TRACE_DESTROY_DEVICE_END, S_OK, 0, 0);
 }
@@ -455,9 +478,14 @@ Flush(D3D10DDI_HDEVICE hDevice)  // IN
 {
    LOG_ENTRYPOINT();
 
+#ifdef D3D10_UMD_HARDWARE
+   HRESULT hr = RuntimeDeviceFinish(CastDevice(hDevice));
+   if (FAILED(hr)) SetError(hDevice, hr);
+#else
    struct pipe_context *pipe = CastPipeContext(hDevice);
 
    pipe->flush(pipe, NULL, 0);
+#endif
 }
 
 
