@@ -215,6 +215,22 @@ driver. The snapshot format is local Windows data, not an ICD/KMD ABI.
   tegra-x1-wddm/tools/display_state.cpp -luser32 -lgdi32 -o display-state.exe
 ```
 
+For a rotation trial, `rotation-test <degrees>` validates the requested mode
+without applying it. `rotation <degrees>` applies it temporarily; only
+`rotation-save <degrees>` persists it. Accepted angles are 0/90/180/270 in
+the [CCD clockwise convention](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ne-wingdi-displayconfig_rotation).
+The helper keeps the current target timing/identity, derives source dimensions
+from the native signal, validates the complete configuration, then checks the
+returned source size, target size and rotation. It does not allow Windows to
+silently choose another mode. These commands require an active input desktop.
+[Validation, temporary apply and persistence flags](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setdisplayconfig)
+
+The added rotation commands compile for Windows ARM64 with warnings treated as
+errors. Their Windows execution/physical result is still pending; the active
+`.148` portrait trial retains the previous, hash-verified helper. Keep the saved
+baseline snapshot for recovery and persist the final landscape mode only after
+the requested physical orientation is verified.
+
 Before a native trial, save `display-state.exe save user-display.bin` from
 the user's preferred baseline. Check `display-state.exe visible` before
 launching and while capturing visible output. After driver/ACPI rollback

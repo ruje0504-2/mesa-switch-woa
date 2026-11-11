@@ -246,14 +246,60 @@ static LONG configure(const snapshot &current, const snapshot &saved, UINT32 fla
    return SetDisplayConfig(1, &path, 2, modes, flags | SDC_USE_SUPPLIED_DISPLAY_CONFIG);
 }
 
+static int orient(const snapshot &current, const WCHAR *operation, const WCHAR *angle)
+{
+   unsigned quarter;
+   if (!std::wcscmp(angle, L"0")) quarter = 0;
+   else if (!std::wcscmp(angle, L"90")) quarter = 1;
+   else if (!std::wcscmp(angle, L"180")) quarter = 2;
+   else if (!std::wcscmp(angle, L"270")) quarter = 3;
+   else { std::fprintf(stderr, "Expected a CCD clockwise angle: 0, 90, 180 or 270\n"); return 2; }
+   if (!visible_desktop()) {
+      print_state(current, operation, false, ERROR_ACCESS_DENIED);
+      return 1;
+   }
+   snapshot desired = current;
+   const auto &native = current.target.targetVideoSignalInfo.activeSize;
+   desired.source.width = quarter & 1 ? native.cy : native.cx;
+   desired.source.height = quarter & 1 ? native.cx : native.cy;
+   desired.path.targetInfo.rotation = static_cast<DISPLAYCONFIG_ROTATION>(quarter + 1);
+   desired.path.targetInfo.scaling = DISPLAYCONFIG_SCALING_IDENTITY;
+   const bool test = !std::wcscmp(operation, L"rotation-test");
+   const bool save = !std::wcscmp(operation, L"rotation-save");
+   /* CCD rotation is clockwise. Keep the physical target timing and adapter
+    * identity; validation must not silently substitute a different mode. */
+   LONG result = configure(current, desired, SDC_VALIDATE);
+   bool changed = false;
+   if (!result && !test) {
+      result = configure(current, desired, SDC_APPLY | (save ? SDC_SAVE_TO_DATABASE : 0));
+      changed = !result && (current.source.width != desired.source.width ||
+         current.source.height != desired.source.height ||
+         current.path.targetInfo.rotation != desired.path.targetInfo.rotation);
+   }
+   snapshot after;
+   LONG read_result = read_state(after);
+   if (!result) result = read_result;
+   const snapshot &expected = test ? current : desired;
+   if (!result && (after.source.width != expected.source.width ||
+       after.source.height != expected.source.height ||
+       after.path.targetInfo.rotation != expected.path.targetInfo.rotation ||
+       after.target.targetVideoSignalInfo.activeSize.cx != native.cx ||
+       after.target.targetVideoSignalInfo.activeSize.cy != native.cy))
+      result = ERROR_INVALID_DATA;
+   print_state(read_result ? current : after, operation, changed, result);
+   return result ? 1 : 0;
+}
+
 int wmain(int argc, WCHAR **argv)
 {
+   const bool rotation = argc >= 2 && (!std::wcscmp(argv[1], L"rotation-test") ||
+      !std::wcscmp(argv[1], L"rotation") || !std::wcscmp(argv[1], L"rotation-save"));
    if (argc < 2 || argc > 3 || (std::wcscmp(argv[1], L"show") && std::wcscmp(argv[1], L"visible") &&
        std::wcscmp(argv[1], L"wake") &&
        std::wcscmp(argv[1], L"save") && std::wcscmp(argv[1], L"verify") &&
-       std::wcscmp(argv[1], L"test") && std::wcscmp(argv[1], L"restore")) ||
+       std::wcscmp(argv[1], L"test") && std::wcscmp(argv[1], L"restore") && !rotation) ||
        ((!std::wcscmp(argv[1], L"show") || !std::wcscmp(argv[1], L"visible") || !std::wcscmp(argv[1], L"wake")) ? argc != 2 : argc != 3)) {
-      std::fprintf(stderr, "usage: display-state.exe {show|visible|wake} | {save|verify|test|restore} snapshot.bin\n");
+      std::fprintf(stderr, "usage: display-state.exe {show|visible|wake} | {save|verify|test|restore} snapshot.bin | {rotation-test|rotation|rotation-save} {0|90|180|270}\n");
       return 2;
    }
    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -263,6 +309,8 @@ int wmain(int argc, WCHAR **argv)
       std::fprintf(stderr, "Read display state failed: %ld (use an interactive single-display session)\n", result);
       return 1;
    }
+   if (rotation)
+      return orient(current, argv[1], argv[2]);
    if (!std::wcscmp(argv[1], L"show")) {
       print_state(current, argv[1], false, 0);
       return 0;

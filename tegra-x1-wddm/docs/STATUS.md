@@ -3,6 +3,13 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**`.148` trial awaiting collection (2026-11-11):** paired KMD `8b599271` and
+UMD `scanout-layout-20261111-umd+413d32bb6034` reach hardware startup/Code 0.
+The live result reports native LUID `9a1e7`, exit 0 and no timeout at 16:21:40
+UTC. SSH subsequently disconnects; full drawing/presentation evidence and
+recovery remain unverified. This is not yet an overall trial pass or a
+hardware-landscape result.
+
 **Latest `.147` native result (2026-11-11): desktop lights up.** DWM selects
 Tegra X1 / FL10_0 on LUID `a2008`. The retained trace contains 108 successful
 Present calls at all three layers (KMD, UMD callback and outer DXGI), plus
@@ -37,8 +44,8 @@ primary's stored geometry controls scanout, so a new mode does not reinterpret
 an old buffer. Smooth rotation and rotated GDI blits remain unsupported.
 The host address models and real-WDK ARM64 controls pass on `.59`, including
 same-address direction changes, incomplete latches, mode support/pivots,
-immediate retries and POST restoration. The candidate has not been installed
-for physical landscape validation yet. The new 48-byte primary producer requires
+immediate retries and POST restoration. `.148` is undergoing portrait regression;
+physical landscape validation is still pending. The new 48-byte primary producer requires
 the matching updated KMD and must not be paired with the old `.147` package.
 [Implementation and remaining contracts](D3D_RUNTIME_SHARING.md#hardware-rotation-backend)
 
