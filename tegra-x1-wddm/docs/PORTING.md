@@ -255,7 +255,7 @@ capability test. The new `nvk_d3d_runtime_check.exe --luid <luid>
 ordered list without changing the driver's claims. The ARM64 build and
 `--warp --feature-levels` control pass on Windows: all four explicit requests
 succeed, and the combined list selects 11_1 on Microsoft 1414:008c, LUID
-`5427`. The native matrix has not yet run. These are device-creation results,
+`5427`. The native matrix follows in the trace-work result below. These are device-creation results,
 not DWM or feature-conformance results.
 
 The Application-log interval 01:25–01:44 UTC contains 35 `Dwminit` exits
@@ -364,7 +364,63 @@ LUIDs, launch the user-session feature matrix and drawing regression, stop
 and export the trace, then request rollback. The 12-minute independent
 rollback remains armed. This removes timely SSH reconnection as a test
 dependency; it does not remove desktop/identity checks or alter power policy.
-Its outcome remains pending under `runs/dwm-init-auto-20261111/`.
+The local workflow admitted the unchanged .144 KMD and ran on matched LUID
+`8b7be` from 03:48:29.7392153 to 03:48:34.3017135 UTC, exiting 0 without
+timeout. The new UMD, system loader and NVK opt-in were in use.
+
+| Native feature request | HRESULT | Selected level |
+| --- | --- | --- |
+| 11_1 | `887a0004` | none |
+| 11_0 | `887a0004` | none |
+| 10_1 | `887a0004` | none |
+| 10_0 | `00000000` | 10_0 |
+| ordered list 11_1 through 10_0 | `00000000` | 10_0 |
+
+The subsequent runtime RGBA/BGRA clear and SM4 triangle regression checks
+16,384 pixels with zero mismatches and releases normally. This confirms
+native rendering at FL10_0; it does not establish higher-level features or
+desktop presentation.
+
+The finalized trace exports 748 UMD events, zero malformed payloads, zero
+recorded event/buffer loss and 1,853 written buffers. Three `dwm.exe` PIDs
+(828, 968, 1132) account for 616 events. In all 88 OpenAdapter10_2 attempts,
+the adapter callback succeeds with flags 3 and a 512 MiB budget; Zink sees
+LUID `8b7be` and exact opt-in `1`, then returns no screen and the adapter
+open returns `887a0004`. These failures precede the frontend's capability
+negotiation and CreateDevice. The legacy OpenAdapter10 fallback requests
+interface `a0002` and is rejected separately. Explorer also fails Zink setup
+eight times, whereas the explicit runtime probe creates three D3D devices
+successfully on the same LUID. Do not attribute DWM's current first failure
+to its requested Feature Level, shared-resource open or Present yet.
+
+The next investigation must retain the precise Zink loader, VkInstance,
+physical-device selection or VkDevice failure in the desktop process. The
+ICD manifest already uses `./libvulkan_nouveau.dll`, relative to the manifest
+directory; a bare-filename manifest is not the current configuration.
+Windows Mesa logging defaults to stderr/OutputDebugString and explicitly
+does not implement `MESA_LOG_FILE`, so setting that variable alone will not
+collect the missing initialization error.
+
+The 720x1280 screenshot remains black even with a successful `Default`
+input-desktop check immediately before capture (96 DPI, source/signal
+720x1280, identity rotation). Its SHA-256 is
+`1affba48e5a5838c73c3371e829823d24c8f541ffbb1bc75ee7b5936c4504aa6`.
+This is a GDI desktop capture, not a physical panel photograph.
+
+Collection initially tried to hash its still-open automatic transcript.
+The native results and finalized ETL were already saved; the outer finally
+block requested rollback. The collector now excludes the live transcript,
+and the full stable record set was hashed after recovery. .59 Code 0,
+original driver/ACPI hashes, removed temporary UMD/ICD registration, permit
+and tasks, restored machine opt-in, deleted temporary system loader and
+unchanged power settings were verified at 03:54:14 UTC. Portrait
+restore/verify passed at 03:54:27 without a mode change.
+
+All 97 returned records (15,580,209 bytes) match device lengths and SHA-256
+values under `runs/dwm-init-auto-20261111/evidence/`. The ETL hash is
+`ef9e8d35397e2fd7e3017e14fd67e55d21cf276e2046f9aed4f0e5b9c4313535`;
+the UMD event export hash is
+`ee072a7101c6142c4441442ad516d30d1abc9c505bae9bc3c3dd69ee5164f846`.
 
 Artifacts and scripts for the completed gated round remain under
 `/Users/rujian/.local/share/mesa-switch-woa-build/runs/dwm-init-20261111/`;

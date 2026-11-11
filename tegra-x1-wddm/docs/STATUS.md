@@ -3,6 +3,19 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**DWM first-failure result (2026-11-11):** the automatic .144 trial on LUID
+`8b7be` confirms a native FL10_0 ceiling: 11_1/11_0/10_1 return unsupported,
+10_0 and the ordered-list negotiation succeed. Another 16,384 RGBA/BGRA
+clear/draw pixels match. DWM enters the new UMD and queries the adapter
+successfully, with the NVK opt-in present, but all 88 Zink initialization
+attempts fail before capability negotiation or D3D device creation. The
+finalized ETL has 748 UMD events and no recorded loss. The active-desktop
+capture remains black. Next isolate Zink's loader/instance/device failure;
+changing the advertised Feature Level does not repair this earlier failure.
+.59 Code 0, the temporary environment cleanup, portrait preference and
+unchanged power settings are verified after rollback.
+[Native result and evidence](PORTING.md#dwm-initialization-trace-work)
+
 **Win32 presentation investigation (2026-11-11):** the GDI WSI now pairs
 window DC acquisition/release on the presenting thread and flushes GDI
 before reusing its DIB. On the unchanged .144 miniport, LUID `90f83`, 24
@@ -13,30 +26,21 @@ presentation is not established. Check the input desktop and capture
 DPI/coordinates alongside composition and scanout; the samples do not
 validate the whole image.
 
-**Present audit:** the same .144 journal retains an owned, visible
+**Earlier Present audit:** the LUID `90f83` .144 journal retains an owned, visible
 `Displayed` address `fc9a6000`, populated after active-bank confirmation.
 This establishes an initial latch, not continuous refresh or correct cube
 pixels. That trial's Application log has 35 Tegra-attributed DWM exits with
 `8898008d`. A subsequent SYSTEM control cannot load `vulkan-1.dll` by name
 (error 126), but can load the explicit app-local copy; the experimental NVK
-opt-in is also absent there. DWM's exact failing UMD call is not yet traced.
-Resolve the compositor's loader/ICD environment and missing Present/shared
-resource contracts before treating a higher Feature Level as the fix.
+opt-in is also absent there. The follow-up above supplies that environment
+and locates the first failed UMD stage. Present/shared-resource contracts
+remain unfinished as well.
 [Feature-level, loader and latch audit](PORTING.md#present-contract-audit)
-
-**DWM initialization tracing WIP:** the ARM64 UMD build and three controlled
-fixtures pass; 27 process-attributed ETW events decode with no malformed
-records or recorded loss. The first gated trial did not run native work
-because SSH was unavailable, and fully restored .59, the environment and
-portrait preference. Its successor was staged at 03:45 UTC on 2026-11-11;
-local logon tasks now perform admission, tests, collection and rollback
-without depending on SSH. Its native outcome remains pending.
-[Trace work and recovery evidence](PORTING.md#dwm-initialization-trace-work)
 
 **User display baseline:** the previous 90-degree rollback did not restore
 the user's portrait preference. Their manually corrected 720x1280,
-orientation-0 mode is saved and matched the registry on .59 Code 0 before
-the currently staged trial.
+orientation-0 mode is saved and again matches the registry on .59 Code 0
+after the automatic trial.
 Future rollback must restore that snapshot. The mode passes non-applying
 CCD validation on `Default`; the later `Screen-saver` desktop observation
 also requires an active-desktop check for visible GPU tests. It does not
