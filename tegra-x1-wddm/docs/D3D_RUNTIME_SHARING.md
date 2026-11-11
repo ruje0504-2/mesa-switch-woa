@@ -1134,3 +1134,55 @@ It changes no parent/system ACL and grants no write access. Use it for the
 temporary runtime outside DriverStore before the next native desktop trial.
 The loading control establishes a deployment defect; the missing menu still
 requires physical validation and may expose further D3D sharing/present work.
+
+### Native AppContainer loading retest
+
+`desktop-acl-native-20261111` changes only the staged runtime directory's
+AppContainer read/execute access, using `5852cfcc`. KMD `.149` (`ebfd5142`),
+UMD `413d32bb6034` and ICD `f828845c38b7` are byte-identical to the preceding
+trial. On LUID `bb153`, startup reaches Code 0 at 18:01:44 UTC. The controller
+observes the portrait desktop from 18:01:58 to 18:03:18, without a rotation
+request, new drawing probe or cube. Its exit 0 means observation collection
+completed; it is not a rendering or taskbar-success result.
+
+The user confirms missing/incomplete bottom taskbar content during this active
+interval. All six snapshots find `Shell_TrayWnd` present, marked visible and
+within the 720x1280 source at `(0,1232)-(720,1280)`, matching the baseline.
+Explorer changes from PID 1300 to 2784 between snapshots; the trace also
+records a later instance, 3336. This does not establish a crash cause, and a
+window's rectangle/visibility flag does not prove its composed pixels.
+
+The retained trace contains no D3D11 `LoadUMD / 80070005` record.
+StartMenuExperienceHost has six successful UMD open results and three
+successful D3D device results across PIDs 1316, 6372 and 2184. This directly
+confirms progress past the earlier loading restriction. Remaining failures
+are distinguishable:
+
+| Process/path | Retained evidence |
+| --- | --- |
+| Explorer 1300, 2784, 3336 | Each creates a 576x960 `DXGI_FORMAT_B8G8R8A8_UNORM` resource, MiscFlags `2` (SHARED), BindFlags `a8`. The D3D11 journal then reports `ConfigureSharedResource` and `ShareObjects` with `c000000d`. This is an Explorer shared surface; the trace does not identify it as the taskbar's own surface. |
+| SearchHost 1336, 2032, 6580; some TextInputHost instances | UMD loading succeeds, but Zink creation fails at stage 8, `vkCreateDevice`, with `VK_ERROR_INITIALIZATION_FAILED (-3)`. The outer UMD result is `887a0004`. Other TextInputHost instances do create devices. The exact underlying KMT failure is not retained. |
+| DWM 828 | 71 retained UMD Present calls return S_OK. This does not override the user's missing/incomplete-menu observation. |
+
+Source inspection finds that non-primary shared textures currently call
+Gallium `resource_create` without attaching their storage to `hRTResource`
+through the runtime allocation callback. `OpenResource` is still an
+unimplemented E_OUTOFMEMORY path. The next implementation must connect real
+shared image metadata, runtime-owned allocation/residency, GPU contents and
+consumer lifetime; neither a handle cast nor a successful descriptor-only
+sharing probe is sufficient. Device creation also needs its underlying KMT
+operation/status retained before further capability or memory-policy changes.
+
+The finalized ETL has 160,415 records, including 32,273 UMD events, with no
+reported event/buffer loss. The known Dwm-Core event 203 template mismatch
+affects 773 records; other configured schemas decode. The original and
+recovered exports are byte-identical. Raw SHA256:
+`b438f06ff71cf205b51f7987e7cf265272624aa2711c2d3542ca42dbc0b36f34`.
+Controller wall-clock times and within-trace ordering are kept separate.
+
+All 163 returned files (75,003,540 bytes) match device lengths/hashes. Following
+the recorded recovery startups, `.59` Code 0, baseline SYS/ACPI, complete
+temporary-registration/task/environment cleanup and unchanged power policy
+are verified at 18:11:24 UTC. Portrait restore/verify is a no-op at 18:12:17.
+No interruption cause is inferred. `native-summary.json`, `umd-summary.json`
+and `display-analysis-001/process-failures.json` retain the scoped findings.

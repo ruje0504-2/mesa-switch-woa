@@ -3,32 +3,40 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Latest `.149` native result (2026-11-11):** KMD `ebfd5142` reaches Code 0 on
-LUID `bd778`, but 90-degree CCD validation still returns 1610
-(`ERROR_BAD_CONFIGURATION`) at 17:32:03 UTC. No mode is applied and `vkcube`
-is not launched. The user reports no rotation and a missing bottom menu,
-apparently already at native startup; this is not a complete visible-desktop
-pass. All 153 returned files (64,013,449 bytes) match device hashes and lengths.
-`.59` Code 0, cleanup and unchanged power settings are verified at 17:39:47 UTC;
-portrait restoration/verification is a no-op at 17:40:49–50 UTC.
+**Latest `.149` native desktop result (2026-11-11):** the runtime access fix
+from `5852cfcc` is tested with unchanged KMD `ebfd5142`, UMD `413d32bb6034`
+and ICD `f828845c38b7`, on native LUID `bb153`. StartMenuExperienceHost now
+loads the UMD and creates D3D devices successfully. The user still confirms
+missing/incomplete taskbar content during the active trial. Six snapshots find
+its window visible at `(0,1232)-(720,1280)`; window geometry is not pixel proof.
+No rotation or cube is requested in this trial.
 
-**Current investigation:** establish why desktop components fail before the
-rotation request. `.149` retains multiple `LoadUMD / 80070005` errors. A `.59`
-control reproduces read/execute and loading denial for both test UMD and NVK
-inside an AppContainer while ordinary loading succeeds. In the interactive
-`WinSta0/Default` session, granting read/execute on an identical private copy
-fixes UMD, NVK and Vulkan Loader loading. An earlier NVK error 1114 occurs only
-in the noninteractive control; it is not evidence of a native desktop ICD
-failure. The original runtime directory is unchanged. This is a confirmed
-deployment/loading issue, not yet proof of the complete cause or a visual fix
-for the missing menu. The next work is a native desktop trial with corrected
-runtime access, then native rotation and Win32 `vkcube`.
-[AppContainer loading diagnosis](D3D_RUNTIME_SHARING.md#appcontainer-runtime-loading)
+**Current boundaries:** Explorer's three observed instances each request a
+576x960 BGRA shared surface, then the D3D runtime reports
+`ConfigureSharedResource / ShareObjects = c000000d`. Some SearchHost and
+TextInputHost instances fail Zink's `vkCreateDevice` with result `-3`;
+the underlying KMT status is not captured. The retained trace has no
+`LoadUMD / 80070005` error. This validates the runtime-directory access fix,
+not complete desktop composition or a repaired taskbar.
+[Native loading retest and process-specific evidence](D3D_RUNTIME_SHARING.md#native-appcontainer-loading-retest)
 
-The source-mode correction enumerates 1280x720 together with compatible
-rotation. Host models/build and four ARM64 controls pass, but the `.149`
-native result shows this correction alone does not resolve CCD validation.
-[Source-mode correction and controls](D3D_RUNTIME_SHARING.md#landscape-source-mode-correction)
+**Recovery:** all 163 returned files (75,003,540 bytes) match device lengths and
+SHA256. `.59` Code 0, baseline hashes, cleanup and unchanged power settings are
+verified at 18:11:24 UTC; portrait restore/verify is a no-op at 18:12:17 UTC.
+Artifacts are in `desktop-acl-native-20261111`; no native test remains running.
+
+**Next implementation:** connect real shared textures to D3D runtime allocation,
+resource metadata and OpenResource, and retain the specific KMT failure behind
+Vulkan device initialization. Ordinary non-primary shared textures currently
+bypass runtime allocation and OpenResource remains unimplemented. Validate
+shared GPU contents and lifetime, then the complete desktop, hardware landscape
+and Win32 `vkcube`. Do not treat raising Feature Level as a fix for these errors.
+
+**Landscape remains unverified:** the preceding `.149` source-mode trial on
+LUID `bd778` still returns CCD error 1610 at 17:32:03 UTC. It applies no mode
+and launches no cube. The 1280x720 source/rotation correction passes host and
+ARM64 controls but is insufficient by itself to fix native mode negotiation.
+[Source-mode correction and retest](D3D_RUNTIME_SHARING.md#native-source-mode-retest)
 
 **Latest `.148` native regression (2026-11-11):** all 40,960 draw/sample pixels
 match on LUID `9a1e7`, with both exit-0 files retained. DWM has 469 successful
@@ -61,8 +69,8 @@ policy are verified at 15:08:11 UTC; portrait verification at 15:08:32 is a
 no-op. The test package is no longer installed.
 [Native Present result, photo provenance and limits](D3D_RUNTIME_SHARING.md#native-mmio-present-result)
 
-**Next work:** implement hardware landscape rotation and shared-image opens,
-then validate sustained desktop composition and visible Win32 `vkcube`.
+**Remaining desktop work:** shared-image opens and device initialization,
+followed by hardware landscape, sustained composition and visible Win32 `vkcube`.
 The current swapchain identity rotation moves storage/views; it does not
 rotate the physical screen. FL10_0 is sufficient for the desktop milestone
 observed here. The `.147` run changed only the KMD package from `.146` to
