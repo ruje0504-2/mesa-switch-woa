@@ -3,6 +3,19 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**Landscape validation / `.149` WIP:** the byte-identical `.148` KMD/UMD/ICD reaches
+Code 0 on LUID `940b9`, but the 90-degree CCD validation returns 1610
+(`ERROR_BAD_CONFIGURATION`) at 17:07:24 UTC. No mode is applied and `vkcube`
+is not launched. `.59` Code 0, cleanup and unchanged power settings are verified
+at 17:15:27 UTC; portrait restoration is a verified no-op at 17:16:27 UTC.
+Evidence is retained in `landscape-native-20261111`.
+The source-mode correction now enumerates the 1280x720 desktop extent and
+constrains it together with rotation instead of admitting only the panel's
+720x1280 signal size. Host models/build and four ARM64 controls pass on `.59`
+at 17:15:32–33 UTC. This is not yet a native fix result; the next KMD package
+is `.149`, retaining the same UMD and ICD.
+[Source-mode correction and controls](D3D_RUNTIME_SHARING.md#landscape-source-mode-correction)
+
 **Latest `.148` native regression (2026-11-11):** all 40,960 draw/sample pixels
 match on LUID `9a1e7`, with both exit-0 files retained. DWM has 469 successful
 flip Presents at the KMD, UMD and DXGI layers across 42.235 seconds of retained

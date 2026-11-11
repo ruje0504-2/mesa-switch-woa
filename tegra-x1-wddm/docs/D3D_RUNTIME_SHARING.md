@@ -927,13 +927,14 @@ incomplete latch cannot inherit its PresentId. Blanking waits for the original
 POST layout and clears stale pending state before VidMm can release the old
 primary. Stop also restores identity even when the address already equals POST.
 
-VidPN now reports identity/90/180/270 with Offset0 only. The source-mode and
-standard shared-primary dimensions remain unrotated for the single portrait-first
-path, following Microsoft's shared-primary contract and the basic-display
-sample's native source-mode enumeration. A DXGI allocation independently
-describes its actual stored extent. This integration still needs a real Windows
-mode-switch trial; the controls cannot establish which primary layout DWM will
-choose. `DriverRotation=0` selects dedicated display rotation. Smooth rotation
+VidPN reports identity/90/180/270 with Offset0 only. The `.148` integration
+incorrectly kept source-mode enumeration at 720x1280 as well as retaining the
+unrotated standard shared primary. Those are distinct contracts: the desktop
+source extent must be compatible with the path rotation and fixed panel target.
+The subsequent source-mode correction is described below. A DXGI allocation
+independently describes its actual stored extent; the controls cannot establish
+which primary layout DWM will choose. `DriverRotation=0` selects dedicated
+display rotation. Smooth rotation
 is not advertised: CommitVidPn records the successfully committed angle and the
 primary-address DDI applies the corresponding allocation layout atomically.
 An active-path request to change the angle without that modeset is rejected.
@@ -1027,3 +1028,42 @@ derives byte count and SHA256 from the same read stream and verifies all files.
 Local `native-summary.json` and `display-analysis-001/scanout-correlation.json`
 retain the counts and per-flip matches. Hardware landscape and a visible Win32
 `vkcube` remain the next physical milestones.
+
+### Landscape source-mode correction
+
+The subsequent `landscape-native-20261111` trial reuses the exact signed `.148`
+KMD, UMD and ICD above. Native LUID `940b9` reaches Code 0, but CCD
+`rotation-test 90` returns 1610 (`ERROR_BAD_CONFIGURATION`) at 17:07:24 UTC.
+The controller records `ValidationRejected`, leaves the 720x1280 identity mode
+unchanged, and never launches `vkcube`. Native snapshot restoration succeeds
+without a mode change. Recovery verifies `.59` Code 0, baseline hashes, complete
+cleanup and unchanged power policy at 17:15:27 UTC; the baseline portrait
+snapshot is also a no-op at 17:16:27. The earlier user's normal-desktop report
+does not establish a visible landscape result.
+All 168 returned files (60,978,917 bytes) match device SHA256 and lengths.
+
+Code review finds that `.148` advertises quarter-turn rotations while accepting
+and enumerating only the 720x1280 source. The candidate now provides both source
+shapes: 720x1280 with pitch 2880 for identity/180, and 1280x720 with pitch 5120
+for 90/270. Pinned source geometry and path rotation constrain one another;
+an unconstrained source/rotation exposes both shapes. Source and rotation pivots
+remain untouched, and CommitVidPn rejects incompatible pairs. The physical DSI
+target remains 720x1280. Standard shared-primary allocation and the independent
+48-byte DXGI primary storage description are unchanged by this correction.
+[Cofunctional mode constraints](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/enumerating-cofunctional-vidpn-source-and-target-modes) ·
+[Source geometry and stride](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmdt/ns-d3dkmdt-_d3dkmdt_graphics_rendering_format)
+
+Host models and the real-WDK ARM64 build pass. Four controls run on `.59` Code 0
+at 17:15:32–33 UTC, with all exits 0 and returned logs matching device hashes.
+The expanded VidPN fixture checks both source shapes, each angle/shape pair,
+wrong-pitch rejection, source/rotation pivots, preservation of OS-assigned mode
+IDs and cleanup after a failed second AddMode. Its executable SHA256 is
+`5d6e1ef948e1a8c6529923d7425a5fda14f1cb66103980436a817cc5fe3bfab9`;
+evidence is in `runs/vidpn-source-control-20261111/`.
+The next native KMD version is `.149`. These controls do not yet prove that
+Windows accepts the corrected native mode or that the panel rotates correctly.
+
+The trial controller also retains the process handle before waiting for a
+PowerShell `Start-Process` child. A control caught null exit codes without that
+retention; the corrected controller reports exact exits 0 and 7 at 17:02:33 UTC,
+before the native test is armed. The original failed control is retained.

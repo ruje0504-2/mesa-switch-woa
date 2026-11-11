@@ -64,10 +64,13 @@ static D3DKMDT_VIDPN_SOURCE_MODE source_mode;
 static D3DKMDT_VIDPN_TARGET_MODE target_mode;
 static UINT path_refs,source_refs,target_refs,source_sets,target_sets;
 static BOOLEAN source_pinned=TRUE;
+static D3DKMDT_VIDPN_SOURCE_MODE new_source_mode,enumerated[2];
+static UINT new_set_refs,new_mode_refs,enumerated_count,assigned_sets,fail_add=UINT32_MAX;
 #define VIDPN ((D3DKMDT_HVIDPN)1)
 #define TOPOLOGY ((D3DKMDT_HVIDPNTOPOLOGY)2)
 #define SOURCE_SET ((D3DKMDT_HVIDPNSOURCEMODESET)3)
 #define TARGET_SET ((D3DKMDT_HVIDPNTARGETMODESET)4)
+#define NEW_SOURCE_SET ((D3DKMDT_HVIDPNSOURCEMODESET)5)
 static NTSTATUS APIENTRY get_count(D3DKMDT_HVIDPNTOPOLOGY topology,SIZE_T *count)
 { CHECK(topology==TOPOLOGY);*count=1;return STATUS_SUCCESS; }
 static NTSTATUS APIENTRY get_path(D3DKMDT_HVIDPNTOPOLOGY topology,const D3DKMDT_VIDPN_PRESENT_PATH **path)
@@ -88,13 +91,30 @@ static NTSTATUS APIENTRY source_info(D3DKMDT_HVIDPNSOURCEMODESET set,const D3DKM
     CHECK(!source_refs++);*mode=&source_mode;return STATUS_SUCCESS;
 }
 static NTSTATUS APIENTRY release_source_info(D3DKMDT_HVIDPNSOURCEMODESET set,const D3DKMDT_VIDPN_SOURCE_MODE *mode)
-{ CHECK(set==SOURCE_SET && mode==&source_mode && source_refs--==1);return STATUS_SUCCESS; }
+{
+    if(set==NEW_SOURCE_SET){CHECK(mode==&new_source_mode && new_mode_refs--==1);return STATUS_SUCCESS;}
+    CHECK(set==SOURCE_SET && mode==&source_mode && source_refs--==1);return STATUS_SUCCESS;
+}
+static NTSTATUS APIENTRY create_source_info(D3DKMDT_HVIDPNSOURCEMODESET set,D3DKMDT_VIDPN_SOURCE_MODE **mode)
+{
+    CHECK(set==NEW_SOURCE_SET && new_set_refs==1 && !new_mode_refs++ && enumerated_count<2);
+    new_source_mode=(D3DKMDT_VIDPN_SOURCE_MODE){.Id=100+enumerated_count};
+    *mode=&new_source_mode;return STATUS_SUCCESS;
+}
+static NTSTATUS APIENTRY add_source_info(D3DKMDT_HVIDPNSOURCEMODESET set,D3DKMDT_VIDPN_SOURCE_MODE *mode)
+{
+    CHECK(set==NEW_SOURCE_SET && new_set_refs==1 && new_mode_refs==1 && mode==&new_source_mode);
+    if(enumerated_count==fail_add)return STATUS_NO_MEMORY;
+    CHECK(mode->Id==100+enumerated_count);enumerated[enumerated_count++]=*mode;--new_mode_refs;
+    return STATUS_SUCCESS;
+}
 static NTSTATUS APIENTRY target_info(D3DKMDT_HVIDPNTARGETMODESET set,const D3DKMDT_VIDPN_TARGET_MODE **mode)
 { CHECK(set==TARGET_SET && target_sets==1 && !target_refs++);*mode=&target_mode;return STATUS_SUCCESS; }
 static NTSTATUS APIENTRY release_target_info(D3DKMDT_HVIDPNTARGETMODESET set,const D3DKMDT_VIDPN_TARGET_MODE *mode)
 { CHECK(set==TARGET_SET && mode==&target_mode && target_refs--==1);return STATUS_SUCCESS; }
 static const DXGK_VIDPNSOURCEMODESET_INTERFACE source_api={
-    .pfnAcquirePinnedModeInfo=source_info,.pfnReleaseModeInfo=release_source_info};
+    .pfnAcquirePinnedModeInfo=source_info,.pfnReleaseModeInfo=release_source_info,
+    .pfnCreateNewModeInfo=create_source_info,.pfnAddMode=add_source_info};
 static const DXGK_VIDPNTARGETMODESET_INTERFACE target_api={
     .pfnAcquirePinnedModeInfo=target_info,.pfnReleaseModeInfo=release_target_info};
 static NTSTATUS APIENTRY get_source(D3DKMDT_HVIDPN vidpn,D3DDDI_VIDEO_PRESENT_SOURCE_ID id,
@@ -104,11 +124,28 @@ static NTSTATUS APIENTRY get_target(D3DKMDT_HVIDPN vidpn,D3DDDI_VIDEO_PRESENT_TA
     D3DKMDT_HVIDPNTARGETMODESET *set,const DXGK_VIDPNTARGETMODESET_INTERFACE **api)
 { CHECK(vidpn==VIDPN && id==7 && !target_sets++);*set=TARGET_SET;*api=&target_api;return STATUS_SUCCESS; }
 static NTSTATUS APIENTRY release_source(D3DKMDT_HVIDPN vidpn,D3DKMDT_HVIDPNSOURCEMODESET set)
-{ CHECK(vidpn==VIDPN && set==SOURCE_SET && !source_refs && source_sets--==1);return STATUS_SUCCESS; }
+{
+    CHECK(vidpn==VIDPN);
+    if(set==NEW_SOURCE_SET){CHECK(!new_mode_refs && new_set_refs--==1);return STATUS_SUCCESS;}
+    CHECK(set==SOURCE_SET && !source_refs && source_sets--==1);return STATUS_SUCCESS;
+}
+static NTSTATUS APIENTRY create_source_set(D3DKMDT_HVIDPN vidpn,D3DDDI_VIDEO_PRESENT_SOURCE_ID id,
+    D3DKMDT_HVIDPNSOURCEMODESET *set,const DXGK_VIDPNSOURCEMODESET_INTERFACE **api)
+{
+    CHECK(vidpn==VIDPN && !id && !new_set_refs++ && !new_mode_refs);enumerated_count=0;
+    *set=NEW_SOURCE_SET;*api=&source_api;return STATUS_SUCCESS;
+}
+static NTSTATUS APIENTRY assign_source_set(D3DKMDT_HVIDPN vidpn,D3DDDI_VIDEO_PRESENT_SOURCE_ID id,
+    D3DKMDT_HVIDPNSOURCEMODESET set)
+{
+    CHECK(vidpn==VIDPN && !id && set==NEW_SOURCE_SET && new_set_refs--==1 && !new_mode_refs && enumerated_count);
+    ++assigned_sets;return STATUS_SUCCESS;
+}
 static NTSTATUS APIENTRY release_target(D3DKMDT_HVIDPN vidpn,D3DKMDT_HVIDPNTARGETMODESET set)
 { CHECK(vidpn==VIDPN && set==TARGET_SET && !target_refs && target_sets--==1);return STATUS_SUCCESS; }
 static const DXGK_VIDPN_INTERFACE vidpn_api={.Version=DXGK_VIDPN_INTERFACE_VERSION_V1,
     .pfnGetTopology=get_topology,.pfnAcquireSourceModeSet=get_source,.pfnReleaseSourceModeSet=release_source,
+    .pfnCreateNewSourceModeSet=create_source_set,.pfnAssignSourceModeSet=assign_source_set,
     .pfnAcquireTargetModeSet=get_target,.pfnReleaseTargetModeSet=release_target};
 static NTSTATUS APIENTRY query_vidpn(D3DKMDT_HVIDPN vidpn,DXGK_VIDPN_INTERFACE_VERSION version,
     const DXGK_VIDPN_INTERFACE **api)
@@ -117,6 +154,7 @@ static NTSTATUS APIENTRY query_vidpn(D3DKMDT_HVIDPN vidpn,DXGK_VIDPN_INTERFACE_V
 static void test_rotation(TG_GPU_ADAPTER *adapter,const DRIVER_INITIALIZATION_DATA *d)
 {
     adapter->Panel.Boot.TargetId=7;
+    adapter->Panel.Boot.ColorFormat=D3DDDIFMT_A8R8G8B8;
     adapter->Panel.PathRotation=D3DKMDT_VPPR_IDENTITY;
     adapter->Engine.Dxgk.DxgkCbQueryVidPnInterface=query_vidpn;
     test_path=(D3DKMDT_VIDPN_PRESENT_PATH){.VidPnTargetId=7,
@@ -128,7 +166,7 @@ static void test_rotation(TG_GPU_ADAPTER *adapter,const DRIVER_INITIALIZATION_DA
     DXGKARG_ENUMVIDPNCOFUNCMODALITY enumerate={.hConstrainingVidPn=VIDPN};
     CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_SUCCESS);
     D3DKMDT_VIDPN_PRESENT_PATH_ROTATION_SUPPORT support=updated_path.ContentTransformation.RotationSupport;
-    CHECK(support.Identity && support.Rotate90 && support.Rotate180 && support.Rotate270 &&
+    CHECK(support.Identity && !support.Rotate90 && support.Rotate180 && !support.Rotate270 &&
         support.Offset0 && !support.Offset90 && !support.Offset180 && !support.Offset270);
     /* A rotation pivot's support must remain untouched. */
     enumerate.EnumPivotType=D3DKMDT_EPT_ROTATION;enumerate.EnumPivot.VidPnTargetId=7;
@@ -138,11 +176,28 @@ static void test_rotation(TG_GPU_ADAPTER *adapter,const DRIVER_INITIALIZATION_DA
     CHECK(support.Rotate90 && !support.Identity && !support.Rotate180 && !support.Rotate270 && !support.Offset0);
     DXGKARG_QUERYVIDPNHWCAPABILITY caps={.hFunctionalVidPn=VIDPN,.TargetId=7};
     CHECK(d->DxgkDdiQueryVidPnHWCapability(adapter,&caps)==STATUS_SUCCESS && !caps.VidPnHWCaps.DriverRotation);
+    enumerate.EnumPivotType=0;
     for(UINT r=1;r<=4;++r) {
+        const BOOLEAN quarter=r==2 || r==4;
+        D3DKMDT_GRAPHICS_RENDERING_FORMAT *g=&source_mode.Format.Graphics;
+        g->PrimSurfSize=(D3DKMDT_2DREGION){quarter?1280:720,quarter?720:1280};
+        g->VisibleRegionSize=g->PrimSurfSize;g->Stride=g->PrimSurfSize.cx*4;
         test_path.ContentTransformation.Rotation=(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION)r;
         DXGKARG_ISSUPPORTEDVIDPN check={.hDesiredVidPn=VIDPN};
         CHECK(d->DxgkDdiIsSupportedVidPn(adapter,&check)==STATUS_SUCCESS && check.IsVidPnSupported);
         DXGKARG_COMMITVIDPN commit={.hFunctionalVidPn=VIDPN};
+        CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_SUCCESS);
+        support=updated_path.ContentTransformation.RotationSupport;
+        CHECK(support.Identity==!quarter && support.Rotate180==!quarter &&
+            support.Rotate90==quarter && support.Rotate270==quarter);
+        const D3DKMDT_GRAPHICS_RENDERING_FORMAT saved_geometry=*g;
+        g->PrimSurfSize=(D3DKMDT_2DREGION){quarter?720:1280,quarter?1280:720};
+        g->VisibleRegionSize=g->PrimSurfSize;g->Stride=g->PrimSurfSize.cx*4;
+        CHECK(d->DxgkDdiIsSupportedVidPn(adapter,&check)==STATUS_SUCCESS && !check.IsVidPnSupported);
+        CHECK(d->DxgkDdiCommitVidPn(adapter,&commit)==STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY);
+        *g=saved_geometry;g->Stride+=4;
+        CHECK(d->DxgkDdiIsSupportedVidPn(adapter,&check)==STATUS_SUCCESS && !check.IsVidPnSupported);
+        *g=saved_geometry;
         CHECK(d->DxgkDdiCommitVidPn(adapter,&commit)==STATUS_SUCCESS && visible && (UINT)adapter->Panel.PathRotation==r);
         DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH update={.VidPnPresentPathInfo=test_path};
         CHECK(d->DxgkDdiUpdateActiveVidPnPresentPath(adapter,&update)==STATUS_SUCCESS);
@@ -151,6 +206,31 @@ static void test_rotation(TG_GPU_ADAPTER *adapter,const DRIVER_INITIALIZATION_DA
             STATUS_GRAPHICS_PATH_CONTENT_GEOMETRY_TRANSFORMATION_NOT_SUPPORTED && (UINT)adapter->Panel.PathRotation==r);
         CHECK(!path_refs && !source_refs && !target_refs && !source_sets && !target_sets);
     }
+    /* An unconstrained source advertises both shapes. A pinned rotation
+     * admits only the shape that reaches the unchanged portrait target. */
+    source_pinned=FALSE;
+    test_path.ContentTransformation.Rotation=D3DKMDT_VPPR_UNPINNED;
+    CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_SUCCESS && enumerated_count==2);
+    CHECK(enumerated[0].Format.Graphics.PrimSurfSize.cx==720 && enumerated[0].Format.Graphics.Stride==2880);
+    CHECK(enumerated[1].Format.Graphics.PrimSurfSize.cx==1280 && enumerated[1].Format.Graphics.PrimSurfSize.cy==720 && enumerated[1].Format.Graphics.Stride==5120);
+    support=updated_path.ContentTransformation.RotationSupport;
+    CHECK(support.Identity && support.Rotate90 && support.Rotate180 && support.Rotate270);
+    for(UINT r=1;r<=4;++r){
+        test_path.ContentTransformation.Rotation=(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION)r;
+        CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_SUCCESS && enumerated_count==1);
+        CHECK(enumerated[0].Format.Graphics.PrimSurfSize.cx==((r==2 || r==4)?1280u:720u));
+    }
+    test_path.ContentTransformation.Rotation=D3DKMDT_VPPR_UNPINNED;
+    const UINT assigned=assigned_sets;
+    enumerate.EnumPivotType=D3DKMDT_EPT_VIDPNSOURCE;
+    CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_SUCCESS && assigned_sets==assigned);
+    enumerate.EnumPivotType=0;fail_add=1;
+    CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_NO_MEMORY && assigned_sets==assigned);
+    CHECK(!new_set_refs && !new_mode_refs && !source_sets && !source_refs && !path_refs);
+    fail_add=UINT32_MAX;source_pinned=TRUE;
+    source_mode.Format.Graphics.PrimSurfSize=(D3DKMDT_2DREGION){720,1280};
+    source_mode.Format.Graphics.VisibleRegionSize=source_mode.Format.Graphics.PrimSurfSize;
+    source_mode.Format.Graphics.Stride=2880;
     const D3DKMDT_VIDPN_PRESENT_PATH_ROTATION saved=adapter->Panel.PathRotation;
     test_path.ContentTransformation.Rotation=D3DKMDT_VPPR_IDENTITY;
     DXGKARG_COMMITVIDPN commit={.hFunctionalVidPn=VIDPN};
