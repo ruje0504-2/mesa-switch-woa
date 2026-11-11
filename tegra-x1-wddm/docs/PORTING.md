@@ -124,7 +124,8 @@ Artifacts and build provenance are retained under
 The 01:15:27 UTC recovery check confirms .59 Code 0, original driver/ACPI
 hashes, removed temporary registration/start permit/tasks and byte-identical
 before/after power settings. The subsequent interactive display query
-confirms the original 90-degree rotation. All 40 downloaded records
+reports 90-degree rotation; the later user correction below supersedes
+the claim that this restored their preferred orientation. All 40 downloaded records
 (24,472,682 bytes) match device-side lengths and SHA-256 values. The native
 cube result JSON has SHA-256
 `7895ce876630b876c8d14b3d82250e5204b3df6a377dea369e90439a46583003`.
@@ -160,9 +161,74 @@ The 33 native records (24,506,536 bytes) match device-side lengths/hashes;
 the transfer resumed after the planned rollback restart. The 01:46:19 UTC
 check confirms .59 Code 0, original driver/ACPI hashes, removed temporary
 registration/permit/tasks and unchanged power settings. The subsequent
-interactive query confirms the original 90-degree rotation. Artifacts and
+interactive query reports 90-degree rotation; the preference correction
+below also applies to this trial. Artifacts and
 the tested source patch are retained under
 `/Users/rujian/.local/share/mesa-switch-woa-build/runs/wsi-gdi-20261111/`.
+
+**Correction after the user's manual adjustment:** the 90-degree query
+above recorded the post-test state, not a verified restoration of the
+user's portrait preference. The old rollback restored driver/ACPI state
+but did not save/apply the full desktop mode. The new baseline captured
+at 02:01:58 UTC is 720x1280, DEVMODE orientation 0 and CCD identity rotation,
+with matching current/registry modes. Use this user-selected baseline.
+
+`tools/display_state.cpp` captures a versioned single-display snapshot
+including monitor identity, current/registry DEVMODE and CCD source/target
+data. `show` reports both desktop and signal dimensions; `visible` checks
+that the process uses the active console/input desktop. `save <file>`
+creates a snapshot without overwriting an existing one; `verify <file>`
+compares the current mode. `test <file>` uses `SetDisplayConfig` validation
+without applying a mode, and `restore <file>` rebinds the saved modes to the
+current adapter IDs before validating/applying only a changed mode. It
+requires the same monitor and an active input desktop for a mode change.
+Run it from the logged-in interactive session, after restoring the baseline
+driver. The snapshot format is local Windows data, not an ICD/KMD ABI.
+
+```sh
+"$ARM64_MINGW_CXX" -std=c++17 -O2 -static -municode -D_WIN32_WINNT=0x0A00 \
+  tegra-x1-wddm/tools/display_state.cpp -luser32 -lgdi32 -o display-state.exe
+```
+
+Before a native trial, save `display-state.exe save user-display.bin` from
+the user's preferred baseline. Check `display-state.exe visible` before
+launching and while capturing visible output. After driver/ACPI rollback
+and interactive logon, run `display-state.exe restore user-display.bin`,
+then `verify user-display.bin`. Keep and hash the snapshot with the trial's
+records. A refused mode change or failed verification is not a restored
+display preference, even when the driver's Code 0 and power settings match.
+
+When a screen saver is active, first attempt an ordinary touch wake from
+the interactive session, then recheck the actual input desktop. Do this
+before asking the user to dismiss it manually; request user intervention
+only if the attempt fails or Windows requires a PIN/password. An input API
+success alone does not establish that the desktop is visible. Keep the
+existing screen-saver, display timeout and sleep settings. The user need
+not keep the screen lit during local development; only the bounded visible
+display trial requires the active desktop. This is the user's requested
+test procedure, not a claim that remote touch dismissal has already passed.
+
+The initial legacy ChangeDisplaySettings test failed without changing the
+mode. CCD validation returned access denied while the process desktop was
+`Default` and the input desktop was `Screen-saver`, including under the
+elevated task. Ordinary mouse wake input was also denied; no input was
+delivered. After the user returned to `Default`, the same CCD configuration
+passed validation at 02:15 UTC, with unchanged portrait settings. Actual
+application across a later driver rollback still needs its own verification.
+The final helper also passes `visible`, `verify` and non-applying `test`
+at 02:19:02 UTC on the same portrait baseline. Its ARM64 build passes with
+`-Wall -Wextra -Werror`; executable SHA-256 is
+`bd742cbfe7c9f3981887c8e70538fa7ee099114ef23533d85648228c598b6e79`.
+Do not infer that the earlier cube captures necessarily had this desktop
+state: it was observed later. Require an active-desktop check before visible
+GPU tests and record the input desktop with captures.
+[CCD validation/apply contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setdisplayconfig)
+
+The user preference snapshot and validation records are retained under
+`/Users/rujian/.local/share/mesa-switch-woa-build/runs/display-preference-20261111/`.
+All 58 downloaded records (506,317 bytes) match device-side lengths and
+SHA-256 values. The 1,192-byte user snapshot has SHA-256
+`af56a3943261198dac51fe1631d33c7481b641171f9ed14fd79298dd39e93d48`.
 
 The user's next-round requirement is real 90-degree landscape support
 together with presentation: update source dimensions, row pitch, VidPN/MPO

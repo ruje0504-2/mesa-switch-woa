@@ -9,16 +9,31 @@ before reusing its DIB. On the unchanged .144 miniport, LUID `90f83`, 24
 presents produce 24 different GPU-buffer hashes; all sampled window-center
 pixels match the corresponding CPU readback RGB values. Every blit/flush
 reports success. The desktop capture is still black, so visible cube/DWM
-presentation is not established. Check capture DPI/coordinates alongside
-composition and scanout; the samples do not validate the whole image.
-.59 Code 0 and 90-degree rotation are restored.
+presentation is not established. Check the input desktop and capture
+DPI/coordinates alongside composition and scanout; the samples do not
+validate the whole image.
+
+**User display baseline:** the previous 90-degree rollback did not restore
+the user's portrait preference. Their manually corrected 720x1280,
+orientation-0 mode is now saved and matches the registry; .59 is Code 0.
+Future rollback must restore that snapshot. The mode passes non-applying
+CCD validation on `Default`; the later `Screen-saver` desktop observation
+also requires an active-desktop check for visible GPU tests. It does not
+prove what caused the earlier black cube captures.
+
+**Screen-saver handling:** first attempt ordinary touch wake in the
+interactive session and recheck the input desktop before asking the user
+to intervene. Ask only when that attempt fails or authentication is needed.
+The user need not keep the screen lit during local development. The prior
+mouse attempt was denied; remote touch dismissal has not yet been verified.
 
 **Next display round includes real 90-degree landscape rotation**, as the
 user requested: implement and verify rotation with source dimensions,
 stride and scanout layout, alongside the presentation work. The current
 native path still accepts only 720x1280 identity scanout. Validate complete,
 correctly oriented visible output and sustained refresh before claiming
-an on-screen pass.
+an on-screen pass. The user's saved portrait setting remains the rollback
+target while landscape capability is developed.
 [Build and physical evidence](PORTING.md#win32-vkcube)
 
 **Current work: D3D UMD/DWM.** .144 passes native Vulkan OPAQUE_WIN32
