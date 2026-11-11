@@ -3,6 +3,17 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**Win32 vkcube is not visibly working (2026-11-11).** With the unchanged
+.144 miniport and a freshly rebuilt NVK ICD, upstream `vkcube --c 120`
+selects GM20B LUID `91fd4` and exits 0, but both client captures are black;
+the user's panel photo confirms missing content and incorrect orientation.
+The native path supports only 720x1280 identity scanout and loses the
+baseline's 90-degree rotation. This is not an on-screen success or proof
+that rotation alone explains the missing image. .59 Code 0 and 90-degree
+rotation are restored. Next, separate GPU image, GDI/window and scanout
+evidence while continuing DWM/shared-resource integration.
+[Build and physical evidence](PORTING.md#win32-vkcube)
+
 **Current work: D3D UMD/DWM.** .144 passes native Vulkan OPAQUE_WIN32
 memory sharing on GM20B LUID `98914`. Named/unnamed buffers and optimal
 RGBA/BGRA images retain their contents after the exporting VkDevice and
@@ -143,9 +154,10 @@ GDI now reserves one kernel queue entry of DMA private data. The Windows
 ARM64 fixture passed with controlled substitutes under .59. The .117
 package is the first physical test of this size change.
 
-The ARM64 NVK build now includes Win32 surface and swapchain support.
-Mesa's GDI presentation waits for the GPU copy fence before reading the
-image. On-screen `vkcube` validation is pending.
+The ARM64 NVK build includes Win32 surface and swapchain support. Mesa's
+GDI presentation waits for the GPU copy fence before reading the image.
+The 2026-11-11 `vkcube` run exits normally but produces black captures;
+visible presentation remains unverified, as detailed above.
 
 ## Long-term objective
 

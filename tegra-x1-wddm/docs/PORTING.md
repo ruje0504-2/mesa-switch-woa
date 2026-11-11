@@ -70,6 +70,65 @@ loads that ICD through `VK_LUNARG_direct_driver_loading`. Optional
 validation in the current KMD covers the tested submission stream.
 [Hardware status](STATUS.md)
 
+### Win32 vkcube
+
+Build the unmodified Khronos Vulkan-Tools C sample with the ARM64 compiler
+and the Vulkan-Headers revision listed in that checkout's `known_good.json`:
+
+```sh
+python3 tegra-x1-wddm/tools/build_vkcube.py \
+  --source "$VULKAN_TOOLS" --headers "$VULKAN_HEADERS/include" \
+  --cc "$ARM64_MINGW_CC" --out build/vkcube
+```
+
+The tool records the upstream commit, shader/source hashes, compile command
+and executable hash. Upstream retains its own license; its renderer and
+embedded SPIR-V are not copied into or modified by this project.
+Place the ARM64 `vulkan-1.dll`, NVK ICD and `nvk_windows_icd.json` beside the
+executable. In an interactive Windows session, after checking that the
+native-ready KMT LUID, NVK LUID and active display LUID match, select that
+single ICD and run a bounded FIFO presentation test. In the 2026-11-11
+device trial, the process environment alone did not make the loader discover
+the ICD; the trial needed a temporary per-adapter `VulkanDriverName`
+registration, saved and removed by its rollback script:
+
+```bat
+set NVK_I_WANT_A_BROKEN_VULKAN_DRIVER=1
+set VK_DRIVER_FILES=%CD%\nvk_windows_icd.json
+vkcube.exe --suppress_popups --gpu_number 0 --present_mode 2 --width 256 --height 256 --c 120
+```
+
+The current Win32 WSI path renders with NVK, waits for the GPU copy fence,
+then presents through GDI. A passing cube is evidence for native Vulkan
+rendering and this windowed presentation path; it does not establish
+hardware DWM composition, direct DXGI presentation or Vulkan conformance.
+
+The first device trial with Vulkan-Tools commit
+`1d3fbab1ff5abce9f3eb9f3e7fcf66f455ae4475` and Vulkan-Headers `v1.4.368`
+runs from 01:07:14 to 01:07:35 UTC on 2026-11-11. The reused .144 miniport,
+NVK and active display agree on GM20B LUID `91fd4`; `vkcube --c 120` selects
+Win32/FIFO and exits 0. Both captured client images are black, and the user's
+panel photo confirms missing content. **Visible cube presentation fails.**
+The native path also changes rotation from 90 degrees to identity; its
+VidPN and MPO contracts currently implement only the native 720x1280,
+2880-byte-row, identity scanout. This identifies a missing rotation feature,
+but does not isolate the cause of the missing image. Separate GPU image
+readback, GDI/window content and scanout evidence is needed next.
+
+Tested executable SHA-256:
+`69ca28a36d20da41b6643573e0fe28527109e7d03454000696aa31002402ca38`.
+Tested ICD SHA-256:
+`2a08e044c70d77d111f3d88fa6b59e39c3e20eee7d5255da4109e48ce81bed8d`.
+Artifacts and build provenance are retained under
+`/Users/rujian/.local/share/mesa-switch-woa-build/runs/win32-cube-20261111/`.
+The 01:15:27 UTC recovery check confirms .59 Code 0, original driver/ACPI
+hashes, removed temporary registration/start permit/tasks and byte-identical
+before/after power settings. The subsequent interactive display query
+confirms the original 90-degree rotation. All 40 downloaded records
+(24,472,682 bytes) match device-side lengths and SHA-256 values. The native
+cube result JSON has SHA-256
+`7895ce876630b876c8d14b3d82250e5204b3df6a377dea369e90439a46583003`.
+
 ## Direct3D UMD and DWM
 
 The user clarified the staging and authorization on 2026-11-10: **first

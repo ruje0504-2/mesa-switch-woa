@@ -231,7 +231,7 @@ static NTSTATUS APIENTRY query_hardware_capability(HANDLE context, DXGKARG_QUERY
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
     if (args->TargetId != adapter->Panel.Boot.TargetId)
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_TARGET;
-    /* The fixed panel path needs no driver-side transforms. */
+    /* Only the panel's native portrait mode is implemented. */
     args->VidPnHWCaps = (D3DKMDT_VIDPN_HW_CAPABILITY){0};
     return STATUS_SUCCESS;
 }

@@ -134,8 +134,12 @@ The former `/private/tmp/t214-gpu-round` host directory is no longer present.
 The C/C++ toolchain and SDK/WDK were restored into
 `/Users/rujian/.local/share/mesa-switch-woa-build/`: LLVM-MinGW 20261104 and
 SDK/WDK NuGet 10.0.26100.6584 (Include 10.0.26100.0). Download origins/hashes
-are recorded in `downloads-manifest.json`. The full Mesa/Rust/host shader
-tool build environment still needs restoration before a new UMD/ICD build.
+are recorded in `downloads-manifest.json`. Rust 1.90.0, Python dependencies
+and the host `mesa_clc`/`vtn_bindgen2` have since been restored under that
+same persistent root. Complete ARM64 UMD and NVK ICD builds pass. Five
+rebuilt controlled Windows fixtures also pass on .59: UMD adapter, DLL
+entry, device, KMT transport and shared-resource lifetime. These fixtures
+use controlled substitutes and do not establish native presentation.
 The two .144 native result JSON files and the .145 native result JSON were
 recovered from the device into `recovered-evidence/`; all three match the
 original verified hashes. This does not restore the former host build trees

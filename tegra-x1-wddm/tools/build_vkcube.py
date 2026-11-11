@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Cross-build the upstream Win32 vkcube without modifying its renderer.
+
+Pass a Khronos Vulkan-Tools checkout, matching Vulkan-Headers include directory,
+and the ARM64 LLVM-MinGW C compiler. The executable dynamically loads the
+Windows Vulkan loader; place vulkan-1.dll alongside it for an app-local test.
+This tool neither downloads dependencies nor installs a driver.
+"""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import subprocess
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--headers", type=Path, required=True)
+    parser.add_argument("--cc", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args()
+    source, headers = args.source.resolve(), args.headers.resolve()
+    out = args.out.resolve()
+    cube = source / "cube"
+    if not (cube / "cube_functions.h").is_file():
+        parser.error("Expected Vulkan-Tools with the dynamically loaded cube_functions.h")
+    if not (headers / "vulkan/vulkan.h").is_file():
+        parser.error("--headers must contain vulkan/vulkan.h")
+    revision = subprocess.check_output(
+        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    if subprocess.check_output(["git", "-C", str(source), "status", "--porcelain", "--", "cube"]):
+        parser.error("Use an unmodified upstream cube directory")
+    out.mkdir(parents=True, exist_ok=True)
+    exe = out / "vkcube.exe"
+    # LLVM-MinGW's target name is a symlink to a wrapper which uses argv[0].
+    command = [str(args.cc.absolute()), "-std=c11", "-O2", "-static", "-mwindows",
+               "-DVK_USE_PLATFORM_WIN32_KHR", "-I" + str(headers),
+               str(cube / "cube.c"), "-lgdi32", "-lshell32", "-o", str(exe)]
+    subprocess.run(command, check=True)
+    shutil.copyfile(source / "LICENSE.txt", out / "vkcube-LICENSE.txt")
+    notice = (cube / "cube.c").read_text().split("*/", 1)[0] + "*/\n"
+    (out / "vkcube-NOTICE.txt").write_text(notice +
+        "\nUnmodified Khronos Vulkan-Tools vkcube, commit " + revision +
+        "\nhttps://github.com/KhronosGroup/Vulkan-Tools\n")
+    inputs = [cube / name for name in (
+        "cube.c", "cube_functions.h", "linmath.h", "gettime.h",
+        "object_type_string_helper.h", "lunarg.ppm.h", "cube.vert.inc", "cube.frag.inc")]
+    (out / "vkcube-manifest.json").write_text(json.dumps({
+        "upstream": "https://github.com/KhronosGroup/Vulkan-Tools",
+        "revision": revision, "renderer_modified": False,
+        "command": command,
+        "source_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs},
+        "vulkan_core_h_sha256": hashlib.sha256((headers / "vulkan/vulkan_core.h").read_bytes()).hexdigest(),
+        "executable_sha256": hashlib.sha256(exe.read_bytes()).hexdigest(),
+        "scope": "Build only; native rendering, Win32 presentation and device identity need live verification",
+    }, indent=2) + "\n")
+    print(f"Built unmodified upstream vkcube at {revision}: {exe}")
+
+
+if __name__ == "__main__":
+    main()
