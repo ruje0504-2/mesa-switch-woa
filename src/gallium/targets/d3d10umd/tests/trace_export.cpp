@@ -18,13 +18,13 @@ static const char *event_name(USHORT id)
    static const char *names[] = {"invalid", "OpenAdapter10", "OpenAdapter10_2",
       "ScreenQuery", "ScreenIdentity", "ZinkBegin", "ZinkEnd", "OpenResult",
       "SupportedVersion", "GetCaps", "CreateDeviceBegin", "CreateDeviceResult",
-      "OpenResource", "Present", "Blt", "SetDisplayMode"};
+      "OpenResource", "Present", "Blt", "SetDisplayMode", "ZinkFailure", "ZinkMessage"};
    return id < ARRAYSIZE(names) ? names[id] : "unknown";
 }
 
 static void json_image(const WCHAR *image)
 {
-   char utf8[128] = {};
+   char utf8[4096] = {};
    WideCharToMultiByte(CP_UTF8, 0, image, -1, utf8, sizeof(utf8), nullptr, nullptr);
    std::putchar('"');
    for (const unsigned char *s = (unsigned char *)utf8; *s; ++s) {
@@ -35,12 +35,33 @@ static void json_image(const WCHAR *image)
    std::putchar('"');
 }
 
+static void record_header(const EVENT_HEADER &header, const WCHAR *image)
+{
+   std::printf("{\"id\":%u,\"event\":\"%s\",\"pid\":%lu,\"tid\":%lu,\"time\":%llu,\"image\":",
+      header.EventDescriptor.Id, event_name(header.EventDescriptor.Id), header.ProcessId,
+      header.ThreadId, (unsigned long long)header.TimeStamp.QuadPart);
+   json_image(image);
+}
+
 static void WINAPI record(EVENT_RECORD *event)
 {
    if (std::memcmp(&event->EventHeader.ProviderId, &provider, sizeof(provider)))
       return;
    const auto &header = event->EventHeader;
-   if (header.EventDescriptor.Version != 1 || event->UserDataLength != sizeof(d3d10_umd_trace_data)) {
+   if (header.EventDescriptor.Version != 1) { ++invalid; return; }
+   if (header.EventDescriptor.Id == D3D10_TRACE_ZINK_MESSAGE) {
+      if (event->UserDataLength != sizeof(d3d10_umd_trace_message)) { ++invalid; return; }
+      d3d10_umd_trace_message message;
+      std::memcpy(&message, event->UserData, sizeof(message));
+      if (message.image[31] || message.message[1023]) { ++invalid; return; }
+      ++matched;
+      record_header(header, message.image);
+      std::printf(",\"message\":");
+      json_image(message.message);
+      std::puts("}");
+      return;
+   }
+   if (event->UserDataLength != sizeof(d3d10_umd_trace_data)) {
       ++invalid;
       return;
    }
@@ -48,12 +69,14 @@ static void WINAPI record(EVENT_RECORD *event)
    std::memcpy(&data, event->UserData, sizeof(data));
    if (data.reserved || data.image[31]) { ++invalid; return; }
    ++matched;
-   std::printf("{\"id\":%u,\"event\":\"%s\",\"pid\":%lu,\"tid\":%lu,\"time\":%llu,\"image\":",
-      header.EventDescriptor.Id, event_name(header.EventDescriptor.Id), header.ProcessId,
-      header.ThreadId, (unsigned long long)header.TimeStamp.QuadPart);
-   json_image(data.image);
-   std::printf(",\"status\":\"%08x\",\"arg0\":\"%016llx\",\"arg1\":\"%016llx\"}\n",
+   record_header(header, data.image);
+   std::printf(",\"status\":\"%08x\",\"arg0\":\"%016llx\",\"arg1\":\"%016llx\"",
       (unsigned)data.result, (unsigned long long)data.arg0, (unsigned long long)data.arg1);
+   if (header.EventDescriptor.Id == D3D10_TRACE_ZINK_FAILURE)
+      std::printf(",\"stage\":%u,\"line\":%u,\"detail\":%u,\"code\":%d",
+                  (unsigned)(data.arg0 >> 32), (unsigned)data.arg0,
+                  (unsigned)(data.arg1 >> 32), (int32_t)data.arg1);
+   std::puts("}");
 }
 
 int wmain(int argc, WCHAR **argv)

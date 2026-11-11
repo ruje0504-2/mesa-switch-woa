@@ -69,7 +69,7 @@ Stop-EtwTraceSession -Name TegraUmd
 .\d3d10-trace-export.exe C:\test\umd.etl > umd.jsonl
 ```
 
-`Trace.h` defines the version-1, 88-byte payload. `ScreenQuery` logs adapter
+`Trace.h` defines the version-1, 88-byte numeric payload. `ScreenQuery` logs adapter
 flags/budget; `ZinkBegin` logs LUID and opt-in state (0 absent, 1 exactly
 `"1"`, 2 another value); `SupportedVersion` logs index/DDI version;
 `GetCaps` logs type/size; `CreateDeviceBegin` logs interface/flags. A failed
@@ -77,6 +77,28 @@ flags/budget; `ZinkBegin` logs LUID and opt-in state (0 absent, 1 exactly
 CSO state (2) or empty shaders (3). `Blt` logs flags/rotation; its current
 success result still comes from an unimplemented stub, not a copy proof.
 The decoder rejects incompatible payload versions and reports lost events.
+
+`ZinkFailure` records the first returned screen-creation failure before
+cleanup. The exporter adds `stage`, `line`, `detail` and signed `code`
+fields. `line` refers to the matching `zink_screen.c` revision. Stages are
+1 allocation, 2 loader, 3 loader entrypoints, 4 instance, 5 physical-device
+enumeration, 6 LUID matching, 7 features, 8 logical device and 9 remaining
+initialization. `code` is a Win32 error for stages 2/3, a `VkResult` for
+Vulkan calls, or zero for boolean failures. At stage 3, `detail` bits 0/1
+identify missing GetInstanceProcAddr/GetDeviceProcAddr; at stage 4 they
+identify missing instance entrypoints/reuse of a cached instance failure.
+Stages 5/6 report the enumerated device count. This preserves the original
+API result when Zink reuses a failed creation attempt; it does not turn a
+zero code into proof that the stage succeeded.
+
+When available, `ZinkMessage` carries the first instance-creation
+`VK_EXT_debug_utils` error, truncated to 1,023 UTF-8 bytes before conversion
+to the separate 2,112-byte UTF-16 event payload. The decoder validates its
+length and terminators and emits JSON `message` text. The callback returns
+`VK_FALSE` and retains its data with the cached instance through destruction;
+it does not point into a screen-creation caller's stack. Other Zink callers
+that do not request creation-error output keep the existing instance chain.
+Absence of a message does not establish where an API error originated.
 
 ## GDI software backend
 

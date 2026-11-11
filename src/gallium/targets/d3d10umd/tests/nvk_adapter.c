@@ -17,6 +17,8 @@ void D3D10Trace(enum d3d10_umd_trace_event event, HRESULT result, uint64_t a, ui
    (void)event; (void)result; (void)a; (void)b;
 }
 
+void D3D10TraceMessage(const char *message) { (void)message; }
+
 #define CHECK(x) do { if (!(x)) { \
    fprintf(stderr, "line %u: %s\n", __LINE__, #x); exit(1); \
 } } while (0)
@@ -43,8 +45,9 @@ query_adapter(HANDLE adapter, const D3DDDICB_QUERYADAPTERINFO *query)
 }
 
 struct pipe_screen *
-zink_win32_create_screen(uint64_t luid)
+zink_win32_create_screen_with_error(uint64_t luid, struct zink_screen_create_error *error)
 {
+   *error = (struct zink_screen_create_error){0};
    ++screens;
    selected_luid = luid;
    return backend_screen;

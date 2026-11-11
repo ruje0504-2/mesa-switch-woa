@@ -426,6 +426,72 @@ Artifacts and scripts for the completed gated round remain under
 `/Users/rujian/.local/share/mesa-switch-woa-build/runs/dwm-init-20261111/`;
 the full build is in the adjacent `dwm-init-20261111-umd/` directory.
 
+The `zink-init-auto-20261111` successor adds optional Zink creation-error
+details and a `ZinkFailure` ETW record. The ARM64 build and three controlled
+fixtures pass (04:16:24 UTC; 27 valid, lossless control events). Preflight
+first finds `Screen-saver`: ordinary touch-down injection returns Win32
+error 5 and the desktop remains unchanged. After the user returns to the
+desktop, portrait/visibility checks pass at 04:19:18. No sleep, screen-saver
+or display policy is changed.
+
+On the same signed .144 KMD, the native trial runs from 04:23:42.9146795
+to 04:23:46.5396818 UTC on matching LUID `8eb74`, exit 0 without timeout.
+The feature matrix remains FL10_0 and the runtime checks another 16,384
+RGBA/BGRA clear/draw pixels with zero mismatches. Its black desktop capture
+has the same hash as the preceding round. The finalized ETL exports 844
+valid UMD events, including 704 from three DWM PIDs. All 88 recorded DWM
+screen-creation failures identify `vkCreateInstance` returning
+`VK_ERROR_OUT_OF_HOST_MEMORY` (-1) at stage 4, source line 3515 in that
+archived patch. Forty-four are fresh calls and 44 reuse the cached error.
+This does not establish RAM exhaustion or the internal allocation site.
+The ETL reports 924 lost events, zero lost buffers and 1,904 written buffers;
+do not use missing events as execution evidence. The next diagnostic adds
+an instance-creation debug-utils callback to retain the first error message.
+
+Local collection finishes at 04:24:17.9146312 UTC; automatic rollback and
+restart complete. At 04:28:12, .59 Code 0, original SYS/ACPI hashes,
+temporary-registration/task/permit removal and unchanged power settings
+are verified. System-loader removal and machine opt-in restoration are
+also verified; portrait restore/verify is a no-op at 04:28:27. All 123
+returned files (16,255,926 bytes) match remote lengths and SHA-256 values.
+The run's `evidence/` directory retains the first screen-saver failure too.
+ETL SHA-256: `e7b77cf90fd8804caf4b756ede5b0575c079c18525927edc62740c4cbcb2cc9c`;
+UMD export: `4fc0f7c0fe013fe08ea3785e65c7529dd211da4fe3dde68b017c4ebcf820d079`.
+
+The `zink-message-auto-20261111` follow-up adds a standard instance-creation
+debug-utils callback and a bounded `ZinkMessage` event. Its storage belongs
+to the cached instance, not the caller's stack; the callback returns
+`VK_FALSE`. The full ARM64 build and three .59 controls pass, with 27 valid
+lossless control events at 04:35:07 UTC. The unchanged .144 KMD runs on LUID
+`8ead0` from 04:40:10.4549680 to 04:40:14.8924611, exit 0 without timeout.
+The feature matrix is unchanged and all 16,384 runtime pixels again match.
+
+Increasing the AutoLogger buffer size from 8 to 64 KiB and setting 16/128
+minimum/maximum buffers yields a finalized ETL with 844 valid UMD events,
+zero recorded event/buffer loss and 549 written buffers. DWM again records
+44 fresh instance errors and 44 cached errors, all -1 at source line 3518
+in the archived patch; no `ZinkMessage` is exported. The error text remains
+unidentified: this does not prove the callback was enabled or locate the
+failure relative to it. The desktop capture is still the same black image.
+
+The deployed loader was independently copied back and matches SHA-256
+`903719814032af3670373c7a82273917d80624d4ff0e50c3cbc3d72ae42b783a`.
+It reports only `Vulkan Loader - Dev Build`. Its retained symbols show that
+`vkCreateInstance` first requests 5,328 bytes through `loader_calloc`, before
+installing debug messengers, and can return -1 there without a callback.
+This is a possible unobserved path, **not proof that this allocation failed**.
+Earlier extension enumeration and subsequent loader/ICD calls still need
+their own failure attribution. The binary and `loader-vkCreateInstance.asm`
+are retained under the build root's `references/` directory.
+
+Collection completes at 04:40:45.1424652 UTC. Recovery verification passes
+at 04:43:42 (.59 Code 0, original SYS/ACPI, no temporary registration,
+permit or test tasks, identical power settings); the loader/opt-in cleanup
+also passes. Portrait restore/verify is a no-op at 04:43:54. All 117 returned
+files (34,154,872 bytes) match remote hashes. ETL SHA-256:
+`fe772098510997510e3ac1c181aeb9c5079c24794d48c35e519b1e6803109f9f`;
+UMD export: `7ca9594655694a73d9cf783a16b2fdd362c33e43d4b0bca4a31032331bac6579`.
+
 ## Direct3D UMD and DWM
 
 The user clarified the staging and authorization on 2026-11-10: **first

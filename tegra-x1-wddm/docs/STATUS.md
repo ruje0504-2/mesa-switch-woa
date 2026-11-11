@@ -3,17 +3,21 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**DWM first-failure result (2026-11-11):** the automatic .144 trial on LUID
-`8b7be` confirms a native FL10_0 ceiling: 11_1/11_0/10_1 return unsupported,
-10_0 and the ordered-list negotiation succeed. Another 16,384 RGBA/BGRA
-clear/draw pixels match. DWM enters the new UMD and queries the adapter
-successfully, with the NVK opt-in present, but all 88 Zink initialization
-attempts fail before capability negotiation or D3D device creation. The
-finalized ETL has 748 UMD events and no recorded loss. The active-desktop
-capture remains black. Next isolate Zink's loader/instance/device failure;
-changing the advertised Feature Level does not repair this earlier failure.
-.59 Code 0, the temporary environment cleanup, portrait preference and
-unchanged power settings are verified after rollback.
+**DWM first-failure result (2026-11-11):** on the unchanged .144 KMD, LUID
+`8ead0`, all 88 recorded DWM Zink failures identify `vkCreateInstance`
+returning `VK_ERROR_OUT_OF_HOST_MEMORY` (-1): 44 fresh attempts and 44
+cached failures. This identifies the failing API, not actual RAM exhaustion
+or its internal cause. The same round again passes FL10_0 negotiation and
+16,384 native RGBA/BGRA clear/draw pixels; higher feature levels remain
+unsupported. The desktop capture is black. The finalized ETL has 844 valid
+UMD events and no recorded loss after increasing the trace buffers. The
+standard instance-creation error callback yields no message; next isolate
+the loader's failure before/inside instance creation, including the earlier
+extension queries. Do not infer real RAM exhaustion or change capability
+bits from this result. .59 Code 0, environment cleanup, portrait preference
+and unchanged power settings are verified after rollback; 117 returned
+files match device-side hashes. The preceding `8eb74` trace reported 924
+lost events and must not be used as absence-of-execution evidence.
 [Native result and evidence](PORTING.md#dwm-initialization-trace-work)
 
 **Win32 presentation investigation (2026-11-11):** the GDI WSI now pairs
@@ -50,7 +54,10 @@ prove what caused the earlier black cube captures.
 interactive session and recheck the input desktop before asking the user
 to intervene. Ask only when that attempt fails or authentication is needed.
 The user need not keep the screen lit during local development. The prior
-mouse attempt was denied; remote touch dismissal has not yet been verified.
+mouse attempt was denied. On 2026-11-11, the ordinary touch-down injection
+also returned access denied (5) on `Screen-saver`; the user then returned
+to `Default` and portrait verification passed. Remote touch dismissal is
+not established on this configuration.
 
 **Next display round includes real 90-degree landscape rotation**, as the
 user requested: implement and verify rotation with source dimensions,

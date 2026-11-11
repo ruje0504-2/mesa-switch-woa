@@ -7,7 +7,8 @@
 
 /* Opt-in ETW provider, enabled by the trace controller rather than a
  * process environment variable. Version 1 payloads use this fixed layout.
- * PID/TID/time are supplied by ETW. No resource or host pointers are logged.
+ * PID/TID/time are supplied by ETW. Numeric events do not log pointers;
+ * the separate bounded Vulkan initialization message may include DLL paths.
  */
 #define D3D10_UMD_TRACE_GUID_INIT \
    {0x78edcf0e, 0xb51c, 0x4b24, {0x9b, 0x28, 0xc8, 0x6d, 0x48, 0xf5, 0x21, 0xa9}}
@@ -28,6 +29,8 @@ enum d3d10_umd_trace_event {
    D3D10_TRACE_PRESENT,
    D3D10_TRACE_BLT,
    D3D10_TRACE_SET_DISPLAY_MODE,
+   D3D10_TRACE_ZINK_FAILURE,
+   D3D10_TRACE_ZINK_MESSAGE,
 };
 
 struct d3d10_umd_trace_data {
@@ -37,11 +40,17 @@ struct d3d10_umd_trace_data {
    WCHAR image[32];
 };
 
+struct d3d10_umd_trace_message {
+   WCHAR image[32];
+   WCHAR message[1024];
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 void D3D10Trace(enum d3d10_umd_trace_event event, HRESULT result,
                 uint64_t arg0, uint64_t arg1);
+void D3D10TraceMessage(const char *message);
 #ifdef __cplusplus
 }
 #endif

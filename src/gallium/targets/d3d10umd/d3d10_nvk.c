@@ -55,7 +55,14 @@ d3d10_create_screen(HANDLE hRTAdapter, const D3DDDI_ADAPTERCALLBACKS *callbacks,
     * the process environment or NVK's normal feature policy. */
    D3D10Trace(D3D10_TRACE_ZINK_BEGIN, S_OK, luid,
              !length ? 0 : length == 1 && opt_in[0] == '1' ? 1 : 2);
-   *screen = zink_win32_create_screen(luid);
+   struct zink_screen_create_error error = {0};
+   *screen = zink_win32_create_screen_with_error(luid, &error);
+   if (!*screen) {
+      D3D10Trace(D3D10_TRACE_ZINK_FAILURE, DXGI_ERROR_UNSUPPORTED,
+                ((uint64_t)error.stage << 32) | error.line,
+                ((uint64_t)error.detail << 32) | (uint32_t)error.result);
+      D3D10TraceMessage(error.message);
+   }
    D3D10Trace(D3D10_TRACE_ZINK_END, *screen ? S_OK : DXGI_ERROR_UNSUPPORTED, luid, 0);
    return *screen ? S_OK : DXGI_ERROR_UNSUPPORTED;
 }

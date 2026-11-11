@@ -24,6 +24,8 @@
 #ifndef ZINK_PUBLIC_H
 #define ZINK_PUBLIC_H
 
+#include <stdint.h>
+
 struct pipe_screen;
 struct renderonly;
 struct sw_winsys;
@@ -36,4 +38,33 @@ struct pipe_screen *
 zink_drm_create_screen(int fd, const struct pipe_screen_config *config, struct renderonly *ro);
 struct pipe_screen *
 zink_win32_create_screen(uint64_t adapter_luid);
+
+/* Optional creation failure detail for frontends that have no visible stderr.
+ * result is a Win32 error for loader stages, VkResult for Vulkan calls, and
+ * zero when the stage only has a boolean failure. line identifies the call
+ * site in the matching source revision. This is not an ICD or kernel ABI.
+ */
+enum zink_screen_create_stage {
+   ZINK_SCREEN_CREATE_OK,
+   ZINK_SCREEN_CREATE_ALLOCATE,
+   ZINK_SCREEN_CREATE_LOADER,
+   ZINK_SCREEN_CREATE_ENTRYPOINTS,
+   ZINK_SCREEN_CREATE_INSTANCE,
+   ZINK_SCREEN_CREATE_ENUMERATE_DEVICES,
+   ZINK_SCREEN_CREATE_MATCH_DEVICE,
+   ZINK_SCREEN_CREATE_FEATURES,
+   ZINK_SCREEN_CREATE_DEVICE,
+   ZINK_SCREEN_CREATE_INITIALIZE,
+};
+
+struct zink_screen_create_error {
+   enum zink_screen_create_stage stage;
+   int32_t result;
+   uint32_t detail, line;
+   char message[1024]; /* First instance debug-utils error, when available. */
+};
+
+struct pipe_screen *
+zink_win32_create_screen_with_error(uint64_t adapter_luid,
+                                   struct zink_screen_create_error *error);
 #endif

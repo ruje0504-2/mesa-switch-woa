@@ -4,6 +4,7 @@
 #include <cwchar>
 
 static_assert(sizeof(d3d10_umd_trace_data) == 88, "ETW payload layout");
+static_assert(sizeof(d3d10_umd_trace_message) == 2112, "ETW message layout");
 
 class TraceProvider {
 public:
@@ -25,12 +26,18 @@ public:
    ~TraceProvider() { EventUnregister(handle); }
 };
 
-void D3D10Trace(enum d3d10_umd_trace_event event, HRESULT result,
-                uint64_t arg0, uint64_t arg1)
+static TraceProvider &trace_provider()
 {
    /* Function-static registration occurs outside DllMain on first use.
     * Its destructor unregisters before the DLL unloads. */
    static TraceProvider provider;
+   return provider;
+}
+
+void D3D10Trace(enum d3d10_umd_trace_event event, HRESULT result,
+                uint64_t arg0, uint64_t arg1)
+{
+   auto &provider = trace_provider();
    const EVENT_DESCRIPTOR descriptor = {(USHORT)event, 1, 0, 4, 0, 0, 1};
    if (!EventEnabled(provider.handle, &descriptor))
       return;
@@ -38,6 +45,21 @@ void D3D10Trace(enum d3d10_umd_trace_event event, HRESULT result,
    data.result = result;
    data.arg0 = arg0;
    data.arg1 = arg1;
+   std::wmemcpy(data.image, provider.image, ARRAYSIZE(data.image));
+   EVENT_DATA_DESCRIPTOR payload;
+   EventDataDescCreate(&payload, &data, sizeof(data));
+   EventWrite(provider.handle, &descriptor, 1, &payload);
+}
+
+void D3D10TraceMessage(const char *message)
+{
+   auto &provider = trace_provider();
+   const EVENT_DESCRIPTOR descriptor = {D3D10_TRACE_ZINK_MESSAGE, 1, 0, 4, 0, 0, 1};
+   if (!message || !*message || !EventEnabled(provider.handle, &descriptor))
+      return;
+   d3d10_umd_trace_message data = {};
+   if (!MultiByteToWideChar(CP_UTF8, 0, message, -1, data.message, ARRAYSIZE(data.message)))
+      return;
    std::wmemcpy(data.image, provider.image, ARRAYSIZE(data.image));
    EVENT_DATA_DESCRIPTOR payload;
    EventDataDescCreate(&payload, &data, sizeof(data));
