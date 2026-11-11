@@ -1067,3 +1067,70 @@ The trial controller also retains the process handle before waiting for a
 PowerShell `Start-Process` child. A control caught null exit codes without that
 retention; the corrected controller reports exact exits 0 and 7 at 17:02:33 UTC,
 before the native test is armed. The original failed control is retained.
+
+### Native source-mode retest
+
+`landscape149-native-20261111` uses KMD `.149` from `ebfd5142`, with unchanged
+UMD `413d32bb6034` and ICD `f828845c38b7`. Native LUID `bd778` reaches Code 0
+at 17:31:34 UTC, but the 90-degree CCD validation still returns 1610 at
+17:32:03. No mode is applied and `vkcube` is not launched. The source-mode
+correction is therefore insufficient to fix the physical landscape path.
+The user reports no rotation and a missing bottom menu, apparently already
+at native startup. The exact physical observation timestamp is unavailable.
+This is not a complete visible-desktop pass.
+
+The recovered export contains 129,717 records, including 21,071 UMD events;
+the finalized ETL reports no event/buffer loss. Dwm-Core event 203 retains the
+known 36/52-byte template mismatch in 622 events. Raw SHA256:
+`51292758886c7dc78a88a856d4db1d8463a08b2c8e2efdb979528cd772a3e9ff`.
+The live controller reports collection at 17:32:37, but that result file is
+zero-filled after a subsequent startup. The live monitor and durable native
+result are retained; do not infer an interruption cause from this observation.
+All 153 returned files (64,013,449 bytes) match device lengths/hashes. Baseline
+`.59` Code 0, cleanup and unchanged power policy are verified at 17:39:47;
+portrait restore/verify is a no-op at 17:40:49–50 UTC.
+
+### AppContainer runtime loading
+
+The `.149` trace contains repeated D3D11 `LoadUMD / 80070005` errors and DXGI
+journal entries naming `\\app\\TegraGpuD3D.dll`. DWM and Explorer have successful
+UMD loads. The failed PIDs are not mapped to executable identities by this
+retained trace, so they must not be labeled StartMenuExperienceHost without
+additional evidence. The absence of UMD OpenResource events is also not proof
+that sharing is unnecessary: some processes fail before entering the UMD.
+
+The test runtime files under ProgramData grant ordinary Users read/execute,
+but lack an AppContainer ACE. An AppContainer access check also considers the
+package identity, so ordinary-user access alone is insufficient.
+[Microsoft AppContainer access model](https://learn.microsoft.com/en-us/windows/win32/secauthz/implementing-an-appcontainer)
+
+`tools/appcontainer_load_check.cpp` compares file read/execute and LoadLibraryEx
+in an ordinary process and a disposable AppContainer, without calling any
+D3D/Vulkan entry point. It grants only its temporary package SID access to the
+probe executable, restores the executable ACL, and deletes its own profile.
+It records the actual session/window station/desktop. Build with an ARM64
+LLVM-MinGW C++ compiler using `-std=c++17 -static -municode -ladvapi32 -luserenv
+-luser32`.
+
+On `.59` Code 0 at 17:50:20 UTC, the ordinary and AppContainer processes both
+run in session 1, `WinSta0/Default`. System D3D11, GDI32 and User32 load in both.
+Original UMD/NVK files load normally but return file/load error 5 inside the
+AppContainer. Byte-identical private copies with `S-1-15-2-1` read/execute load
+successfully there, as does the copied Vulkan Loader. The probe and scheduled
+task exit 0; executable ACL restoration and profile deletion succeed. No native
+driver is enabled during these controls. The original runtime ACLs are intact.
+All 16 returned control files match device lengths/hashes; evidence is in
+`runs/appcontainer-load-control-20261111/`.
+
+An earlier SSH/noninteractive control loads the corrected UMD but returns
+NVK initialization error 1114. That result is retained, including a separate
+NVK-only check. It does not reproduce in the interactive session and is not
+attributed to the native desktop ICD. This distinction matters when testing
+DLLs that import desktop graphics APIs.
+
+`tools/Enable-RuntimeAppContainerRead.ps1` applies read/execute access to the
+staged runtime directory and its children, verifying the three runtime DLLs.
+It changes no parent/system ACL and grants no write access. Use it for the
+temporary runtime outside DriverStore before the next native desktop trial.
+The loading control establishes a deployment defect; the missing menu still
+requires physical validation and may expose further D3D sharing/present work.

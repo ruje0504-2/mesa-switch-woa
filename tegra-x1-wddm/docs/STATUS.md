@@ -3,17 +3,31 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Landscape validation / `.149` WIP:** the byte-identical `.148` KMD/UMD/ICD reaches
-Code 0 on LUID `940b9`, but the 90-degree CCD validation returns 1610
-(`ERROR_BAD_CONFIGURATION`) at 17:07:24 UTC. No mode is applied and `vkcube`
-is not launched. `.59` Code 0, cleanup and unchanged power settings are verified
-at 17:15:27 UTC; portrait restoration is a verified no-op at 17:16:27 UTC.
-Evidence is retained in `landscape-native-20261111`.
-The source-mode correction now enumerates the 1280x720 desktop extent and
-constrains it together with rotation instead of admitting only the panel's
-720x1280 signal size. Host models/build and four ARM64 controls pass on `.59`
-at 17:15:32–33 UTC. This is not yet a native fix result; the next KMD package
-is `.149`, retaining the same UMD and ICD.
+**Latest `.149` native result (2026-11-11):** KMD `ebfd5142` reaches Code 0 on
+LUID `bd778`, but 90-degree CCD validation still returns 1610
+(`ERROR_BAD_CONFIGURATION`) at 17:32:03 UTC. No mode is applied and `vkcube`
+is not launched. The user reports no rotation and a missing bottom menu,
+apparently already at native startup; this is not a complete visible-desktop
+pass. All 153 returned files (64,013,449 bytes) match device hashes and lengths.
+`.59` Code 0, cleanup and unchanged power settings are verified at 17:39:47 UTC;
+portrait restoration/verification is a no-op at 17:40:49–50 UTC.
+
+**Current investigation:** establish why desktop components fail before the
+rotation request. `.149` retains multiple `LoadUMD / 80070005` errors. A `.59`
+control reproduces read/execute and loading denial for both test UMD and NVK
+inside an AppContainer while ordinary loading succeeds. In the interactive
+`WinSta0/Default` session, granting read/execute on an identical private copy
+fixes UMD, NVK and Vulkan Loader loading. An earlier NVK error 1114 occurs only
+in the noninteractive control; it is not evidence of a native desktop ICD
+failure. The original runtime directory is unchanged. This is a confirmed
+deployment/loading issue, not yet proof of the complete cause or a visual fix
+for the missing menu. The next work is a native desktop trial with corrected
+runtime access, then native rotation and Win32 `vkcube`.
+[AppContainer loading diagnosis](D3D_RUNTIME_SHARING.md#appcontainer-runtime-loading)
+
+The source-mode correction enumerates 1280x720 together with compatible
+rotation. Host models/build and four ARM64 controls pass, but the `.149`
+native result shows this correction alone does not resolve CCD validation.
 [Source-mode correction and controls](D3D_RUNTIME_SHARING.md#landscape-source-mode-correction)
 
 **Latest `.148` native regression (2026-11-11):** all 40,960 draw/sample pixels
