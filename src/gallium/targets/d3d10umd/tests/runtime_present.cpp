@@ -35,7 +35,7 @@ extern "C" HRESULT d3d10_create_screen(HANDLE, const D3DDDI_ADAPTERCALLBACKS *, 
 static HRESULT APIENTRY allocate(HANDLE d, D3DDDICB_ALLOCATE *a)
 {
    CHECK(d == rt_device && a->hResource == rt_resource(creating) && a->NumAllocations == 1);
-   CHECK(a->pAllocationInfo2->Flags.Primary && a->pAllocationInfo2->PrivateDriverDataSize == 32);
+   CHECK(a->pAllocationInfo2->Flags.Primary && a->pAllocationInfo2->PrivateDriverDataSize == 48);
    a->pAllocationInfo2->hAllocation = 0x50 + creating;
    ++live_allocations; return S_OK;
 }

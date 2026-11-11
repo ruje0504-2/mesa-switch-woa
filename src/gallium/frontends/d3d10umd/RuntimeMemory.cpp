@@ -23,6 +23,7 @@ struct RuntimePrimary {
    D3DKMT_HANDLE queue, fence;
    const volatile UINT64 *fence_value;
    HRESULT error, cleanup_error;
+   UINT pitch;
    bool cpu_locked, dead, associated;
    PrimaryMapping *mappings;
 };
@@ -220,15 +221,31 @@ HRESULT RuntimePrimaryCreate(Device *device, const D3D10DDIARG_CREATERESOURCE *d
                               D3D10DDI_HRTRESOURCE runtime, RuntimePrimary **out)
 {
    *out = NULL;
-   /* This is the KMD's existing portrait primary layout. Landscape support
-    * must extend both the layout and the scanout contract together. */
+   if (!desc->pPrimaryDesc || !desc->pMipInfoList) return DXGI_ERROR_UNSUPPORTED;
+   const auto &primary = *desc->pPrimaryDesc;
+   const UINT mode_rotation = primary.ModeDesc.Rotation == DXGI_DDI_MODE_ROTATION_UNSPECIFIED ?
+      DXGI_DDI_MODE_ROTATION_IDENTITY : primary.ModeDesc.Rotation;
+   /* NONPREROTATED explicitly leaves output orientation to the application.
+    * Preserve that identity storage rather than applying the mode twice. */
+   const UINT rotation = primary.Flags & DXGI_DDI_PRIMARY_NONPREROTATED ?
+      DXGI_DDI_MODE_ROTATION_IDENTITY : mode_rotation;
+   const bool quarter = rotation == DXGI_DDI_MODE_ROTATION_ROTATE90 ||
+                        rotation == DXGI_DDI_MODE_ROTATION_ROTATE270;
+   const UINT width = quarter ? 1280 : 720, height = quarter ? 720 : 1280;
+   D3D10Trace(D3D10_TRACE_PRIMARY_LAYOUT, S_OK,
+      (uint64_t)primary.ModeDesc.Width << 32 | primary.ModeDesc.Height,
+      (uint64_t)primary.Flags << 32 | primary.ModeDesc.Rotation);
    if (!desc->pPrimaryDesc || !runtime.handle || !desc->pMipInfoList ||
        desc->ResourceDimension != D3D10DDIRESOURCE_TEXTURE2D ||
        desc->Format != DXGI_FORMAT_B8G8R8A8_UNORM || desc->MipLevels != 1 ||
        desc->ArraySize != 1 || desc->SampleDesc.Count != 1 || desc->SampleDesc.Quality ||
-       desc->pPrimaryDesc->VidPnSourceId != 0 ||
-       desc->pMipInfoList[0].TexelWidth != 720 || desc->pMipInfoList[0].TexelHeight != 1280 ||
-       desc->pPrimaryDesc->ModeDesc.Width != 720 || desc->pPrimaryDesc->ModeDesc.Height != 1280)
+       primary.VidPnSourceId != 0 || mode_rotation > DXGI_DDI_MODE_ROTATION_ROTATE270 ||
+       (primary.Flags & ~(DXGI_DDI_PRIMARY_OPTIONAL | DXGI_DDI_PRIMARY_NONPREROTATED)) ||
+       desc->pMipInfoList[0].TexelWidth != width || desc->pMipInfoList[0].TexelHeight != height ||
+       !((primary.ModeDesc.Width == width && primary.ModeDesc.Height == height) ||
+         ((mode_rotation == DXGI_DDI_MODE_ROTATION_ROTATE90 ||
+           mode_rotation == DXGI_DDI_MODE_ROTATION_ROTATE270) &&
+          primary.ModeDesc.Width == height && primary.ModeDesc.Height == width)))
       return DXGI_ERROR_UNSUPPORTED;
 
    const auto &cb = device->KTCallbacks;
@@ -241,6 +258,7 @@ HRESULT RuntimePrimaryCreate(Device *device, const D3D10DDIARG_CREATERESOURCE *d
    auto p = static_cast<RuntimePrimary *>(calloc(1, sizeof(RuntimePrimary)));
    if (!p) return E_OUTOFMEMORY;
    p->refs = 1;
+   p->pitch = width * 4;
    p->device = device->hDevice;
    p->runtime_resource = runtime.handle;
    p->callbacks = cb;
@@ -262,17 +280,11 @@ HRESULT RuntimePrimaryCreate(Device *device, const D3D10DDIARG_CREATERESOURCE *d
    p->fence_value = static_cast<const volatile UINT64 *>(queue.FenceValueCPUVirtualAddress);
    if (!p->queue || !p->fence) { RuntimePrimaryDestroy(p); return E_FAIL; }
 
-   struct {
-      tg_gpu_allocation_request buffer;
-      D3DDDIFORMAT format;
-      D3DDDI_RATIONAL refresh;
-      UINT reserved;
-   } request = {{TG_GPU_ALLOCATION_ABI, TG_GPU_ALLOCATION_CPU_VISIBLE |
-               TG_GPU_ALLOCATION_DISPLAY_PRIMARY, 720ull * 1280 * 4},
-               D3DDDIFMT_A8R8G8B8,
-               {desc->pPrimaryDesc->ModeDesc.RefreshRate.Numerator,
-                desc->pPrimaryDesc->ModeDesc.RefreshRate.Denominator}, 0};
-   static_assert(sizeof(request) == 32, "KMD primary layout");
+   tg_gpu_primary_allocation_request request = {
+      {TG_GPU_ALLOCATION_ABI, TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_DISPLAY_PRIMARY,
+       (uint64_t)p->pitch * height}, D3DDDIFMT_A8R8G8B8,
+      {primary.ModeDesc.RefreshRate.Numerator, primary.ModeDesc.RefreshRate.Denominator},
+      rotation, width, height, p->pitch, 0};
    D3DDDI_ALLOCATIONINFO2 info = {};
    info.pPrivateDriverData = &request;
    info.PrivateDriverDataSize = sizeof(request);
@@ -283,7 +295,7 @@ HRESULT RuntimePrimaryCreate(Device *device, const D3D10DDIARG_CREATERESOURCE *d
    allocate.NumAllocations = 1;
    allocate.pAllocationInfo2 = &info;
    hr = cb.pfnAllocateCb(p->device, &allocate);
-   trace(p, 1, hr, request.buffer.bytes);
+   trace(p, 1, hr, request.Buffer.bytes);
    if (FAILED(hr)) { RuntimePrimaryDestroy(p); return hr; }
    p->associated = true;
    p->memory.allocation = info.hAllocation;
@@ -297,7 +309,7 @@ HRESULT RuntimePrimaryCreate(Device *device, const D3D10DDIARG_CREATERESOURCE *d
    if (SUCCEEDED(hr) || hr == E_PENDING) hr = wait_paging(p, resident.PagingFenceValue);
    if (FAILED(hr)) { RuntimePrimaryDestroy(p); return hr; }
    p->memory.version = WSI_WIN32_MEMORY_VERSION;
-   p->memory.size = request.buffer.bytes;
+   p->memory.size = request.Buffer.bytes;
    p->memory.context = p;
    p->memory.retain = retain;
    p->memory.release = release;
@@ -329,6 +341,7 @@ HRESULT RuntimePrimaryError(RuntimePrimary *p)
 }
 
 const wsi_win32_memory *RuntimePrimaryMemory(RuntimePrimary *p) { return &p->memory; }
+UINT RuntimePrimaryPitch(RuntimePrimary *p) { return p->pitch; }
 
 HRESULT RuntimePresent(const DXGI_DDI_ARG_PRESENT *args)
 {

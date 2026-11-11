@@ -28,10 +28,10 @@ static UINT header(UINT method,UINT count)
         NVVAL(NVB06F,DMA_INCR,ADDRESS,method>>2) |
         NVVAL(NVB06F,DMA_INCR,COUNT,count);
 }
-static BOOLEAN rectangle(const RECT *r)
+static BOOLEAN rectangle(const RECT *r,UINT width,UINT height)
 {
     return r->left>=0 && r->top>=0 && r->right>r->left && r->bottom>r->top &&
-        r->right<=(LONG)T214_DC_PANEL_WIDTH && r->bottom<=(LONG)T214_DC_PANEL_HEIGHT;
+        r->right<=(LONG)width && r->bottom<=(LONG)height;
 }
 static BOOLEAN surface_va(TG_GPU_CONTEXT *c,UINT64 va)
 {
@@ -56,9 +56,6 @@ NTSTATUS APIENTRY TgGpuDdiPresent(HANDLE context,DXGKARG_PRESENT *a)
        !c->Device->Process)return STATUS_NOT_SUPPORTED;
     if(!a->pAllocationInfo || !a->pDmaBuffer || !a->pDmaBufferPrivateData ||
        ((ULONG_PTR)a->pDmaBuffer&3) || !a->DmaBufferGpuVirtualAddress ||
-       !rectangle(&a->SrcRect) || !rectangle(&a->DstRect) ||
-       a->SrcRect.right-a->SrcRect.left!=a->DstRect.right-a->DstRect.left ||
-       a->SrcRect.bottom-a->SrcRect.top!=a->DstRect.bottom-a->DstRect.top ||
        !a->SubRectCnt || !a->pDstSubRects || a->MultipassOffset>=a->SubRectCnt)
         return STATUS_INVALID_PARAMETER;
     if(a->DmaBufferPrivateDataSize<sizeof(TG_GPU_QUEUE_ENTRY))
@@ -73,6 +70,11 @@ NTSTATUS APIENTRY TgGpuDdiPresent(HANDLE context,DXGKARG_PRESENT *a)
     if(!NT_SUCCESS(status))return status;
     status=TgGpuGetPresentSurface(c->Device,dst->hDeviceSpecificAllocation,TRUE,&destination);
     if(!NT_SUCCESS(status))return status;
+    if(!rectangle(&a->SrcRect,source.Width,source.Height) ||
+       !rectangle(&a->DstRect,destination.Width,destination.Height) ||
+       a->SrcRect.right-a->SrcRect.left!=a->DstRect.right-a->DstRect.left ||
+       a->SrcRect.bottom-a->SrcRect.top!=a->DstRect.bottom-a->DstRect.top)
+        return STATUS_INVALID_PARAMETER;
     if(src->PhysicalAdapterIndex || dst->PhysicalAdapterIndex ||
        !surface_va(c,src->AllocationVirtualAddress) ||
        !surface_va(c,dst->AllocationVirtualAddress))return STATUS_INVALID_PARAMETER;
@@ -86,13 +88,13 @@ NTSTATUS APIENTRY TgGpuDdiPresent(HANDLE context,DXGKARG_PRESENT *a)
     UINT next=a->MultipassOffset;
     for(;next<a->SubRectCnt;++next) {
         const RECT *r=&a->pDstSubRects[next];
-        if(!rectangle(r) || r->left<a->DstRect.left || r->top<a->DstRect.top ||
+        if(!rectangle(r,destination.Width,destination.Height) ||
+           r->left<a->DstRect.left || r->top<a->DstRect.top ||
            r->right>a->DstRect.right || r->bottom>a->DstRect.bottom)return STATUS_INVALID_PARAMETER;
         if(available<packet_words)break;
-        const UINT pitch=T214_DC_PANEL_WIDTH*4;
-        const UINT64 from=src->AllocationVirtualAddress+(UINT64)(r->top-a->DstRect.top+a->SrcRect.top)*pitch+
+        const UINT64 from=src->AllocationVirtualAddress+(UINT64)(r->top-a->DstRect.top+a->SrcRect.top)*source.Pitch+
             (UINT64)(r->left-a->DstRect.left+a->SrcRect.left)*4;
-        const UINT64 to=dst->AllocationVirtualAddress+(UINT64)r->top*pitch+(UINT64)r->left*4;
+        const UINT64 to=dst->AllocationVirtualAddress+(UINT64)r->top*destination.Pitch+(UINT64)r->left*4;
         *p++=header(0,1);*p++=MAXWELL_DMA_COPY_A;
         if(opaque) {
             /* GDI supplies XRGB shadows for ARGB primaries. Preserve BGR
@@ -108,7 +110,8 @@ NTSTATUS APIENTRY TgGpuDdiPresent(HANDLE context,DXGKARG_PRESENT *a)
         }
         *p++=header(NVB0B5_OFFSET_IN_UPPER,8);
         *p++=(UINT)(from>>32);*p++=(UINT)from;*p++=(UINT)(to>>32);*p++=(UINT)to;
-        *p++=pitch;*p++=pitch;*p++=(UINT)(r->right-r->left)*(opaque?1:4);*p++=(UINT)(r->bottom-r->top);
+        *p++=source.Pitch;*p++=destination.Pitch;
+        *p++=(UINT)(r->right-r->left)*(opaque?1:4);*p++=(UINT)(r->bottom-r->top);
         *p++=header(NVB0B5_LAUNCH_DMA,1);
         *p++=NVDEF(NVB0B5,LAUNCH_DMA,DATA_TRANSFER_TYPE,PIPELINED) |
             NVDEF(NVB0B5,LAUNCH_DMA,FLUSH_ENABLE,TRUE) |

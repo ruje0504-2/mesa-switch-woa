@@ -31,9 +31,14 @@ observed here. The latest run changes only the KMD package from `.146` to
 
 **Hardware rotation WIP:** the Display A backend now programs and verifies
 pitch-linear identity/90/180/270-degree fetch layouts. The full-frame address
-model passes all four orientations and portrait restoration. Windows VidPN,
-primary-allocation and MPO/UMD geometry integration remain pending; no new
-orientation is advertised or installed on hardware yet.
+model passes all four orientations and portrait restoration. Primary allocations
+now carry explicit dimensions, pitch and orientation; UMD imports and GDI copies
+use that stored geometry. The new KMD and UMD ARM64 controls pass on the restored
+`.59` device, including old primary descriptors and mixed source/destination
+pitches. Windows VidPN, standard landscape allocations and MPO/legacy scanout
+integration remain pending; no new orientation is advertised or installed on
+hardware yet. The new 48-byte primary producer requires the matching updated
+KMD and must not be paired with the old `.147` package.
 [Implementation and remaining contracts](D3D_RUNTIME_SHARING.md#hardware-rotation-backend)
 
 The preceding `.146` trial on LUID `94aa5` reached the real runtime Present

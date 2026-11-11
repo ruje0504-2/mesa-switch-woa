@@ -333,8 +333,8 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
       struct winsys_handle handle = {};
       handle.type = WINSYS_HANDLE_TYPE_WDDM_ALLOCATION;
       handle.com_obj = const_cast<wsi_win32_memory *>(RuntimePrimaryMemory(pResource->runtime_primary));
-      handle.stride = 720 * 4;
-      handle.size = 720ull * 1280 * 4;
+      handle.stride = RuntimePrimaryPitch(pResource->runtime_primary);
+      handle.size = RuntimePrimaryMemory(pResource->runtime_primary)->size;
       handle.format = templat.format;
       pResource->resource = screen->resource_from_handle(screen, &templat, &handle,
                                                          PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE);

@@ -22,7 +22,7 @@ static const char *event_name(USHORT id)
       "ZinkInstanceCall", "ZinkInstanceInfo", "RuntimeError", "ResourceCreateBegin",
       "ResourceCreateSize", "ResourceCreateEnd", "FormatBegin", "FormatEnd",
       "Multisample", "DestroyDeviceBegin", "DestroyDeviceEnd", "RuntimeMemory", "RuntimeContext",
-      "RotateIdentities"};
+      "RotateIdentities", "PrimaryLayout"};
    return id < ARRAYSIZE(names) ? names[id] : "unknown";
 }
 

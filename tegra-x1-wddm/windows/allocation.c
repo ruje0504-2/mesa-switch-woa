@@ -63,7 +63,8 @@ static NTSTATUS request(const DXGK_ALLOCATIONINFO *info,TG_GPU_ALLOCATION_DESC *
 {
     const UINT size=info->PrivateDriverDataSize;
     const struct tg_gpu_allocation_request *r=&desc->Buffer;
-    if(!info->pPrivateDriverData || (size!=sizeof(*r) && size!=sizeof(*desc)))
+    if(!info->pPrivateDriverData || (size!=sizeof(*r) &&
+        size!=TG_GPU_PRIMARY_LEGACY_BYTES && size!=sizeof(desc->Primary)))
         return STATUS_GRAPHICS_DRIVER_MISMATCH;
     RtlZeroMemory(desc,sizeof(*desc));
     RtlCopyMemory(desc,info->pPrivateDriverData,size);
@@ -83,9 +84,24 @@ static NTSTATUS request(const DXGK_ALLOCATIONINFO *info,TG_GPU_ALLOCATION_DESC *
         if(!NT_SUCCESS(status))return status;
         return pitch==desc->Linear.Pitch && bytes==r->bytes?STATUS_SUCCESS:STATUS_INVALID_PARAMETER;
     }
-    if(size==sizeof(*desc) && (!(r->flags&TG_GPU_ALLOCATION_CPU_VISIBLE) ||
-        r->bytes!=T214_GPU_POST_FB_SIZE || desc->Primary.Reserved ||
-        (desc->Primary.Format!=D3DDDIFMT_X8R8G8B8 && desc->Primary.Format!=D3DDDIFMT_A8R8G8B8)))
+    if(size==sizeof(*r))return STATUS_SUCCESS;
+    TG_GPU_PRIMARY_ALLOCATION_REQUEST *primary=&desc->Primary;
+    if(size==TG_GPU_PRIMARY_LEGACY_BYTES) {
+        if(primary->Rotation)return STATUS_INVALID_PARAMETER; /* Old reserved word. */
+        primary->Rotation=D3DDDI_ROTATION_IDENTITY;
+        primary->Width=T214_DC_PANEL_WIDTH;
+        primary->Height=T214_DC_PANEL_HEIGHT;
+        primary->Pitch=T214_DC_PANEL_PITCH;
+    }
+    const BOOLEAN quarter=primary->Rotation==D3DDDI_ROTATION_90 ||
+        primary->Rotation==D3DDDI_ROTATION_270;
+    if(!(r->flags&TG_GPU_ALLOCATION_CPU_VISIBLE) || r->bytes!=T214_GPU_POST_FB_SIZE ||
+        primary->Reserved || primary->Rotation<D3DDDI_ROTATION_IDENTITY ||
+        primary->Rotation>D3DDDI_ROTATION_270 ||
+        primary->Width!=(quarter?T214_DC_PANEL_HEIGHT:T214_DC_PANEL_WIDTH) ||
+        primary->Height!=(quarter?T214_DC_PANEL_WIDTH:T214_DC_PANEL_HEIGHT) ||
+        primary->Pitch!=primary->Width*4 ||
+        (primary->Format!=D3DDDIFMT_X8R8G8B8 && primary->Format!=D3DDDIFMT_A8R8G8B8))
         return STATUS_INVALID_PARAMETER;
     return STATUS_SUCCESS;
 }
@@ -172,11 +188,12 @@ NTSTATUS APIENTRY TgGpuDdiCreateAllocation(HANDLE adapter,DXGKARG_CREATEALLOCATI
         r->Metadata=resource_desc;new_resource=TRUE;
     }
     for(i=0;i<a->NumAllocations;++i) {
+        status=request(&a->pAllocationInfo[i],&desc);
+        if(!NT_SUCCESS(status))goto fail;
         allocation=ExAllocatePool2(POOL_FLAG_NON_PAGED,sizeof(*allocation),TAG);
         if(!allocation) { status=STATUS_NO_MEMORY;goto fail; }
-        /* Dxgkrnl provides a stable kernel copy of the UMD data for this call. */
-        RtlCopyMemory(&allocation->Desc,a->pAllocationInfo[i].pPrivateDriverData,
-            a->pAllocationInfo[i].PrivateDriverDataSize);
+        /* Retain normalized geometry, including legacy portrait descriptions. */
+        allocation->Desc=desc;
         allocation->Bytes=(SIZE_T)allocation_size(allocation->Desc.Buffer.bytes);
         allocation->Engine=e;allocation->Resource=r;
         a->pAllocationInfo[i].hAllocation=allocation;++created;
@@ -237,18 +254,18 @@ static NTSTATUS APIENTRY describe_allocation(HANDLE adapter,DXGKARG_DESCRIBEALLO
     if(buffer && ((desc->Buffer.flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY) ||
         args->Flags.CheckDisplayMode || desc->Buffer.bytes>UINT32_MAX))
         return STATUS_NOT_SUPPORTED;
-    /* Every supported image layout is unrotated. Zero is not IDENTITY;
-     * DxgKrnl compares this output to the active mode's
-     * rotation when checking a display primary. */
+    /* Report the allocation's own layout, not the panel's latest mode: old
+     * and new primaries can coexist during a mode change. */
     *args=(DXGKARG_DESCRIBEALLOCATION){
         .hAllocation=args->hAllocation,
-        .Width=buffer?(UINT)desc->Buffer.bytes:linear?allocation->Desc.Linear.Width:T214_DC_PANEL_WIDTH,
-        .Height=buffer?1:linear?allocation->Desc.Linear.Height:T214_DC_PANEL_HEIGHT,
-        .Format=desc->Format,
+        .Width=buffer?(UINT)desc->Buffer.bytes:linear?allocation->Desc.Linear.Width:desc->Width,
+        .Height=buffer?1:linear?allocation->Desc.Linear.Height:desc->Height,
+        .Format=(D3DDDIFORMAT)desc->Format,
         .MultisampleMethod={.NumSamples=1},
-        .RefreshRate=(linear||buffer)?(D3DDDI_RATIONAL){0}:desc->RefreshRate,
+        .RefreshRate=(linear||buffer)?(D3DDDI_RATIONAL){0}:
+            (D3DDDI_RATIONAL){desc->RefreshRate.Numerator,desc->RefreshRate.Denominator},
         .Flags=args->Flags,
-        .Rotation=D3DDDI_ROTATION_IDENTITY,
+        .Rotation=(linear||buffer)?D3DDDI_ROTATION_IDENTITY:(D3DDDI_ROTATION)desc->Rotation,
     };
     return STATUS_SUCCESS;
 }
@@ -479,10 +496,13 @@ NTSTATUS APIENTRY TgGpuDdiGetStandardAllocationDriverData(HANDLE context,
             T214_GPU_POST_FB_SIZE,
         },
         .Format = format,
+        .Rotation = D3DDDI_ROTATION_IDENTITY,
+        .Width = width, .Height = height, .Pitch = width * sizeof(UINT32),
     };
-    if (primary)
-        request.RefreshRate = args->pCreateSharedPrimarySurfaceData->RefreshRate;
-    else
+    if (primary) {
+        request.RefreshRate.Numerator = args->pCreateSharedPrimarySurfaceData->RefreshRate.Numerator;
+        request.RefreshRate.Denominator = args->pCreateSharedPrimarySurfaceData->RefreshRate.Denominator;
+    } else
         args->pCreateShadowSurfaceData->Pitch = T214_DC_PANEL_WIDTH * sizeof(UINT32);
     args->AllocationPrivateDriverDataSize = sizeof(request);
     args->ResourcePrivateDriverDataSize = 0;

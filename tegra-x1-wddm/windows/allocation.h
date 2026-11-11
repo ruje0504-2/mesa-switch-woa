@@ -10,15 +10,9 @@
  */
 #define TG_GPU_EXPLICIT_TABLE_SEGMENT 1u
 
-/* Private data for the fixed-size standard primary and shadow. The NVK buffer ABI
- * continues to use only tg_gpu_allocation_request.
- */
-typedef struct _TG_GPU_PRIMARY_ALLOCATION_REQUEST {
-    struct tg_gpu_allocation_request Buffer;
-    D3DDDIFORMAT Format;
-    D3DDDI_RATIONAL RefreshRate;
-    UINT Reserved;
-} TG_GPU_PRIMARY_ALLOCATION_REQUEST;
+/* Explicit storage geometry is shared with the D3D UMD. NVK buffers retain
+ * the original 16-byte allocation request. */
+typedef struct tg_gpu_primary_allocation_request TG_GPU_PRIMARY_ALLOCATION_REQUEST;
 
 /* Linear cross-adapter surfaces use their own geometry, not the fixed panel's
  * primary layout. Raw standard heaps keep the 16-byte buffer description. */

@@ -45,6 +45,7 @@ enum d3d10_umd_trace_event {
    D3D10_TRACE_RUNTIME_MEMORY,
    D3D10_TRACE_RUNTIME_CONTEXT,
    D3D10_TRACE_ROTATE_IDENTITIES,
+   D3D10_TRACE_PRIMARY_LAYOUT,
 };
 
 struct d3d10_umd_trace_data {

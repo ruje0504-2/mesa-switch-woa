@@ -19,6 +19,21 @@ struct tg_gpu_allocation_request {
 };
 _Static_assert(sizeof(struct tg_gpu_allocation_request)==16,"allocation ABI");
 
+/* Explicit pitch-linear primary/shadow layout. Format and Rotation use the
+ * numeric D3DDDIFORMAT and D3DDDI_ROTATION values; neither is a raw display
+ * register value. Width/Height/Pitch describe the actual allocation storage.
+ * The old 32-byte portrait descriptor ended with a zero reserved word and
+ * is still accepted by the KMD. New producers supply all 48 bytes. */
+#define TG_GPU_PRIMARY_LEGACY_BYTES 32u
+struct tg_gpu_primary_allocation_request {
+    struct tg_gpu_allocation_request Buffer;
+    uint32_t Format;
+    struct { uint32_t Numerator, Denominator; } RefreshRate;
+    uint32_t Rotation;
+    uint32_t Width, Height, Pitch, Reserved;
+};
+_Static_assert(sizeof(struct tg_gpu_primary_allocation_request)==48,"primary layout ABI");
+
 /* Resource-level data precedes the UMD's image/layout descriptor. VidMm
  * retains that descriptor for OpenResource; the KMD validates only the
  * storage envelope. This is one atomic allocation set, as required when

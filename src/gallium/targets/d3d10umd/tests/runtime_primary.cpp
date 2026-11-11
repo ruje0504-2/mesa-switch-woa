@@ -13,12 +13,14 @@ static unsigned queues, allocations, waits, gpu_maps, gpu_frees, locks, modes;
 static unsigned failure;
 static UINT64 paging_value;
 static HRESULT mode_result = S_OK, map_result = S_OK, resident_result = S_OK;
+static UINT expected_rotation = D3DDDI_ROTATION_IDENTITY, expected_width = 720, expected_height = 1280;
 static char cpu_bytes[16];
 static pipe_screen screen = {};
 static pipe_context context = {};
 
 extern "C" void D3D10Trace(d3d10_umd_trace_event event, HRESULT, uint64_t arg0, uint64_t)
 {
+   if (event == D3D10_TRACE_PRIMARY_LAYOUT) return; /* Input mode metadata. */
    CHECK(event == D3D10_TRACE_RUNTIME_MEMORY && (arg0 >> 32) >= 1 && (arg0 >> 32) <= 10);
 }
 
@@ -42,9 +44,13 @@ static HRESULT APIENTRY allocate(HANDLE device, D3DDDICB_ALLOCATE *a)
    CHECK(!a->pPrivateDriverData && !a->PrivateDriverDataSize);
    auto i = a->pAllocationInfo2;
    CHECK(i && i->Flags.Primary && !i->VidPnSourceId && !i->pSystemMem);
-   CHECK(i->PrivateDriverDataSize == 32);
+   CHECK(i->PrivateDriverDataSize == sizeof(tg_gpu_primary_allocation_request));
    auto desc = static_cast<const tg_gpu_allocation_request *>(i->pPrivateDriverData);
    CHECK(desc->version == 1 && desc->flags == 3 && desc->bytes == 3686400);
+   auto layout = static_cast<const tg_gpu_primary_allocation_request *>(i->pPrivateDriverData);
+   CHECK(layout->Format == D3DDDIFMT_A8R8G8B8 && layout->Rotation == expected_rotation &&
+         layout->Width == expected_width && layout->Height == expected_height &&
+         layout->Pitch == expected_width * 4 && !layout->Reserved);
    if (failure == 2) return E_OUTOFMEMORY;
    CHECK(!allocations++);
    i->hAllocation = failure == 5 ? 0 : 0x50;
@@ -175,6 +181,41 @@ int main()
    CHECK(memory.map_gpu(memory.context, 0x40000, 4096, 8192, 0, false, 0x40000, 0x4000) == VK_ERROR_DEVICE_LOST);
    CHECK(memory.free_gpu(memory.context, 0x40000, 0x4000) == VK_SUCCESS && gpu_frees == 1);
    memory.release(memory.context);
+   resident_result = map_result = S_OK;
+   for (UINT rotation = 1; rotation <= 4; ++rotation) {
+      const bool quarter = rotation == 2 || rotation == 4;
+      expected_rotation = rotation;
+      mip.TexelWidth = primary.ModeDesc.Width = expected_width = quarter ? 1280 : 720;
+      mip.TexelHeight = primary.ModeDesc.Height = expected_height = quarter ? 720 : 1280;
+      primary.ModeDesc.Rotation = static_cast<DXGI_DDI_MODE_ROTATION>(rotation);
+      CHECK(RuntimePrimaryCreate(&device, &desc, runtime, &p) == S_OK);
+      CHECK(RuntimePrimaryPitch(p) == expected_width * 4 && RuntimePrimaryMemory(p)->size == 3686400);
+      CHECK(RuntimePrimaryDestroy(p) == S_OK && !queues && !allocations);
+      if (quarter) {
+         /* The mode can retain its unrotated extent; storage follows mip info. */
+         primary.ModeDesc.Width = 720; primary.ModeDesc.Height = 1280;
+         CHECK(RuntimePrimaryCreate(&device, &desc, runtime, &p) == S_OK);
+         CHECK(RuntimePrimaryPitch(p) == 5120);
+         CHECK(RuntimePrimaryDestroy(p) == S_OK && !queues && !allocations);
+      }
+   }
+   expected_rotation = D3DDDI_ROTATION_IDENTITY;
+   mip.TexelWidth = expected_width = 720; mip.TexelHeight = expected_height = 1280;
+   primary.ModeDesc.Width = 1280; primary.ModeDesc.Height = 720;
+   primary.ModeDesc.Rotation = DXGI_DDI_MODE_ROTATION_ROTATE90;
+   primary.Flags = DXGI_DDI_PRIMARY_NONPREROTATED;
+   CHECK(RuntimePrimaryCreate(&device, &desc, runtime, &p) == S_OK && RuntimePrimaryPitch(p) == 2880);
+   CHECK(RuntimePrimaryDestroy(p) == S_OK && !queues && !allocations);
+   primary.Flags = 0;
+   CHECK(RuntimePrimaryCreate(&device, &desc, runtime, &p) == DXGI_ERROR_UNSUPPORTED && !p);
+   mip.TexelWidth = 1280; mip.TexelHeight = 720;
+   primary.ModeDesc.Width = 640;
+   CHECK(RuntimePrimaryCreate(&device, &desc, runtime, &p) == DXGI_ERROR_UNSUPPORTED && !p);
+   primary.ModeDesc.Width = 1280; primary.Flags = DXGI_DDI_PRIMARY_STEREO;
+   CHECK(RuntimePrimaryCreate(&device, &desc, runtime, &p) == DXGI_ERROR_UNSUPPORTED && !p);
+   primary.Flags = 0; primary.ModeDesc.Rotation = static_cast<DXGI_DDI_MODE_ROTATION>(5);
+   CHECK(RuntimePrimaryCreate(&device, &desc, runtime, &p) == DXGI_ERROR_UNSUPPORTED && !p);
+   CHECK(!queues && !allocations);
    puts("Runtime primary: device ownership, allocation flags, S_OK/E_PENDING paging and failed waits, maps, mode status and lifetime cleanup pass (controlled callbacks)");
    return 0;
 }

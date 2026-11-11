@@ -843,9 +843,64 @@ the display pipeline, while 1 denotes a software/graphics-engine transform.
 [VidPN rotation](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/supporting-rotation-in-a-display-miniport-driver) ·
 [Hardware capability meaning](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmdt/ns-d3dkmdt-_d3dkmdt_vidpn_hw_capability)
 
-Before advertising landscape, connect source-mode enumeration, primary/shadow
-dimensions and pitch, DescribeAllocation orientation, UMD imports, VidPN
-commit/update, MPO and legacy flips to the same layout. Then verify asymmetric
-corners on the physical panel and retain the user's requested normal-handheld
-1280x720 landscape setting. This backend is implementation in progress toward
-that result, not a completed hardware-rotation milestone.
+Before advertising landscape, connect source-mode enumeration, standard
+landscape allocations, VidPN commit/update, MPO and legacy flips to the same
+layout. Then verify asymmetric corners on the physical panel and retain the
+user's requested normal-handheld 1280x720 landscape setting. This backend is
+implementation in progress toward that result, not a completed hardware-rotation
+milestone. The allocation/import portion below is implemented separately so its
+storage contract can be checked before exposing a new display mode.
+
+### Explicit primary storage layout
+
+The shared UMD/KMD primary descriptor now has 48 bytes: the existing buffer
+header, format and refresh rate, followed by Windows rotation, width, height,
+pitch and a zero reserved word. It describes the allocation's own storage,
+not the adapter's latest mode. Identity/180-degree storage is 720x1280 at
+2880 bytes per row; quarter-turn storage is 1280x720 at 5120 bytes per row.
+Both occupy 3,686,400 bytes. These Windows enum values are not raw Display A
+rotation controls; the eventual presentation path must explicitly convert the
+relevant Windows contract.
+
+The KMD normalizes the old 32-byte portrait descriptor to explicit identity
+geometry and rejects a nonzero old reserved word. Ordinary 16-byte NVK buffer
+and 32-byte linear-surface requests keep their existing contracts. New primary
+producers require the updated KMD: `.147` does not accept the 48-byte request.
+Standard primary/shadow generation still supports portrait only until the
+Windows mode/scanout integration is complete. The dynamic 512 MiB budget and
+scanout-segment accounting are unchanged.
+
+`DescribeAllocation` reports stored geometry even when old and new primaries
+coexist. The UMD imports the primary's actual pitch and byte size into Zink/NVK.
+`DXGI_DDI_PRIMARY_NONPREROTATED` retains identity storage, as specified by the
+[primary descriptor contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgi_ddi_primary_desc).
+An ordinary GDI blit checks each allocation's bounds and uses separate source
+and destination pitches in its copy commands. This is a straight copy; the
+GDI `Rotate` operation remains unsupported.
+
+Trace event 32, `PrimaryLayout`, records input mode width/height in `arg0`
+and primary flags/raw mode rotation in `arg1`. It is emitted before validation.
+Its S_OK field means an informational record, not successful allocation,
+presentation or rotation. The subsequent allocation/mode/Present records still
+determine each operation's result.
+
+Validation on 2026-11-11:
+
+- All host models and the real-WDK ARM64 build pass. On `.59` Code 0, the
+  paging and context fixtures both exit 0 at 15:45:29 UTC. They cover legacy
+  normalization, four explicit rotations, malformed layout rejection and
+  portrait/landscape copies with independent pitches. Returned logs match
+  device hashes.
+- UMD candidate `scanout-layout-20261111-umd+413d32bb6034` passes the primary,
+  Present, adapter, device and DLL-entry controls at 15:46:27 UTC. Primary
+  controls cover all four rotations, nonprerotated storage, invalid extents
+  and flags, paging failures and lifetime cleanup. The finalized ETW contains
+  114 valid events with no recorded loss, including three input-layout records.
+  All 12 returned files (159,133 bytes) match device lengths and hashes.
+
+Evidence is retained outside the repository under
+`runs/scanout-layout-control-20261111/` and
+`runs/scanout-layout-umd-control-20261111/`. These execute controlled ARM64
+fixtures on Windows without installing the candidate or rendering on the
+native GPU. Actual landscape modes, physical latch/rotation and sustained DWM
+composition remain to be validated.
