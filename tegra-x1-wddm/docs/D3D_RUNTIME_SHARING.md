@@ -1235,3 +1235,64 @@ scope; the per-phase pixel records above are authoritative. The rebuilt probe
 `10aec6cd4e44ca072eec3434e3991121ca3df60b377c6af0c4e7f2000676442e`
 changes only that final message. Native shared pixels remain unverified.
 
+### Native shared trial and page-table capacity
+
+`runtime-shared-native-20261111` pairs signed KMD `.150` (SYS `9b6130182f29`)
+with the byte-identical controlled UMD `c46b59544870` and ICD `6e2fad99d742`.
+The source is `be55a95b`. A later probe-only rebuild relinked the UMD as well;
+the trial deliberately reuses the previously tested DLL, with that substitution
+recorded in its candidate manifest. The corrected probe is `10aec6cd4e44`.
+All 13 signed package files/catalog members pass verification before install.
+
+The controller records Code 0, hardware status 0 and consumed native permit at
+19:10:01 UTC. Its interactive task is requested at 19:10:14. A subsequent boot
+at 19:11:00 interrupts collection; no final probe result, pixel log or desktop
+screenshot survives. On that boot `.150` is correctly stopped at the one-shot
+gate (`c00000a3`, Code 43). The user's visible Start-menu reports are not tied
+to a verified native interval. No cause is assigned to the subsequent restart.
+
+The first ETL contains 88,138 exported records, including 17,426 UMD events.
+It is unfinalized (`EndTime=0`, `BuffersWritten=0`); reported event/buffer losses
+are zero. The exact device templates decode all four system providers except
+258 known Dwm-Core 203 payload-size mismatches. Its raw export SHA256 is
+`6d4645652181ff8c03c1e680e5ebddfe5f1877e5d8a40a0434d3654a00d9ea20`.
+
+The native adapter LUID is `c0728`. These ordered events identify an actionable
+resource-capacity boundary without relying on the trace's final event:
+
+| Evidence | Retained value |
+| --- | --- |
+| Native Segment 1 size/commit limit | 2,097,152 bytes |
+| Last Segment 1 residency before first failed reservation | 2,097,152 bytes |
+| Page-table residency increments | 131,072 bytes, matching the GM20B table size |
+| Paired failed ReserveResource calls | 12, all Segment 1, `c0000001` |
+| Ordinary Segment 4 residency immediately before first failure | 22,900,736 bytes |
+| Peak ordinary Segment 4 residency in this trace | 84,910,080 bytes |
+| Retained DWM UMD Present results | 14 S_OK across 6.261 seconds, then `88760870` |
+
+The first failed reservation is followed by `VidSchMarkDeviceAsError` reason
+12; later DWM reports device reset/removed. This establishes exhaustion of the
+old 16-table pool as a concrete desktop allocation limit. It does not prove
+that increasing the pool resolves every subsequent failure. The trace contains
+no SHARED texture CreateResource or OpenResource event, so it cannot validate
+or reject the new shared-pixel implementation. Absence in this interrupted
+capture is not proof that a later operation never executed.
+
+The debugger log retains only 32,768 bytes and a partial final line; the absence
+of `[NVK KMT]` there does not rule out a KMT error. ETL timestamps also precede
+the controller's wall-clock startup by approximately 30 seconds. Preserve event
+ordering within this stream rather than naively correlating those UTC values.
+The second ETL is finalized, has zero UMD events, and belongs to the closed-gate
+boot. The retained startup-contract file contains that later default state,
+not the overwritten live native record.
+
+Recovery verifies `.59` Code 0, baseline hashes, no test tasks/temporary runtime
+registration, unchanged sleep/display settings, and portrait at 19:23:24–36
+UTC. All 147 files (93,316,658 bytes) match the remote lengths and SHA256; the
+four earlier downloads are byte-identical to the final copies.
+
+The next KMD candidate expands the MMU pool to 128 tables (16 MiB), retaining
+the existing dynamic 512-MiB application cap. This is a bounded infrastructure
+allocation, separate from image/buffer storage. Test the native residency
+beyond the old 2-MiB limit with the same UMD/ICD, then retry real shared pixels
+and desktop composition; do not claim those results from the capacity change.

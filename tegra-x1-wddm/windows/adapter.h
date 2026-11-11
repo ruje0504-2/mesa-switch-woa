@@ -9,11 +9,13 @@
 #include "worker.h"
 #include "panel.h"
 
-/* Enough dedicated table backing for the initial single-process Vulkan
- * triangle; application storage remains dynamically allocated system memory.
- * VidMm suballocates this segment. This is not the 512 MiB application budget.
+/* DWM and shell processes share this VidMm-managed page-table segment.
+ * The initial 16-table (2 MiB) pool fills during desktop device creation;
+ * .150 ETW records full residency followed by failed Segment 1 reservations.
+ * Keep space for 128 tables while application storage remains dynamic under
+ * the unchanged 512 MiB resource cap. This is MMU backing, not application VRAM.
  */
-#define TG_GPU_ADAPTER_TABLE_BYTES (16u*TG_GPU_TABLE_BYTES)
+#define TG_GPU_ADAPTER_TABLE_BYTES (128u*TG_GPU_TABLE_BYTES)
 enum tg_gpu_adapter_state { TgGpuAdapterAdded,TgGpuAdapterStarting,TgGpuAdapterReady,
     TgGpuAdapterStopping,TgGpuAdapterResetting,TgGpuAdapterSuspended };
 typedef struct _TG_GPU_ADAPTER {

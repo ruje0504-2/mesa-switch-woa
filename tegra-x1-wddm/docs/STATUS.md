@@ -3,6 +3,18 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**Latest `.150` native result (2026-11-11): page-table capacity reached.**
+On LUID `c0728`, Segment 1's 2-MiB backing reaches exactly 2 MiB resident
+before 12 paired `ReserveResource` failures (`c0000001`, all Segment 1).
+Ordinary system-memory residency is 22,900,736 bytes before the first failure;
+this is distinct from the 512-MiB application resource limit. DWM retains 14
+successful UMD Presents followed by device-removed, but no native shared-pixel
+result or desktop screenshot survives. The user sees the Start menu only in
+the unverified/recovered interval; complete native desktop remains unproven.
+All 147 returned files match device hashes. `.59` Code 0, cleanup, unchanged
+power settings and portrait are verified at 19:23:24–36 UTC.
+[Native shared trial and page-table evidence](D3D_RUNTIME_SHARING.md#native-shared-trial-and-page-table-capacity)
+
 **Latest `.149` native desktop result (2026-11-11):** the runtime access fix
 from `5852cfcc` is tested with unchanged KMD `ebfd5142`, UMD `413d32bb6034`
 and ICD `f828845c38b7`, on native LUID `bb153`. StartMenuExperienceHost now
@@ -31,8 +43,16 @@ ICD and WDK ARM64 builds pass; controlled callbacks pass ownership, paging and
 failure cleanup. The upgraded probe passes all 49,152 shared-content checks on
 Microsoft WARP, including producer-device release. This is not native Tegra
 pixel evidence. The candidate also retains the failing KMT API/NTSTATUS during
-device initialization. No new native package has been installed yet.
+device initialization. Source `be55a95b` is published on `main`.
 [Implementation and controls](D3D_RUNTIME_SHARING.md#runtime-shared-texture-bridge)
+
+**Page-table WIP:** increase the early single-process pool from 16 to 128
+128-KiB tables (2 to 16 MiB). This is contiguous MMU infrastructure; application
+storage retains its existing dynamic 512-MiB cap. Host models, WDK ARM64 build
+and the paging/context controls on `.59` pass, including translations beyond
+the former limit and rejection past the new backing. `.151` native validation
+is pending.
+Reuse the exact `.150` UMD/ICD so the native change is the table-pool capacity.
 
 **Next validation:** run the shared GPU contents/lifetime probe with the paired
 UMD/ICD, then inspect the complete desktop, hardware landscape and Win32
@@ -160,15 +180,15 @@ Present and shared-image opens were unfinished at that point.
 
 **Version labels:** Device Manager shows the installed INF package's version.
 Earlier experiments reused the signed `.144` KMD while replacing the test UMD
-and ICD. The latest KMD is rebuilt and versioned `.148`. Standalone build manifests
+and ICD. The current KMD candidate is rebuilt and versioned `.150`. Standalone build manifests
 name their component and include a readable `artifact_id` with the DLL hash.
-The latest native trial uses:
+The active native trial uses:
 
 | Component | Candidate identifier |
 | --- | --- |
-| Signed KMD package | `0.1.0.148` (source `8b599271`, SYS `5d6c3e2893c3`) |
-| D3D UMD / Zink | `scanout-layout-20261111-umd+413d32bb6034` (tested source `8427bc89`) |
-| NVK ICD | `runtime-primary-20261111-icd-v2+f828845c38b7` |
+| Signed KMD package | `0.1.0.150` (source `be55a95b`, SYS `9b6130182f29`) |
+| D3D UMD / Zink | `runtime-shared-20261111-umd+c46b59544870` (source `be55a95b`) |
+| NVK ICD | `runtime-shared-20261111-icd+6e2fad99d742` |
 
 These are test-deployment identifiers. Rollback reinstalls `.59`; a future
 complete driver-package release must version its INF and catalog together

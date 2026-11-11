@@ -1208,7 +1208,20 @@ static __declspec(noinline) void TestAdapterLifecycle(const DXGKRNL_INTERFACE *c
     ResourceList(TRUE);CHECK(NT_SUCCESS(d.DxgkDdiStartDevice(a,&start,&dxgk,&sources,&children)));
     CHECK(!sources && !children && a->State==TgGpuAdapterReady && a->EngineReady && a->QueueReady);
     CHECK(a->Engine.Tables==&a->Tables && a->Queue.Engine==&a->Engine && a->Engine.QueueOwner==&a->Queue);
-    CHECK(a->Tables.Memory.Bytes==2u*1024*1024 && adapter_table_used);
+    CHECK(a->Tables.Memory.Bytes==16u*1024*1024 && adapter_table_used);
+    /* Exercise translations beyond the old 16-table pool, including the
+     * final complete table and rejection beyond the actual backing. */
+    PVOID table_cpu=NULL;UINT64 table_device=0;
+    CHECK(NT_SUCCESS(TgGpuMapTableSegment(&a->Tables,16u*TG_GPU_TABLE_BYTES,
+        TG_GPU_TABLE_BYTES,&table_cpu,&table_device)));
+    CHECK(table_cpu==adapter_table+16u*TG_GPU_TABLE_BYTES &&
+          table_device==0x92000000ull+16u*TG_GPU_TABLE_BYTES);
+    CHECK(NT_SUCCESS(TgGpuMapTableSegment(&a->Tables,TG_GPU_ADAPTER_TABLE_BYTES-TG_GPU_TABLE_BYTES,
+        TG_GPU_TABLE_BYTES,&table_cpu,&table_device)));
+    CHECK(table_cpu==adapter_table+TG_GPU_ADAPTER_TABLE_BYTES-TG_GPU_TABLE_BYTES &&
+          table_device==0x92000000ull+TG_GPU_ADAPTER_TABLE_BYTES-TG_GPU_TABLE_BYTES);
+    CHECK(TgGpuMapTableSegment(&a->Tables,TG_GPU_ADAPTER_TABLE_BYTES,
+        PAGE_SIZE,&table_cpu,&table_device)==STATUS_INVALID_ADDRESS);
     CHECK(a->Engine.AdapterIdentityReady && a->Engine.AdapterLuid.LowPart==0x12345678);
     TestAdapterQueries(&a->Engine,&d);
     CHECK(d.DxgkDdiRemoveDevice(a)==STATUS_DEVICE_BUSY);
