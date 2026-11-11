@@ -226,10 +226,14 @@ silently choose another mode. These commands require an active input desktop.
 [Validation, temporary apply and persistence flags](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setdisplayconfig)
 
 The added rotation commands compile for Windows ARM64 with warnings treated as
-errors. Their Windows execution/physical result is still pending; the active
-`.148` portrait trial retains the previous, hash-verified helper. Keep the saved
-baseline snapshot for recovery and persist the final landscape mode only after
-the requested physical orientation is verified.
+errors. On restored `.59`/BasicDisplay, identity validation succeeds and 90-degree
+validation returns `ERROR_GEN_FAILURE` (31); neither applies a mode. A subsequent
+snapshot verification confirms unchanged portrait at 16:44:24 UTC on 2026-11-11.
+All returned control files match device hashes. This does not establish whether
+the native driver accepts that configuration; physical application remains
+pending. The `.148` portrait trial used the previous, hash-verified helper.
+Keep the saved baseline snapshot for recovery and persist the final landscape
+mode only after the requested physical orientation is verified.
 
 Before a native trial, save `display-state.exe save user-display.bin` from
 the user's preferred baseline. Check `display-state.exe visible` before

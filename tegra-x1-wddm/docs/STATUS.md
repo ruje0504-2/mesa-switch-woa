@@ -3,12 +3,17 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**`.148` trial awaiting collection (2026-11-11):** paired KMD `8b599271` and
-UMD `scanout-layout-20261111-umd+413d32bb6034` reach hardware startup/Code 0.
-The live result reports native LUID `9a1e7`, exit 0 and no timeout at 16:21:40
-UTC. SSH subsequently disconnects; full drawing/presentation evidence and
-recovery remain unverified. This is not yet an overall trial pass or a
-hardware-landscape result.
+**Latest `.148` native regression (2026-11-11):** all 40,960 draw/sample pixels
+match on LUID `9a1e7`, with both exit-0 files retained. DWM has 469 successful
+flip Presents at the KMD, UMD and DXGI layers across 42.235 seconds of retained
+events. All 469 target physical addresses match a subsequent VSync scanout
+report before the next flip. This validates the new allocation/scanout path
+in portrait. Collection is interrupted by a further startup; the native ETL
+is unfinalized and no desktop image survives. The user confirms only the
+restored desktop, not the native interval. Physical landscape and sustained
+stability remain unverified. All 152 returned files match device hashes;
+`.59` Code 0, cleanup, unchanged power settings and portrait are verified.
+[Native regression and evidence limits](D3D_RUNTIME_SHARING.md#native-explicit-layout-regression)
 
 **Latest `.147` native result (2026-11-11): desktop lights up.** DWM selects
 Tegra X1 / FL10_0 on LUID `a2008`. The retained trace contains 108 successful
@@ -33,7 +38,7 @@ no-op. The test package is no longer installed.
 then validate sustained desktop composition and visible Win32 `vkcube`.
 The current swapchain identity rotation moves storage/views; it does not
 rotate the physical screen. FL10_0 is sufficient for the desktop milestone
-observed here. The latest run changes only the KMD package from `.146` to
+observed here. The `.147` run changed only the KMD package from `.146` to
 `.147`, retaining the same UMD and ICD binaries and their passed controls.
 
 **Hardware rotation WIP:** allocation geometry, UMD imports, Display A fetch,
@@ -44,8 +49,9 @@ primary's stored geometry controls scanout, so a new mode does not reinterpret
 an old buffer. Smooth rotation and rotated GDI blits remain unsupported.
 The host address models and real-WDK ARM64 controls pass on `.59`, including
 same-address direction changes, incomplete latches, mode support/pivots,
-immediate retries and POST restoration. `.148` is undergoing portrait regression;
-physical landscape validation is still pending. The new 48-byte primary producer requires
+immediate retries and POST restoration. `.148` passes the recorded native
+portrait drawing/flip checks; physical landscape validation is still pending.
+The new 48-byte primary producer requires
 the matching updated KMD and must not be paired with the old `.147` package.
 [Implementation and remaining contracts](D3D_RUNTIME_SHARING.md#hardware-rotation-backend)
 
@@ -112,14 +118,14 @@ Present and shared-image opens were unfinished at that point.
 
 **Version labels:** Device Manager shows the installed INF package's version.
 Earlier experiments reused the signed `.144` KMD while replacing the test UMD
-and ICD. The latest KMD is rebuilt and versioned `.147`. Standalone build manifests
+and ICD. The latest KMD is rebuilt and versioned `.148`. Standalone build manifests
 name their component and include a readable `artifact_id` with the DLL hash.
 The latest native trial uses:
 
 | Component | Candidate identifier |
 | --- | --- |
-| Signed KMD package | `0.1.0.147` (source `2d351cdf`, SYS `e491932a9fd3`) |
-| D3D UMD / Zink | `runtime-present-20261111-umd+79fa8169fb00` (source `d6635e3d`) |
+| Signed KMD package | `0.1.0.148` (source `8b599271`, SYS `5d6c3e2893c3`) |
+| D3D UMD / Zink | `scanout-layout-20261111-umd+413d32bb6034` (tested source `8427bc89`) |
 | NVK ICD | `runtime-primary-20261111-icd-v2+f828845c38b7` |
 
 These are test-deployment identifiers. Rollback reinstalls `.59`; a future

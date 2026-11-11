@@ -18,11 +18,11 @@ OpenGL compatibility route.
 | Native Vulkan | NVK rendered an offscreen triangle and read back the expected pixels and guards with driver **0.1.0.87**. A Win32 preview showed that readback. |
 | Display adapter | **0.1.0.130** reached **Code 0**, completed GDI copies and displayed verified RGB bars on the internal panel through the GM20B VidPN and native scanout. |
 | Shared storage | **0.1.0.144** passes Vulkan Win32 buffer/image sharing, GPU read/write after producer-device release, and re-export: 32,768 payload words plus 512 guards match. [Scope and evidence](tegra-x1-wddm/docs/VULKAN_WIN32_MEMORY.md). |
-| Windows desktop | **.147 lights up the desktop:** DWM selects Tegra / FL10_0; 108 KMD, UMD and DXGI presents succeed across a retained 24.7-second window, with a normal physical desktop confirmed by the user. All 40,960 draw/sample pixels match. A subsequent reboot leaves sustained stability unverified; shared-image opens and hardware landscape rotation remain pending. [Evidence](tegra-x1-wddm/docs/D3D_RUNTIME_SHARING.md#native-mmio-present-result). |
+| Windows desktop | **.147 produced a user-confirmed visible desktop.** The newer **.148** portrait regression matches all 40,960 draw/sample pixels and records 469 successful KMD/UMD/DXGI flip Presents, each with a matching subsequent VSync scanout address. Collection is interrupted; the native .148 image, sustained stability and hardware landscape remain unverified. [Evidence](tegra-x1-wddm/docs/D3D_RUNTIME_SHARING.md#native-explicit-layout-regression). |
 
-Package versions above identify KMD test packages. The latest trial rebuilds
-and signs **.147**, retaining the validated UMD/Zink and NVK binaries. Each
-component has its own build manifest and source/artifact identity.
+Package versions above identify KMD test packages. The latest trial pairs
+signed **.148** with the explicit-layout UMD/Zink and the unchanged NVK ICD.
+Each component has its own build manifest and source/artifact identity.
 [Current component identifiers](tegra-x1-wddm/docs/STATUS.md)
 
 The Windows NVK backend uses KMT for allocations, GPU virtual addresses,

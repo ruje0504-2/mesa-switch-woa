@@ -957,3 +957,73 @@ correcting that expectation, it exits 0 at 16:06:30 UTC. Returned logs match
 device hashes. Evidence and the failed original binary/source are retained in
 `runs/panel-rotation-v2-control-20261111/`, with the final context result in
 `context-recheck/`. No native driver was installed for these controls.
+
+### Native explicit-layout regression
+
+The `panel-rotation-native-20261111` trial pairs source-built KMD `.148`
+(`8b599271`) with UMD `scanout-layout-20261111-umd+413d32bb6034` (tested source
+`8427bc89`) and the unchanged `f828845c38b7` NVK ICD. The signed SYS is
+`5d6c3e2893c32db72f1f0fc1c359e9984c706b29120d3e439d5a12dbfb16f3f2`;
+the CAT is `601690828ee2ebcdff4b098da5155301a0a59ce3cc02cc7b2013a5b4b06e5a5d`.
+All package signatures and catalog memberships are verified before installation.
+
+On 2026-11-11, native LUID `9a1e7` reaches hardware startup/Code 0. The ordinary
+probe matches 16,384 RGBA/BGRA clear/draw pixels, and the independent texture/
+sampler cases match another 24,576. Both report S_OK device status, explicitly
+release their devices, and retain exit-0 records. The controller reports no
+timeout and completion at 16:21:40 UTC. These probe records are flushed before
+desktop capture and survive the later interruption; their source files, not
+only their success messages, are present in the verified receipt. Probe feature
+level is 10_0; these probes do not exercise sharing or presentation themselves.
+
+The independent DWM trace records PID 692/TID 1652 issuing 469 successful flip
+Presents at each of the KMT, UMD callback and outer DXGI layers, plus 469 successful
+rotations of its three swapchain storage identities. The retained Present span
+is 42.2345337 seconds, not an FPS measurement. Four other KMT records from DWM
+TID 1592 have flags `0x8000` and are excluded from that flip count.
+
+All 469 flips use no-wait MMIO presentation at interval 1. MPO records identify
+one full-size 720x1280 plane in segment 3. For every submitted flip, a subsequent
+same-adapter VSync reports its target physical address before the next captured
+flip. The three addresses are `0xfc09f000`, `0xfb997000` and `0xfbd1b000`, used
+157/156/156 times. The driver produces those scanout reports from the active
+register bank; the new path checks rotation, pitch and origins as well as the
+address before completing pending state. This is real portrait scanout evidence,
+not a physical validation of the quarter-turn layout.
+
+The native `Default` desktop/ACPI display state is retained before and after
+the drawing probes, still 720x1280 identity. No desktop image or capture-result
+file is retained. The user did not observe the native interval and confirms
+only the recovered desktop. Thus this trial does not add a visible desktop
+photograph to the `.147` milestone or establish long-term stability. A later
+startup interrupts normal collection; its cause is not established. In
+particular, the last available pre-capture record does not locate a fault.
+
+The native ETL is unfinalized (`EndTime=0`, `BuffersWritten=0`), containing
+165,790 exported records, including 19,933 UMD events. Early DWM HWDEVICE and
+PrimaryLayout records are not retained; their absence is not nonexecution.
+The later ETL is finalized (436 buffers, 158,581 records): the Tegra startup gate
+returns `c00000a3`, there are no UMD events, and DWM selects Basic Render LUIDs
+`4e12`/`4e4b`. It is not continued native rendering. The device-provided Dwm-Core
+203 template still accounts for only 36 of its 52 payload bytes, leaving
+1131/1202 records undecoded in the two files; the other provider schemas decode.
+ETL absolute timestamps differ from the live/CIM wall clock, so the timeline
+uses wall-clock controller records and the within-trace Present span separately.
+
+The raw export SHA256 values are:
+
+| Trace | SHA256 |
+| --- | --- |
+| Native `.001` | `4590f514c3d87efce57033912129ba0b2e325ea4dafb0b6e03ce4133eba9f63a` |
+| Later `.002` | `342fde691430391f6b2be41f76254eeba71456ebb3c62f93cc5cf94817bbf293` |
+
+Recovery stages `.59` at 16:25:21 UTC and reboots. `.59` Code 0, baseline SYS/ACPI
+hashes, temporary-registration/task/environment cleanup and unchanged power
+policy are verified at 16:31:52; portrait restoration/verification is a no-op
+at 16:32:52. All 152 returned files (91,883,051 bytes) match device lengths and
+SHA256. The first receipt reports `loader-debug.csv` length 0 despite a matching
+hash for its actual 41,218 bytes. That receipt is preserved; the final collector
+derives byte count and SHA256 from the same read stream and verifies all files.
+Local `native-summary.json` and `display-analysis-001/scanout-correlation.json`
+retain the counts and per-flip matches. Hardware landscape and a visible Win32
+`vkcube` remain the next physical milestones.

@@ -17,7 +17,7 @@ Zink also remains the OpenGL compatibility route.
 | Native Vulkan | NVK rendered an offscreen triangle on the GM20B and read back the expected pixels and guards with driver **0.1.0.87**. A Win32 preview displayed that readback. |
 | Display adapter | **0.1.0.130** reached **Code 0**, completed GDI copies and displayed verified RGB bars through the GM20B VidPN and native scanout. |
 | Shared storage | **0.1.0.144** passes Vulkan Win32 buffer/image sharing, GPU read/write after producer-device release, and re-export: 32,768 payload words plus 512 guards match. [Scope and evidence](docs/VULKAN_WIN32_MEMORY.md). |
-| Windows desktop | **.147 lights up the desktop:** DWM selects Tegra / FL10_0; 108 KMD, UMD and DXGI presents succeed across a retained 24.7-second window, with a normal physical desktop confirmed by the user. All 40,960 draw/sample pixels match. A subsequent reboot leaves sustained stability unverified; shared-image opens and hardware landscape rotation remain pending. [Evidence](docs/D3D_RUNTIME_SHARING.md#native-mmio-present-result). |
+| Windows desktop | **.147 produced a user-confirmed visible desktop.** The newer **.148** portrait regression matches all 40,960 draw/sample pixels and records 469 successful KMD/UMD/DXGI flip Presents, each with a matching subsequent VSync scanout address. Collection is interrupted; the native .148 image, sustained stability and hardware landscape remain unverified. [Evidence](docs/D3D_RUNTIME_SHARING.md#native-explicit-layout-regression). |
 
 The driver uses dynamically allocated shared memory with a **512 MiB**
 adapter ceiling. Windows manages residency and budgets through VidMm.
