@@ -3,6 +3,45 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**Primary bridge native result (2026-11-11):** the driver now creates the portrait
+primary through the D3D runtime, imports that same allocation into NVK through
+Mesa-internal owner callbacks, and routes SetDisplayMode to the real runtime
+callback. Zink/NVK retain the explicit 2880-byte pitch and use GPU tiled-shadow
+rendering. The owner releases GPUVA reservations before runtime deallocation,
+so delayed object cleanup cannot free a reused address. After fixing the
+incorrect rejection of `E_PENDING`, native LUID `98df6` completes 116 primary
+allocations, 116 GPUVA maps and 232 paging waits; 115 actual runtime
+SetDisplayMode callbacks return S_OK. The finalized 12,816-event trace has
+no recorded loss or DWM runtime-error callback. This validates the allocation
+and mode-setting bridge, not sustained Present or a visible desktop.
+All 120 returned files match device hashes; .59, portrait and power policy are
+restored. A bounded-wait rerun on LUID `954c5` validates device release but
+reveals a sampler binding error in the returned SPIR-V. After using Zink's
+Vulkan binding instead of the Gallium slot, LUID `92166` matches 24,576
+independent `t5/s2` sample pixels (wrap/clamp/rebinding, RGBA/BGRA) plus the
+16,384 ordinary draw pixels. Both probes complete explicit teardown and exit
+0 without timeout. All 144 final-trial files match device hashes; .59 Code 0,
+cleanup, portrait and unchanged power policy are verified. Desktop capture
+remains black; DWM continues cycling primary resources/mode setting. Actual
+Present and shared-image opens remain unfinished.
+[Primary bridge contract and controls](D3D_RUNTIME_SHARING.md#runtime-primary-bridge-work)
+
+**Version labels:** Device Manager shows the installed INF package's version.
+Recent experiments reuse the signed `.144` KMD while replacing the test UMD
+and ICD; they are not unchanged GPU builds. Standalone build manifests now
+name their component and include a readable `artifact_id` with the DLL hash.
+The current primary-bridge candidate uses:
+
+| Component | Candidate identifier |
+| --- | --- |
+| Signed KMD package | `0.1.0.144` (reused binary) |
+| D3D UMD / Zink | `runtime-primary-20261111-umd+826085f423ab` |
+| NVK ICD | `runtime-primary-20261111-icd-v2+f828845c38b7` |
+
+These are test-deployment identifiers. Rollback reinstalls `.59`; a future
+complete driver-package release must version its INF and catalog together
+with the bundled UMD/ICD, even if a component's binary is reused.
+
 **DWM false OOM located (2026-11-11):** loader diagnostics identify Windows
 error 87 while opening `./libvulkan_nouveau.dll`. The Windows manifest
 generator used a POSIX separator; changing it to a backslash removes the
@@ -52,46 +91,10 @@ The device restarts before the native drawing probes finish. The retained
 of nonexecution. Native sampling, the latest ordinary-draw regression and
 desktop composition remain unverified. All 121 returned files match device
 hashes; .59 Code 0, portrait and unchanged power policy are restored.
-Next connect the actual primary-resource allocation to the runtime's display
-mode callback, alongside the pending resource/presentation bridge. The cause
-of the trial restart is not established by this record.
+The subsequent primary bridge connects the actual runtime allocation and
+display-mode callback. The cause of this earlier trial's restart is not
+established by its record.
 [Exception context and sampling work](PORTING.md#dwm-tgsi-sample-abort)
-
-**Primary bridge WIP (2026-11-11):** the working tree now creates the portrait
-primary through the D3D runtime, imports that same allocation into NVK through
-Mesa-internal owner callbacks, and routes SetDisplayMode to the real runtime
-callback. Zink/NVK retain the explicit 2880-byte pitch and use GPU tiled-shadow
-rendering. The owner releases GPUVA reservations before runtime deallocation,
-so delayed object cleanup cannot free a reused address. After fixing the
-incorrect rejection of `E_PENDING`, native LUID `98df6` completes 116 primary
-allocations, 116 GPUVA maps and 232 paging waits; 115 actual runtime
-SetDisplayMode callbacks return S_OK. The finalized 12,816-event trace has
-no recorded loss or DWM runtime-error callback. This validates the allocation
-and mode-setting bridge, not sustained Present or a visible desktop.
-All 120 returned files match device hashes; .59, portrait and power policy are
-restored. A bounded-wait rerun on LUID `954c5` matches all 16,384 ordinary
-draw pixels and completes explicit device release with exit 0. Sampling
-still clamps instead of wrapping; its returned SPIR-V reveals that a bare
-sampler was assigned its Gallium slot instead of Zink's Vulkan binding.
-That generator fix is being tested in the next candidate. Present and
-shared-resource opens remain unfinished.
-[Primary bridge contract and controls](D3D_RUNTIME_SHARING.md#runtime-primary-bridge-work)
-
-**Version labels:** Device Manager shows the installed INF package's version.
-Recent experiments reuse the signed `.144` KMD while replacing the test UMD
-and ICD; they are not unchanged GPU builds. Standalone build manifests now
-name their component and include a readable `artifact_id` with the DLL hash.
-The current primary-bridge candidate uses:
-
-| Component | Candidate identifier |
-| --- | --- |
-| Signed KMD package | `0.1.0.144` (reused binary) |
-| D3D UMD / Zink | `runtime-primary-20261111-umd+826085f423ab` |
-| NVK ICD | `runtime-primary-20261111-icd-v2+f828845c38b7` |
-
-These are test-deployment identifiers. Rollback reinstalls `.59`; a future
-complete driver-package release must version its INF and catalog together
-with the bundled UMD/ICD, even if a component's binary is reused.
 
 **Host-memory audit (2026-11-11):** no page-size/alignment or 512 MiB unit
 error was found in the inspected paths. The current instance path uses

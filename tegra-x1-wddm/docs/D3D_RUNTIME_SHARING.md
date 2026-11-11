@@ -281,8 +281,33 @@ SHA-256 is `fb513b6a16cee202daa5602d0a36f4e3836e5a31b16bdb124b1c7f255441a462`.
 On .59 at 11:00:40 UTC, the new regression fixture reproduces the original
 generator's binding 2 instead of 450 and exits 1; the patched generator passes
 all three cases and exits 0. WARP reference sampling again matches 24,576
-pixels. These are compiler/CPU controls; the candidate's native trial is
-still pending.
+pixels. These are compiler/CPU controls.
+
+The patched native trial on LUID `92166` runs at 11:05:01–11:05:09 UTC.
+Ordinary clear/triangle drawing matches 16,384 RGBA/BGRA pixels; independent
+`t5/s2` sampling matches all 24,576 pixels across wrap, clamp and texture
+rebinding in both render-target formats. Both processes report S_OK device
+status, complete explicit teardown and exit 0 without timeout. This validates
+the sampler binding fix on GM20B. The returned fragment SPIR-V now uses
+Binding 451 for the separate precompile and Binding 450 for the linked
+program, matching Zink's remapping. The linked fragment's SHA-256 is
+`96ffd0ccb1d67d2df0bd5adc1a328ba430348e5943a0ee92911ac574604549e4`.
+
+The retained finalized circular ETL contains 13,760 valid UMD events and no
+recorded event/buffer loss, including 141 S_OK SetDisplayMode callbacks. DWM
+continues recreating primary surfaces; the retained window has no Present,
+Blt or runtime-error records. This does not establish their absence outside
+that window or identify the first failure after mode setting. Desktop capture
+is still black despite the confirmed Default input desktop, 720x1280 mode,
+identity rotation, (0,0) origin and 96 DPI. Visible desktop composition and
+sustained presentation are not validated. The next boundary is the repeated
+mode/resource cycle and actual Present/shared-image contracts.
+
+All 144 returned files (36,655,102 bytes) match device hashes in
+`runs/sampler-binding-auto-20261111/evidence/verified.json` under the external
+build root. .59 Code 0, original driver/ACPI hashes, temporary registration,
+loader/environment/task/permit cleanup and unchanged power policy pass at
+11:09:12 UTC. Portrait verification is a no-op at 11:09:27 UTC.
 
 ETW numeric event 29 is `RuntimeMemory`. The high 32 bits of `arg0` identify
 the operation; the low 32 bits contain the allocation handle when available.
