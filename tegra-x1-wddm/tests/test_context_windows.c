@@ -244,7 +244,7 @@ __declspec(noinline) static void TestMmioPresent(TG_GPU_DEVICE *device)
     a.Flags.FlipWithNoWait=0;
     CHECK(TgGpuDdiPresent(&context,&a)==STATUS_SUCCESS);
     a.Flags.FlipWithNoWait=1;a.Flags.Rotate=1;
-    CHECK(TgGpuDdiPresent(&context,&a)==STATUS_NOT_SUPPORTED);
+    CHECK(TgGpuDdiPresent(&context,&a)==STATUS_SUCCESS);
     a.Flags.Rotate=0;a.Flags.Flip=0;
     CHECK(TgGpuDdiPresent(&context,&a)==STATUS_NOT_SUPPORTED);
     a.Flags.Flip=1;a.MultipassOffset=1;
@@ -679,6 +679,8 @@ __declspec(noinline) static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU
           info[0].SupportedWriteSegmentSet==info[0].SupportedReadSegmentSet && !e->AllocationBytes);
     DXGKARG_DESCRIBEALLOCATION describe={.hAllocation=info[0].hAllocation};
     CHECK(ddi->DxgkDdiDescribeAllocation(e,&describe)==STATUS_NOT_SUPPORTED);
+    TG_GPU_PRIMARY_ALLOCATION_REQUEST scanout;
+    CHECK(TgGpuGetScanoutSurface(e,info[0].hAllocation,&scanout)==STATUS_NOT_SUPPORTED);
     CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)) && !e->AllocationBytes);
 
     TG_GPU_PRIMARY_ALLOCATION_REQUEST primary={
@@ -721,6 +723,10 @@ __declspec(noinline) static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU
         CHECK(NT_SUCCESS(ddi->DxgkDdiDescribeAllocation(e,&describe)) &&
               describe.Width==primary.Width && describe.Height==primary.Height &&
               (UINT)describe.Rotation==rotation && info[0].Size==T214_GPU_POST_FB_SIZE);
+        CHECK(TgGpuGetScanoutSurface(other,info[0].hAllocation,&scanout)==STATUS_INVALID_PARAMETER);
+        CHECK(TgGpuGetScanoutSurface(e,info[0].hAllocation,&scanout)==STATUS_SUCCESS &&
+              scanout.Rotation==rotation && scanout.Width==primary.Width &&
+              scanout.Height==primary.Height && scanout.Pitch==primary.Pitch);
         CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)) && !e->AllocationBytes);
         primary.Pitch+=4;
         CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER && !e->AllocationBytes);
@@ -746,6 +752,7 @@ __declspec(noinline) static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU
     CHECK(NT_SUCCESS(ddi->DxgkDdiCreateAllocation(e,&create)));
     CHECK(info[0].FlagsWddm2.CpuVisible && !info[0].FlagsWddm2.AccessedPhysically &&
           e->AllocationBytes==T214_GPU_POST_FB_SIZE);
+    CHECK(TgGpuGetScanoutSurface(e,info[0].hAllocation,&scanout)==STATUS_NOT_SUPPORTED);
     DXGKARG_BUILDPAGINGBUFFER discard={.Operation=DXGK_OPERATION_DISCARD_CONTENT};
     discard.DiscardContent.hAllocation=info[0].hAllocation;
     CHECK(TgGpuDdiBuildPagingBuffer(e,&discard)==STATUS_SUCCESS);
@@ -1139,7 +1146,7 @@ static __declspec(noinline) void TestAdapterLifecycle(const DXGKRNL_INTERFACE *c
     flip.pDmaBuffer=(PVOID)1;
     CHECK(d.DxgkDdiPresent((HANDLE)1,&flip)==STATUS_NOT_SUPPORTED);
     flip.pDmaBuffer=NULL;flip.Flags.Rotate=1;
-    CHECK(d.DxgkDdiPresent((HANDLE)1,&flip)==STATUS_NOT_SUPPORTED);
+    CHECK(d.DxgkDdiPresent((HANDLE)1,&flip)==STATUS_SUCCESS);
     DXGKARG_PATCH patch={0};
     CHECK(d.DxgkDdiPatch((HANDLE)1,&patch)==STATUS_SUCCESS);
     patch.PatchLocationListSubmissionLength=1;

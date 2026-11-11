@@ -818,9 +818,9 @@ address-only update can use HBlank. Latch confirmation reads the active bank's
 address, direction, pitch and origins together. A partially matching layout
 is not a completed flip. Release requires the original visible POST address
 with identity pitch/origins. Windows stop recovery now queues that full
-identity layout even if the address already equals POST. The old scanout
-entry points continue to request identity, so this change alone does not
-expose a landscape mode to Windows.
+identity layout even if the address already equals POST. The compatibility
+scanout wrappers still request identity; the Windows integration below uses
+the complete surface request for rotated primaries.
 
 The host model checks every output pixel's byte address against independent
 coordinate rotation for all four directions, catches incorrect active pitch
@@ -843,13 +843,11 @@ the display pipeline, while 1 denotes a software/graphics-engine transform.
 [VidPN rotation](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/supporting-rotation-in-a-display-miniport-driver) ·
 [Hardware capability meaning](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmdt/ns-d3dkmdt-_d3dkmdt_vidpn_hw_capability)
 
-Before advertising landscape, connect source-mode enumeration, standard
-landscape allocations, VidPN commit/update, MPO and legacy flips to the same
-layout. Then verify asymmetric corners on the physical panel and retain the
-user's requested normal-handheld 1280x720 landscape setting. This backend is
-implementation in progress toward that result, not a completed hardware-rotation
-milestone. The allocation/import portion below is implemented separately so its
-storage contract can be checked before exposing a new display mode.
+The allocation/import and Windows scanout work below connect this backend to
+the candidate's four normal VidPN rotations. Physical validation must still
+verify asymmetric corners, the actual primary geometry and sustained output,
+then retain the user's requested normal-handheld 1280x720 landscape setting.
+This is implementation in progress, not a completed hardware-rotation milestone.
 
 ### Explicit primary storage layout
 
@@ -866,9 +864,9 @@ The KMD normalizes the old 32-byte portrait descriptor to explicit identity
 geometry and rejects a nonzero old reserved word. Ordinary 16-byte NVK buffer
 and 32-byte linear-surface requests keep their existing contracts. New primary
 producers require the updated KMD: `.147` does not accept the 48-byte request.
-Standard primary/shadow generation still supports portrait only until the
-Windows mode/scanout integration is complete. The dynamic 512 MiB budget and
-scanout-segment accounting are unchanged.
+Standard shared-primary/shadow generation retains the unrotated portrait
+layout; the DXGI primary producer can supply explicit quarter-turn storage.
+The dynamic 512 MiB budget and scanout-segment accounting are unchanged.
 
 `DescribeAllocation` reports stored geometry even when old and new primaries
 coexist. The UMD imports the primary's actual pitch and byte size into Zink/NVK.
@@ -904,3 +902,58 @@ Evidence is retained outside the repository under
 fixtures on Windows without installing the candidate or rendering on the
 native GPU. Actual landscape modes, physical latch/rotation and sustained DWM
 composition remain to be validated.
+
+### Windows scanout rotation
+
+Legacy `SetVidPnSourceAddress` now reads immutable allocation metadata through
+the KMD handle supplied and retained by Dxgkrnl. It checks ownership, primary
+format, actual pitch/dimensions and the physical scanout range before programming
+the fetch layout. This lookup does not take an engine lock at display DIRQL.
+A null allocation during a mode change still selects the original POST buffer.
+[Allocation-specific programming contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgkarg_setvidpnsourceaddress)
+
+MPO validation and submission share the same geometry check. Its explicit
+clockwise plane rotation converts to the backend's counter-clockwise enum;
+neither the VidPN angle nor the allocation's orientation is added again.
+The source rectangle covers the actual storage and the destination covers
+the native 720x1280 panel. Unsupported crop, stretch, blend and extra planes
+remain rejected.
+[MPO rotation and rectangles](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_multiplane_overlay_attributes3)
+
+Pending/displayed state includes the physical rotation. Interrupts and immediate
+completion confirm the active address, direction, pitch and origins together.
+The same address with a different rotation is a new flip, and a mixed or
+incomplete latch cannot inherit its PresentId. Blanking waits for the original
+POST layout and clears stale pending state before VidMm can release the old
+primary. Stop also restores identity even when the address already equals POST.
+
+VidPN now reports identity/90/180/270 with Offset0 only. The source-mode and
+standard shared-primary dimensions remain unrotated for the single portrait-first
+path, following Microsoft's shared-primary contract and the basic-display
+sample's native source-mode enumeration. A DXGI allocation independently
+describes its actual stored extent. This integration still needs a real Windows
+mode-switch trial; the controls cannot establish which primary layout DWM will
+choose. `DriverRotation=0` selects dedicated display rotation. Smooth rotation
+is not advertised: CommitVidPn records the successfully committed angle and the
+primary-address DDI applies the corresponding allocation layout atomically.
+An active-path request to change the angle without that modeset is rejected.
+The no-DMA flip Present accepts `Rotate`; GDI rotated blits remain unsupported.
+[Rotation contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/supporting-rotation-in-a-display-miniport-driver) ·
+[Active-path and smooth-rotation contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_updateactivevidpnpresentpath)
+
+The real-WDK scanout fixture links the display DDIs and register backend,
+substituting allocation handles, register banks, interrupt delivery and shared
+clock data. It checks all four legacy/MPO transforms, same-address direction
+changes, corrupt pitch and incomplete-latch rejection, immediate recall/waits,
+pending-flip blanking and rotated-POST recovery. The VidPN fixture checks all
+four supported/committed angles, rotation pivots, reference cleanup, failure
+propagation and rejection of path-only angle changes. The context fixture checks
+real allocation ownership and no-DMA rotation dispatch.
+
+All host models and the ARM64 build pass. On `.59` Code 0, paging, VidPN and
+scanout fixtures exit 0 at 16:04:23 UTC on 2026-11-11. The context fixture's first
+run stops at a stale assertion expecting rotated flips to be rejected; after
+correcting that expectation, it exits 0 at 16:06:30 UTC. Returned logs match
+device hashes. Evidence and the failed original binary/source are retained in
+`runs/panel-rotation-v2-control-20261111/`, with the final context result in
+`context-recheck/`. No native driver was installed for these controls.

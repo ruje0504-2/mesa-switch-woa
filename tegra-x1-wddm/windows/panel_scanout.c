@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "adapter.h"
+#include "allocation.h"
 #include "../platform/t214_resources.h"
 
 typedef struct _FLIP_ACTION {
@@ -7,6 +8,27 @@ typedef struct _FLIP_ACTION {
     TG_GPU_PANEL_FLIP Flip;
     NTSTATUS Status;
 } FLIP_ACTION;
+
+static bool matches(const TG_GPU_PANEL_FLIP *flip, const struct tg_t214_dc_scanout *active)
+{
+    return flip->Address == active->address && flip->Rotation == active->rotation &&
+        (flip->Visible != FALSE) == active->visible;
+}
+
+BOOLEAN TgGpuPanelReadLatched(TG_GPU_PANEL *panel, struct tg_t214_dc_scanout *active)
+{
+    if (!tg_t214_dc_latched_surface(&panel->Dc, active))
+        return FALSE;
+    if (panel->Pending.Address && matches(&panel->Pending, active)) {
+        panel->Displayed = panel->Pending;
+        panel->Pending = (TG_GPU_PANEL_FLIP){0};
+    } else if (!matches(&panel->Displayed, active)) {
+        /* Unknown/external state must not inherit a completed PresentId. */
+        panel->Displayed = (TG_GPU_PANEL_FLIP){.Address = active->address,
+            .Rotation = active->rotation, .Visible = active->visible};
+    }
+    return TRUE;
+}
 
 static BOOLEAN program_flip(PVOID context)
 {
@@ -16,25 +38,21 @@ static BOOLEAN program_flip(PVOID context)
         action->Status = STATUS_DEVICE_NOT_READY;
         return TRUE;
     }
+    struct tg_t214_dc_scanout active;
+    const BOOLEAN latched = TgGpuPanelReadLatched(panel, &active);
     if (panel->Pending.Address) {
-        UINT64 address;
-        bool visible;
-        if (!tg_t214_dc_latched_scanout(&panel->Dc,&address,&visible) ||
-            address!=panel->Pending.Address || visible!=(panel->Pending.Visible!=FALSE)) {
-            action->Status = STATUS_DEVICE_BUSY;
-            return TRUE;
-        }
-        panel->Displayed=panel->Pending;
-        panel->Pending=(TG_GPU_PANEL_FLIP){0};
+        action->Status = STATUS_DEVICE_BUSY;
+        return TRUE;
     }
-    if (action->Flip.Immediate && panel->Displayed.Address==action->Flip.Address &&
-        panel->Displayed.Visible==action->Flip.Visible && panel->Displayed.PresentId==action->Flip.PresentId) {
+    if (action->Flip.Immediate && latched && matches(&action->Flip, &active) &&
+        panel->Displayed.PresentId==action->Flip.PresentId) {
         action->Status=STATUS_SUCCESS;
         return TRUE;
     }
-    enum tg_t214_dc_result result = action->Flip.Immediate ?
-        tg_t214_dc_queue_immediate(&panel->Dc,action->Flip.Address,action->Flip.Visible!=FALSE) :
-        tg_t214_dc_queue_scanout(&panel->Dc,action->Flip.Address,action->Flip.Visible!=FALSE);
+    const struct tg_t214_dc_scanout surface = {action->Flip.Address,
+        action->Flip.Rotation, action->Flip.Visible != FALSE};
+    enum tg_t214_dc_result result = tg_t214_dc_queue_surface(&panel->Dc, &surface,
+        action->Flip.Immediate != FALSE);
     if (result == TG_T214_DC_OK) {
         panel->Pending = action->Flip;
         action->Status = action->Flip.Immediate ? STATUS_PENDING : STATUS_SUCCESS;
@@ -47,11 +65,9 @@ static BOOLEAN program_flip(PVOID context)
 static BOOLEAN confirm_flip(PVOID context)
 {
     FLIP_ACTION *action=context;
-    UINT64 address;
-    bool visible;
+    struct tg_t214_dc_scanout active;
     action->Status=STATUS_PENDING;
-    if (tg_t214_dc_latched_scanout(&action->Panel->Dc,&address,&visible) &&
-        address==action->Flip.Address && visible==(action->Flip.Visible!=FALSE)) {
+    if (TgGpuPanelReadLatched(action->Panel, &active) && matches(&action->Flip, &active)) {
         action->Panel->Displayed=action->Flip;
         action->Panel->Pending=(TG_GPU_PANEL_FLIP){0};
         action->Status=STATUS_SUCCESS;
@@ -74,7 +90,7 @@ static NTSTATUS flip(TG_GPU_ADAPTER *adapter, TG_GPU_PANEL_FLIP scanout)
     if (!scanout.Immediate || action.Status!=STATUS_PENDING)return action.Status;
     /* Immediate MPO requests are recalled at PASSIVE before queuing. Keep
      * their DDI lifetime until the active bank confirms completion. Address
-     * changes usually take one scanline; visibility changes require VBlank. */
+     * changes usually take one scanline; layout/visibility changes require VBlank. */
     const ULONGLONG deadline=KeQueryInterruptTime()+500000;
     LARGE_INTEGER interval={.QuadPart=-10000};
     for (UINT i=0;KeQueryInterruptTime()<deadline;++i) {
@@ -85,6 +101,28 @@ static NTSTATUS flip(TG_GPU_ADAPTER *adapter, TG_GPU_PANEL_FLIP scanout)
         if(action.Status==STATUS_SUCCESS)return STATUS_SUCCESS;
     }
     return STATUS_INVALID_PARAMETER;
+}
+
+static bool allocation_rotation(UINT rotation, enum tg_t214_dc_rotation *physical)
+{
+    /* Legacy primary orientation follows the VidPN/GDI counter-clockwise
+     * convention. NONPREROTATED producers describe identity storage. */
+    switch (rotation) {
+    case D3DDDI_ROTATION_IDENTITY: *physical = TG_T214_DC_IDENTITY; return true;
+    case D3DDDI_ROTATION_90: *physical = TG_T214_DC_CCW90; return true;
+    case D3DDDI_ROTATION_180: *physical = TG_T214_DC_CCW180; return true;
+    case D3DDDI_ROTATION_270: *physical = TG_T214_DC_CCW270; return true;
+    default: return false;
+    }
+}
+
+static bool storage_matches(const TG_GPU_PRIMARY_ALLOCATION_REQUEST *allocation,
+    enum tg_t214_dc_rotation rotation)
+{
+    struct tg_t214_dc_layout layout;
+    return tg_t214_dc_get_layout(rotation, &layout) &&
+        allocation->Width == layout.width && allocation->Height == layout.height &&
+        allocation->Pitch == layout.pitch;
 }
 
 static NTSTATUS APIENTRY set_primary(HANDLE context, const DXGKARG_SETVIDPNSOURCEADDRESS *args)
@@ -98,7 +136,14 @@ static NTSTATUS APIENTRY set_primary(HANDLE context, const DXGKARG_SETVIDPNSOURC
     if (args->hAllocation) {
         if (args->PrimarySegment != TG_GPU_SCANOUT_SEGMENT)
             return STATUS_NOT_SUPPORTED;
-        NTSTATUS status = TgGpuResolveScanoutAddress(&adapter->Tables,
+        TG_GPU_PRIMARY_ALLOCATION_REQUEST allocation;
+        NTSTATUS status = TgGpuGetScanoutSurface(&adapter->Engine, args->hAllocation, &allocation);
+        if (!NT_SUCCESS(status))
+            return status;
+        if (!allocation_rotation(allocation.Rotation, &scanout.Rotation) ||
+            !storage_matches(&allocation, scanout.Rotation))
+            return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE_MODE;
+        status = TgGpuResolveScanoutAddress(&adapter->Tables,
             (UINT64)args->PrimaryAddress.QuadPart, T214_GPU_POST_FB_SIZE, &scanout.Address);
         if (!NT_SUCCESS(status))
             return status;
@@ -108,19 +153,30 @@ static NTSTATUS APIENTRY set_primary(HANDLE context, const DXGKARG_SETVIDPNSOURC
     return flip(adapter, scanout);
 }
 
-static bool full_panel(const RECT *rect)
+static bool full_surface(const RECT *rect, UINT width, UINT height)
 {
     return rect->left == 0 && rect->top == 0 &&
-        rect->right == T214_DC_PANEL_WIDTH && rect->bottom == T214_DC_PANEL_HEIGHT;
+        rect->right == (LONG)width && rect->bottom == (LONG)height;
 }
 
-static bool native_plane(const DXGK_MULTIPLANE_OVERLAY_ATTRIBUTES3 *plane)
+static bool native_plane(const DXGK_MULTIPLANE_OVERLAY_ATTRIBUTES3 *plane,
+    const TG_GPU_PRIMARY_ALLOCATION_REQUEST *allocation, enum tg_t214_dc_rotation *rotation)
 {
-    return !plane->Flags.Value && full_panel(&plane->SrcRect) && full_panel(&plane->DstRect) &&
-        (full_panel(&plane->ClipRect) ||
+    /* MPO already supplies the plane's required clockwise transform. Do not
+     * add the VidPN or the allocation's mode orientation a second time. */
+    switch (plane->Rotation) {
+    case D3DDDI_ROTATION_IDENTITY: *rotation = TG_T214_DC_IDENTITY; break;
+    case D3DDDI_ROTATION_90: *rotation = TG_T214_DC_CCW270; break;
+    case D3DDDI_ROTATION_180: *rotation = TG_T214_DC_CCW180; break;
+    case D3DDDI_ROTATION_270: *rotation = TG_T214_DC_CCW90; break;
+    default: return false;
+    }
+    return storage_matches(allocation, *rotation) && !plane->Flags.Value &&
+        full_surface(&plane->SrcRect, allocation->Width, allocation->Height) &&
+        full_surface(&plane->DstRect, T214_DC_PANEL_WIDTH, T214_DC_PANEL_HEIGHT) &&
+        (full_surface(&plane->ClipRect, T214_DC_PANEL_WIDTH, T214_DC_PANEL_HEIGHT) ||
             (!plane->ClipRect.left && !plane->ClipRect.top &&
              !plane->ClipRect.right && !plane->ClipRect.bottom)) &&
-        plane->Rotation == D3DDDI_ROTATION_IDENTITY &&
         !plane->Blend.Value &&
         plane->ColorSpaceType == D3DDDI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
 }
@@ -153,13 +209,19 @@ static NTSTATUS APIENTRY set_primary_mpo(HANDLE context,
         return STATUS_RETRY;
     }
     if (scanout.Visible) {
-        if (!native_plane(&plane->PlaneAttributes) || plane->ContextCount != 1 ||
+        if (plane->ContextCount != 1 ||
             !plane->ppContextData || !plane->ppContextData[0])
             return STATUS_INVALID_PARAMETER;
         const DXGK_PRIMARYCONTEXTDATA *primary = plane->ppContextData[0];
         if (!primary->hAllocation || primary->SegmentId != TG_GPU_SCANOUT_SEGMENT)
             return STATUS_NOT_SUPPORTED;
-        NTSTATUS status = TgGpuResolveScanoutAddress(&adapter->Tables,
+        TG_GPU_PRIMARY_ALLOCATION_REQUEST allocation;
+        NTSTATUS status = TgGpuGetScanoutSurface(&adapter->Engine, primary->hAllocation, &allocation);
+        if (!NT_SUCCESS(status))
+            return status;
+        if (!native_plane(&plane->PlaneAttributes, &allocation, &scanout.Rotation))
+            return STATUS_INVALID_PARAMETER;
+        status = TgGpuResolveScanoutAddress(&adapter->Tables,
             (UINT64)primary->SegmentAddress.QuadPart, T214_GPU_POST_FB_SIZE, &scanout.Address);
         if (!NT_SUCCESS(status))
             return status;
@@ -182,8 +244,13 @@ static NTSTATUS APIENTRY check_mpo(HANDLE context, DXGKARG_CHECKMULTIPLANEOVERLA
         return STATUS_SUCCESS;
     }
     const DXGK_MULTIPLANE_OVERLAY_PLANE_WITH_SOURCE2 *plane = args->ppPlanes[0];
-    if (plane && plane->hAllocation && !plane->LayerIndex && !plane->VidPnSourceId)
-        args->Supported = native_plane(&plane->PlaneAttributes);
+    if (plane && plane->hAllocation && !plane->LayerIndex && !plane->VidPnSourceId) {
+        TG_GPU_ADAPTER *adapter = context;
+        TG_GPU_PRIMARY_ALLOCATION_REQUEST allocation;
+        enum tg_t214_dc_rotation rotation;
+        if (NT_SUCCESS(TgGpuGetScanoutSurface(&adapter->Engine, plane->hAllocation, &allocation)))
+            args->Supported = native_plane(&plane->PlaneAttributes, &allocation, &rotation);
+    }
     return STATUS_SUCCESS;
 }
 
@@ -228,16 +295,8 @@ static BOOLEAN panel_interrupt(PVOID context, ULONG message)
     if (message || !tg_t214_dc_ack_vblank(&panel->Dc))
         return FALSE;
 
-    UINT64 address;
-    bool visible;
-    if (tg_t214_dc_latched_scanout(&panel->Dc, &address, &visible)) {
-        if (address == panel->Pending.Address && visible == (panel->Pending.Visible != FALSE)) {
-            panel->Displayed = panel->Pending;
-            panel->Pending = (TG_GPU_PANEL_FLIP){0};
-        } else if (address != panel->Displayed.Address || visible != (panel->Displayed.Visible != FALSE)) {
-            panel->Displayed = (TG_GPU_PANEL_FLIP){.Address = address, .Visible = visible};
-        }
-    }
+    struct tg_t214_dc_scanout active;
+    (VOID)TgGpuPanelReadLatched(panel, &active);
 
     const DXGKRNL_INTERFACE *dxgk = &adapter->Engine.Dxgk;
     if (panel->NotifyMpoVBlank) {

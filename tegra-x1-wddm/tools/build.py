@@ -238,6 +238,19 @@ if args.windows_tests:
                     "/entry:start", "/include:_load_config_used", "/nodefaultlib", "/release", "/opt:ref", "/timestamp:0",
                     f"/out:{args.out / 'test-panel-timings.exe'}", str(timings_test),
                     str(args.out / "panel_vidpn.obj"), str(sdk_lib)], check=True)
+    # Keep real WDK layouts/backend code, substituting only shared clock data
+    # so synchronous latch waits can execute in a user-mode ARM64 fixture.
+    scanout_models = []
+    for source in [root / "tests/test_panel_scanout_windows.c",
+                   root / "windows/panel.c", root / "windows/panel_scanout.c"]:
+        obj = args.out / (source.stem + "_model.obj")
+        subprocess.run([args.clang_cl, *flags, "/DRELOCATABLE_USER_SHARED_DATA",
+                        "/clang:-funwind-tables", f"/Fo{obj}", "--", str(source)], check=True)
+        scanout_models.append(obj)
+    subprocess.run([args.link, "/nologo", "/machine:arm64", "/subsystem:console,10.0",
+                    "/entry:start", "/include:_load_config_used", "/nodefaultlib", "/release", "/opt:ref", "/timestamp:0",
+                    f"/out:{args.out / 'test-panel-scanout.exe'}", *map(str, scanout_models),
+                    str(args.out / "t214_dc.obj"), str(sdk_lib)], check=True)
     hardware_test=args.out / "test_hardware_windows.obj"
     subprocess.run([args.clang_cl,*flags,"/clang:-funwind-tables",f"/Fo{hardware_test}","--",
                     str(root / "tests/test_hardware_windows.c")],check=True)

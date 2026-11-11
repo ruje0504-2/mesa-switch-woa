@@ -38,4 +38,8 @@ NTSTATUS TgGpuValidateOpenAllocationRange(TG_GPU_DEVICE *,HANDLE,
                                          UINT64 Offset,UINT64 Bytes,BOOLEAN Write);
 NTSTATUS TgGpuGetPresentSurface(TG_GPU_DEVICE *,HANDLE,BOOLEAN,
                                 TG_GPU_PRIMARY_ALLOCATION_REQUEST *);
+/* Immutable metadata through an OS-supplied KMD allocation handle. Dxgkrnl
+ * keeps it alive for scanout/check DDIs, including their high-IRQL calls. */
+NTSTATUS TgGpuGetScanoutSurface(TG_GPU_CONTEXT_ENGINE *,HANDLE,
+                                TG_GPU_PRIMARY_ALLOCATION_REQUEST *);
 #endif

@@ -446,6 +446,23 @@ NTSTATUS TgGpuValidatePagingAllocation(TG_GPU_CONTEXT_ENGINE *e,HANDLE handle,UI
     KeReleaseSpinLock(&e->Lock,irql);return status;
 }
 
+NTSTATUS TgGpuGetScanoutSurface(TG_GPU_CONTEXT_ENGINE *engine,HANDLE handle,
+    TG_GPU_PRIMARY_ALLOCATION_REQUEST *desc)
+{
+    const TG_GPU_ALLOCATION *allocation=handle;
+    if(!engine || !allocation || !desc || allocation->Engine!=engine)
+        return STATUS_INVALID_PARAMETER;
+    const TG_GPU_PRIMARY_ALLOCATION_REQUEST *primary=&allocation->Desc.Primary;
+    if(primary->Buffer.flags!=(TG_GPU_ALLOCATION_CPU_VISIBLE|TG_GPU_ALLOCATION_DISPLAY_PRIMARY) ||
+        primary->Buffer.bytes!=T214_GPU_POST_FB_SIZE ||
+        (primary->Format!=D3DDDIFMT_X8R8G8B8 && primary->Format!=D3DDDIFMT_A8R8G8B8))
+        return STATUS_NOT_SUPPORTED;
+    /* No engine spin lock here: this immutable object is retained by the OS,
+     * and the fast flip DDI can run above DISPATCH_LEVEL. */
+    *desc=*primary;
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS APIENTRY TgGpuDdiGetStandardAllocationDriverData(HANDLE context,
     DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA *args)
 {

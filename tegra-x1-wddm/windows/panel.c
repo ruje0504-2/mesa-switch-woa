@@ -85,6 +85,7 @@ NTSTATUS TgGpuPanelStart(TG_GPU_ADAPTER *adapter)
     if (boot.TargetId == D3DDDI_ID_UNINITIALIZED)
         boot.TargetId = 0;
     adapter->Panel.Boot = boot;
+    adapter->Panel.PathRotation = D3DKMDT_VPPR_IDENTITY;
     adapter->Panel.Displayed = (TG_GPU_PANEL_FLIP){
         .Address = (UINT64)boot.PhysicAddress.QuadPart,
         .Visible = TRUE,
@@ -118,13 +119,18 @@ static BOOLEAN set_visibility(PVOID context)
 {
     PANEL_ACTION *action = context;
     struct tg_t214_dc *dc = &action->Adapter->Panel.Dc;
-    uint64_t address;
-    bool visible;
+    TG_GPU_PANEL *panel = &action->Adapter->Panel;
+    struct tg_t214_dc_scanout active;
     action->Result = TG_T214_DC_BUSY;
-    if (!tg_t214_dc_latched_scanout(dc, &address, &visible))
+    if (!TgGpuPanelReadLatched(panel, &active))
         return TRUE;
     /* When blanking a source, detach its primary before VidMm can evict it. */
-    if (visible == (action->Visible != FALSE) && (visible || address == T214_GPU_POST_FB_BASE)) {
+    if (active.visible == (action->Visible != FALSE) && (active.visible ||
+        (active.address == T214_GPU_POST_FB_BASE && active.rotation == TG_T214_DC_IDENTITY))) {
+        /* A visibility transition has detached the old allocation. Do not
+         * leave a previous flip pending against an address no longer scanned. */
+        if (!active.visible)
+            panel->Pending = (TG_GPU_PANEL_FLIP){0};
         action->Result = TG_T214_DC_OK;
         return TRUE;
     }

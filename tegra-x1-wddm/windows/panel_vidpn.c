@@ -50,8 +50,16 @@ static bool supported_path(const TG_GPU_PANEL *panel, const D3DKMDT_VIDPN_PRESEN
     return path->VidPnSourceId == 0 && path->VidPnTargetId == panel->Boot.TargetId &&
         (x->Scaling == D3DKMDT_VPPS_IDENTITY || x->Scaling == D3DKMDT_VPPS_UNPINNED ||
          x->Scaling == D3DKMDT_VPPS_NOTSPECIFIED || x->Scaling == D3DKMDT_VPPS_UNINITIALIZED) &&
-        (x->Rotation == D3DKMDT_VPPR_IDENTITY || x->Rotation == D3DKMDT_VPPR_UNPINNED ||
+        ((x->Rotation >= D3DKMDT_VPPR_IDENTITY && x->Rotation <= D3DKMDT_VPPR_ROTATE270) ||
+         x->Rotation == D3DKMDT_VPPR_UNPINNED ||
          x->Rotation == D3DKMDT_VPPR_NOTSPECIFIED || x->Rotation == D3DKMDT_VPPR_UNINITIALIZED);
+}
+
+static D3DKMDT_VIDPN_PRESENT_PATH_ROTATION path_rotation(const D3DKMDT_VIDPN_PRESENT_PATH *path)
+{
+    const D3DKMDT_VIDPN_PRESENT_PATH_ROTATION rotation=path->ContentTransformation.Rotation;
+    return rotation>=D3DKMDT_VPPR_IDENTITY && rotation<=D3DKMDT_VPPR_ROTATE270 ?
+        rotation : D3DKMDT_VPPR_IDENTITY;
 }
 
 static bool same_size(D3DKMDT_2DREGION a, D3DKMDT_2DREGION b)
@@ -61,6 +69,9 @@ static bool same_size(D3DKMDT_2DREGION a, D3DKMDT_2DREGION b)
 
 static bool is_native_source(const D3DKMDT_VIDPN_SOURCE_MODE *mode)
 {
+    /* Source-mode/shared-primary dimensions stay unrotated in this single
+     * portrait-first path. A DXGI primary separately describes actual storage,
+     * including a quarter-turn 1280x720 allocation imported by the UMD. */
     const D3DKMDT_GRAPHICS_RENDERING_FORMAT *g = &mode->Format.Graphics;
     return mode->Type == D3DKMDT_RMT_GRAPHICS &&
         same_size(g->PrimSurfSize, TgGpuPanelSignal.ActiveSize) &&
@@ -231,7 +242,8 @@ static NTSTATUS APIENTRY query_hardware_capability(HANDLE context, DXGKARG_QUERY
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
     if (args->TargetId != adapter->Panel.Boot.TargetId)
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_TARGET;
-    /* Only the panel's native portrait mode is implemented. */
+    /* DriverRotation=0 means a dedicated display-pipeline transform. It does
+     * not mean unsupported; the normal rotation bits are reported per path. */
     args->VidPnHWCaps = (D3DKMDT_VIDPN_HW_CAPABILITY){0};
     return STATUS_SUCCESS;
 }
@@ -286,7 +298,8 @@ static NTSTATUS APIENTRY enumerate_modes(HANDLE context, const DXGKARG_ENUMVIDPN
             (D3DKMDT_VIDPN_PRESENT_PATH_SCALING_SUPPORT){.Identity = 1};
     if (args->EnumPivotType != D3DKMDT_EPT_ROTATION || !path_pivot)
         update.ContentTransformation.RotationSupport =
-            (D3DKMDT_VIDPN_PRESENT_PATH_ROTATION_SUPPORT){.Identity = 1, .Offset0 = 1};
+            (D3DKMDT_VIDPN_PRESENT_PATH_ROTATION_SUPPORT){.Identity = 1,
+                .Rotate90 = 1, .Rotate180 = 1, .Rotate270 = 1, .Offset0 = 1};
     status = path.Topology->pfnUpdatePathSupportInfo(path.Handle, &update);
 done:
     {
@@ -296,13 +309,15 @@ done:
 }
 
 static NTSTATUS validate_commit(TG_GPU_ADAPTER *adapter, D3DKMDT_HVIDPN vidpn,
-    bool inherited, bool *attached)
+    bool inherited, bool *attached, D3DKMDT_VIDPN_PRESENT_PATH_ROTATION *rotation)
 {
     PANEL_PATH path = {0};
     NTSTATUS status = acquire_path(adapter, vidpn, &path);
     if (!NT_SUCCESS(status))
         return status;
     *attached = path.Path != NULL;
+    if (rotation)
+        *rotation = *attached ? path_rotation(path.Path) : D3DKMDT_VPPR_IDENTITY;
     if (!*attached)
         return STATUS_SUCCESS;
 
@@ -342,13 +357,17 @@ static NTSTATUS APIENTRY commit_vidpn(HANDLE context, const DXGKARG_COMMITVIDPN 
     if (args->AffectedVidPnSourceId != 0 && args->AffectedVidPnSourceId != D3DDDI_ID_ALL)
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
     bool attached;
-    NTSTATUS status = validate_commit(adapter, args->hFunctionalVidPn, false, &attached);
+    D3DKMDT_VIDPN_PRESENT_PATH_ROTATION rotation;
+    NTSTATUS status = validate_commit(adapter, args->hFunctionalVidPn, false, &attached, &rotation);
     if (!NT_SUCCESS(status))
         return status;
-    /* There is a single fixed DSI signal. The source remains on the
-     * inherited timing. An empty or powered-off path detaches scanout.
-     */
-    return TgGpuPanelSetVisibility(adapter, attached && !args->Flags.PathPoweredOff);
+    /* DSI timings do not rotate. SetVidPnSourceAddress programs the bound
+     * primary's dimensions/pitch/orientation atomically, before or after this
+     * modeset. Never reinterpret a previous primary using the new path angle. */
+    status = TgGpuPanelSetVisibility(adapter, attached && !args->Flags.PathPoweredOff);
+    if (NT_SUCCESS(status))
+        adapter->Panel.PathRotation = rotation;
+    return status;
 }
 
 static NTSTATUS APIENTRY set_timings(HANDLE context, DXGKARG_SETTIMINGSFROMVIDPN *args)
@@ -376,7 +395,7 @@ static NTSTATUS APIENTRY set_timings(HANDLE context, DXGKARG_SETTIMINGSFROMVIDPN
 
         bool attached;
         NTSTATUS status = validate_commit(adapter, args->hFunctionalVidPn,
-            path->Input.PreserveInherited != 0, &attached);
+            path->Input.PreserveInherited != 0, &attached, NULL);
         if (!NT_SUCCESS(status))
             return status;
         if (!attached && !path->Input.PreserveInherited)
@@ -423,8 +442,13 @@ static NTSTATUS APIENTRY update_active_path(HANDLE context,
     if (path->GammaRamp.Type != D3DDDI_GAMMARAMP_DEFAULT &&
         path->GammaRamp.Type != D3DDDI_GAMMARAMP_UNINITIALIZED)
         return STATUS_NOT_SUPPORTED;
-    /* The accepted path keeps the active identity transformation. */
-    return adapter->Panel.Dc.owned ? STATUS_SUCCESS : STATUS_DEVICE_NOT_READY;
+    if (!adapter->Panel.Dc.owned)
+        return STATUS_DEVICE_NOT_READY;
+    /* Smooth rotation is not advertised. A changed angle needs CommitVidPn
+     * and the matching primary; path-only updates must not rotate old storage. */
+    if (path_rotation(path) != adapter->Panel.PathRotation)
+        return STATUS_GRAPHICS_PATH_CONTENT_GEOMETRY_TRANSFORMATION_NOT_SUPPORTED;
+    return STATUS_SUCCESS;
 }
 
 void TgGpuRegisterPanelVidPn(DRIVER_INITIALIZATION_DATA *ddis)

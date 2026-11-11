@@ -29,16 +29,17 @@ rotate the physical screen. FL10_0 is sufficient for the desktop milestone
 observed here. The latest run changes only the KMD package from `.146` to
 `.147`, retaining the same UMD and ICD binaries and their passed controls.
 
-**Hardware rotation WIP:** the Display A backend now programs and verifies
-pitch-linear identity/90/180/270-degree fetch layouts. The full-frame address
-model passes all four orientations and portrait restoration. Primary allocations
-now carry explicit dimensions, pitch and orientation; UMD imports and GDI copies
-use that stored geometry. The new KMD and UMD ARM64 controls pass on the restored
-`.59` device, including old primary descriptors and mixed source/destination
-pitches. Windows VidPN, standard landscape allocations and MPO/legacy scanout
-integration remain pending; no new orientation is advertised or installed on
-hardware yet. The new 48-byte primary producer requires the matching updated
-KMD and must not be paired with the old `.147` package.
+**Hardware rotation WIP:** allocation geometry, UMD imports, Display A fetch,
+legacy/MPO flips and full-layout latch confirmation are connected. The candidate
+VidPN implementation advertises the four normal rotations; the fixed DSI signal
+and standard shared primary retain their unrotated dimensions. The actual
+primary's stored geometry controls scanout, so a new mode does not reinterpret
+an old buffer. Smooth rotation and rotated GDI blits remain unsupported.
+The host address models and real-WDK ARM64 controls pass on `.59`, including
+same-address direction changes, incomplete latches, mode support/pivots,
+immediate retries and POST restoration. The candidate has not been installed
+for physical landscape validation yet. The new 48-byte primary producer requires
+the matching updated KMD and must not be paired with the old `.147` package.
 [Implementation and remaining contracts](D3D_RUNTIME_SHARING.md#hardware-rotation-backend)
 
 The preceding `.146` trial on LUID `94aa5` reached the real runtime Present

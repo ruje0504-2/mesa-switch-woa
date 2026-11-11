@@ -47,7 +47,9 @@ NTSTATUS APIENTRY TgGpuDdiPresent(HANDLE context,DXGKARG_PRESENT *a)
     if(!c || !a)return STATUS_INVALID_PARAMETER;
     /* NoWait keeps the GPU pipeline running while the scheduler performs
      * the VSync MMIO flip. This no-DMA path emits no GPU wait commands. */
-    const DXGK_PRESENTFLAGS flips={.Flip=1,.FlipWithNoWait=1,
+    /* Rotation of flip storage is performed by the panel DDIs using the
+     * allocation layout (or explicit MPO transform), without a GPU blit. */
+    const DXGK_PRESENTFLAGS flips={.Flip=1,.FlipWithNoWait=1,.Rotate=1,
         .FlipWithMultiPlaneOverlay=1,.RedirectedFlip=1};
     if(a->Flags.Flip && !(a->Flags.Value&~flips.Value) && !a->pDmaBuffer && !a->MultipassOffset)
         return STATUS_SUCCESS; /* Panel DDIs perform the scheduled MMIO flip. */
