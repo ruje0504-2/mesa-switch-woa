@@ -607,3 +607,107 @@ Portrait restore/verification at 13:44:09 is a no-op. All 149 returned files
 (76,015,725 bytes, including the re-export) match device SHA-256. Evidence,
 strict decoding and summaries are under the external build root's
 `runs/describe-rotation-native-v2-20261111/` directory.
+
+### Runtime Present and swapchain identities
+
+The new UMD routes native primary flips through `pfnPresentCbDXGI`. It
+passes the allocation returned by the runtime, the registered runtime
+context and the original opaque DXGI context. Before submitting, it resolves
+the Zink primary's tiled shadow and waits for NVK GPU completion. Callback
+HRESULTs, including positive statuses, are returned unchanged. A missing
+destination means its subresource index is unused. This connects the current
+mono primary-flip path; UMD blt presentation and shared-image opens are still
+separate unfinished paths.
+[DXGI presentation callback](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/nc-dxgiddi-pfnddxgiddi_presentcb)
+[Callback allocation/context ownership](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgiddicb_present)
+
+Hardware swapchain identity rotation now moves the actual Gallium storage
+and its runtime allocation owner instead of copying pixels. Runtime resource
+handles remain in their original logical slots. RTV/DSV descriptions and
+sampler views follow the new storage, and current framebuffer/sampler
+bindings are updated. Replacement sampler views are prepared before mutating
+identities; a failed allocation or GPU wait leaves the previous identities
+and bindings intact. This is buffer-identity rotation, not screen rotation.
+[Resource identity and view contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgi_ddi_base_functions)
+
+The exact candidate is `runtime-present-20261111-umd+79fa8169fb00`, built
+from `d6635e3d`; its DLL SHA-256 is recorded in the external build manifest.
+Five ARM64 controlled fixtures pass on `.59` at 14:28:25 UTC. They cover
+actual frontend Present/Rotate/view functions with substitute runtime and
+Gallium owners: opaque context forwarding, allocation ownership, GPU-before-
+Present ordering, raw success/error/positive callback results, four rotations
+of three resources, bound RTV/SRV updates, partial view-allocation failure,
+failed completion and teardown through unchanged runtime resource handles.
+The finalized control trace has 111 events, no invalid payloads or reported
+loss, and explicit successful/failed Present and RotateIdentities events.
+These are controlled API tests, not a native presentation pass.
+
+Trace event 31, `RotateIdentities`, records the final HRESULT and resource
+count. `Present` records the final HRESULT, DDI flags in `arg0` and flip
+interval in `arg1`. The matching exporter names the new event. Native trial
+collection now flushes exporter outputs to disk, and a controller invocation
+after a reboot preserves the first attempt instead of overwriting its error.
+The native run reuses the signed `.146` KMD and `f828845c38b7` ICD.
+
+### Runtime Present native trial
+
+`runtime-present-v2-auto-20261111` starts the unchanged `.146` KMD with the
+`79fa8169fb00` UMD and `f828845c38b7` ICD. Hardware startup returns success
+and the adapter reaches Code 0 on LUID `94aa5`. The ordinary and independent
+sampling probes run at 14:35:20.335–14:35:27.335 UTC; all 40,960 pixels match,
+both devices explicitly release, and both executables exit 0. Their success
+record precedes the separate desktop capture and is not a complete trial pass.
+
+DWM PID 440 / TID 1700 completes three retained fullscreen transitions with
+S_OK and non-null primary allocations. Two retained HWDEVICE creation events
+identify Tegra X1, LUID `94aa5`, FL10_0. Each of the three following flips
+has `MMIOFlip=1`, `FlipWithNoWait=1`, interval 1 and a null DMA buffer.
+The corresponding kernel Present event returns `c00000bb`
+(`STATUS_NOT_SUPPORTED`). The D3D11 journal preserves that status, then
+records `PresentCB=80004005`, matching the UMD's returned HRESULT. Device
+removal (`887a0020` internally, `887a0005` from outer DXGI Present) follows.
+These are actual calls through the new runtime bridge, replacing the old
+`887a0004` UMD stub failure. Other redirected presents on a different thread
+and context do not establish success of these Tegra primary flips.
+
+The user reports physical black output and confirms that the desktop returns
+after rollback. No native desktop PNG is retained. The input-desktop records
+identify `Default`, the native ACPI display, 720x1280 identity mode and origin
+(0,0). Neither those records nor the successful offscreen pixel comparisons
+establish visible composition or hardware landscape rotation.
+
+The trace is finalized: ProcessTrace=0, 20,004 valid UMD events, no reported
+event/buffer loss, nonzero EndTime and 973 buffers written. The raw export
+contains 103,487 records: 80,001 DxgKrnl, 3,122 DXGI, 318 Dwm-Core, 40
+Direct3D11, 20,004 UMD and two headers. All four OS providers decode exactly
+against the device templates, with no unknown or malformed events.
+Raw-export SHA-256:
+`d308619328fb380dfa31e4288f87029224b58360b73990139f98f3192f0a3585`.
+The separate loader receiver reaches its 150-second limit with only one of
+two control markers, so its validation fails; this does not invalidate the
+independently finalized ETL. The controller collects the trace and rolls back.
+
+At 14:41:10 UTC, `.59` Code 0, original driver/table hashes, removed temporary
+registration/tasks/environment and unchanged power reports are verified.
+Portrait restore/verification at 14:41:24 is a no-op. All 154 returned files
+(48,364,096 bytes) match device SHA-256 and lengths. Evidence and strict
+decoding are retained under the external build root's
+`runs/runtime-present-v2-auto-20261111/` directory.
+
+The KMD's no-DMA flip filter omitted `FlipWithNoWait`; the source now accepts
+it without emitting GPU commands or waiting for a flip. The actual scanout
+change remains owned by the scheduled panel DDIs. Rotation, blt, stereo and
+DMA-bearing requests are not admitted by this change. The Windows flag
+describes a tear-free flip that does not stall the graphics pipeline, not
+permission to tear or to claim a completed physical latch.
+[Present flags](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_presentflags)
+
+The real-WDK context fixture reproduces the rejection with `Flip|FlipWithNoWait`
+and no DMA buffer: the old code exits at assertion 241 at 14:47:05 UTC.
+With the flag admitted, the full context fixture exits 0 at 14:48:56 UTC,
+including unchanged-output checks and rejection of unsupported rotation,
+missing Flip, multipass and DMA-bearing inputs. Both run as CPU-only controls
+on `.59` Code 0; returned logs match device hashes. Host models and the ARM64
+kernel/fixture build pass. Artifacts are under
+`runs/mmio-nowait-control-20261111/`. This is not yet a native rerun or a
+physical screen-rotation implementation.

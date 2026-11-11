@@ -3,31 +3,39 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Source WIP after `.146`:** the UMD now routes primary flips through the
-DXGI runtime callback after GPU completion. Swapchain identity rotation moves
-the real storage/owners, rebuilds views and rebinds them while preserving RT
-handles. New controlled tests are being compiled; this source has not yet
-passed a native presentation trial. Hardware landscape rotation is still pending.
+**Latest `.146` native result (2026-11-11):** the new runtime Present bridge
+reaches the kernel on LUID `94aa5`. All 40,960 ordinary/sampled pixels match,
+and both probes release their devices and exit 0. Three retained complete
+DWM fullscreen transitions return S_OK. Each subsequent MMIO Present fails
+with `c00000bb`; the runtime callback returns `80004005`, then DXGI reports
+device removal. The user reports a black physical screen. This is not an
+on-screen pass.
 
-**Latest `.146` native result (2026-11-11):** the rebuilt KMD reaches Code 0
-on LUID `92611`; all 40,960 ordinary/sampled pixels match, and both probes
-release their devices and exit 0. The allocation identity-rotation fix passes
-the mode-setting boundary: all 14 retained complete DXGI fullscreen
-transitions return S_OK with a non-null primary. DWM's 15 recorded device
-creations identify **Tegra X1 / FL10_0**, not Basic Render. The native desktop
-capture now contains the complete Windows desktop, but does not prove
-physical panel output or sustained hardware composition.
+**Current boundary and WIP:** the recorded flips have no DMA buffer and set
+`FlipWithNoWait=1`, which the `.146` KMD's flip filter omits. The source now
+admits this flag through the scheduled MMIO path. The real-WDK fixture fails
+before the change and passes afterward on ARM64; native validation of the
+fix is pending. The UMD routes actual primary flips and rotates swapchain
+storage/views while retaining runtime handles. Five ARM64 controlled fixtures
+and a finalized 111-event trace pass. This buffer-identity rotation is not
+hardware screen rotation, which is still pending alongside shared-image opens.
+Keep the current FL10_0 rather than using a feature-level change to bypass
+these missing contracts.
 
-**Current boundary:** DWM reaches the UMD `Present` stub, which returns
-`887a0004` 14 times; DXGI then reports device removal. Connect the actual
-runtime presentation callback and finish shared-image handling, then validate
-continuous output together with hardware landscape rotation. Do not raise
-the advertised feature level to bypass this missing implementation.
-The finalized ETL decodes fully with no reported loss. All 149 returned files
-match device hashes. After an additional boot during collection, `.59`
-Code 0, cleanup and unchanged power policy are verified at 13:43:47 UTC;
-portrait restore/verification at 13:44:09 is a no-op.
-[Mode-setting fix and native evidence](D3D_RUNTIME_SHARING.md#native-identity-rotation-trial)
+All 154 returned files match device hashes; the finalized native trace has
+20,004 valid UMD events and no reported loss, and all four OS providers decode
+fully. The optional loader capture reaches its duration limit before the
+second control marker; its validation fails and the controller rolls back.
+`.59` Code 0, cleared test state and unchanged power policy are verified at
+14:41:10 UTC. Portrait restore/verification at 14:41:24 is a no-op, and the
+user confirms the physical desktop is restored.
+[Present implementation and native failure](D3D_RUNTIME_SHARING.md#runtime-present-native-trial)
+
+The previous `.146` run on LUID `92611` passed the allocation-rotation
+mode-setting fix and reached the then-unimplemented UMD Present stub. Its
+desktop capture contained wallpaper/icons, but did not establish physical
+panel output. The newer native result above replaces that Present boundary.
+[Mode-setting fix and earlier evidence](D3D_RUNTIME_SHARING.md#native-identity-rotation-trial)
 
 **Final orientation requested by the user:** hardware rotation with a
 1280x720 landscape desktop, left/right controls in their normal handheld
@@ -91,7 +99,7 @@ The latest native trial uses:
 | Component | Candidate identifier |
 | --- | --- |
 | Signed KMD package | `0.1.0.146` (rebuilt from source) |
-| D3D UMD / Zink | `runtime-primary-20261111-umd+41f76160496e` |
+| D3D UMD / Zink | `runtime-present-20261111-umd+79fa8169fb00` (source `d6635e3d`) |
 | NVK ICD | `runtime-primary-20261111-icd-v2+f828845c38b7` |
 
 These are test-deployment identifiers. Rollback reinstalls `.59`; a future

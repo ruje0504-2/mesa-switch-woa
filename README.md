@@ -18,10 +18,10 @@ OpenGL compatibility route.
 | Native Vulkan | NVK rendered an offscreen triangle and read back the expected pixels and guards with driver **0.1.0.87**. A Win32 preview showed that readback. |
 | Display adapter | **0.1.0.130** reached **Code 0**, completed GDI copies and displayed verified RGB bars on the internal panel through the GM20B VidPN and native scanout. |
 | Shared storage | **0.1.0.144** passes Vulkan Win32 buffer/image sharing, GPU read/write after producer-device release, and re-export: 32,768 payload words plus 512 guards match. [Scope and evidence](tegra-x1-wddm/docs/VULKAN_WIN32_MEMORY.md). |
-| Windows desktop | **.146** matches 40,960 native D3D11 FL10_0 draw/sample pixels. DWM selects Tegra and completes its fullscreen transitions; its next failure is the unimplemented UMD `Present`. Sustained hardware composition, shared-image opens and hardware landscape rotation remain pending. [Evidence](tegra-x1-wddm/docs/D3D_RUNTIME_SHARING.md#native-identity-rotation-trial). |
+| Windows desktop | **.146** matches 40,960 native D3D11 FL10_0 draw/sample pixels. The new UMD Present bridge reaches the kernel, which rejects the MMIO flip; the physical screen remains black. The omitted `FlipWithNoWait` flag is fixed in source, pending native validation. Sustained composition, shared-image opens and hardware landscape rotation remain pending. [Evidence](tegra-x1-wddm/docs/D3D_RUNTIME_SHARING.md#runtime-present-native-trial). |
 
-Package versions above identify KMD test packages. The latest trial rebuilds
-and signs **.146**, retaining the validated UMD/Zink and NVK binaries. Each
+Package versions above identify KMD test packages. The latest trial reuses
+signed **.146** and the validated NVK binary with a newly built UMD/Zink. Each
 component has its own build manifest and source/artifact identity.
 [Current component identifiers](tegra-x1-wddm/docs/STATUS.md)
 

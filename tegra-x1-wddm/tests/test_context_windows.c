@@ -232,6 +232,28 @@ static VOID APIENTRY ReleaseHandle(const DXGKARGCB_RELEASEHANDLEDATA a)
 static UINT PoolsInUse(void)
 { UINT i,count=0;for(i=0;i<64;++i) count+=pool_used[i]!=FALSE;return count; }
 
+__declspec(noinline) static void TestMmioPresent(TG_GPU_DEVICE *device)
+{
+    TG_GPU_CONTEXT context={.Device=device,.Flags={.VirtualAddressing=1}};
+    DXGKARG_PRESENT a={.Flags={.Flip=1,.FlipWithNoWait=1},.FlipInterval=D3DDDI_FLIPINTERVAL_ONE};
+    /* The native DWM trace requests a no-DMA MMIO flip with NoWait set.
+     * Admission must leave the actual flip to the scheduled panel callback. */
+    CHECK(TgGpuDdiPresent(&context,&a)==STATUS_SUCCESS);
+    CHECK(a.Flags.Value==12 && a.FlipInterval==D3DDDI_FLIPINTERVAL_ONE &&
+          !a.pDmaBuffer && !a.pDmaBufferPrivateData && !a.MultipassOffset);
+    a.Flags.FlipWithNoWait=0;
+    CHECK(TgGpuDdiPresent(&context,&a)==STATUS_SUCCESS);
+    a.Flags.FlipWithNoWait=1;a.Flags.Rotate=1;
+    CHECK(TgGpuDdiPresent(&context,&a)==STATUS_NOT_SUPPORTED);
+    a.Flags.Rotate=0;a.Flags.Flip=0;
+    CHECK(TgGpuDdiPresent(&context,&a)==STATUS_NOT_SUPPORTED);
+    a.Flags.Flip=1;a.MultipassOffset=1;
+    CHECK(TgGpuDdiPresent(&context,&a)==STATUS_NOT_SUPPORTED);
+    a.MultipassOffset=0;
+    UINT command=0x12345678;a.pDmaBuffer=&command;
+    CHECK(TgGpuDdiPresent(&context,&a)==STATUS_NOT_SUPPORTED && command==0x12345678);
+}
+
 __declspec(noinline) static void TestGdiPresent(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_DEVICE *device,BOOLEAN opaque)
 {
     UINT before=PoolsInUse();
@@ -1703,6 +1725,7 @@ void start(void)
     CHECK(ddi.DxgkDdiCreateDevice(&other,&device)==STATUS_INVALID_PARAMETER);
     CHECK(NT_SUCCESS(ddi.DxgkDdiCreateDevice(&e,&device)));
     TestAllocations(&e,&other,&ddi,device.hDevice);
+    TestMmioPresent(device.hDevice);
     TestGdiPresent(&e,device.hDevice,FALSE);
     TestGdiPresent(&e,device.hDevice,TRUE);
     CHECK(ddi.DxgkDdiDestroyProcess(&e,process.hKmdProcess)==STATUS_DEVICE_BUSY);

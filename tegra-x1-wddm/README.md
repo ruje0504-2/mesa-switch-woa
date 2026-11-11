@@ -17,7 +17,7 @@ Zink also remains the OpenGL compatibility route.
 | Native Vulkan | NVK rendered an offscreen triangle on the GM20B and read back the expected pixels and guards with driver **0.1.0.87**. A Win32 preview displayed that readback. |
 | Display adapter | **0.1.0.130** reached **Code 0**, completed GDI copies and displayed verified RGB bars through the GM20B VidPN and native scanout. |
 | Shared storage | **0.1.0.144** passes Vulkan Win32 buffer/image sharing, GPU read/write after producer-device release, and re-export: 32,768 payload words plus 512 guards match. [Scope and evidence](docs/VULKAN_WIN32_MEMORY.md). |
-| Windows desktop | **.146** matches 40,960 native D3D11 FL10_0 draw/sample pixels. DWM selects Tegra and completes its fullscreen transitions; its next failure is the unimplemented UMD `Present`. Sustained hardware composition, shared-image opens and hardware landscape rotation remain pending. [Evidence](docs/D3D_RUNTIME_SHARING.md#native-identity-rotation-trial). |
+| Windows desktop | **.146** matches 40,960 native D3D11 FL10_0 draw/sample pixels. The new UMD Present bridge reaches the kernel, which rejects the MMIO flip; the physical screen remains black. The omitted `FlipWithNoWait` flag is fixed in source, pending native validation. Sustained composition, shared-image opens and hardware landscape rotation remain pending. [Evidence](docs/D3D_RUNTIME_SHARING.md#runtime-present-native-trial). |
 
 The driver uses dynamically allocated shared memory with a **512 MiB**
 adapter ceiling. Windows manages residency and budgets through VidMm.
