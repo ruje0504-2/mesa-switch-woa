@@ -62,15 +62,19 @@ primary through the D3D runtime, imports that same allocation into NVK through
 Mesa-internal owner callbacks, and routes SetDisplayMode to the real runtime
 callback. Zink/NVK retain the explicit 2880-byte pitch and use GPU tiled-shadow
 rendering. The owner releases GPUVA reservations before runtime deallocation,
-so delayed object cleanup cannot free a reused address. The first native trial
-successfully allocates fourteen primary surfaces, then incorrectly rejects
-`E_PENDING` from residency. The paging callbacks now wait for that queued
-operation; the extended ARM64 controls pass. Ordinary drawing matches 16,384
-pixels but reveals a stale Zink program pointer at device release, also fixed
-in the next candidate. Sampling still has wrong pixels. The follow-up harness
-prematurely rejects a pending hardware-start field; its bounded wait is being
-corrected before repeating with the same binaries. Present and shared-resource
-opens remain unfinished.
+so delayed object cleanup cannot free a reused address. After fixing the
+incorrect rejection of `E_PENDING`, native LUID `98df6` completes 116 primary
+allocations, 116 GPUVA maps and 232 paging waits; 115 actual runtime
+SetDisplayMode callbacks return S_OK. The finalized 12,816-event trace has
+no recorded loss or DWM runtime-error callback. This validates the allocation
+and mode-setting bridge, not sustained Present or a visible desktop.
+All 120 returned files match device hashes; .59, portrait and power policy are
+restored. A bounded-wait rerun on LUID `954c5` matches all 16,384 ordinary
+draw pixels and completes explicit device release with exit 0. Sampling
+still clamps instead of wrapping; its returned SPIR-V reveals that a bare
+sampler was assigned its Gallium slot instead of Zink's Vulkan binding.
+That generator fix is being tested in the next candidate. Present and
+shared-resource opens remain unfinished.
 [Primary bridge contract and controls](D3D_RUNTIME_SHARING.md#runtime-primary-bridge-work)
 
 **Version labels:** Device Manager shows the installed INF package's version.
@@ -82,7 +86,7 @@ The current primary-bridge candidate uses:
 | Component | Candidate identifier |
 | --- | --- |
 | Signed KMD package | `0.1.0.144` (reused binary) |
-| D3D UMD / Zink | `runtime-primary-20261111-umd+d17a557b3a76` |
+| D3D UMD / Zink | `runtime-primary-20261111-umd+826085f423ab` |
 | NVK ICD | `runtime-primary-20261111-icd-v2+f828845c38b7` |
 
 These are test-deployment identifiers. Rollback reinstalls `.59`; a future

@@ -244,6 +244,46 @@ first snapshot; it uses the same UMD/ICD binaries. The harness records each
 probe's exit status separately and recognizes negative Windows exception
 codes as failures.
 
+The recovered first attempt nevertheless establishes a real DWM primary
+bridge pass on LUID `98df6`: 116 successful primary allocations, 116 queued
+residency operations, 116 queued GPUVA maps and 232 successful paging waits.
+The actual runtime `SetDisplayMode` callback returns S_OK 115 times, with
+the real primary allocation handle. DWM has 479 successful resource creations
+and no recorded runtime-error callback in this finalized 12,816-event trace
+(no recorded event/buffer loss). Repeated primary creation/mode setting is
+not evidence of sustained Present or a visible desktop. The drawing probes
+were not launched because of the early harness check. All 120 returned files
+(36,355,064 bytes) match device hashes. .59 Code 0 and environment/power
+restoration pass at 10:48:35 UTC; portrait verification is a no-op at
+10:48:49 UTC.
+
+The bounded-wait run reaches native LUID `954c5` at 10:54:18–10:54:40 UTC.
+Ordinary RGBA/BGRA drawing matches all 16,384 pixels and completes context,
+device and adapter release with exit 0. The sampler probe exits 1 without
+timeout: its wrap/clamp/rebound-texture cases have 2,940/0/2,940 mismatches.
+This is inconsistent with simply selecting the deliberately swapped `s5`.
+The retained finalized circular ETL contains 14,432 valid events, including
+140 successful SetDisplayMode callbacks and no recorded DWM runtime error.
+Circular retention does not establish a complete startup history.
+All 139 returned files (36,812,705 bytes) match device hashes. .59 and cleanup
+pass at 10:58:29 UTC; portrait verification is a no-op at 10:58:44 UTC.
+
+Six returned SPIR-V files identify the sampler bug: the fragment shader
+correctly loads the independent texture and sampler, but the sampler's
+Binding decoration is 2, the original Gallium slot. `emit_sampler` used
+`driver_location` instead of the Vulkan `binding` assigned by Zink, unlike
+image emission. The next candidate uses the assigned binding and adds a
+complete NIR-to-SPIR-V control covering remapped binding 450, binding zero,
+and the unchanged-slot case. The old fragment SPIR-V `sample-dump05.spv`
+SHA-256 is `fb513b6a16cee202daa5602d0a36f4e3836e5a31b16bdb124b1c7f255441a462`.
+`sampler-binding-auto-20261111` tests UMD artifact
+`runtime-primary-20261111-umd+826085f423ab` with the same ICD and signed KMD.
+On .59 at 11:00:40 UTC, the new regression fixture reproduces the original
+generator's binding 2 instead of 450 and exits 1; the patched generator passes
+all three cases and exits 0. WARP reference sampling again matches 24,576
+pixels. These are compiler/CPU controls; the candidate's native trial is
+still pending.
+
 ETW numeric event 29 is `RuntimeMemory`. The high 32 bits of `arg0` identify
 the operation; the low 32 bits contain the allocation handle when available.
 `arg1` is the byte count, paging-fence value or paging-queue handle, as relevant.

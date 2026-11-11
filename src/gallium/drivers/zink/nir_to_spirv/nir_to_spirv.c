@@ -1391,7 +1391,7 @@ emit_sampler(struct ntv_context *ctx, nir_variable *var)
    snprintf(buf, sizeof(buf), "sampler_%u", var->data.driver_location);
    spirv_builder_emit_name(&ctx->builder, var_id, buf);
    spirv_builder_emit_descriptor_set(&ctx->builder, var_id, var->data.descriptor_set);
-   spirv_builder_emit_binding(&ctx->builder, var_id, var->data.driver_location);
+   spirv_builder_emit_binding(&ctx->builder, var_id, var->data.binding);
    _mesa_hash_table_insert(ctx->vars, var, (void *)(intptr_t)var_id);
    if (ctx->spirv_1_4_interfaces) {
       assert(ctx->num_entry_ifaces < ARRAY_SIZE(ctx->entry_ifaces));
