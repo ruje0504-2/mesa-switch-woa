@@ -8,6 +8,7 @@
 #include "../platform/t214_clock.h"
 #include "adapter_abi.h"
 #include "graphics.h"
+#include "diagnostic_events.h"
 
 typedef struct _TG_GPU_CONTEXT_ENGINE TG_GPU_CONTEXT_ENGINE;
 typedef struct _TG_GPU_PROCESS TG_GPU_PROCESS;
@@ -146,6 +147,9 @@ NTSTATUS TgGpuArmSoftwareCompletion(TG_GPU_CONTEXT_ENGINE *,TG_GPU_CONTEXT_WORK 
 /* DISPATCH-safe internal recovery request; no waits/MMIO or completed fence. */
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS TgGpuRequestEngineRecovery(TG_GPU_CONTEXT_ENGINE *,NTSTATUS);
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS TgGpuRequestEngineRecoveryAt(TG_GPU_CONTEXT_ENGINE *,NTSTATUS,
+    enum tg_gpu_recovery_source,const DXGKARG_SUBMITCOMMANDVIRTUAL *);
 /* Kernel-generated paging records share the ordered execution slot. CPU PTE
  * publication and real TLB completion precede arming the OS notification. */
 NTSTATUS TgGpuExecutePagingWork(TG_GPU_CONTEXT_ENGINE *,TG_GPU_CONTEXT_WORK *,

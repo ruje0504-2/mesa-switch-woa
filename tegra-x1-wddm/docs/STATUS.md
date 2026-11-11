@@ -3,6 +3,26 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**Latest `.152` result:** native LUID `bbde7` reaches Code 0 at 19:57:57 UTC.
+Explorer's shared Blt-mode Present now returns S_OK through the runtime; the
+corresponding kernel event is a successful `RedirectedFlip`. DWM opens that
+image and retains 63 successful flip callbacks, followed by device loss. The
+patterned probe fails `vkCreateDevice` with `VK_ERROR_DEVICE_LOST`, without a
+pixel result. The user reports an initially correct taskbar position with its
+right-side tray missing, then no taskbar from the second of about three flashes.
+Complete native desktop composition remains unverified.
+All 152 returned files (102,245,042 bytes) match device lengths/hashes. `.59`
+Code 0, cleanup and unchanged power settings are verified at 20:05:11 UTC;
+portrait verification at 20:06:35 is a no-op. No native test remains running.
+[Native result and restart timeline](D3D_RUNTIME_SHARING.md#native-windowed-present-retest)
+
+**Next diagnostic candidate (`.153`, not installed):** record the first KMD
+recovery status and triggering path in ETW before notifying Dxgkrnl, including
+DISPATCH_LEVEL preemption and legacy-submit failures. Host/WDK builds and
+Windows ARM64 context/worker controls pass at 20:16:20 UTC. They check first
+error retention, lock release and notification ordering; live kernel ETW
+delivery remains untested. [Payload and capture limits](RECOVERY_TRACE.md)
+
 **Latest `.151` result:** native LUID `baff1` completes legacy BGRA/RGBA shared
 GPU writes/readbacks in both directions and after producer-device release:
 24,576 matching pixels. The full probe exits 1 because the NT/keyed-mutex
@@ -12,7 +32,7 @@ photos retain wallpaper/icons with the taskbar displaced/incomplete or absent.
 The trace now exceeds the old table-pool limit (2.75 MiB resident, no retained
 ReserveResource failure). DWM opens Explorer's shared image successfully 26
 times, but all 26 Explorer Blt-mode Presents return `887a0004` at the UMD's
-flip-only guard. That is the next concrete implementation boundary.
+flip-only guard. This rejection is addressed by the `.152` candidate above.
 All 161 returned files match device lengths/hashes; `.59` Code 0, cleanup,
 unchanged power settings and portrait are verified at 19:40:17–31 UTC.
 [Native result and remaining windowed Present contract](D3D_RUNTIME_SHARING.md#native-table-pool-retest)
@@ -37,7 +57,7 @@ missing/incomplete taskbar content during the active trial. Six snapshots find
 its window visible at `(0,1232)-(720,1280)`; window geometry is not pixel proof.
 No rotation or cube is requested in this trial.
 
-**Current boundaries:** Explorer's three observed instances each request a
+**.149 boundaries (superseded by .151 above):** Explorer's three observed instances each request a
 576x960 BGRA shared surface, then the D3D runtime reports
 `ConfigureSharedResource / ShareObjects = c000000d`. Some SearchHost and
 TextInputHost instances fail Zink's `vkCreateDevice` with result `-3`;
@@ -46,7 +66,7 @@ the underlying KMT status is not captured. The retained trace has no
 not complete desktop composition or a repaired taskbar.
 [Native loading retest and process-specific evidence](D3D_RUNTIME_SHARING.md#native-appcontainer-loading-retest)
 
-**Recovery:** all 163 returned files (75,003,540 bytes) match device lengths and
+**.149 recovery:** all 163 returned files (75,003,540 bytes) match device lengths and
 SHA256. `.59` Code 0, baseline hashes, cleanup and unchanged power settings are
 verified at 18:11:24 UTC; portrait restore/verify is a no-op at 18:12:17 UTC.
 Artifacts are in `desktop-acl-native-20261111`; no native test remains running.
@@ -68,18 +88,18 @@ the former limit and rejection past the new backing. Source `71322147` is
 published; `.151` passes the native capacity comparison above with the exact
 same UMD/ICD as `.150`. Complete desktop rendering remains unfinished.
 
-**Windowed Present WIP:** the working tree accepts the observed Blt flag for
+**Windowed Present candidate (`24c1ca9a`):** the UMD accepts the observed Blt flag for
 runtime-owned shared surfaces, completes GPU use and forwards their allocation,
 context and opaque DXGI token to the runtime callback. Primary-only validation
-still applies to flips. The ARM64 build passes. Windows callback controls have
-not run because SSH times out/no longer has a route, before uploading the new
-candidate. A new `--shared-layout` probe renders a nonuniform shared pattern
+still applies to flips. The ARM64 build and Windows callback controls pass.
+A new `--shared-layout` probe renders a nonuniform shared pattern
 and samples it with translated/scaled/clipped viewports and rebound constants
-on a 720x1280 target; its WARP and native runs are also pending. No candidate
-with these changes has been installed. KMD destination/copy behavior and native
-windowed Present still require validation; callback success is not pixel proof.
+on a 720x1280 target; all 3,686,400 WARP pixel checks pass at 19:50:09 UTC.
+The `.152` native trial confirms successful Explorer and DWM callbacks, followed
+by device loss; it is recovered to `.59`. Native layout checks and complete
+windowed composition still require validation; callback success is not pixel proof.
 
-**Next validation:** complete windowed Present, test nonuniform shared patterns,
+**Next validation:** capture the first internal recovery cause, complete windowed Present and test nonuniform shared patterns,
 offset/scale/clipping and the complete desktop, then hardware landscape and
 Win32 `vkcube`. NT-handle/keyed-mutex sharing remains a separate D3D interface
 contract to implement. Do not treat raising Feature Level as a fix for the
@@ -206,14 +226,14 @@ Present and shared-image opens were unfinished at that point.
 
 **Version labels:** Device Manager shows the installed INF package's version.
 Earlier experiments reused the signed `.144` KMD while replacing the test UMD
-and ICD. The current KMD candidate is rebuilt and versioned `.151`. Standalone build manifests
+and ICD. The last native KMD candidate is versioned `.152`; `.153` currently adds recovery diagnostics only. Standalone build manifests
 name their component and include a readable `artifact_id` with the DLL hash.
-The active native trial uses:
+The completed `.152` native trial used:
 
 | Component | Candidate identifier |
 | --- | --- |
-| Signed KMD package | `0.1.0.151` (source `71322147`, SYS `ab14c3fc0667`) |
-| D3D UMD / Zink | `runtime-shared-20261111-umd+c46b59544870` (source `be55a95b`) |
+| Signed KMD package | `0.1.0.152` (source `24c1ca9a`, SYS `22c86127cd25`; KMD behavior unchanged from `.151`) |
+| D3D UMD / Zink | `runtime-windowed-20261111-umd+11116dc1b815` (source `24c1ca9a`) |
 | NVK ICD | `runtime-shared-20261111-icd+6e2fad99d742` |
 
 These are test-deployment identifiers. Rollback reinstalls `.59`; a future

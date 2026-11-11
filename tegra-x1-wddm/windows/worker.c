@@ -23,7 +23,7 @@ static VOID run(PVOID context)
         KeAcquireSpinLock(&w->Queue->Lock,&irql);
         w->Queue->Paused=TRUE;w->Queue->Failure=status;
         KeReleaseSpinLock(&w->Queue->Lock,irql);w->Failure=status;
-        (VOID)TgGpuRequestEngineRecovery(w->Queue->Engine,status);
+        (VOID)TgGpuRequestEngineRecoveryAt(w->Queue->Engine,status,TgGpuRecoveryWorker,NULL);
     }
     (VOID)PsTerminateSystemThread(NT_SUCCESS(status)?STATUS_SUCCESS:status);
 }

@@ -46,6 +46,22 @@ static TG_GPU_QUEUE_ENTRY *reuse_private;
 static TG_GPU_CONTEXT *notify_context;
 static UINT notify_references;
 static KIRQL level;
+static UINT recovery_records,recovery_interrupts_at_trace;
+static KIRQL recovery_trace_level;
+static TG_GPU_RECOVERY_EVENT recovery_record;
+static TG_GPU_CONTEXT_ENGINE *trace_engine;
+/* Capture the real recovery record without importing kernel ETW into this
+ * user-mode fixture. Native ETW delivery is verified separately. */
+VOID TgGpuTraceRecovery(const TG_GPU_RECOVERY_EVENT *record)
+{
+    CHECK(record && record->Version==1 && level<=DISPATCH_LEVEL && !in_sync);
+    if(trace_engine){
+        TG_GPU_WORK_QUEUE *q=trace_engine->QueueOwner;
+        CHECK(!trace_engine->Lock && (!q || !q->Lock));
+    }
+    recovery_record=*record;recovery_trace_level=level;
+    recovery_interrupts_at_trace=recovery_interrupts;++recovery_records;
+}
 static VOID NTAPI InitializeLock(PKSPIN_LOCK lock) { *lock=0; }
 VOID (NTAPI * const __imp_KeInitializeSpinLock)(PKSPIN_LOCK)=InitializeLock;
 static VOID NTAPI InitializeEvent(PRKEVENT event,EVENT_TYPE type,BOOLEAN state)
@@ -1519,14 +1535,34 @@ __declspec(noinline) static void TestPagingDispatch(const DXGKRNL_INTERFACE *dxg
     CHECK(TgGpuResetWorkQueue(&q,&io,&power,&clock)==STATUS_DEVICE_DATA_ERROR && q.Current.Engine);
     hw.fail_reset=FALSE;CHECK(TgGpuResetWorkQueue(&q,&io,&power,&clock)==STATUS_SUCCESS);
     CHECK(!q.Current.Engine && !e.Active && !e.Notification && e.LastCompletedFence==107 && interrupts==before+6);
-    fail_pool=fail_sync=TRUE;UINT faults=recovery_interrupts;
+    fail_pool=fail_sync=TRUE;UINT faults=recovery_interrupts,records=recovery_records;
+    trace_engine=&e;
     CHECK(SubmitModel(&e,&submit)==STATUS_SUCCESS);
+    trace_engine=NULL;
     fail_pool=fail_sync=FALSE;
     CHECK(e.RecoveryPending && !e.RecoveryNotified && e.RecoveryStatus==STATUS_NO_MEMORY && q.Paused);
     CHECK(e.LastCompletedFence==107 && recovery_interrupts==faults);
+    CHECK(recovery_records==records+1 && recovery_interrupts_at_trace==faults &&
+        recovery_trace_level==PASSIVE_LEVEL && recovery_record.Source==TgGpuRecoverySubmit &&
+        recovery_record.Status==STATUS_NO_MEMORY && recovery_record.LastCompletedFence==107);
+    CHECK(recovery_record.AdapterLuid.LowPart==e.AdapterLuid.LowPart &&
+        recovery_record.AdapterLuid.HighPart==e.AdapterLuid.HighPart &&
+        recovery_record.GraphicsGeneration==e.GraphicsGeneration &&
+        recovery_record.CachedFifo==e.Channel.fifo_interrupt &&
+        recovery_record.CachedMmu==e.Channel.mmu_fault &&
+        recovery_record.CachedPbdma==e.Channel.pbdma_interrupt &&
+        recovery_record.CachedPbdma1==e.Channel.pbdma_interrupt_1);
+    CHECK(recovery_record.Flags==submit.Flags.Value &&
+        recovery_record.Context==(ULONGLONG)(ULONG_PTR)submit.hContext &&
+        recovery_record.DmaBytes==submit.DmaBufferSize &&
+        recovery_record.PrivateBytes==submit.DmaBufferPrivateDataSize &&
+        recovery_record.UmdPrivateBytes==submit.DmaBufferUmdPrivateDataSize &&
+        recovery_record.SubmissionFence==submit.SubmissionFenceId);
     CHECK(TgGpuRequestEngineRecovery(&e,STATUS_DEVICE_DATA_ERROR)==STATUS_SUCCESS && recovery_interrupts==faults+1);
     CHECK(TgGpuRequestEngineRecovery(&e,STATUS_DEVICE_NOT_READY)==STATUS_SUCCESS && recovery_interrupts==faults+1);
     CHECK(e.RecoveryStatus==STATUS_NO_MEMORY && e.LastCompletedFence==107);
+    CHECK(recovery_records==records+1 && recovery_record.Source==TgGpuRecoverySubmit &&
+        recovery_record.Status==STATUS_NO_MEMORY);
     CHECK(TgGpuStopWorkQueue(&q)==STATUS_SUCCESS);
     CHECK(ddi.DxgkDdiDestroyContext(context.hContext)==STATUS_SUCCESS);
     CHECK(ddi.DxgkDdiDestroyDevice(device.hDevice)==STATUS_SUCCESS);
@@ -1654,13 +1690,21 @@ static __declspec(noinline) VOID TestPreemption(const DXGKRNL_INTERFACE *dxgk)
     fail_sync=FALSE;CHECK(TgGpuResetWorkQueue(&q,NULL,&power,&clock)==STATUS_SUCCESS);
     CHECK(!e.Notification && !q.Current.Engine && PoolsInUse()==pools && e.LastCompletedFence==204);
     CHECK(TgGpuResumeWorkQueue(&q,&power)==STATUS_SUCCESS);
-    fail_pool=TRUE;accesses=hw.reads+hw.writes;RequestPreempt(&e,507);fail_pool=FALSE;
+    UINT records=recovery_records;
+    trace_engine=&e;fail_pool=TRUE;accesses=hw.reads+hw.writes;RequestPreempt(&e,507);fail_pool=FALSE;
+    trace_engine=NULL;
     CHECK(e.RecoveryPending && e.RecoveryNotified && e.RecoveryStatus==STATUS_NO_MEMORY && q.Paused);
     CHECK(recovery_interrupts==faults+1 && preemption_interrupts==events+6 && e.LastCompletedFence==204);
+    CHECK(recovery_records==records+1 && recovery_interrupts_at_trace==faults &&
+        recovery_trace_level==DISPATCH_LEVEL && recovery_record.Source==TgGpuRecoveryPreempt &&
+        recovery_record.Status==STATUS_NO_MEMORY && recovery_record.LastCompletedFence==204 &&
+        !recovery_record.Context && !recovery_record.Flags && !recovery_record.DmaBytes &&
+        !recovery_record.PrivateBytes && !recovery_record.UmdPrivateBytes && !recovery_record.SubmissionFence);
     CHECK(hw.reads+hw.writes==accesses && PoolsInUse()==pools);
     e.Resetting=TRUE;
     CHECK(TgGpuRequestEngineRecovery(&e,STATUS_DEVICE_DATA_ERROR)==STATUS_DEVICE_NOT_READY);
     CHECK(recovery_interrupts==faults+1 && e.RecoveryStatus==STATUS_NO_MEMORY);e.Resetting=FALSE;
+    CHECK(recovery_records==records+1 && recovery_record.Source==TgGpuRecoveryPreempt);
     CHECK(TgGpuStopWorkQueue(&q)==STATUS_SUCCESS);e.HardwareOwner=NULL;
     notify_engine=NULL;notify_context=NULL;
     CHECK(TgGpuDdiDestroyContext(c)==STATUS_SUCCESS && TgGpuDdiDestroyDevice(device.hDevice)==STATUS_SUCCESS);

@@ -1371,7 +1371,69 @@ viewports, scissors and constant-buffer values. It compares every output pixel
 against integer coordinate expectations in BGRA and RGBA: 3,686,400 checks if
 all four passes succeed. It does not present a desktop or replace NT testing.
 
-Both the UMD and probe compile for ARM64. The first attempt at Windows controls
-fails at SSH connection before upload or execution; a retry reports no route.
-No new native driver is installed. WARP patterned-pixel results and controlled
-callback execution remain **pending**, as does real windowed presentation.
+Both the UMD and probe compile for ARM64. Initial SSH failures prevent upload
+and execution. At 19:50:09 UTC, connectivity is restored and the exact candidate
+`runtime-windowed-20261111-umd+11116dc1b815` passes the Windows controls on
+`.59` Code 0. The real runtime-owner fixture exercises shared Blt Present,
+GPU-completion failure and exact callback status/token propagation; primary,
+flip, adapter, device and DLL-entry controls also pass. The finalized control
+trace contains 114 events with no reported loss. Microsoft WARP passes all four
+nonuniform BGRA/RGBA placement/scissor cases, 3,686,400 pixels with zero mismatch.
+All 14 returned files (229,011 bytes) match device lengths/hashes. These are
+controlled callback and software-renderer results, not native presentation.
+The paired ICD remains `6e2fad99d742`; `.152` tests this candidate below.
+
+### Native windowed Present retest
+
+`windowed152-native-20261111` pairs source `24c1ca9a`, signed `.152` SYS
+`22c86127cd25`, UMD `11116dc1b815` and ICD `6e2fad99d742`. KMD behavior is
+unchanged from `.151`. Native LUID `bbde7` reaches Code 0 at 19:57:57 UTC.
+
+The retained first ETL contains 127,594 exported records and 34,514 valid UMD
+records. Explorer's one observed shared Blt-mode Present returns S_OK instead
+of the previous `887a0004`. Its matching kernel Present also succeeds with
+flags `0x8000`: `D3DKMT_PRESENTFLAGS.RedirectedFlip` in SDK 10.0.26100.0,
+not a physical-copy request. DWM successfully opens the 576x960 shared image
+with pitch 2304 and has 63 successful flip Present callbacks. No retained
+ReserveResource failure appears. These callbacks do not establish complete
+physical desktop composition or prove which later submission fails.
+
+After Explorer's successful Present, Dxgkrnl marks a device in error, and
+D3D11 records `SignalSynchronizationObjectFromGpu2 = c00002b6` and device
+removal/reset. The scheduler's numeric Reason fields are not NTSTATUS and
+have no independently established meaning here. Explorer subsequently fails
+timeline-semaphore initialization. The patterned probe starts at 19:58:20 UTC
+but fails `vkCreateDevice` with `VK_ERROR_DEVICE_LOST`; no native pattern-pixel
+result or final `native-result.json` survives. Do not treat the WARP result as
+native evidence or infer a zero-size DMA submission from a null ETW pointer.
+
+The user reports about three flashes seconds apart: initially correct taskbar
+placement with the right-side tray missing, then no Start/taskbar from the
+second flash onward. This remains an incomplete and unstable desktop result.
+The script requests no second mode/orientation change during this observation.
+The physical flashes cannot be assigned to individual restarts from the logs.
+
+The machine's recorded boot times separate planned setup/recovery from the
+additional startup:
+
+| UTC on 2026-11-11 | Observation |
+| --- | --- |
+| 19:55:29 | Planned setup boot, `.152` initially gated closed. |
+| 19:59:05 | Additional startup after native probe launch; still `.152`, gate closed. Its cause is unconfirmed. |
+| 20:02:07 | Recovery stages the `.59` package. |
+| 20:02:35 | Planned recovery boot into `.59`. |
+| 20:05:11 | `.59` Code 0, baseline hashes, cleanup and unchanged power settings verified. |
+| 20:06:35 | Saved portrait verified; no mode change needed. |
+
+All 152 returned files (102,245,042 bytes) match device lengths and SHA256;
+the early copies also match their final counterparts. Raw first-export SHA256:
+`9e87cdc8f00cf065f2fe210479d1ad6991d149cdd091ff9690b3de10c6ccb833`.
+The first ETL remains unfinalized (`EndTime=0`, `BuffersWritten=0`); it reports
+no lost events, but startup adapter/segment records are absent. Neither the
+last retained event nor an absent event identifies the first failure.
+
+The next `.153` candidate adds a first-recovery ETW event at the KMD's actual
+failure-reporting path, before OS notification. Context/worker models pass on
+Windows ARM64 `.59` at 20:16:20 UTC, including failed synchronization retry
+and DISPATCH_LEVEL preemption. Native delivery and the actual failure cause
+remain pending. [Recovery event schema and limits](RECOVERY_TRACE.md).

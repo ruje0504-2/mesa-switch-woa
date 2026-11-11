@@ -15,7 +15,8 @@ NTSTATUS APIENTRY TgGpuDdiSubmitCommandVirtual(HANDLE adapter,const DXGKARG_SUBM
     if(q) {
         status=KeWaitForSingleObject(&q->DispatchGate,Executive,KernelMode,FALSE,NULL);
         if(status!=STATUS_SUCCESS) {
-            (VOID)TgGpuRequestEngineRecovery(e,NT_SUCCESS(status)?STATUS_DEVICE_BUSY:status);
+            (VOID)TgGpuRequestEngineRecoveryAt(e,NT_SUCCESS(status)?STATUS_DEVICE_BUSY:status,
+                TgGpuRecoverySubmitGate,a);
             KeAcquireSpinLock(&e->Lock,&irql);--e->Creating;KeReleaseSpinLock(&e->Lock,irql);return STATUS_SUCCESS;
         }
     }
@@ -51,8 +52,8 @@ NTSTATUS APIENTRY TgGpuDdiSubmitCommandVirtual(HANDLE adapter,const DXGKARG_SUBM
     if(reserved && !used)ExFreePoolWithTag(reserved,TG_GPU_QUEUE_TAG);
     if(status==STATUS_INVALID_PARAMETER && used) {
         NTSTATUS drain=TgGpuDrainRejectedIdle(q);
-        if(!NT_SUCCESS(drain))(VOID)TgGpuRequestEngineRecovery(e,drain);
-    } else if(status!=STATUS_SUCCESS)(VOID)TgGpuRequestEngineRecovery(e,status);
+        if(!NT_SUCCESS(drain))(VOID)TgGpuRequestEngineRecoveryAt(e,drain,TgGpuRecoveryRejectDrain,a);
+    } else if(status!=STATUS_SUCCESS)(VOID)TgGpuRequestEngineRecoveryAt(e,status,TgGpuRecoverySubmit,a);
     if(q)(VOID)KeReleaseMutex(&q->DispatchGate,FALSE);
     KeAcquireSpinLock(&e->Lock,&irql);--e->Creating;KeReleaseSpinLock(&e->Lock,irql);
     if(status==STATUS_INVALID_PARAMETER && used)return STATUS_INVALID_PARAMETER;
@@ -76,7 +77,7 @@ NTSTATUS APIENTRY TgGpuDdiPreemptCommand(HANDLE adapter,const DXGKARG_PREEMPTCOM
         status=entry?TgGpuQueuePreempt(q,a,entry):STATUS_NO_MEMORY;
         if(entry && !NT_SUCCESS(status))ExFreePoolWithTag(entry,TG_GPU_QUEUE_TAG);
     }
-    if(!NT_SUCCESS(status))(VOID)TgGpuRequestEngineRecovery(e,status);
+    if(!NT_SUCCESS(status))(VOID)TgGpuRequestEngineRecoveryAt(e,status,TgGpuRecoveryPreempt,NULL);
     KeAcquireSpinLock(&e->Lock,&irql);--e->Creating;KeReleaseSpinLock(&e->Lock,irql);
     return STATUS_SUCCESS;
 }
@@ -112,7 +113,7 @@ static NTSTATUS APIENTRY submit_legacy(HANDLE adapter, const DXGKARG_SUBMITCOMMA
     /* This DISPATCH_LEVEL DDI has no failure return. An unexpected physical
      * submission enters the existing recovery path without retiring a fence.
      */
-    (VOID)TgGpuRequestEngineRecovery(adapter, STATUS_NOT_SUPPORTED);
+    (VOID)TgGpuRequestEngineRecoveryAt(adapter,STATUS_NOT_SUPPORTED,TgGpuRecoveryLegacySubmit,NULL);
     return STATUS_SUCCESS;
 }
 

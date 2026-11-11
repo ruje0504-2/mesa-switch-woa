@@ -68,8 +68,10 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
     CHECK(q==&queue && io==&hardware.Io && power==&hardware.Power && !queue.Lock && !model.terminated);
     CHECK(model.services<3);return model.service[model.services++];
 }
-NTSTATUS TgGpuRequestEngineRecovery(TG_GPU_CONTEXT_ENGINE *e,NTSTATUS status)
+NTSTATUS TgGpuRequestEngineRecoveryAt(TG_GPU_CONTEXT_ENGINE *e,NTSTATUS status,
+    enum tg_gpu_recovery_source source,const DXGKARG_SUBMITCOMMANDVIRTUAL *submit)
 {
+    CHECK(source==TgGpuRecoveryWorker && !submit);
     CHECK(e==&engine && !NT_SUCCESS(status) && queue.Paused && queue.Failure==status);
     ++model.recovery_requests;return STATUS_SUCCESS;
 }

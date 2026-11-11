@@ -18,11 +18,13 @@ OpenGL compatibility route.
 | Native Vulkan | NVK rendered an offscreen triangle and read back the expected pixels and guards with driver **0.1.0.87**. A Win32 preview showed that readback. |
 | Display adapter | **0.1.0.130** reached **Code 0**, completed GDI copies and displayed verified RGB bars on the internal panel through the GM20B VidPN and native scanout. |
 | Shared storage | **0.1.0.144** passes Vulkan Win32 buffer/image sharing, GPU read/write after producer-device release, and re-export: 32,768 payload words plus 512 guards match. [Scope and evidence](tegra-x1-wddm/docs/VULKAN_WIN32_MEMORY.md). |
-| Windows desktop | **Incomplete.** .147 first lights up the desktop; .151 passes 24,576 legacy D3D shared-color read/write/lifetime checks and exceeds the old page-table capacity. The physical taskbar is still misplaced/incomplete or absent. Explorer's windowed Present is rejected by the UMD; the next candidate forwards that callback and adds patterned placement/clipping tests. NT sharing, hardware landscape and complete desktop composition remain unfinished. [Current evidence](tegra-x1-wddm/docs/D3D_RUNTIME_SHARING.md#native-table-pool-retest). |
+| Windows desktop | **Incomplete.** .147 first lights up the desktop; .151 passes 24,576 legacy D3D shared-color checks. In .152, Explorer's windowed Present reaches the system callback successfully, but later device loss and an incomplete/disappearing taskbar remain. Patterned native sampling, NT sharing, hardware landscape and complete desktop composition are unverified. [Current evidence](tegra-x1-wddm/docs/D3D_RUNTIME_SHARING.md#native-windowed-present-retest). |
 
 Package versions above identify KMD test packages. The latest trial pairs
-signed **.151** with the runtime-shared UMD/Zink and matching NVK ICD.
-The next windowed-Present UMD builds but awaits Windows controls and native testing.
+signed **.152** with the windowed-Present UMD/Zink and matching NVK ICD.
+Windows callback controls and all 3,686,400 WARP patterned-pixel checks pass;
+the native patterned probe fails device initialization. The device is restored
+to **.59**. The next diagnostic candidate records the first KMD recovery cause.
 Each component has its own build manifest and source/artifact identity.
 [Current component identifiers](tegra-x1-wddm/docs/STATUS.md)
 

@@ -172,12 +172,13 @@ static NTSTATUS APIENTRY set_vm_data(HANDLE adapter,const DXGKARG_SETVIRTUALMACH
     return STATUS_NOT_SUPPORTED;
 }
 
-static VOID unload(VOID) {}
+static VOID unload(VOID) {TgGpuTraceShutdown();}
 
 DRIVER_INITIALIZE DriverEntry;
 NTSTATUS DriverEntry(PDRIVER_OBJECT object,PUNICODE_STRING path)
 {
     record_status(L"InitializeStatus",STATUS_PENDING);
+    record_status(L"TraceStatus",TgGpuTraceInitialize());
     DRIVER_INITIALIZATION_DATA d={0};
     d.Version=DXGKDDI_INTERFACE_VERSION;
     TgGpuRegisterAdapterDdis(&d);
@@ -204,6 +205,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT object,PUNICODE_STRING path)
     d.DxgkDdiQueryCurrentFence=NULL; /* MCDM uses scheduler fence notifications. */
 #endif
     NTSTATUS status=DxgkInitialize(object,path,&d);
+    if(!NT_SUCCESS(status))TgGpuTraceShutdown();
     record_status(L"InitializeStatus",status);
     return status;
 }
