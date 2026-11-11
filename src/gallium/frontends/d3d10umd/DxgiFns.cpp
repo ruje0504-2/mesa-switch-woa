@@ -37,6 +37,7 @@
 #include "State.h"
 
 #include "Debug.h"
+#include "Trace.h"
 
 #include "util/format/u_format.h"
 
@@ -61,6 +62,7 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
 #ifdef D3D10_UMD_HARDWARE
    /* The runtime allocation/presentation bridge is not connected yet. The
     * software target's frontbuffer handle is not a Zink drawable. */
+   D3D10Trace(D3D10_TRACE_PRESENT, DXGI_ERROR_UNSUPPORTED, 0, 0);
    return DXGI_ERROR_UNSUPPORTED;
 #else
    struct Device *device = CastDevice(pPresentData->hDevice);
@@ -123,6 +125,7 @@ _SetDisplayMode( DXGI_DDI_ARG_SETDISPLAYMODE *SetDisplayMode )
    LOG_UNSUPPORTED_ENTRYPOINT();
 
 #ifdef D3D10_UMD_HARDWARE
+   D3D10Trace(D3D10_TRACE_SET_DISPLAY_MODE, DXGI_ERROR_UNSUPPORTED, 0, 0);
    return DXGI_ERROR_UNSUPPORTED;
 #else
    return S_OK;
@@ -267,6 +270,7 @@ HRESULT APIENTRY
 _Blt(DXGI_DDI_ARG_BLT *Blt)
 {
    LOG_UNSUPPORTED_ENTRYPOINT();
+   D3D10Trace(D3D10_TRACE_BLT, S_OK, Blt->Flags.Value, Blt->Rotate);
 
    return S_OK;
 }

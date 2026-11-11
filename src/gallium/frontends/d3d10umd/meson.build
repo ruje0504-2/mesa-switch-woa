@@ -32,6 +32,7 @@ libd3d10umd = static_library(
     'ShaderDump.cpp',
     'ShaderParse.c',
     'ShaderTGSI.c',
+    'Trace.cpp',
   ),
   _d3d10_kmt_sources,
   c_args : _c_args_d3d10umd,
@@ -39,5 +40,5 @@ libd3d10umd = static_library(
   include_directories : [
     inc_include, inc_src, inc_gallium, inc_gallium_aux, inc_winddk,
   ],
-  dependencies: idep_mesautilformat,
+  dependencies: [idep_mesautilformat, cc.find_library('advapi32')],
 )

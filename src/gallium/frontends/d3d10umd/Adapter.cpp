@@ -36,6 +36,7 @@
 #include "State.h"
 
 #include "Debug.h"
+#include "Trace.h"
 
 #include "util/u_memory.h"
 
@@ -68,6 +69,7 @@ OpenAdapterCommon(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
 
    HRESULT hr = d3d10_create_screen((HANDLE)pOpenData->hRTAdapter.handle,
                                    pOpenData->pAdapterCallbacks, &pAdaptor->screen);
+   D3D10Trace(D3D10_TRACE_OPEN_RESULT, hr, pOpenData->Interface, pOpenData->Version);
    if (FAILED(hr)) {
       free(pAdaptor);
       return hr;
@@ -99,6 +101,7 @@ EXTERN_C HRESULT APIENTRY
 OpenAdapter10(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
 {
    LOG_ENTRYPOINT();
+   D3D10Trace(D3D10_TRACE_OPEN10, S_OK, pOpenData->Interface, pOpenData->Version);
 
    /*
     * This is checked here and not on the common code because MSDN docs
@@ -123,6 +126,7 @@ OpenAdapter10(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
          DebugPrintf("%s: unsupported interface version 0x%08x\n",
                      __func__, pOpenData->Interface);
       }
+      D3D10Trace(D3D10_TRACE_OPEN_RESULT, E_FAIL, pOpenData->Interface, pOpenData->Version);
       return E_FAIL;
    }
 
@@ -176,6 +180,8 @@ GetSupportedVersions(D3D10DDI_HADAPTER hAdapter,
       memcpy(pSupportedDDIInterfaceVersions,
              SupportedDDIInterfaceVersions,
              sizeof SupportedDDIInterfaceVersions);
+      for (UINT32 i = 0; i < *puEntries; ++i)
+         D3D10Trace(D3D10_TRACE_SUPPORTED_VERSION, S_OK, i, SupportedDDIInterfaceVersions[i]);
    }
 
    return S_OK;
@@ -198,6 +204,7 @@ GetCaps(D3D10DDI_HADAPTER hAdapter,
 {
    LOG_ENTRYPOINT();
    memset(pData->pData, 0, pData->DataSize);
+   D3D10Trace(D3D10_TRACE_CAPS, S_OK, pData->Type, pData->DataSize);
    return S_OK;
 }
 
@@ -218,6 +225,7 @@ EXTERN_C HRESULT APIENTRY
 OpenAdapter10_2(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
 {
    LOG_ENTRYPOINT();
+   D3D10Trace(D3D10_TRACE_OPEN10_2, S_OK, pOpenData->Interface, pOpenData->Version);
 
    HRESULT hr = OpenAdapterCommon(pOpenData);
 

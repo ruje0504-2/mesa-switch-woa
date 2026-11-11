@@ -1,0 +1,48 @@
+/* SPDX-License-Identifier: MIT */
+#ifndef D3D10_UMD_TRACE_H
+#define D3D10_UMD_TRACE_H
+
+#include <windows.h>
+#include <stdint.h>
+
+/* Opt-in ETW provider, enabled by the trace controller rather than a
+ * process environment variable. Version 1 payloads use this fixed layout.
+ * PID/TID/time are supplied by ETW. No resource or host pointers are logged.
+ */
+#define D3D10_UMD_TRACE_GUID_INIT \
+   {0x78edcf0e, 0xb51c, 0x4b24, {0x9b, 0x28, 0xc8, 0x6d, 0x48, 0xf5, 0x21, 0xa9}}
+
+enum d3d10_umd_trace_event {
+   D3D10_TRACE_OPEN10 = 1,
+   D3D10_TRACE_OPEN10_2,
+   D3D10_TRACE_SCREEN_QUERY,
+   D3D10_TRACE_SCREEN_IDENTITY,
+   D3D10_TRACE_ZINK_BEGIN,
+   D3D10_TRACE_ZINK_END,
+   D3D10_TRACE_OPEN_RESULT,
+   D3D10_TRACE_SUPPORTED_VERSION,
+   D3D10_TRACE_CAPS,
+   D3D10_TRACE_CREATE_DEVICE_BEGIN,
+   D3D10_TRACE_CREATE_DEVICE_RESULT,
+   D3D10_TRACE_OPEN_RESOURCE,
+   D3D10_TRACE_PRESENT,
+   D3D10_TRACE_BLT,
+   D3D10_TRACE_SET_DISPLAY_MODE,
+};
+
+struct d3d10_umd_trace_data {
+   int32_t result;
+   uint32_t reserved;
+   uint64_t arg0, arg1;
+   WCHAR image[32];
+};
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+void D3D10Trace(enum d3d10_umd_trace_event event, HRESULT result,
+                uint64_t arg0, uint64_t arg1);
+#ifdef __cplusplus
+}
+#endif
+#endif

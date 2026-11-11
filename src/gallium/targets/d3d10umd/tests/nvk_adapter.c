@@ -9,6 +9,13 @@
 
 #include "nouveau/vulkan/nvkmd/windows/adapter_abi.h"
 #include "zink/zink_public.h"
+#include "Trace.h"
+
+/* This fixture tests adapter selection, not the ETW transport. */
+void D3D10Trace(enum d3d10_umd_trace_event event, HRESULT result, uint64_t a, uint64_t b)
+{
+   (void)event; (void)result; (void)a; (void)b;
+}
 
 #define CHECK(x) do { if (!(x)) { \
    fprintf(stderr, "line %u: %s\n", __LINE__, #x); exit(1); \

@@ -148,6 +148,49 @@ static bool visible_desktop()
           context.desktop[0] && !std::wcscmp(context.desktop, context.input);
 }
 
+static LONG wake_screensaver(const snapshot &state)
+{
+   if (visible_desktop())
+      return ERROR_SUCCESS;
+   const auto desktop = read_desktop();
+   if (desktop.session != desktop.console_session || desktop.input_error ||
+       std::wcscmp(desktop.input, L"Screen-saver"))
+      return ERROR_ACCESS_DENIED;
+   if (!InitializeTouchInjection(1, TOUCH_FEEDBACK_NONE)) {
+      DWORD error = GetLastError();
+      std::fprintf(stderr, "InitializeTouchInjection: %lu\n", error);
+      return error;
+   }
+   POINTER_TOUCH_INFO touch = {};
+   touch.pointerInfo.pointerType = PT_TOUCH;
+   touch.pointerInfo.pointerId = 1;
+   touch.pointerInfo.ptPixelLocation = {
+      state.current.dmPosition.x + (LONG)state.current.dmPelsWidth / 2,
+      state.current.dmPosition.y + (LONG)state.current.dmPelsHeight / 2};
+   touch.pointerInfo.pointerFlags = POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT;
+   if (!InjectTouchInput(1, &touch)) {
+      DWORD error = GetLastError();
+      std::fprintf(stderr, "InjectTouchInput down: %lu\n", error);
+      return error;
+   }
+   Sleep(20);
+   touch.pointerInfo.pointerFlags = POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT;
+   DWORD error = InjectTouchInput(1, &touch) ? ERROR_SUCCESS : GetLastError();
+   Sleep(20);
+   touch.pointerInfo.pointerFlags = POINTER_FLAG_UP | (error ? POINTER_FLAG_CANCELED : 0);
+   if (!InjectTouchInput(1, &touch) && !error)
+      error = GetLastError();
+   if (error) {
+      std::fprintf(stderr, "InjectTouchInput release: %lu\n", error);
+      return error;
+   }
+   for (unsigned i = 0; i < 10; ++i) {
+      if (visible_desktop()) return ERROR_SUCCESS;
+      Sleep(50);
+   }
+   return ERROR_TIMEOUT;
+}
+
 static void print_state(const snapshot &s, const WCHAR *operation, bool changed, LONG status)
 {
    const auto context = read_desktop();
@@ -206,10 +249,11 @@ static LONG configure(const snapshot &current, const snapshot &saved, UINT32 fla
 int wmain(int argc, WCHAR **argv)
 {
    if (argc < 2 || argc > 3 || (std::wcscmp(argv[1], L"show") && std::wcscmp(argv[1], L"visible") &&
+       std::wcscmp(argv[1], L"wake") &&
        std::wcscmp(argv[1], L"save") && std::wcscmp(argv[1], L"verify") &&
        std::wcscmp(argv[1], L"test") && std::wcscmp(argv[1], L"restore")) ||
-       ((!std::wcscmp(argv[1], L"show") || !std::wcscmp(argv[1], L"visible")) ? argc != 2 : argc != 3)) {
-      std::fprintf(stderr, "usage: display-state.exe {show|visible} | {save|verify|test|restore} snapshot.bin\n");
+       ((!std::wcscmp(argv[1], L"show") || !std::wcscmp(argv[1], L"visible") || !std::wcscmp(argv[1], L"wake")) ? argc != 2 : argc != 3)) {
+      std::fprintf(stderr, "usage: display-state.exe {show|visible|wake} | {save|verify|test|restore} snapshot.bin\n");
       return 2;
    }
    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -227,6 +271,13 @@ int wmain(int argc, WCHAR **argv)
       bool visible = visible_desktop();
       print_state(current, argv[1], false, visible ? ERROR_SUCCESS : ERROR_ACCESS_DENIED);
       return visible ? 0 : 1;
+   }
+   if (!std::wcscmp(argv[1], L"wake")) {
+      result = wake_screensaver(current);
+      snapshot after;
+      LONG read_result = read_state(after);
+      print_state(read_result ? current : after, argv[1], false, result ? result : read_result);
+      return result || read_result ? 1 : 0;
    }
    if (!std::wcscmp(argv[1], L"save")) {
       HANDLE file = CreateFileW(argv[2], GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);

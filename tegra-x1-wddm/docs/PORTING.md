@@ -176,7 +176,11 @@ with matching current/registry modes. Use this user-selected baseline.
 `tools/display_state.cpp` captures a versioned single-display snapshot
 including monitor identity, current/registry DEVMODE and CCD source/target
 data. `show` reports both desktop and signal dimensions; `visible` checks
-that the process uses the active console/input desktop. `save <file>`
+that the process uses the active console/input desktop. `wake` is a no-op
+on the active desktop; on `Screen-saver` it attempts one ordinary touch
+sequence and then checks whether the input desktop actually changed. An
+injection failure is reported without changing desktop permissions or
+screen-saver settings. It does not authenticate a locked session. `save <file>`
 creates a snapshot without overwriting an existing one; `verify <file>`
 compares the current mode. `test <file>` uses `SetDisplayConfig` validation
 without applying a mode, and `restore <file>` rebinds the saved modes to the
@@ -307,6 +311,64 @@ register writes are not part of this audit.
 All 11 returned Windows records (526,873 bytes) match device lengths and
 SHA-256 values. The feature probe executable has SHA-256
 `9081c87021f358bcb52f5454f1bd32e7dc7bc49f5434bdd7ee80db53499a375c`.
+
+### DWM initialization trace work
+
+The UMD now exposes an opt-in ETW provider for initialization and present
+contracts. Its release-build records include the process image, HRESULT,
+interface/capability arguments and selected LUID. `ZinkBegin` additionally
+records whether the process inherited the exact NVK test opt-in. The
+provider unregisters before DLL unload. The exporter validates its fixed
+versioned payload and reports the ETL header's end time, buffers written
+and event/buffer loss counters; missing events in an unfinished or lossy
+trace cannot establish that a callback never ran.
+[Provider and collection commands](../../src/gallium/targets/d3d10umd/README.md)
+
+The full ARM64 build passed, and the existing adapter, DLL-entry and device
+fixtures passed on .59 at 03:15:15 UTC. The controlled ETL decodes 27 UMD
+events with zero malformed records, including a successful device result
+and the expected denied adapter query. The initial attempt used unavailable
+`logman.exe`; the completed capture uses Windows' installed
+`New-EtwTraceSession`/`Add-EtwTraceProvider` cmdlets. No GPU rendering or DWM
+acceptance is claimed for these controlled callbacks. The exporter was
+then corrected to use `LogfileHeader.EventsLost`, rather than the reserved
+`EVENT_TRACE_LOGFILE.EventsLost`. Re-export of the retained ETL confirms 27
+valid events, zero event/buffer loss, nonzero end time and two written buffers.
+
+The native package reuses the signed .144 KMD and tested WSI ICD, changing
+the UMD and its process environment. Staging installs the known ARM64
+loader temporarily in System32 and saves/restores the machine NVK opt-in.
+The startup gate remained closed before the 03:20 UTC restart. SSH was
+unavailable during its test window and no native desktop grant was issued.
+The automatic rollback ran at 03:34:17 UTC; after restart, .59 Code 0,
+original SYS/ACPI hashes, removed registrations/permit/tasks and unchanged
+power settings were verified at 03:39:55. The temporary system loader was
+removed and the machine opt-in restored. Portrait restore/verify passed
+at 03:40:09 as a no-op. All 88 returned records (12,819,703 bytes) match
+device-side lengths and SHA-256 values. The native feature matrix did not run.
+Retain all four API-specific `UserModeDriverName` slots when selecting the
+new UMD for D3D10/11. The staged run initially reduced the list to one item;
+that round never received a native grant. Its successor preserves all four
+slots and replaces only the D3D10/11 entries before restarting the device.
+
+The user's saved 720x1280 portrait setting passed interactive preflight at
+03:13:48 UTC. `wake` returned success as a no-op because the input desktop
+was already `Default`; it did not test touch dismissal of a running screen
+saver. Physical direction, display/sleep policy and firmware were unchanged
+by that check. After the native trial, restore/verify the saved mode with
+the same helper in the interactive session.
+
+The successor staged at 03:45 UTC uses a local SYSTEM task after interactive
+logon: verify the gated baseline, admit one native startup, verify active
+LUIDs, launch the user-session feature matrix and drawing regression, stop
+and export the trace, then request rollback. The 12-minute independent
+rollback remains armed. This removes timely SSH reconnection as a test
+dependency; it does not remove desktop/identity checks or alter power policy.
+Its outcome remains pending under `runs/dwm-init-auto-20261111/`.
+
+Artifacts and scripts for the completed gated round remain under
+`/Users/rujian/.local/share/mesa-switch-woa-build/runs/dwm-init-20261111/`;
+the full build is in the adjacent `dwm-init-20261111-umd/` directory.
 
 ## Direct3D UMD and DWM
 

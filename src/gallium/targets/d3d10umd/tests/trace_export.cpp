@@ -1,0 +1,76 @@
+/* SPDX-License-Identifier: MIT */
+/* Decode the versioned UMD provider without installing an event manifest. */
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <evntrace.h>
+#include <evntcons.h>
+#include <cstdio>
+#include <cstring>
+#include "Trace.h"
+
+static const GUID provider = D3D10_UMD_TRACE_GUID_INIT;
+static unsigned matched, invalid;
+
+static const char *event_name(USHORT id)
+{
+   static const char *names[] = {"invalid", "OpenAdapter10", "OpenAdapter10_2",
+      "ScreenQuery", "ScreenIdentity", "ZinkBegin", "ZinkEnd", "OpenResult",
+      "SupportedVersion", "GetCaps", "CreateDeviceBegin", "CreateDeviceResult",
+      "OpenResource", "Present", "Blt", "SetDisplayMode"};
+   return id < ARRAYSIZE(names) ? names[id] : "unknown";
+}
+
+static void json_image(const WCHAR *image)
+{
+   char utf8[128] = {};
+   WideCharToMultiByte(CP_UTF8, 0, image, -1, utf8, sizeof(utf8), nullptr, nullptr);
+   std::putchar('"');
+   for (const unsigned char *s = (unsigned char *)utf8; *s; ++s) {
+      if (*s == '"' || *s == '\\') std::putchar('\\');
+      if (*s < 32) std::printf("\\u%04x", *s);
+      else std::putchar(*s);
+   }
+   std::putchar('"');
+}
+
+static void WINAPI record(EVENT_RECORD *event)
+{
+   if (std::memcmp(&event->EventHeader.ProviderId, &provider, sizeof(provider)))
+      return;
+   const auto &header = event->EventHeader;
+   if (header.EventDescriptor.Version != 1 || event->UserDataLength != sizeof(d3d10_umd_trace_data)) {
+      ++invalid;
+      return;
+   }
+   d3d10_umd_trace_data data;
+   std::memcpy(&data, event->UserData, sizeof(data));
+   if (data.reserved || data.image[31]) { ++invalid; return; }
+   ++matched;
+   std::printf("{\"id\":%u,\"event\":\"%s\",\"pid\":%lu,\"tid\":%lu,\"time\":%llu,\"image\":",
+      header.EventDescriptor.Id, event_name(header.EventDescriptor.Id), header.ProcessId,
+      header.ThreadId, (unsigned long long)header.TimeStamp.QuadPart);
+   json_image(data.image);
+   std::printf(",\"status\":\"%08x\",\"arg0\":\"%016llx\",\"arg1\":\"%016llx\"}\n",
+      (unsigned)data.result, (unsigned long long)data.arg0, (unsigned long long)data.arg1);
+}
+
+int wmain(int argc, WCHAR **argv)
+{
+   if (argc != 2) { std::fprintf(stderr, "usage: d3d10-trace-export.exe trace.etl\n"); return 2; }
+   EVENT_TRACE_LOGFILEW log = {};
+   log.LogFileName = argv[1];
+   log.ProcessTraceMode = PROCESS_TRACE_MODE_EVENT_RECORD;
+   log.EventRecordCallback = record;
+   TRACEHANDLE handle = OpenTraceW(&log);
+   if (handle == INVALID_PROCESSTRACE_HANDLE) {
+      std::fprintf(stderr, "OpenTrace failed: %lu\n", GetLastError()); return 1;
+   }
+   const ULONG status = ProcessTrace(&handle, 1, nullptr, nullptr);
+   CloseTrace(handle);
+   std::fprintf(stderr, "ProcessTrace=%lu matched=%u invalid=%u events_lost=%lu buffers_lost=%lu end_time=%llu buffers_written=%lu\n",
+                status, matched, invalid, log.LogfileHeader.EventsLost, log.LogfileHeader.BuffersLost,
+                (unsigned long long)log.LogfileHeader.EndTime.QuadPart, log.LogfileHeader.BuffersWritten);
+   return status || invalid || !matched ? 1 : 0;
+}

@@ -53,6 +53,31 @@ does not establish a feature-level ceiling. The present frontend's ceiling
 also follows from `SUPPORT_D3D10_1=0`, `SUPPORT_D3D11=0` and its supported
 device-interface table; advertising 11_0 requires implementing its DDIs.
 
+The UMD has an opt-in ETW provider
+`{78edcf0e-b51c-4b24-9b28-c86d48f521a9}` (level 4, keyword 1). It records
+adapter/device negotiation, exact Zink LUID selection, shared-resource open
+and DXGI presentation calls, including their actual HRESULTs. Enable it
+through a trace controller; it does not depend on a DWM environment flag.
+The provider unregisters before DLL unload. The versioned payload includes
+the process image basename; ETW supplies PID, TID and timestamp.
+
+```powershell
+New-EtwTraceSession -Name TegraUmd -LocalFilePath C:\test\umd.etl -LogFileMode 1
+Add-EtwTraceProvider -Guid '{78edcf0e-b51c-4b24-9b28-c86d48f521a9}' -SessionName TegraUmd -Level 4 -MatchAnyKeyword 1
+# Run the bounded driver test, then stop the trace before exporting.
+Stop-EtwTraceSession -Name TegraUmd
+.\d3d10-trace-export.exe C:\test\umd.etl > umd.jsonl
+```
+
+`Trace.h` defines the version-1, 88-byte payload. `ScreenQuery` logs adapter
+flags/budget; `ZinkBegin` logs LUID and opt-in state (0 absent, 1 exactly
+`"1"`, 2 another value); `SupportedVersion` logs index/DDI version;
+`GetCaps` logs type/size; `CreateDeviceBegin` logs interface/flags. A failed
+`CreateDeviceResult` identifies interface rejection (arg1=0), context (1),
+CSO state (2) or empty shaders (3). `Blt` logs flags/rotation; its current
+success result still comes from an unimplemented stub, not a copy proof.
+The decoder rejects incompatible payload versions and reports lost events.
+
 ## GDI software backend
 
 When compiled with `gallium-driver=llvmpipe` or `gallium-driver=softpipe` the resulting libgallium_d3d10.dll implements D3D10's software rendering interface, like WARP.

@@ -40,6 +40,13 @@ libgallium_d3d10 = shared_library(
 )
 
 if with_tests and d3d10_backend == 'nvk'
+  executable(
+    'd3d10-trace-export',
+    files('tests/trace_export.cpp'),
+    include_directories : [inc_d3d10umd],
+    dependencies : [cpp.find_library('advapi32')],
+    link_args : cc.get_argument_syntax() == 'gcc' ? ['-municode'] : [],
+  )
   # Explicitly run on a native-submission KMD; never a default Meson test.
   executable(
     'nvk_d3d_check',
@@ -78,7 +85,7 @@ if with_tests and d3d10_backend == 'nvk'
     executable(
       'test_d3d10_nvk_adapter',
       files('tests/nvk_adapter.c', 'd3d10_nvk.c'),
-      include_directories : [inc_src, inc_gallium_drivers, inc_winddk],
+      include_directories : [inc_src, inc_gallium_drivers, inc_winddk, inc_d3d10umd],
     ),
     suite : ['d3d10'],
   )

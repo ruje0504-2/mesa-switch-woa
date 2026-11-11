@@ -37,6 +37,7 @@
 #include "Query.h"
 
 #include "Debug.h"
+#include "Trace.h"
 
 #include "util/u_math.h"
 #include "util/u_rect.h"
@@ -431,6 +432,7 @@ OpenResource(D3D10DDI_HDEVICE hDevice,                            // IN
              D3D10DDI_HRTRESOURCE hRTResource)                    // IN
 {
    LOG_UNSUPPORTED_ENTRYPOINT();
+   D3D10Trace(D3D10_TRACE_OPEN_RESOURCE, E_OUTOFMEMORY, 0, 0);
    SetError(hDevice, E_OUTOFMEMORY);
 }
 

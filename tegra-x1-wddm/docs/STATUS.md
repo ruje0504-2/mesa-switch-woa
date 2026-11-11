@@ -24,9 +24,19 @@ Resolve the compositor's loader/ICD environment and missing Present/shared
 resource contracts before treating a higher Feature Level as the fix.
 [Feature-level, loader and latch audit](PORTING.md#present-contract-audit)
 
+**DWM initialization tracing WIP:** the ARM64 UMD build and three controlled
+fixtures pass; 27 process-attributed ETW events decode with no malformed
+records or recorded loss. The first gated trial did not run native work
+because SSH was unavailable, and fully restored .59, the environment and
+portrait preference. Its successor was staged at 03:45 UTC on 2026-11-11;
+local logon tasks now perform admission, tests, collection and rollback
+without depending on SSH. Its native outcome remains pending.
+[Trace work and recovery evidence](PORTING.md#dwm-initialization-trace-work)
+
 **User display baseline:** the previous 90-degree rollback did not restore
 the user's portrait preference. Their manually corrected 720x1280,
-orientation-0 mode is now saved and matches the registry; .59 is Code 0.
+orientation-0 mode is saved and matched the registry on .59 Code 0 before
+the currently staged trial.
 Future rollback must restore that snapshot. The mode passes non-applying
 CCD validation on `Default`; the later `Screen-saver` desktop observation
 also requires an active-desktop check for visible GPU tests. It does not

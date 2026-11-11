@@ -43,6 +43,7 @@
 #include "Format.h"
 
 #include "Debug.h"
+#include "Trace.h"
 
 #include "util/u_sampler.h"
 #include "util/u_framebuffer.h"
@@ -98,6 +99,7 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
              __in D3D10DDIARG_CREATEDEVICE *pCreateData) // IN
 {
    LOG_ENTRYPOINT();
+   D3D10Trace(D3D10_TRACE_CREATE_DEVICE_BEGIN, S_OK, pCreateData->Interface, pCreateData->Flags);
 
    if (0) {
       DebugPrintf("hAdapter = %p\n", hAdapter);
@@ -122,6 +124,7 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
    default:
       DebugPrintf("%s: unsupported interface version 0x%08x\n",
                   __func__, pCreateData->Interface);
+      D3D10Trace(D3D10_TRACE_CREATE_DEVICE_RESULT, E_FAIL, pCreateData->Interface, 0);
       return E_FAIL;
    }
 
@@ -132,8 +135,10 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
 
    struct pipe_screen *screen = pAdapter->screen;
    struct pipe_context *pipe = screen->context_create(screen, NULL, 0);
-   if (!pipe)
+   if (!pipe) {
+      D3D10Trace(D3D10_TRACE_CREATE_DEVICE_RESULT, E_OUTOFMEMORY, pCreateData->Interface, 1);
       return E_OUTOFMEMORY;
+   }
    pDevice->pipe = pipe;
    /* Null D3D vertex bindings use CPU-backed zero values. Let CSO upload
     * those (and translate unsupported formats) for hardware backends.
@@ -142,6 +147,7 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
    if (!pDevice->cso) {
       pipe->destroy(pipe);
       pDevice->pipe = NULL;
+      D3D10Trace(D3D10_TRACE_CREATE_DEVICE_RESULT, E_OUTOFMEMORY, pCreateData->Interface, 2);
       return E_OUTOFMEMORY;
    }
 
@@ -155,6 +161,7 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
       cso_destroy_context(pDevice->cso);
       pipe->destroy(pipe);
       memset(pDevice, 0, sizeof *pDevice);
+      D3D10Trace(D3D10_TRACE_CREATE_DEVICE_RESULT, E_OUTOFMEMORY, pCreateData->Interface, 3);
       return E_OUTOFMEMORY;
    }
 
@@ -315,8 +322,10 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
       _Blt;
 
 #ifdef D3D10_UMD_HARDWARE
+   D3D10Trace(D3D10_TRACE_CREATE_DEVICE_RESULT, S_OK, pCreateData->Interface, 0);
    return S_OK;
 #else
+   D3D10Trace(D3D10_TRACE_CREATE_DEVICE_RESULT, DXGI_STATUS_NO_REDIRECTION, pCreateData->Interface, 0);
    // The GDI software target does not use DWM's shared-resource presentation.
    return DXGI_STATUS_NO_REDIRECTION;
 #endif

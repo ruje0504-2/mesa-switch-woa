@@ -6,6 +6,7 @@
 
 #include "nouveau/vulkan/nvkmd/windows/adapter_abi.h"
 #include "zink/zink_public.h"
+#include "Trace.h"
 
 extern HRESULT
 d3d10_create_screen(HANDLE hRTAdapter, const D3DDDI_ADAPTERCALLBACKS *callbacks,
@@ -28,6 +29,7 @@ d3d10_create_screen(HANDLE hRTAdapter, const D3DDDI_ADAPTERCALLBACKS *callbacks,
       .PrivateDriverDataSize = sizeof(info),
    };
    HRESULT hr = callbacks->pfnQueryAdapterInfoCb(hRTAdapter, &query);
+   D3D10Trace(D3D10_TRACE_SCREEN_QUERY, hr, info.flags, info.memory_budget_bytes);
    if (FAILED(hr))
       return hr;
 
@@ -35,14 +37,25 @@ d3d10_create_screen(HANDLE hRTAdapter, const D3DDDI_ADAPTERCALLBACKS *callbacks,
    if (info.version != TG_GPU_ADAPTER_ABI || info.size != sizeof(info) ||
        info.reserved || (info.flags & required) != required ||
        info.vendor != 0x10de || info.chipset != 0x12e ||
-       !info.memory_budget_bytes || info.memory_budget_bytes > TG_GPU_MEMORY_BUDGET_BYTES)
+       !info.memory_budget_bytes || info.memory_budget_bytes > TG_GPU_MEMORY_BUDGET_BYTES) {
+      D3D10Trace(D3D10_TRACE_SCREEN_IDENTITY, DXGI_ERROR_UNSUPPORTED, info.version, info.flags);
       return DXGI_ERROR_UNSUPPORTED;
+   }
 
    const uint64_t luid = (uint64_t)(uint32_t)info.luid_high << 32 | info.luid_low;
    /* Zero is Zink's automatic-selection sentinel, not an adapter identity. */
-   if (!luid)
+   if (!luid) {
+      D3D10Trace(D3D10_TRACE_SCREEN_IDENTITY, DXGI_ERROR_UNSUPPORTED, 0, info.flags);
       return DXGI_ERROR_UNSUPPORTED;
+   }
 
+   char opt_in[8] = {0};
+   DWORD length = GetEnvironmentVariableA("NVK_I_WANT_A_BROKEN_VULKAN_DRIVER", opt_in, sizeof(opt_in));
+   /* Trace absence / exact test opt-in "1" / other value without changing
+    * the process environment or NVK's normal feature policy. */
+   D3D10Trace(D3D10_TRACE_ZINK_BEGIN, S_OK, luid,
+             !length ? 0 : length == 1 && opt_in[0] == '1' ? 1 : 2);
    *screen = zink_win32_create_screen(luid);
+   D3D10Trace(D3D10_TRACE_ZINK_END, *screen ? S_OK : DXGI_ERROR_UNSUPPORTED, luid, 0);
    return *screen ? S_OK : DXGI_ERROR_UNSUPPORTED;
 }
