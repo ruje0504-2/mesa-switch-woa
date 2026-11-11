@@ -11,6 +11,14 @@ The user's historical screenshot, identified by them as `.146`, lacks the
 taskbar. Wallpaper/icons alone were not a complete desktop pass.
 [Capture procedure and evidence limits](DESKTOP_CAPTURE.md)
 
+**`.154` candidate:** inherited MME/CB0/program state is now validated when
+queued work reaches execution, rather than against stale retired state during
+admission. On `.59`, the old backend rejects the second valid queued MME packet
+in the regression; the corrected ARM64 model passes at 23:47:39 UTC. Host
+checks and the WDK build pass. Native deployment/desktop validation is pending;
+this is not yet an explanation of the `.153` physical failure.
+[Queue correction and Carbon High review](D3D_RUNTIME_SHARING.md#queued-inherited-state-validation)
+
 **Latest physical desktop result: failed.** In the 120-second `.153` viewing
 trial on LUID `b946a`, the user confirms an incomplete/displaced taskbar followed
 by its disappearance, with four photos retained locally. Most shell snapshots

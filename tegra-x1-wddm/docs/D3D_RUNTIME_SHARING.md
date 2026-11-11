@@ -1920,3 +1920,63 @@ device lengths and hashes. The requested `.148` comparison is cancelled
 before installation. No native test remains running. Continue from the first
 device-error boundary rather than treating the later OOM or last trace record
 as its cause.
+
+### Queued inherited-state validation
+
+The `.154` candidate corrects admission-time validation in
+`TgGpuCaptureContextWork`: an earlier packet can still be queued when the next
+packet needs its MME, CB0 or program-region bindings. Checking only the retired
+context at that point can incorrectly return `STATUS_INVALID_PARAMETER` for
+valid ordered work. The check now runs in `TgGpuActivateContextWork`, after
+earlier work publishes its state and before root writes, fence arming or GPU
+execution. Packet syntax/address ownership checks remain at admission; missing
+bindings and out-of-range inherited state still fail before execution.
+
+The regression queues an actual NVK MME initialization/binding packet followed
+by an MME draw before servicing either. It verifies that the second packet
+requires inherited MME/CB0/program state, both admissions succeed, fences 300
+and 301 complete in order, and context/snapshot ownership is released. Existing
+negative cases still reject missing bindings and invalid inherited ranges at
+activation. An initial direct-draw test did not exercise the admission check
+and passed the old backend; it is not a reproduction of this bug. Its launcher
+also failed to retain an exit code, so the retained stdout is not presented as
+an exact exit-0 result.
+
+The corrected regression, linked against the old `.153` backend, exits at its
+second-admission assertion (line 1789) at 23:47:21 UTC. The new backend passes
+the queue regression and existing context controls with exit 0 at 23:47:39.
+Both run as user-mode Windows ARM64 models on `.59` Code 0; they do not execute
+real GPU work. Executable SHA256 values are respectively
+`cda92b214a2952696d20e3e3dafdbf8f5d5955377fd253b9a2282a7e11465a14` and
+`076fb1bed47f245f776939064a2c1ae0ca55c556632b7f2fa4ba09d5a0618756`.
+Host checks and the full WDK build pass. The `.154` unsigned SYS hash is
+`b7a508cb14b27cd345d350795a03aacd7bca191541f3091faebdb78222194d65`.
+Native deployment and visual validation remain pending.
+
+A genuinely missing inherited binding discovered after admission now follows
+the existing worker-failure/recovery path. It is not retroactively returned as
+a malformed-packet error to the submitting device. Mapping checks may reject
+such work before activation with `STATUS_INVALID_ADDRESS`; that does not bypass
+the later generation check for work that reaches activation or permit GPU
+execution. Maintaining speculative queued-state summaries is outside this
+correction. The original rejection/reset diagnostic gaps remain open.
+
+At the user's request, the existing local Gemini 4 Carbon conversation is
+continued twice with model `gemini-4-carbon-high` and `--effort high`. Both
+calls return review text but report backend stream interruption; neither is
+recorded as a clean completed review. Independent checking rejects its initial
+recommendation to prohibit `STATUS_INVALID_PARAMETER`: Microsoft's documented
+virtual-submit contract permits malformed-packet rejection and requires ordered
+last-fence accounting, which the existing rejection marker implements without
+a fabricated DMA interrupt. Carbon withdraws that recommendation on follow-up.
+Its assertion that VidMm never rebinds a system-context root after reset is
+unsupported; no root-validity protection is removed. `DMAptr=0` is not proof
+of zero DMA length.
+
+The review also identifies a plausible first-error attribution race: the worker
+publishes `q->Failure` and releases `DispatchGate` before requesting recovery,
+so an arriving submit may report a later `STATUS_DEVICE_NOT_READY` first.
+This is a source-derived interleaving, not proof that it occurred in the retained
+trace. Neither the review nor the passing queue model establishes the physical
+taskbar/black-output cause. Raw review output, the corrected interpretation and
+before/after model records are retained with the external build evidence.

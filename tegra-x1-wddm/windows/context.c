@@ -327,26 +327,10 @@ NTSTATUS TgGpuCaptureContextWork(TG_GPU_CONTEXT_ENGINE *e,
         a->DmaBufferVirtualAddress+a->DmaBufferSize>c->Device->Process->Internal.Base) {
         KeReleaseSpinLock(&e->Lock,irql); return STATUS_INVALID_PARAMETER;
     }
-    if (info && ((info->requires_mme && !c->MmeInitialized) ||
-                 (info->requires_cb0 && !c->Cb0End))) {
-        KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
-    }
     /* VidMm can replace the root while the immutable snapshot is decoded. */
-    if (info && ((info->va_end && (info->va_end>c->Root.VaLimit ||
-        info->reserved_base!=c->Device->Process->Internal.Base)) ||
-        (info->requires_cb0 && c->Cb0End>c->Root.VaLimit))) {
+    if (info && info->va_end && (info->va_end>c->Root.VaLimit ||
+        info->reserved_base!=c->Device->Process->Internal.Base)) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
-    }
-    if (info) {
-        for (UINT engine=0;engine<TG_GPU_PROGRAM_ENGINES;engine++) {
-            if (!(info->requires_program & (1u << engine)))
-                continue;
-            const UINT64 end=c->Programs.end[engine];
-            if (!end || end>c->Root.VaLimit) {
-                status=end ? STATUS_DEVICE_NOT_READY : STATUS_INVALID_PARAMETER;
-                KeReleaseSpinLock(&e->Lock,irql);return status;
-            }
-        }
     }
     RtlZeroMemory(w,sizeof(*w));
     w->Engine=e;w->Context=c; w->Root=c->Root; w->DmaAddress=a->DmaBufferVirtualAddress;
@@ -400,7 +384,28 @@ NTSTATUS TgGpuActivateContextWork(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_CONTEXT_WORK *
        w->Context->GraphicsGeneration!=e->GraphicsGeneration)) {
         KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
     }
-    /* A preceding queue-state push can still be pending at admission. */
+    /* Admission can run ahead of a preceding state-binding packet. Validate
+     * inherited state only when this work reaches the serialized execution
+     * slot, after that packet has retired and published its context state.
+     * This still precedes root writes, fence arming and hardware execution. */
+    if (info && ((info->requires_mme && !w->Context->MmeInitialized) ||
+                 (info->requires_cb0 && !w->Context->Cb0End))) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_INVALID_PARAMETER;
+    }
+    if (info && info->requires_cb0 && w->Context->Cb0End>w->Root.VaLimit) {
+        KeReleaseSpinLock(&e->Lock,irql);return STATUS_DEVICE_NOT_READY;
+    }
+    if (info) {
+        for (UINT engine=0;engine<TG_GPU_PROGRAM_ENGINES;engine++) {
+            if (!(info->requires_program & (1u << engine)))
+                continue;
+            const UINT64 end=w->Context->Programs.end[engine];
+            if (!end || end>w->Root.VaLimit) {
+                status=end ? STATUS_DEVICE_NOT_READY : STATUS_INVALID_PARAMETER;
+                KeReleaseSpinLock(&e->Lock,irql);return status;
+            }
+        }
+    }
     if (info && info->required_compute_slm_per_tpc &&
         (info->required_compute_slm_per_tpc>w->Context->ComputeSlm.bytes_per_tpc ||
          w->Context->ComputeSlm.va_end>w->Root.VaLimit)) {
