@@ -660,6 +660,59 @@ ETL SHA-256: `e8e30b9dfcd2099526c2fdd806245d1fdcd6139dac3a9efdf0bdb10f6af6bd28`;
 UMD export: `135865f2a4afca0d2528b6e2aea5f5602a2639741cfebf348010c963b0ef56a0`;
 loader CSV: `c0379df4a7433e024754f0eeadb87a85dd4f164a8a859accfde25c9aa17fb054`.
 
+### Post-device DDI trace
+
+The `post-device-auto-20261111` round adds resource creation, format-query
+and device-teardown boundaries, plus a source-located `RuntimeError`
+event before `pfnSetErrorCb`. The latter uses a distinct 328-byte payload
+with HRESULT, source basename/function/line and process image. The original
+return values, capability bits and allocation behavior are unchanged.
+See the [payload definitions](../../src/gallium/targets/d3d10umd/README.md).
+
+The ARM64 UMD build passes, retaining the pre-existing ShaderTGSI warnings.
+UMD SHA-256: `b00ba41c916c69b905a1f8b40abdcf1339472b2e92710d5e4b35b3c5ca23bf89`.
+At 07:18:40 UTC, all three controlled fixtures pass. The 46 valid ETW
+records include three resource allocation/map errors (`8007000e`) and
+two device-removal callbacks (`88760870`), with the expected source sites.
+There is no recorded event/buffer loss, and three buffers are written.
+An initial PowerShell syntax preflight rejects the dump setup script
+before driver installation; the missing brace is corrected before retry.
+
+The hardware run retains the signed .144 KMD, memory-error ICD and fixed
+backslash manifest. On matching LUID `90f60`, the native runtime runs from
+07:26:06.2469440 to 07:26:11.9344414 UTC, exits 0 without timeout and again
+matches 16,384 RGBA/BGRA clear/triangle pixels at FL10_0. The desktop capture
+is unchanged and black.
+
+The finalized ETL exports 22,407 valid events, zero recorded event/buffer
+loss and 769 written buffers. DWM PIDs 772, 1632 and 1292 contribute 8,484
+events. Their 18 resource creations all have matching successful endpoints:
+each process creates constant buffers of 48, 4,000, 16 and 48 bytes, then
+vertex buffers of 240,012 and 102,400 bytes. All have misc flags zero and
+one subresource. DWM also completes 294 format-query pairs and 7,650
+multisample queries. No DWM RuntimeError, OpenResource, Present, Blt or
+device-teardown event is recorded. These observations do not cover every
+shader/state DDI and do not prove that no internal error occurred.
+
+DWM again reports three `c0000409` exits. A temporary per-application WER
+configuration requests up to three minidumps in a dedicated directory,
+granting write access only to the observed DWM account in addition to
+inherited permissions. No dump is generated. This is an attempted capture,
+not exception-context evidence or proof of a particular termination path.
+Next obtain the exception context and trace the uncovered shader/state
+boundaries. Do not infer a fault from the last successful buffer or change
+capabilities merely to move that endpoint.
+[WER local dump scope and limitations](https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps)
+
+Collection finishes at 07:26:51. Recovery verification at 07:32:17 confirms
+.59 Code 0, original driver/ACPI hashes, removed temporary registration,
+permit/tasks, loader/debug environment and receiver, unchanged power
+settings, and restored WER settings and dump-directory ACL. Portrait
+restore/verify is a no-op at 07:32:49. All 134 returned records (38,295,250
+bytes) match remote lengths and SHA-256 values. ETL:
+`4fce9ece9e3a54050decff0384681af60f929ebfd36b50201e74cdaf5e0fe1c0`;
+UMD export: `0b23877d5637bcd68e7758f4a444f27ec9d9815a1c70a3c7eb63bb91e01e0002`.
+
 ### Host allocation and budget audit
 
 The 2026-11-11 audit follows the reported DWM instance OOM into the actual

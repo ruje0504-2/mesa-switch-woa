@@ -111,6 +111,20 @@ An unset call bit is not a successful result; cached snapshots are not new
 Vulkan calls. Failure of a zero-sized list's optional malloc is not reported
 as an allocation failure.
 
+Post-device diagnostics retain the original DDI behavior. `RuntimeError`
+uses a separate 328-byte payload containing HRESULT, source basename,
+function, line and process image. It is written before `pfnSetErrorCb`,
+which may not return. `ResourceCreateBegin` packs format/dimension in arg0
+and misc/bind flags in arg1; `ResourceCreateSize` packs width/height and
+array/mip counts respectively (high/low 32-bit halves). `ResourceCreateEnd`
+marks successful completion with format and subresource count. Failure
+sites are reported by `RuntimeError`, not a fabricated successful end.
+`FormatBegin`/`FormatEnd` bracket the format query and retain its capability
+bits; `Multisample` records format and sample/quality counts.
+`DestroyDeviceBegin`/`DestroyDeviceEnd` bracket teardown. No resource pointers
+or contents are included, and missing endpoints alone do not establish a
+crash location. Use the exporter built with these payload definitions.
+
 ## GDI software backend
 
 When compiled with `gallium-driver=llvmpipe` or `gallium-driver=softpipe` the resulting libgallium_d3d10.dll implements D3D10's software rendering interface, like WARP.

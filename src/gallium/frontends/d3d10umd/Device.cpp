@@ -348,6 +348,7 @@ DestroyDevice(D3D10DDI_HDEVICE hDevice)   // IN
    unsigned i;
 
    LOG_ENTRYPOINT();
+   D3D10Trace(D3D10_TRACE_DESTROY_DEVICE_BEGIN, S_OK, 0, 0);
 
    Device *pDevice = CastDevice(hDevice);
    struct pipe_context *pipe = pDevice->pipe;
@@ -388,6 +389,7 @@ DestroyDevice(D3D10DDI_HDEVICE hDevice)   // IN
                            PIPE_MAX_SHADER_SAMPLER_VIEWS, 0, sampler_views);
 
    pipe->destroy(pipe);
+   D3D10Trace(D3D10_TRACE_DESTROY_DEVICE_END, S_OK, 0, 0);
 }
 
 
@@ -475,7 +477,7 @@ CheckFormatSupport(D3D10DDI_HDEVICE hDevice, // IN
                    DXGI_FORMAT Format,       // IN
                    __out UINT *pFormatCaps)  // OUT
 {
-   //LOG_ENTRYPOINT();
+   D3D10Trace(D3D10_TRACE_FORMAT_BEGIN, S_OK, Format, 0);
 
    struct pipe_context *pipe = CastPipeContext(hDevice);
    struct pipe_screen *screen = pipe->screen;
@@ -485,6 +487,7 @@ CheckFormatSupport(D3D10DDI_HDEVICE hDevice, // IN
    enum pipe_format format = FormatTranslate(Format, false);
    if (format == PIPE_FORMAT_NONE) {
       *pFormatCaps = D3D10_DDI_FORMAT_SUPPORT_NOT_SUPPORTED;
+      D3D10Trace(D3D10_TRACE_FORMAT_END, S_OK, Format, *pFormatCaps);
       return;
    }
 
@@ -493,6 +496,7 @@ CheckFormatSupport(D3D10DDI_HDEVICE hDevice, // IN
        * We only need to support creation.
        * http://msdn.microsoft.com/en-us/library/windows/hardware/ff552818.aspx
        */
+      D3D10Trace(D3D10_TRACE_FORMAT_END, S_OK, Format, *pFormatCaps);
       return;
    }
 
@@ -520,6 +524,7 @@ CheckFormatSupport(D3D10DDI_HDEVICE hDevice, // IN
       }
 #endif
    }
+   D3D10Trace(D3D10_TRACE_FORMAT_END, S_OK, Format, *pFormatCaps);
 }
 
 
@@ -545,6 +550,8 @@ CheckMultisampleQualityLevels(D3D10DDI_HDEVICE hDevice,        // IN
 
    /* XXX: Disable MSAA */
    *pNumQualityLevels = 0;
+   D3D10Trace(D3D10_TRACE_MULTISAMPLE, S_OK, Format,
+              (uint64_t)SampleCount << 32 | *pNumQualityLevels);
 }
 
 

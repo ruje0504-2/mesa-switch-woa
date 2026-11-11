@@ -33,6 +33,15 @@ enum d3d10_umd_trace_event {
    D3D10_TRACE_ZINK_MESSAGE,
    D3D10_TRACE_ZINK_INSTANCE_CALL,
    D3D10_TRACE_ZINK_INSTANCE_INFO,
+   D3D10_TRACE_RUNTIME_ERROR,
+   D3D10_TRACE_RESOURCE_CREATE_BEGIN,
+   D3D10_TRACE_RESOURCE_CREATE_SIZE,
+   D3D10_TRACE_RESOURCE_CREATE_END,
+   D3D10_TRACE_FORMAT_BEGIN,
+   D3D10_TRACE_FORMAT_END,
+   D3D10_TRACE_MULTISAMPLE,
+   D3D10_TRACE_DESTROY_DEVICE_BEGIN,
+   D3D10_TRACE_DESTROY_DEVICE_END,
 };
 
 struct d3d10_umd_trace_data {
@@ -47,12 +56,22 @@ struct d3d10_umd_trace_message {
    WCHAR message[1024];
 };
 
+struct d3d10_umd_trace_error {
+   int32_t result;
+   uint32_t line;
+   WCHAR image[32];
+   WCHAR file[64];
+   WCHAR function[64];
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 void D3D10Trace(enum d3d10_umd_trace_event event, HRESULT result,
                 uint64_t arg0, uint64_t arg1);
 void D3D10TraceMessage(const char *message);
+void D3D10TraceError(HRESULT result, const char *file, const char *function,
+                     unsigned line);
 #ifdef __cplusplus
 }
 #endif

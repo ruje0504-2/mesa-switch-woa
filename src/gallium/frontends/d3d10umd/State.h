@@ -32,6 +32,7 @@
 
 
 #include "DriverIncludes.h"
+#include "Trace.h"
 #include "util/u_hash_table.h"
 #include "cso_cache/cso_context.h"
 
@@ -143,13 +144,18 @@ CastPipeDevice(DXGI_DDI_HDEVICE hDevice)
 
 
 static inline void
-SetError(D3D10DDI_HDEVICE hDevice, HRESULT hr)
+SetErrorAt(D3D10DDI_HDEVICE hDevice, HRESULT hr, const char *file,
+           const char *function, unsigned line)
 {
    if (FAILED(hr)) {
+      /* Record before entering the runtime: its callback may not return. */
+      D3D10TraceError(hr, file, function, line);
       Device *pDevice = CastDevice(hDevice);
       pDevice->UMCallbacks.pfnSetErrorCb(pDevice->hRTCoreLayer, hr);
    }
 }
+
+#define SetError(device, error) SetErrorAt(device, error, __FILE__, __func__, __LINE__)
 
 static inline bool
 CheckDeviceRemoved(D3D10DDI_HDEVICE hDevice)

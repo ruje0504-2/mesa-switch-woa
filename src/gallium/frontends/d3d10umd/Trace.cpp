@@ -2,9 +2,11 @@
 #include "Trace.h"
 #include <evntprov.h>
 #include <cwchar>
+#include <cstring>
 
 static_assert(sizeof(d3d10_umd_trace_data) == 88, "ETW payload layout");
 static_assert(sizeof(d3d10_umd_trace_message) == 2112, "ETW message layout");
+static_assert(sizeof(d3d10_umd_trace_error) == 328, "ETW runtime error layout");
 
 class TraceProvider {
 public:
@@ -59,6 +61,28 @@ void D3D10TraceMessage(const char *message)
       return;
    d3d10_umd_trace_message data = {};
    if (!MultiByteToWideChar(CP_UTF8, 0, message, -1, data.message, ARRAYSIZE(data.message)))
+      return;
+   std::wmemcpy(data.image, provider.image, ARRAYSIZE(data.image));
+   EVENT_DATA_DESCRIPTOR payload;
+   EventDataDescCreate(&payload, &data, sizeof(data));
+   EventWrite(provider.handle, &descriptor, 1, &payload);
+}
+
+void D3D10TraceError(HRESULT result, const char *file, const char *function,
+                     unsigned line)
+{
+   auto &provider = trace_provider();
+   const EVENT_DESCRIPTOR descriptor = {D3D10_TRACE_RUNTIME_ERROR, 1, 0, 4, 0, 0, 1};
+   if (!EventEnabled(provider.handle, &descriptor))
+      return;
+   d3d10_umd_trace_error data = {};
+   data.result = result;
+   data.line = line;
+   /* Keep the source site, without embedding the build host's directory. */
+   for (const char *s = file; *s; ++s)
+      if (*s == '/' || *s == '\\') file = s + 1;
+   if (!MultiByteToWideChar(CP_UTF8, 0, file, -1, data.file, ARRAYSIZE(data.file)) ||
+       !MultiByteToWideChar(CP_UTF8, 0, function, -1, data.function, ARRAYSIZE(data.function)))
       return;
    std::wmemcpy(data.image, provider.image, ARRAYSIZE(data.image));
    EVENT_DATA_DESCRIPTOR payload;

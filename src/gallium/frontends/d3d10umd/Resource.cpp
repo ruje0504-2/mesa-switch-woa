@@ -197,6 +197,13 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
                D3D10DDI_HRTRESOURCE hRTResource)                        // IN
 {
    LOG_ENTRYPOINT();
+   D3D10Trace(D3D10_TRACE_RESOURCE_CREATE_BEGIN, S_OK,
+              (uint64_t)pCreateResource->Format << 32 | pCreateResource->ResourceDimension,
+              (uint64_t)pCreateResource->MiscFlags << 32 | pCreateResource->BindFlags);
+   D3D10Trace(D3D10_TRACE_RESOURCE_CREATE_SIZE, S_OK,
+              (uint64_t)pCreateResource->pMipInfoList[0].TexelWidth << 32 |
+                 pCreateResource->pMipInfoList[0].TexelHeight,
+              (uint64_t)pCreateResource->ArraySize << 32 | pCreateResource->MipLevels);
 
    if ((pCreateResource->MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED) ||
        (pCreateResource->pPrimaryDesc &&
@@ -391,6 +398,8 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
          }
       }
    }
+   D3D10Trace(D3D10_TRACE_RESOURCE_CREATE_END, S_OK,
+              pCreateResource->Format, pResource->NumSubResources);
 }
 
 

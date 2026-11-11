@@ -22,6 +22,18 @@ post-device resource/runtime path before claiming composition or Present.
 settings are verified after rollback.
 [Diagnosis, controls and validation](PORTING.md#windows-icd-manifest-path)
 
+**Post-device result (2026-11-11):** new resource/format/teardown and
+source-located runtime-error records pass the ARM64 controls and native
+regression. On LUID `90f60`, three DWM processes each successfully create
+four constant buffers and two vertex buffers. The finalized trace has
+22,407 valid events and no recorded loss; it contains no DWM runtime-error
+callback. DWM still exits with `c0000409`, and the per-DWM WER attempt
+produces no dump. The last successful buffer is not a fault location.
+Next obtain exception context and cover shader/state DDIs, without guessing
+capability changes. All 134 returned files match device hashes; .59, portrait,
+power policy, temporary environment and dump settings/ACLs are restored.
+[Post-device evidence](PORTING.md#post-device-ddi-trace)
+
 **Host-memory audit (2026-11-11):** no page-size/alignment or 512 MiB unit
 error was found in the inspected paths. The current instance path uses
 ordinary CRT allocation; GPU section allocation uses committed,

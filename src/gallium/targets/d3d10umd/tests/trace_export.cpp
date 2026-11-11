@@ -19,7 +19,9 @@ static const char *event_name(USHORT id)
       "ScreenQuery", "ScreenIdentity", "ZinkBegin", "ZinkEnd", "OpenResult",
       "SupportedVersion", "GetCaps", "CreateDeviceBegin", "CreateDeviceResult",
       "OpenResource", "Present", "Blt", "SetDisplayMode", "ZinkFailure", "ZinkMessage",
-      "ZinkInstanceCall", "ZinkInstanceInfo"};
+      "ZinkInstanceCall", "ZinkInstanceInfo", "RuntimeError", "ResourceCreateBegin",
+      "ResourceCreateSize", "ResourceCreateEnd", "FormatBegin", "FormatEnd",
+      "Multisample", "DestroyDeviceBegin", "DestroyDeviceEnd"};
    return id < ARRAYSIZE(names) ? names[id] : "unknown";
 }
 
@@ -50,6 +52,20 @@ static void WINAPI record(EVENT_RECORD *event)
       return;
    const auto &header = event->EventHeader;
    if (header.EventDescriptor.Version != 1) { ++invalid; return; }
+   if (header.EventDescriptor.Id == D3D10_TRACE_RUNTIME_ERROR) {
+      if (event->UserDataLength != sizeof(d3d10_umd_trace_error)) { ++invalid; return; }
+      d3d10_umd_trace_error data;
+      std::memcpy(&data, event->UserData, sizeof(data));
+      if (data.image[31] || data.file[63] || data.function[63]) { ++invalid; return; }
+      ++matched;
+      record_header(header, data.image);
+      std::printf(",\"status\":\"%08x\",\"line\":%u,\"file\":", (unsigned)data.result, data.line);
+      json_image(data.file);
+      std::printf(",\"function\":");
+      json_image(data.function);
+      std::puts("}");
+      return;
+   }
    if (header.EventDescriptor.Id == D3D10_TRACE_ZINK_MESSAGE) {
       if (event->UserDataLength != sizeof(d3d10_umd_trace_message)) { ++invalid; return; }
       d3d10_umd_trace_message message;
