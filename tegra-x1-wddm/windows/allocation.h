@@ -16,11 +16,7 @@ typedef struct tg_gpu_primary_allocation_request TG_GPU_PRIMARY_ALLOCATION_REQUE
 
 /* Linear cross-adapter surfaces use their own geometry, not the fixed panel's
  * primary layout. Raw standard heaps keep the 16-byte buffer description. */
-typedef struct _TG_GPU_LINEAR_ALLOCATION_REQUEST {
-    struct tg_gpu_allocation_request Buffer;
-    D3DDDIFORMAT Format;
-    UINT Width, Height, Pitch;
-} TG_GPU_LINEAR_ALLOCATION_REQUEST;
+typedef struct tg_gpu_linear_allocation_request TG_GPU_LINEAR_ALLOCATION_REQUEST;
 
 void TgGpuRegisterAllocationDdis(DRIVER_INITIALIZATION_DATA *);
 /* OS-supplied KMD handle, held alive by VidMm for this paging call. */

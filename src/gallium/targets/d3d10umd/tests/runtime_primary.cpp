@@ -131,7 +131,7 @@ int main()
    desc.ArraySize = desc.MipLevels = desc.SampleDesc.Count = 1;
    desc.pMipInfoList = &mip; desc.pPrimaryDesc = &primary;
    D3D10DDI_HRTRESOURCE runtime = {resource_handle};
-   RuntimePrimary *p = NULL;
+   RuntimeResource *p = NULL;
    const HRESULT expected[] = {S_OK, E_ACCESSDENIED, E_OUTOFMEMORY,
       D3DDDIERR_OUTOFVIDEOMEMORY, D3DDDIERR_DEVICEREMOVED, E_FAIL};
    for (failure = 1; failure < ARRAYSIZE(expected); ++failure) {
@@ -148,7 +148,7 @@ int main()
    failure = 0; paging_value = 0;
    const unsigned resident_waits = waits;
    CHECK(RuntimePrimaryCreate(&device, &desc, runtime, &p) == S_OK);
-   auto memory = *RuntimePrimaryMemory(p);
+   auto memory = *RuntimeResourceMemory(p);
    CHECK(memory.adapter_luid == 0x1234567890ull && memory.size == 3686400 && memory.allocation == 0x50);
    CHECK(paging_value == 7 && waits == resident_waits + 1);
    const unsigned before = waits;
@@ -160,11 +160,11 @@ int main()
    CHECK(gpu_maps == 1 && waits == before + 1 && paging_value == 9);
    paging_value = 7; failure = 4;
    CHECK(memory.map_gpu(memory.context, 0x40000, 4096, 8192, 0, false, 0x40000, 0x4000) == VK_ERROR_DEVICE_LOST);
-   CHECK(RuntimePrimaryError(p) == D3DDDIERR_DEVICEREMOVED && paging_value == 7);
+   CHECK(RuntimeResourceError(p) == D3DDDIERR_DEVICEREMOVED && paging_value == 7);
    failure = 0;
    map_result = DXGI_ERROR_DEVICE_REMOVED;
    CHECK(memory.map_gpu(memory.context, 0x40000, 4096, 8192, 0, false, 0x40000, 0x4000) == VK_ERROR_DEVICE_LOST);
-   CHECK(RuntimePrimaryError(p) == DXGI_ERROR_DEVICE_REMOVED);
+   CHECK(RuntimeResourceError(p) == DXGI_ERROR_DEVICE_REMOVED);
    void *cpu = NULL;
    CHECK(memory.map_cpu(memory.context, &cpu) == VK_SUCCESS && cpu == cpu_bytes);
    memory.unmap_cpu(memory.context); CHECK(!locks);
@@ -176,7 +176,7 @@ int main()
    CHECK(RuntimePrimarySetMode(p, device_handle, 0) == S_OK && modes == 2);
    memory.retain(memory.context);
    CHECK(memory.map_cpu(memory.context, &cpu) == VK_SUCCESS && locks == 1);
-   CHECK(RuntimePrimaryDestroy(p) == S_OK && !locks && !queues && !allocations && gpu_frees == 1);
+   CHECK(RuntimeResourceDestroy(p) == S_OK && !locks && !queues && !allocations && gpu_frees == 1);
    CHECK(memory.map_cpu(memory.context, &cpu) == VK_ERROR_DEVICE_LOST);
    CHECK(memory.map_gpu(memory.context, 0x40000, 4096, 8192, 0, false, 0x40000, 0x4000) == VK_ERROR_DEVICE_LOST);
    CHECK(memory.free_gpu(memory.context, 0x40000, 0x4000) == VK_SUCCESS && gpu_frees == 1);
@@ -189,14 +189,14 @@ int main()
       mip.TexelHeight = primary.ModeDesc.Height = expected_height = quarter ? 720 : 1280;
       primary.ModeDesc.Rotation = static_cast<DXGI_DDI_MODE_ROTATION>(rotation);
       CHECK(RuntimePrimaryCreate(&device, &desc, runtime, &p) == S_OK);
-      CHECK(RuntimePrimaryPitch(p) == expected_width * 4 && RuntimePrimaryMemory(p)->size == 3686400);
-      CHECK(RuntimePrimaryDestroy(p) == S_OK && !queues && !allocations);
+      CHECK(RuntimeResourcePitch(p) == expected_width * 4 && RuntimeResourceMemory(p)->size == 3686400);
+      CHECK(RuntimeResourceDestroy(p) == S_OK && !queues && !allocations);
       if (quarter) {
          /* The mode can retain its unrotated extent; storage follows mip info. */
          primary.ModeDesc.Width = 720; primary.ModeDesc.Height = 1280;
          CHECK(RuntimePrimaryCreate(&device, &desc, runtime, &p) == S_OK);
-         CHECK(RuntimePrimaryPitch(p) == 5120);
-         CHECK(RuntimePrimaryDestroy(p) == S_OK && !queues && !allocations);
+         CHECK(RuntimeResourcePitch(p) == 5120);
+         CHECK(RuntimeResourceDestroy(p) == S_OK && !queues && !allocations);
       }
    }
    expected_rotation = D3DDDI_ROTATION_IDENTITY;
@@ -204,8 +204,8 @@ int main()
    primary.ModeDesc.Width = 1280; primary.ModeDesc.Height = 720;
    primary.ModeDesc.Rotation = DXGI_DDI_MODE_ROTATION_ROTATE90;
    primary.Flags = DXGI_DDI_PRIMARY_NONPREROTATED;
-   CHECK(RuntimePrimaryCreate(&device, &desc, runtime, &p) == S_OK && RuntimePrimaryPitch(p) == 2880);
-   CHECK(RuntimePrimaryDestroy(p) == S_OK && !queues && !allocations);
+   CHECK(RuntimePrimaryCreate(&device, &desc, runtime, &p) == S_OK && RuntimeResourcePitch(p) == 2880);
+   CHECK(RuntimeResourceDestroy(p) == S_OK && !queues && !allocations);
    primary.Flags = 0;
    CHECK(RuntimePrimaryCreate(&device, &desc, runtime, &p) == DXGI_ERROR_UNSUPPORTED && !p);
    mip.TexelWidth = 1280; mip.TexelHeight = 720;

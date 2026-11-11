@@ -14,7 +14,7 @@ struct PrimaryMapping {
    PrimaryMapping *next;
 };
 
-struct RuntimePrimary {
+struct RuntimeResource {
    wsi_win32_memory memory;
    LONG refs;
    SRWLOCK lock;
@@ -24,20 +24,20 @@ struct RuntimePrimary {
    const volatile UINT64 *fence_value;
    HRESULT error, cleanup_error;
    UINT pitch;
-   bool cpu_locked, dead, associated;
+   bool cpu_locked, dead, associated, primary;
    PrimaryMapping *mappings;
 };
 
 /* arg0: stage in high 32 bits, allocation handle in low 32 bits.
  * arg1: byte count, paging-fence value, or paging-queue handle. */
-static HRESULT trace(RuntimePrimary *p, unsigned stage, HRESULT hr, uint64_t value = 0)
+static HRESULT trace(RuntimeResource *p, unsigned stage, HRESULT hr, uint64_t value = 0)
 {
    D3D10Trace(D3D10_TRACE_RUNTIME_MEMORY, hr,
               (uint64_t)stage << 32 | p->memory.allocation, value);
    return hr;
 }
 
-static VkResult result(RuntimePrimary *p, HRESULT hr)
+static VkResult result(RuntimeResource *p, HRESULT hr)
 {
    if (SUCCEEDED(hr)) return VK_SUCCESS;
    p->error = hr;
@@ -48,7 +48,7 @@ static VkResult result(RuntimePrimary *p, HRESULT hr)
    return VK_ERROR_UNKNOWN;
 }
 
-static HRESULT wait_paging(RuntimePrimary *p, UINT64 value)
+static HRESULT wait_paging(RuntimeResource *p, UINT64 value)
 {
    if (!value || (p->fence_value && *p->fence_value >= value)) return S_OK;
    D3DDDICB_WAITFORSYNCHRONIZATIONOBJECTFROMCPU wait = {};
@@ -60,12 +60,12 @@ static HRESULT wait_paging(RuntimePrimary *p, UINT64 value)
 
 static void retain(void *context)
 {
-   InterlockedIncrement(&static_cast<RuntimePrimary *>(context)->refs);
+   InterlockedIncrement(&static_cast<RuntimeResource *>(context)->refs);
 }
 
 static void release(void *context)
 {
-   auto p = static_cast<RuntimePrimary *>(context);
+   auto p = static_cast<RuntimeResource *>(context);
    if (!InterlockedDecrement(&p->refs)) {
       while (p->mappings) {
          auto next = p->mappings->next;
@@ -75,7 +75,7 @@ static void release(void *context)
    }
 }
 
-static HRESULT free_address(RuntimePrimary *p, uint64_t address, uint64_t bytes)
+static HRESULT free_address(RuntimeResource *p, uint64_t address, uint64_t bytes)
 {
    D3DDDICB_FREEGPUVIRTUALADDRESS args = {};
    args.BaseAddress = address;
@@ -85,7 +85,7 @@ static HRESULT free_address(RuntimePrimary *p, uint64_t address, uint64_t bytes)
 
 static VkResult free_gpu(void *context, uint64_t address, uint64_t bytes)
 {
-   auto p = static_cast<RuntimePrimary *>(context);
+   auto p = static_cast<RuntimeResource *>(context);
    AcquireSRWLockExclusive(&p->lock);
    PrimaryMapping **link = &p->mappings;
    while (*link && ((*link)->address != address || (*link)->size != bytes)) link = &(*link)->next;
@@ -103,7 +103,7 @@ static VkResult map_gpu(void *context, uint64_t address, uint64_t offset,
                         uint64_t bytes, uint8_t kind, bool read_only,
                         uint64_t reserved, uint64_t reserved_size)
 {
-   auto p = static_cast<RuntimePrimary *>(context);
+   auto p = static_cast<RuntimeResource *>(context);
    AcquireSRWLockExclusive(&p->lock);
    HRESULT hr = E_INVALIDARG;
    if (p->dead) {
@@ -146,7 +146,7 @@ static VkResult map_gpu(void *context, uint64_t address, uint64_t offset,
 
 static VkResult map_cpu(void *context, void **address)
 {
-   auto p = static_cast<RuntimePrimary *>(context);
+   auto p = static_cast<RuntimeResource *>(context);
    AcquireSRWLockExclusive(&p->lock);
    D3DDDICB_LOCK2 lock = {};
    lock.hAllocation = p->memory.allocation;
@@ -166,7 +166,7 @@ static VkResult map_cpu(void *context, void **address)
 
 static void unmap_cpu(void *context)
 {
-   auto p = static_cast<RuntimePrimary *>(context);
+   auto p = static_cast<RuntimeResource *>(context);
    AcquireSRWLockExclusive(&p->lock);
    if (p->cpu_locked) {
       D3DDDICB_UNLOCK2 unlock = {};
@@ -177,7 +177,7 @@ static void unmap_cpu(void *context)
    ReleaseSRWLockExclusive(&p->lock);
 }
 
-HRESULT RuntimePrimaryDestroy(RuntimePrimary *p)
+HRESULT RuntimeResourceDestroy(RuntimeResource *p)
 {
    if (!p) return S_OK;
    AcquireSRWLockExclusive(&p->lock);
@@ -217,8 +217,205 @@ HRESULT RuntimePrimaryDestroy(RuntimePrimary *p)
    return hr;
 }
 
+static HRESULT create_owner(Device *device, D3D10DDI_HRTRESOURCE runtime,
+                            UINT pitch, RuntimeResource **out)
+{
+   const auto &cb = device->KTCallbacks;
+   if (!runtime.handle || !cb.pfnDeallocateCb ||
+       !cb.pfnCreatePagingQueueCb || !cb.pfnDestroyPagingQueueCb ||
+       !cb.pfnMakeResidentCb || !cb.pfnMapGpuVirtualAddressCb || !cb.pfnFreeGpuVirtualAddressCb ||
+       !cb.pfnWaitForSynchronizationObjectFromCpuCb || !cb.pfnLock2Cb || !cb.pfnUnlock2Cb ||
+       !device->pipe->screen->get_device_luid)
+      return DXGI_ERROR_UNSUPPORTED;
+   auto p = static_cast<RuntimeResource *>(calloc(1, sizeof(RuntimeResource)));
+   if (!p) return E_OUTOFMEMORY;
+   p->refs = 1;
+   p->pitch = pitch;
+   p->device = device->hDevice;
+   p->runtime_resource = runtime.handle;
+   p->callbacks = cb;
+   InitializeSRWLock(&p->lock);
+   device->pipe->screen->get_device_luid(device->pipe->screen,
+                                        reinterpret_cast<char *>(&p->memory.adapter_luid));
+   if (!p->memory.adapter_luid) {
+      release(p);
+      return DXGI_ERROR_UNSUPPORTED;
+   }
+   *out = p;
+   return S_OK;
+}
+
+static HRESULT create_queue(RuntimeResource *p)
+{
+   D3DDDICB_CREATEPAGINGQUEUE queue = {};
+   queue.Priority = D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL;
+   HRESULT hr = p->callbacks.pfnCreatePagingQueueCb(p->device, &queue);
+   trace(p, 9, hr, queue.hPagingQueue);
+   if (FAILED(hr)) return hr;
+   p->queue = queue.hPagingQueue;
+   p->fence = queue.hSyncObject;
+   p->fence_value = static_cast<const volatile UINT64 *>(queue.FenceValueCPUVirtualAddress);
+   return p->queue && p->fence ? S_OK : E_FAIL;
+}
+
+static HRESULT make_ready(RuntimeResource *p, uint64_t bytes)
+{
+   if (!p->memory.allocation) return E_FAIL;
+   D3DDDI_MAKERESIDENT resident = {};
+   resident.hPagingQueue = p->queue;
+   resident.NumAllocations = 1;
+   resident.AllocationList = &p->memory.allocation;
+   HRESULT hr = p->callbacks.pfnMakeResidentCb(p->device, &resident);
+   trace(p, 2, hr, resident.PagingFenceValue);
+   if (SUCCEEDED(hr) || hr == E_PENDING) hr = wait_paging(p, resident.PagingFenceValue);
+   if (FAILED(hr)) return hr;
+   p->memory.version = WSI_WIN32_MEMORY_VERSION;
+   p->memory.size = bytes;
+   p->memory.context = p;
+   p->memory.retain = retain;
+   p->memory.release = release;
+   p->memory.map_gpu = map_gpu;
+   p->memory.free_gpu = free_gpu;
+   p->memory.map_cpu = map_cpu;
+   p->memory.unmap_cpu = unmap_cpu;
+   return S_OK;
+}
+
+/* The KMD owns the storage envelope; this pointer-free payload belongs to
+ * the D3D UMD. OpenResource receives the original bytes from the runtime. */
+struct SharedMetadata {
+   tg_gpu_resource_request storage;
+   uint32_t magic, version;
+   RuntimeSharedDescription description;
+   uint32_t reserved[2];
+};
+static_assert(sizeof(SharedMetadata) == 72, "shared image metadata ABI");
+static constexpr uint32_t shared_magic = 0x52534754; /* TGSR */
+
+static HRESULT shared_layout(const RuntimeSharedDescription &d,
+                             tg_gpu_linear_allocation_request *allocation)
+{
+   if (!d.width || !d.height || d.usage != D3D10_DDI_USAGE_DEFAULT ||
+       (d.bind_flags & ~(D3D10_DDI_BIND_SHADER_RESOURCE | D3D10_DDI_BIND_RENDER_TARGET |
+                         D3D10_DDI_BIND_PRESENT)))
+      return DXGI_ERROR_UNSUPPORTED;
+   uint32_t format;
+   switch (d.format) {
+   case DXGI_FORMAT_B8G8R8A8_UNORM: format = D3DDDIFMT_A8R8G8B8; break;
+   case DXGI_FORMAT_R8G8B8A8_UNORM: format = D3DDDIFMT_A8B8G8R8; break;
+   default: return DXGI_ERROR_UNSUPPORTED;
+   }
+   const uint64_t pitch = ((uint64_t)d.width * 4 + 127) & ~UINT64_C(127);
+   const uint64_t rows = ((uint64_t)d.height + 3) & ~UINT64_C(3);
+   const uint64_t budget = UINT64_C(512) * 1024 * 1024;
+   if (pitch > budget || rows > budget / pitch)
+      return D3DDDIERR_OUTOFVIDEOMEMORY;
+   *allocation = {
+      {TG_GPU_ALLOCATION_ABI, TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_LINEAR_SURFACE,
+       (pitch * rows + 4095) & ~UINT64_C(4095)},
+      format, d.width, d.height, (UINT)pitch};
+   return S_OK;
+}
+
+HRESULT RuntimeSharedCreate(Device *device, const D3D10DDIARG_CREATERESOURCE *desc,
+                            D3D10DDI_HRTRESOURCE runtime, RuntimeResource **out)
+{
+   *out = NULL;
+   if (!device->KTCallbacks.pfnAllocateCb || !desc->pMipInfoList || desc->pPrimaryDesc ||
+       desc->ResourceDimension != D3D10DDIRESOURCE_TEXTURE2D ||
+       desc->MiscFlags != D3D10_DDI_RESOURCE_MISC_SHARED || desc->MapFlags ||
+       desc->MipLevels != 1 || desc->ArraySize != 1 ||
+       desc->SampleDesc.Count != 1 || desc->SampleDesc.Quality ||
+       desc->pMipInfoList[0].TexelDepth != 1)
+      return DXGI_ERROR_UNSUPPORTED;
+   SharedMetadata metadata = {};
+   auto &d = metadata.description;
+   d = {desc->pMipInfoList[0].TexelWidth, desc->pMipInfoList[0].TexelHeight, 0,
+        desc->Format, desc->BindFlags, desc->Usage};
+   tg_gpu_linear_allocation_request request;
+   HRESULT hr = shared_layout(d, &request);
+   if (FAILED(hr)) return hr;
+   d.pitch = request.Pitch;
+   metadata.magic = shared_magic;
+   metadata.version = 1;
+   metadata.storage = {TG_GPU_RESOURCE_ABI, sizeof(metadata.storage), 1,
+      sizeof(metadata) - sizeof(metadata.storage), request.Buffer.bytes, {0, 0}};
+   RuntimeResource *p = NULL;
+   hr = create_owner(device, runtime, d.pitch, &p);
+   if (FAILED(hr)) return hr;
+   hr = create_queue(p);
+   if (FAILED(hr)) { RuntimeResourceDestroy(p); return hr; }
+   D3DDDI_ALLOCATIONINFO2 info = {};
+   info.pPrivateDriverData = &request;
+   info.PrivateDriverDataSize = sizeof(request);
+   D3DDDICB_ALLOCATE allocate = {};
+   allocate.hResource = runtime.handle;
+   allocate.pPrivateDriverData = &metadata;
+   allocate.PrivateDriverDataSize = sizeof(metadata);
+   allocate.NumAllocations = 1;
+   allocate.pAllocationInfo2 = &info;
+   hr = p->callbacks.pfnAllocateCb(p->device, &allocate);
+   trace(p, 1, hr, request.Buffer.bytes);
+   if (FAILED(hr)) { RuntimeResourceDestroy(p); return hr; }
+   p->associated = true;
+   p->memory.allocation = info.hAllocation;
+   hr = make_ready(p, request.Buffer.bytes);
+   if (FAILED(hr)) { RuntimeResourceDestroy(p); return hr; }
+   *out = p;
+   return S_OK;
+}
+
+HRESULT RuntimeSharedOpen(Device *device, const D3D10DDIARG_OPENRESOURCE *args,
+                          D3D10DDI_HRTRESOURCE runtime, RuntimeResource **out,
+                          RuntimeSharedDescription *description)
+{
+   *out = NULL;
+   *description = {};
+   if (args->NumAllocations != 1 || !args->pOpenAllocationInfo ||
+       !args->hKMResource.handle || !args->pPrivateDriverData ||
+       args->PrivateDriverDataSize != sizeof(SharedMetadata))
+      return DXGI_ERROR_UNSUPPORTED;
+   SharedMetadata metadata;
+   memcpy(&metadata, args->pPrivateDriverData, sizeof(metadata));
+   const auto &s = metadata.storage;
+   if (metadata.magic != shared_magic || metadata.version != 1 ||
+       metadata.reserved[0] || metadata.reserved[1] ||
+       s.version != TG_GPU_RESOURCE_ABI || s.header_bytes != sizeof(s) ||
+       s.allocation_count != 1 || s.driver_data_bytes != sizeof(metadata) - sizeof(s) ||
+       s.reserved[0] || s.reserved[1])
+      return DXGI_ERROR_UNSUPPORTED;
+   tg_gpu_linear_allocation_request expected;
+   HRESULT hr = shared_layout(metadata.description, &expected);
+   if (FAILED(hr)) return hr;
+   if (s.allocation_bytes != expected.Buffer.bytes || metadata.description.pitch != expected.Pitch)
+      return DXGI_ERROR_UNSUPPORTED;
+   /* For one allocation, only the documented INFO/INFO2 common prefix is
+    * needed. Do not interpret a reserved/unnegotiated GPU-VA suffix. */
+   const auto &info = args->pOpenAllocationInfo[0];
+   if (!info.hAllocation || !info.pPrivateDriverData ||
+       info.PrivateDriverDataSize != sizeof(expected))
+      return DXGI_ERROR_UNSUPPORTED;
+   tg_gpu_linear_allocation_request actual;
+   memcpy(&actual, info.pPrivateDriverData, sizeof(actual));
+   if (memcmp(&actual, &expected, sizeof(actual))) return DXGI_ERROR_UNSUPPORTED;
+   RuntimeResource *p = NULL;
+   hr = create_owner(device, runtime, expected.Pitch, &p);
+   if (FAILED(hr)) return hr;
+   /* The runtime has opened these handles for the consumer device already.
+    * Keep its hRTResource, not the producer's handles or hKMResource, for
+    * callbacks and teardown. No second allocation or KMT open is performed. */
+   p->associated = true;
+   p->memory.allocation = info.hAllocation;
+   hr = create_queue(p);
+   if (SUCCEEDED(hr)) hr = make_ready(p, expected.Buffer.bytes);
+   if (FAILED(hr)) { RuntimeResourceDestroy(p); return hr; }
+   *description = metadata.description;
+   *out = p;
+   return S_OK;
+}
+
 HRESULT RuntimePrimaryCreate(Device *device, const D3D10DDIARG_CREATERESOURCE *desc,
-                              D3D10DDI_HRTRESOURCE runtime, RuntimePrimary **out)
+                              D3D10DDI_HRTRESOURCE runtime, RuntimeResource **out)
 {
    *out = NULL;
    if (!desc->pPrimaryDesc || !desc->pMipInfoList) return DXGI_ERROR_UNSUPPORTED;
@@ -248,37 +445,14 @@ HRESULT RuntimePrimaryCreate(Device *device, const D3D10DDIARG_CREATERESOURCE *d
           primary.ModeDesc.Width == height && primary.ModeDesc.Height == width)))
       return DXGI_ERROR_UNSUPPORTED;
 
-   const auto &cb = device->KTCallbacks;
-   if (!cb.pfnAllocateCb || !cb.pfnDeallocateCb || !cb.pfnSetDisplayModeCb ||
-       !cb.pfnCreatePagingQueueCb || !cb.pfnDestroyPagingQueueCb ||
-       !cb.pfnMakeResidentCb || !cb.pfnMapGpuVirtualAddressCb || !cb.pfnFreeGpuVirtualAddressCb ||
-       !cb.pfnWaitForSynchronizationObjectFromCpuCb || !cb.pfnLock2Cb || !cb.pfnUnlock2Cb ||
-       !device->pipe->screen->get_device_luid)
+   if (!device->KTCallbacks.pfnAllocateCb || !device->KTCallbacks.pfnSetDisplayModeCb)
       return DXGI_ERROR_UNSUPPORTED;
-   auto p = static_cast<RuntimePrimary *>(calloc(1, sizeof(RuntimePrimary)));
-   if (!p) return E_OUTOFMEMORY;
-   p->refs = 1;
-   p->pitch = width * 4;
-   p->device = device->hDevice;
-   p->runtime_resource = runtime.handle;
-   p->callbacks = cb;
-   InitializeSRWLock(&p->lock);
-   device->pipe->screen->get_device_luid(device->pipe->screen,
-                                        reinterpret_cast<char *>(&p->memory.adapter_luid));
-   if (!p->memory.adapter_luid) {
-      release(p);
-      return DXGI_ERROR_UNSUPPORTED;
-   }
-
-   D3DDDICB_CREATEPAGINGQUEUE queue = {};
-   queue.Priority = D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL;
-   HRESULT hr = cb.pfnCreatePagingQueueCb(p->device, &queue);
-   trace(p, 9, hr, queue.hPagingQueue);
-   if (FAILED(hr)) { release(p); return hr; }
-   p->queue = queue.hPagingQueue;
-   p->fence = queue.hSyncObject;
-   p->fence_value = static_cast<const volatile UINT64 *>(queue.FenceValueCPUVirtualAddress);
-   if (!p->queue || !p->fence) { RuntimePrimaryDestroy(p); return E_FAIL; }
+   RuntimeResource *p = NULL;
+   HRESULT hr = create_owner(device, runtime, width * 4, &p);
+   if (FAILED(hr)) return hr;
+   p->primary = true;
+   hr = create_queue(p);
+   if (FAILED(hr)) { RuntimeResourceDestroy(p); return hr; }
 
    tg_gpu_primary_allocation_request request = {
       {TG_GPU_ALLOCATION_ABI, TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_DISPLAY_PRIMARY,
@@ -294,36 +468,20 @@ HRESULT RuntimePrimaryCreate(Device *device, const D3D10DDIARG_CREATERESOURCE *d
    allocate.hResource = runtime.handle;
    allocate.NumAllocations = 1;
    allocate.pAllocationInfo2 = &info;
-   hr = cb.pfnAllocateCb(p->device, &allocate);
+   hr = p->callbacks.pfnAllocateCb(p->device, &allocate);
    trace(p, 1, hr, request.Buffer.bytes);
-   if (FAILED(hr)) { RuntimePrimaryDestroy(p); return hr; }
+   if (FAILED(hr)) { RuntimeResourceDestroy(p); return hr; }
    p->associated = true;
    p->memory.allocation = info.hAllocation;
-   if (!info.hAllocation) { RuntimePrimaryDestroy(p); return E_FAIL; }
-   D3DDDI_MAKERESIDENT resident = {};
-   resident.hPagingQueue = p->queue;
-   resident.NumAllocations = 1;
-   resident.AllocationList = &p->memory.allocation;
-   hr = cb.pfnMakeResidentCb(p->device, &resident);
-   trace(p, 2, hr, resident.PagingFenceValue);
-   if (SUCCEEDED(hr) || hr == E_PENDING) hr = wait_paging(p, resident.PagingFenceValue);
-   if (FAILED(hr)) { RuntimePrimaryDestroy(p); return hr; }
-   p->memory.version = WSI_WIN32_MEMORY_VERSION;
-   p->memory.size = request.Buffer.bytes;
-   p->memory.context = p;
-   p->memory.retain = retain;
-   p->memory.release = release;
-   p->memory.map_gpu = map_gpu;
-   p->memory.free_gpu = free_gpu;
-   p->memory.map_cpu = map_cpu;
-   p->memory.unmap_cpu = unmap_cpu;
+   hr = make_ready(p, request.Buffer.bytes);
+   if (FAILED(hr)) { RuntimeResourceDestroy(p); return hr; }
    *out = p;
    return S_OK;
 }
 
-HRESULT RuntimePrimarySetMode(RuntimePrimary *p, HANDLE device, UINT subresource)
+HRESULT RuntimePrimarySetMode(RuntimeResource *p, HANDLE device, UINT subresource)
 {
-   if (!p) return DXGI_ERROR_UNSUPPORTED;
+   if (!p || !p->primary) return DXGI_ERROR_UNSUPPORTED;
    if (p->device != device || subresource) return E_INVALIDARG;
    AcquireSRWLockExclusive(&p->lock);
    D3DDDICB_SETDISPLAYMODE mode = {};
@@ -335,13 +493,13 @@ HRESULT RuntimePrimarySetMode(RuntimePrimary *p, HANDLE device, UINT subresource
    return hr;
 }
 
-HRESULT RuntimePrimaryError(RuntimePrimary *p)
+HRESULT RuntimeResourceError(RuntimeResource *p)
 {
    return FAILED(p->error) ? p->error : DXGI_ERROR_UNSUPPORTED;
 }
 
-const wsi_win32_memory *RuntimePrimaryMemory(RuntimePrimary *p) { return &p->memory; }
-UINT RuntimePrimaryPitch(RuntimePrimary *p) { return p->pitch; }
+const wsi_win32_memory *RuntimeResourceMemory(RuntimeResource *p) { return &p->memory; }
+UINT RuntimeResourcePitch(RuntimeResource *p) { return p->pitch; }
 
 HRESULT RuntimePresent(const DXGI_DDI_ARG_PRESENT *args)
 {
@@ -358,16 +516,17 @@ HRESULT RuntimePresent(const DXGI_DDI_ARG_PRESENT *args)
        (destination && args->DstSubResourceIndex) ||
        (unsigned)args->FlipInterval > DXGI_DDI_FLIP_INTERVAL_FOUR ||
        !device->hContext || !device->pDXGIBaseCallbacks ||
-       !device->pDXGIBaseCallbacks->pfnPresentCb || !source->runtime_primary ||
-       !source->resource || (destination && (!destination->runtime_primary || !destination->resource)))
+       !device->pDXGIBaseCallbacks->pfnPresentCb || !source->runtime_memory ||
+       !source->resource || (destination && (!destination->runtime_memory || !destination->resource)))
       return DXGI_ERROR_UNSUPPORTED;
-   RuntimePrimary *src = source->runtime_primary;
-   RuntimePrimary *dst = destination ? destination->runtime_primary : NULL;
+   RuntimeResource *src = source->runtime_memory;
+   RuntimeResource *dst = destination ? destination->runtime_memory : NULL;
+   if (!src->primary || (dst && !dst->primary)) return DXGI_ERROR_UNSUPPORTED;
    if (src->device != device->hDevice || (dst && dst->device != device->hDevice))
       return E_INVALIDARG;
    if (src->dead || !src->associated || (dst && (dst->dead || !dst->associated)))
       return D3DDDIERR_DEVICEREMOVED;
-   HRESULT hr = RuntimePrimaryFinish(device, source);
+   HRESULT hr = RuntimeResourceFinish(device, source);
    if (FAILED(hr)) return hr;
    DXGIDDICB_PRESENT present = {};
    present.hSrcAllocation = src->memory.allocation;
@@ -380,21 +539,21 @@ HRESULT RuntimePresent(const DXGI_DDI_ARG_PRESENT *args)
 
 HRESULT RuntimeRotateOwnership(Device *device, Resource *const *resources, UINT count)
 {
-   if (!count || !resources[0]->runtime_primary) return S_OK;
+   if (!count || !resources[0]->runtime_memory) return S_OK;
    for (UINT i = 0; i < count; ++i) {
-      const RuntimePrimary *p = resources[i]->runtime_primary;
+      const RuntimeResource *p = resources[i]->runtime_memory;
       if (!p || p->device != device->hDevice || !resources[i]->runtime_resource)
          return E_INVALIDARG;
       if (p->dead || !p->associated) return D3DDDIERR_DEVICEREMOVED;
    }
-   RuntimePrimary *first = resources[0]->runtime_primary;
+   RuntimeResource *first = resources[0]->runtime_memory;
    for (UINT i = 0; i + 1 < count; ++i)
-      resources[i]->runtime_primary = resources[i + 1]->runtime_primary;
-   resources[count - 1]->runtime_primary = first;
+      resources[i]->runtime_memory = resources[i + 1]->runtime_memory;
+   resources[count - 1]->runtime_memory = first;
    /* Allocation ownership moves with the Gallium storage. The runtime's
     * resource handles stay in their original logical resource slots. */
    for (UINT i = 0; i < count; ++i)
-      resources[i]->runtime_primary->runtime_resource = resources[i]->runtime_resource;
+      resources[i]->runtime_memory->runtime_resource = resources[i]->runtime_resource;
    return S_OK;
 }
 
@@ -449,9 +608,9 @@ HRESULT RuntimeDeviceFinish(Device *device)
    return hr;
 }
 
-HRESULT RuntimePrimaryFinish(Device *device, Resource *resource)
+HRESULT RuntimeResourceFinish(Device *device, Resource *resource)
 {
-   if (!resource->runtime_primary || !resource->resource) return S_OK;
+   if (!resource->runtime_memory || !resource->resource) return S_OK;
    if (device->pipe->flush_resource)
       device->pipe->flush_resource(device->pipe, resource->resource);
    return RuntimeDeviceFinish(device);

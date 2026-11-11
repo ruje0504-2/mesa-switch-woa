@@ -1186,3 +1186,52 @@ temporary-registration/task/environment cleanup and unchanged power policy
 are verified at 18:11:24 UTC. Portrait restore/verify is a no-op at 18:12:17.
 No interruption cause is inferred. `native-summary.json`, `umd-summary.json`
 and `display-analysis-001/process-failures.json` retain the scoped findings.
+
+### Runtime shared texture bridge
+
+The next candidate implements the path missing from the `.149` Explorer trace.
+Shared BGRA/RGBA, single-mip/single-layer, single-sample default textures now
+allocate through the real D3D runtime resource handle. A 72-byte, pointer-free
+renderer descriptor accompanies the existing KMD resource envelope and 32-byte
+linear allocation ABI. Layout uses 128-byte rows, four-row padding and 4-KiB
+backing, bounded by the existing 512-MiB cap.
+
+OpenResource validates that descriptor and imports the allocation already opened
+by the runtime for the consumer device. It neither casts a kernel resource
+handle into a runtime handle nor allocates a replacement backing store. Each
+owner has its own paging queue, residency and GPU-VA mappings; cleanup releases
+the correct runtime reference. A failed OpenResource unwinds immediately because
+the runtime will not issue DestroyResource for that failed handle.
+[Microsoft OpenResource contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_openresource)
+
+The Zink/NVK import preserves existing linear contents and explicit BGRA/RGBA
+row pitch without labelling shared textures as display primaries. This is a
+limited shared-texture implementation, not a claim of support for every D3D
+format, resource type or synchronization contract. The next native trial must
+record legacy and NT-handle results separately. Failing KMT device/context/fence
+creation now emits the original API and NTSTATUS as `[NVK KMT]` debugger output.
+
+Controls completed on `.59` Code 0 at 18:50:06 UTC on 2026-11-11:
+
+- The new ARM64 runtime-owner fixture passes aligned BGRA/RGBA metadata,
+  consumer-specific handles, pending paging, producer release, stale mapping
+  cleanup and failure unwinding. It uses controlled callbacks, not GPU hardware.
+- Existing primary, Present, adapter, device and DLL-entry fixtures pass. Their
+  finalized 114-event trace reports no event or buffer loss.
+- The real Windows D3D runtime probe passes legacy and NT sharing on Microsoft
+  WARP: both formats match 4,096 pixels in each direction and after producer
+  device release, totalling 49,152 checks. WARP is a software control; it does
+  not validate Tegra rendering, desktop composition or presentation.
+- All 14 returned evidence files match remote lengths and SHA256. The source
+  also passes host models and the real WDK ARM64 build. The linear ABI was
+  centralized without changing its byte layout.
+
+Artifacts: `runtime-shared-umd-control-20261111`, UMD
+`runtime-shared-20261111-umd+c46b59544870`, ICD
+`runtime-shared-20261111-icd+6e2fad99d742`. The tested probe hash is
+`8d05297c6ac550efd378faf62a09988d5250c8b2b414ac3d125535d5d49e4475`.
+Its final success message incorrectly retained the earlier descriptor-only
+scope; the per-phase pixel records above are authoritative. The rebuilt probe
+`10aec6cd4e44ca072eec3434e3991121ca3df60b377c6af0c4e7f2000676442e`
+changes only that final message. Native shared pixels remain unverified.
+

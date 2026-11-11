@@ -1497,10 +1497,11 @@ setup_image_pnext(struct zink_screen *screen, const struct pipe_resource *templ,
 
 #ifdef _WIN32
    if (is_wddm_allocation(alloc_info->whandle)) {
+      ici->initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
       s->wsi = (struct wsi_image_create_info) {
          .sType = VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA,
          .pNext = ici->pNext,
-         .scanout = true,
+         .scanout = !(templ->bind & PIPE_BIND_SHARED),
          .win32_row_pitch = alloc_info->whandle->stride,
       };
       ici->pNext = &s->wsi;
@@ -1665,7 +1666,7 @@ create_image(struct zink_screen *screen, struct zink_resource_object *obj,
       ici.pNext = NULL;
       struct wsi_image_create_info wsi = {
          .sType = VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA,
-         .scanout = true,
+         .scanout = !(templ->bind & PIPE_BIND_SHARED),
          .win32_row_pitch = alloc_info->whandle->stride,
       };
       VkPhysicalDeviceImageFormatInfo2 info = {
@@ -1979,7 +1980,8 @@ resource_create(struct pipe_screen *pscreen,
       res->dmabuf = whandle && whandle->type == WINSYS_HANDLE_TYPE_FD;
       if (res->dmabuf)
          res->queue = VK_QUEUE_FAMILY_FOREIGN_EXT;
-      res->layout = res->dmabuf ? VK_IMAGE_LAYOUT_PREINITIALIZED : VK_IMAGE_LAYOUT_UNDEFINED;
+      res->layout = (res->dmabuf || is_wddm_allocation(whandle)) ?
+         VK_IMAGE_LAYOUT_PREINITIALIZED : VK_IMAGE_LAYOUT_UNDEFINED;
       res->linear = linear;
       res->aspect = aspect_from_format(templ->format);
    }
@@ -2396,7 +2398,8 @@ zink_resource_from_handle(struct pipe_screen *pscreen,
       if (!whandle->com_obj || !whandle->stride || whandle->offset || whandle->plane ||
           templ->target != PIPE_TEXTURE_2D || templ->array_size != 1 ||
           templ->last_level || util_res_sample_count(templ) != 1 ||
-          templ->format != PIPE_FORMAT_B8G8R8A8_UNORM)
+          (templ->format != PIPE_FORMAT_B8G8R8A8_UNORM &&
+           templ->format != PIPE_FORMAT_R8G8B8A8_UNORM))
          return NULL;
       struct pipe_resource linear = *templ;
       linear.bind |= PIPE_BIND_LINEAR;

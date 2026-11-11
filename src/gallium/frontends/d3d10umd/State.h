@@ -170,7 +170,7 @@ CheckDeviceRemoved(D3D10DDI_HDEVICE hDevice)
 }
 
 
-struct RuntimePrimary;
+struct RuntimeResource;
 struct Resource;
 struct ResourceViewLink {
    Resource *owner;
@@ -191,7 +191,7 @@ struct Resource
    struct pipe_resource *resource;
    struct pipe_transfer **transfers;
    struct pipe_stream_output_target *so_target;
-   RuntimePrimary *runtime_primary;
+   RuntimeResource *runtime_memory;
    ResourceViewLink *views;
 };
 

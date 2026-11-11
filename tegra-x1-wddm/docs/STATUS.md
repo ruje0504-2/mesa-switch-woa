@@ -25,12 +25,19 @@ SHA256. `.59` Code 0, baseline hashes, cleanup and unchanged power settings are
 verified at 18:11:24 UTC; portrait restore/verify is a no-op at 18:12:17 UTC.
 Artifacts are in `desktop-acl-native-20261111`; no native test remains running.
 
-**Next implementation:** connect real shared textures to D3D runtime allocation,
-resource metadata and OpenResource, and retain the specific KMT failure behind
-Vulkan device initialization. Ordinary non-primary shared textures currently
-bypass runtime allocation and OpenResource remains unimplemented. Validate
-shared GPU contents and lifetime, then the complete desktop, hardware landscape
-and Win32 `vkcube`. Do not treat raising Feature Level as a fix for these errors.
+**Shared-texture candidate:** runtime-owned non-primary BGRA/RGBA allocation,
+serialized resource metadata and consumer OpenResource are implemented. UMD,
+ICD and WDK ARM64 builds pass; controlled callbacks pass ownership, paging and
+failure cleanup. The upgraded probe passes all 49,152 shared-content checks on
+Microsoft WARP, including producer-device release. This is not native Tegra
+pixel evidence. The candidate also retains the failing KMT API/NTSTATUS during
+device initialization. No new native package has been installed yet.
+[Implementation and controls](D3D_RUNTIME_SHARING.md#runtime-shared-texture-bridge)
+
+**Next validation:** run the shared GPU contents/lifetime probe with the paired
+UMD/ICD, then inspect the complete desktop, hardware landscape and Win32
+`vkcube`. Legacy and NT-handle results must be recorded separately. Do not
+treat raising Feature Level as a fix for the observed resource failures.
 
 **Landscape remains unverified:** the preceding `.149` source-mode trial on
 LUID `bd778` still returns CCD error 1610 at 17:32:03 UTC. It applies no mode

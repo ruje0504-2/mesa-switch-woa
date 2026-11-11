@@ -370,9 +370,10 @@ nvk_GetPhysicalDeviceImageFormatProperties2(
    const struct wsi_image_create_info *wsi =
       vk_find_struct_const(pImageFormatInfo->pNext, WSI_IMAGE_CREATE_INFO_MESA);
    if (wsi && wsi->win32_row_pitch) {
-      if (!wsi->scanout || pImageFormatInfo->type != VK_IMAGE_TYPE_2D ||
+      if (pImageFormatInfo->type != VK_IMAGE_TYPE_2D ||
           pImageFormatInfo->tiling != VK_IMAGE_TILING_LINEAR ||
-          pImageFormatInfo->format != VK_FORMAT_B8G8R8A8_UNORM ||
+          (pImageFormatInfo->format != VK_FORMAT_B8G8R8A8_UNORM &&
+           pImageFormatInfo->format != VK_FORMAT_R8G8B8A8_UNORM) ||
           pImageFormatInfo->flags || (wsi->win32_row_pitch & 31))
          return VK_ERROR_FORMAT_NOT_SUPPORTED;
       win32_scanout = true;
@@ -971,9 +972,10 @@ nvk_image_init(struct nvk_device *dev,
    const struct wsi_image_create_info *wsi =
       vk_find_struct_const(pCreateInfo->pNext, WSI_IMAGE_CREATE_INFO_MESA);
    if (wsi && wsi->win32_row_pitch) {
-      if (!wsi->scanout || image->vk.image_type != VK_IMAGE_TYPE_2D ||
+      if (image->vk.image_type != VK_IMAGE_TYPE_2D ||
           image->vk.tiling != VK_IMAGE_TILING_LINEAR ||
-          image->vk.format != VK_FORMAT_B8G8R8A8_UNORM ||
+          (image->vk.format != VK_FORMAT_B8G8R8A8_UNORM &&
+           image->vk.format != VK_FORMAT_R8G8B8A8_UNORM) ||
           image->vk.array_layers != 1 || image->vk.mip_levels != 1 ||
           image->vk.samples != VK_SAMPLE_COUNT_1_BIT || pCreateInfo->flags ||
           (wsi->win32_row_pitch & 31) ||

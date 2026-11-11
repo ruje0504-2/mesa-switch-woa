@@ -34,6 +34,14 @@ struct tg_gpu_primary_allocation_request {
 };
 _Static_assert(sizeof(struct tg_gpu_primary_allocation_request)==48,"primary layout ABI");
 
+/* Existing linear-surface ABI: 128-byte rows, four-row storage height,
+ * and page-rounded backing. Format uses D3DDDIFORMAT values. */
+struct tg_gpu_linear_allocation_request {
+    struct tg_gpu_allocation_request Buffer;
+    uint32_t Format, Width, Height, Pitch;
+};
+_Static_assert(sizeof(struct tg_gpu_linear_allocation_request)==32,"linear surface ABI");
+
 /* Resource-level data precedes the UMD's image/layout descriptor. VidMm
  * retains that descriptor for OpenResource; the KMD validates only the
  * storage envelope. This is one atomic allocation set, as required when

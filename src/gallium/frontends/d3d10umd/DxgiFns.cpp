@@ -133,12 +133,12 @@ _SetDisplayMode( DXGI_DDI_ARG_SETDISPLAYMODE *SetDisplayMode )
       return E_INVALIDARG;
    Device *device = CastDevice(SetDisplayMode->hDevice);
    Resource *resource = CastResource(SetDisplayMode->hResource);
-   HRESULT hr = RuntimePrimaryFinish(device, resource);
+   HRESULT hr = RuntimeResourceFinish(device, resource);
    if (SUCCEEDED(hr))
-      hr = RuntimePrimarySetMode(resource->runtime_primary, device->hDevice,
+      hr = RuntimePrimarySetMode(resource->runtime_memory, device->hDevice,
                                  SetDisplayMode->SubResourceIndex);
    D3D10Trace(D3D10_TRACE_SET_DISPLAY_MODE, hr,
-      resource->runtime_primary ? RuntimePrimaryMemory(resource->runtime_primary)->allocation : 0,
+      resource->runtime_memory ? RuntimeResourceMemory(resource->runtime_memory)->allocation : 0,
       SetDisplayMode->SubResourceIndex);
    return hr;
 #else
@@ -223,7 +223,7 @@ rotate_hardware_resources(const DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *args)
          }
       }
       const pipe_resource *a = resources[0]->resource, *b = r->resource;
-      if (!!r->runtime_primary != !!resources[0]->runtime_primary ||
+      if (!!r->runtime_memory != !!resources[0]->runtime_memory ||
           r->Format != resources[0]->Format || a->target != PIPE_TEXTURE_2D ||
           b->target != a->target || b->format != a->format ||
           b->width0 != a->width0 || b->height0 != a->height0 || b->depth0 != a->depth0 ||

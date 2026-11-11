@@ -89,7 +89,7 @@ static void check_identities(const RenderTargetView *rtv, const ShaderResourceVi
    for (unsigned i = 0; i < 3; ++i) {
       CHECK(resources[i].runtime_resource == rt_resource(i));
       CHECK(resources[i].resource == &textures[expected[i]]);
-      CHECK(RuntimePrimaryMemory(resources[i].runtime_primary)->allocation == 0x50 + expected[i]);
+      CHECK(RuntimeResourceMemory(resources[i].runtime_memory)->allocation == 0x50 + expected[i]);
       CHECK(rtv[i].surface.texture == resources[i].resource);
       CHECK(srv[i].handle->texture == resources[i].resource);
       CHECK(srv[i].handle->format == PIPE_FORMAT_B8G8R8A8_UNORM);
@@ -150,7 +150,7 @@ int main()
       t.width0 = 720; t.height0 = 1280; t.depth0 = t.array_size = 1;
       r.device = &device; r.runtime_resource = rt_resource(i); r.resource = &t;
       r.Format = desc.Format; r.MipLevels = r.NumSubResources = 1;
-      CHECK(RuntimePrimaryCreate(&device, &desc, {rt_resource(i)}, &r.runtime_primary) == S_OK);
+      CHECK(RuntimePrimaryCreate(&device, &desc, {rt_resource(i)}, &r.runtime_memory) == S_OK);
       handles[i] = reinterpret_cast<DXGI_DDI_HRESOURCE>(&r);
       rtv_handles[i] = {&rtv[i]}; srv_handles[i] = {&srv[i]};
       D3D10DDIARG_CREATERENDERTARGETVIEW v = {};
@@ -212,7 +212,7 @@ int main()
       DestroyRenderTargetView(hdevice, rtv_handles[destroying]);
       CHECK(!resources[destroying].views);
       pipe_resource_reference(&resources[destroying].resource, NULL);
-      CHECK(RuntimePrimaryDestroy(resources[destroying].runtime_primary) == S_OK);
+      CHECK(RuntimeResourceDestroy(resources[destroying].runtime_memory) == S_OK);
    }
    CHECK(!live_views && !live_allocations && !live_queues && destroyed_textures == 3);
    puts("PASS: runtime Present preserves owners/context/opaque token/status after GPU completion; swapchain identities, RTV/SRV bindings, failed waits/allocations and cleanup pass (controlled substitutes)");

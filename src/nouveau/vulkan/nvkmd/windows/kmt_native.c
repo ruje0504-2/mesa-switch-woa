@@ -13,6 +13,24 @@
 #include "allocation_abi.h"
 #include "submit_abi.h"
 
+/* Keep the failing API/NTSTATUS before cleanup, even when a desktop process
+ * has no stderr or Vulkan debug messenger. One debugger message per failure. */
+static void
+log_create_failure(const char *operation, LONG status)
+{
+   char text[128] = "[NVK KMT] ";
+   size_t n = sizeof("[NVK KMT] ") - 1;
+   while (*operation && n < sizeof(text) - 22)
+      text[n++] = *operation++;
+   const char suffix[] = " status=0x";
+   memcpy(text + n, suffix, sizeof(suffix) - 1);
+   n += sizeof(suffix) - 1;
+   for (int shift = 28; shift >= 0; shift -= 4)
+      text[n++] = "0123456789abcdef"[((uint32_t)status >> shift) & 15];
+   text[n++] = '\n'; text[n] = 0;
+   OutputDebugStringA(text);
+}
+
 LONG
 tg_kmt_open_device(struct tg_kmt_device *dev,
                    const struct tg_gpu_adapter_info *info)
@@ -24,10 +42,13 @@ tg_kmt_open_device(struct tg_kmt_device *dev,
       .AdapterLuid = { .LowPart = info->luid_low, .HighPart = info->luid_high },
    };
    LONG status = D3DKMTOpenAdapterFromLuid(&open);
-   if (status < 0)
+   if (status < 0) {
+      log_create_failure("D3DKMTOpenAdapterFromLuid", status);
       return status;
+   }
    dev->adapter = open.hAdapter;
 
+   const char *operation = "D3DKMTCreateDevice";
    D3DKMT_CREATEDEVICE device = { .hAdapter = dev->adapter };
    status = D3DKMTCreateDevice(&device);
    if (status < 0)
@@ -37,6 +58,7 @@ tg_kmt_open_device(struct tg_kmt_device *dev,
    D3DKMT_CREATEPAGINGQUEUE queue = {
       .hDevice = dev->handle, .Priority = D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL,
    };
+   operation = "D3DKMTCreatePagingQueue";
    status = D3DKMTCreatePagingQueue(&queue);
    if (status < 0)
       goto fail;
@@ -47,6 +69,7 @@ tg_kmt_open_device(struct tg_kmt_device *dev,
    return 0;
 
 fail:
+   log_create_failure(operation, status);
    tg_kmt_close_device(dev);
    return status;
 }
@@ -85,6 +108,8 @@ tg_kmt_create_context(const struct tg_kmt_device *dev, uint32_t *context)
    LONG status = D3DKMTCreateContextVirtual(&args);
    if (status >= 0)
       *context = args.hContext;
+   else
+      log_create_failure("D3DKMTCreateContextVirtual", status);
    return status;
 }
 
@@ -504,6 +529,8 @@ tg_kmt_create_fence(const struct tg_kmt_device *dev, uint64_t initial, struct tg
       *fence = (struct tg_kmt_fence) {
          .handle = args.hSyncObject, .value = args.Info.MonitoredFence.FenceValueCPUVirtualAddress,
       };
+   else
+      log_create_failure("D3DKMTCreateSynchronizationObject2", status);
    return status;
 }
 

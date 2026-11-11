@@ -306,6 +306,10 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
    templat.nr_storage_samples = pCreateResource->SampleDesc.Count;
    templat.bind       = translate_resource_flags(pCreateResource->BindFlags);
    templat.usage      = translate_resource_usage(pCreateResource->Usage);
+#ifdef D3D10_UMD_HARDWARE
+   const bool shared = pCreateResource->MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED;
+   if (shared) templat.bind |= PIPE_BIND_SHARED;
+#endif
 
    if (templat.target != PIPE_BUFFER) {
       if (!screen->is_format_supported(screen,
@@ -322,26 +326,27 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
    }
 
 #ifdef D3D10_UMD_HARDWARE
-   if (pCreateResource->pPrimaryDesc) {
+   if (pCreateResource->pPrimaryDesc || shared) {
       if (!screen->resource_from_handle) {
          SetError(hDevice, DXGI_ERROR_UNSUPPORTED);
          return;
       }
-      HRESULT hr = RuntimePrimaryCreate(CastDevice(hDevice), pCreateResource,
-                                        hRTResource, &pResource->runtime_primary);
+      HRESULT hr = shared ?
+         RuntimeSharedCreate(CastDevice(hDevice), pCreateResource, hRTResource, &pResource->runtime_memory) :
+         RuntimePrimaryCreate(CastDevice(hDevice), pCreateResource, hRTResource, &pResource->runtime_memory);
       if (FAILED(hr)) { SetError(hDevice, hr); return; }
       struct winsys_handle handle = {};
       handle.type = WINSYS_HANDLE_TYPE_WDDM_ALLOCATION;
-      handle.com_obj = const_cast<wsi_win32_memory *>(RuntimePrimaryMemory(pResource->runtime_primary));
-      handle.stride = RuntimePrimaryPitch(pResource->runtime_primary);
-      handle.size = RuntimePrimaryMemory(pResource->runtime_primary)->size;
+      handle.com_obj = const_cast<wsi_win32_memory *>(RuntimeResourceMemory(pResource->runtime_memory));
+      handle.stride = RuntimeResourcePitch(pResource->runtime_memory);
+      handle.size = RuntimeResourceMemory(pResource->runtime_memory)->size;
       handle.format = templat.format;
       pResource->resource = screen->resource_from_handle(screen, &templat, &handle,
                                                          PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE);
       if (!pResource->resource) {
-         hr = RuntimePrimaryError(pResource->runtime_primary);
-         RuntimePrimaryDestroy(pResource->runtime_primary);
-         pResource->runtime_primary = NULL;
+         hr = RuntimeResourceError(pResource->runtime_memory);
+         RuntimeResourceDestroy(pResource->runtime_memory);
+         pResource->runtime_memory = NULL;
          SetError(hDevice, hr);
          return;
       }
@@ -473,9 +478,59 @@ OpenResource(D3D10DDI_HDEVICE hDevice,                            // IN
              D3D10DDI_HRESOURCE hResource,                        // IN
              D3D10DDI_HRTRESOURCE hRTResource)                    // IN
 {
+#ifdef D3D10_UMD_HARDWARE
+   Resource *resource = CastResource(hResource);
+   memset(resource, 0, sizeof(*resource));
+   resource->device = CastDevice(hDevice);
+   resource->runtime_resource = hRTResource.handle;
+   auto screen = resource->device->pipe->screen;
+   RuntimeSharedDescription description = {};
+   HRESULT hr = screen->resource_from_handle ?
+      RuntimeSharedOpen(resource->device, pOpenResource, hRTResource,
+                        &resource->runtime_memory, &description) : DXGI_ERROR_UNSUPPORTED;
+   if (SUCCEEDED(hr)) {
+      pipe_resource templat = {};
+      templat.target = PIPE_TEXTURE_2D;
+      templat.format = FormatTranslate(description.format, FALSE);
+      templat.width0 = description.width;
+      templat.height0 = description.height;
+      templat.depth0 = templat.array_size = 1;
+      templat.nr_samples = templat.nr_storage_samples = 1;
+      templat.bind = translate_resource_flags(description.bind_flags) | PIPE_BIND_SHARED;
+      templat.usage = translate_resource_usage(static_cast<D3D10_DDI_RESOURCE_USAGE>(description.usage));
+      winsys_handle handle = {};
+      handle.type = WINSYS_HANDLE_TYPE_WDDM_ALLOCATION;
+      handle.com_obj = const_cast<wsi_win32_memory *>(RuntimeResourceMemory(resource->runtime_memory));
+      handle.stride = description.pitch;
+      handle.size = RuntimeResourceMemory(resource->runtime_memory)->size;
+      handle.format = templat.format;
+      resource->resource = screen->resource_from_handle(screen, &templat, &handle,
+                                                         PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE);
+      if (!resource->resource) hr = RuntimeResourceError(resource->runtime_memory);
+   }
+   if (SUCCEEDED(hr)) {
+      resource->Format = description.format;
+      resource->MipLevels = 1;
+      resource->transfers = static_cast<pipe_transfer **>(calloc(1, sizeof(pipe_transfer *)));
+      if (!resource->transfers) hr = E_OUTOFMEMORY;
+      else resource->NumSubResources = 1;
+   }
+   D3D10Trace(D3D10_TRACE_OPEN_RESOURCE, hr,
+              (uint64_t)description.width << 32 | description.height,
+              (uint64_t)pOpenResource->NumAllocations << 32 | description.pitch);
+   if (FAILED(hr)) {
+      /* A failed OpenResource will not receive DestroyResource from the
+       * runtime. Unwind the storage and callbacks here, in ownership order. */
+      pipe_resource_reference(&resource->resource, NULL);
+      RuntimeResourceDestroy(resource->runtime_memory);
+      memset(resource, 0, sizeof(*resource));
+      SetError(hDevice, hr);
+   }
+#else
    LOG_UNSUPPORTED_ENTRYPOINT();
    D3D10Trace(D3D10_TRACE_OPEN_RESOURCE, E_OUTOFMEMORY, 0, 0);
    SetError(hDevice, E_OUTOFMEMORY);
+#endif
 }
 
 
@@ -523,12 +578,12 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
    /* The runtime resource is no longer valid after this DDI returns. Finish
     * GPU use before releasing its allocation, even if Zink retains a cached
     * object wrapper until a later batch cleanup. */
-   HRESULT completion = RuntimePrimaryFinish(CastDevice(hDevice), pResource);
+   HRESULT completion = RuntimeResourceFinish(CastDevice(hDevice), pResource);
 #endif
    pipe_resource_reference(&pResource->resource, NULL);
 #ifdef D3D10_UMD_HARDWARE
-   HRESULT released = RuntimePrimaryDestroy(pResource->runtime_primary);
-   pResource->runtime_primary = NULL;
+   HRESULT released = RuntimeResourceDestroy(pResource->runtime_memory);
+   pResource->runtime_memory = NULL;
    if (FAILED(completion)) SetError(hDevice, completion);
    else if (FAILED(released)) SetError(hDevice, released);
 #endif

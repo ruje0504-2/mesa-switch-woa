@@ -147,23 +147,85 @@ static void feature_levels(IDXGIAdapter *adapter, D3D_DRIVER_TYPE type,
    marker("Feature negotiation recorded; rendering, DWM and scanout were not exercised");
 }
 
-/* Exercise the runtime's resource association independently of rendering.
- * Legacy shared handles and NT handles have different ownership contracts.
- */
-static void shared_contract(ID3D11Device *producer, ID3D11Device *consumer, bool nt)
+static void acquire_shared(IDXGIKeyedMutex *mutex, UINT64 key, const char *phase)
 {
+   const HRESULT status = mutex->AcquireSync(key, 5000);
+   /* WAIT_TIMEOUT and WAIT_ABANDONED are positive HRESULT values. */
+   if (status != S_OK) {
+      fprintf(stderr, "%s: %08lx\n", phase, (unsigned long)status);
+      throw std::runtime_error("shared keyed mutex was not acquired");
+   }
+}
+
+static void shared_pixels(ID3D11Device *device, ID3D11DeviceContext *context,
+                          ID3D11Texture2D *source, bool red, const char *phase)
+{
+   D3D11_TEXTURE2D_DESC desc = {};
+   source->GetDesc(&desc);
+   const DXGI_FORMAT format = desc.Format;
+   desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = desc.MiscFlags = 0;
+   desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+   ComPtr<ID3D11Texture2D> staging;
+   check(device->CreateTexture2D(&desc, NULL, &staging), "Create shared readback staging");
+   context->CopyResource(staging.Get(), source);
+   D3D11_MAPPED_SUBRESOURCE mapped = {};
+   check(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped), "Map shared GPU contents");
+   const unsigned char expected[4] = {
+      static_cast<unsigned char>(red && format == DXGI_FORMAT_R8G8B8A8_UNORM ? 255 : 0),
+      static_cast<unsigned char>(red ? 0 : 255),
+      static_cast<unsigned char>(red && format == DXGI_FORMAT_B8G8R8A8_UNORM ? 255 : 0), 255};
+   bool matches = mapped.RowPitch >= desc.Width * 4;
+   for (UINT y = 0; matches && y < desc.Height; ++y) {
+      const auto row = static_cast<const unsigned char *>(mapped.pData) + y * mapped.RowPitch;
+      for (UINT x = 0; x < desc.Width; ++x) {
+         if (memcmp(row + x * 4, expected, 4)) { matches = false; break; }
+      }
+   }
+   context->Unmap(staging.Get(), 0);
+   check(device->GetDeviceRemovedReason(), "Shared readback device status");
+   if (!matches) throw std::runtime_error("shared GPU pixels differ");
+   printf("Shared pixels: phase=%s format=%u matched=%u\n", phase, format, desc.Width * desc.Height);
+   fflush(stdout);
+}
+
+/* Real contents and producer-device lifetime. Legacy handles are not NT
+ * handles; keyed-mutex synchronization is used for the separate NT case. */
+static void shared_contract(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVEL requested,
+                            ID3D11Device *consumer, DXGI_FORMAT format, bool nt)
+{
+   ComPtr<ID3D11Device> producer;
+   ComPtr<ID3D11DeviceContext> producer_context, consumer_context;
+   D3D_FEATURE_LEVEL actual_level = {};
+   check(D3D11CreateDevice(adapter, hardware ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_WARP,
+                          NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &requested, 1,
+                          D3D11_SDK_VERSION, &producer, &actual_level, &producer_context),
+         "Create sharing producer");
+   if (actual_level != requested) throw std::runtime_error("unexpected producer feature level");
+   consumer->GetImmediateContext(&consumer_context);
    D3D11_TEXTURE2D_DESC desc = {};
    desc.Width = desc.Height = 64;
    desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
-   desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+   desc.Format = format;
    desc.Usage = D3D11_USAGE_DEFAULT;
    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
    desc.MiscFlags = nt ? D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX :
                         D3D11_RESOURCE_MISC_SHARED;
-   printf("Shared contract: mode=%s flags=%08x\n", nt ? "NT" : "legacy", desc.MiscFlags);
+   printf("Shared contract: mode=%s format=%u flags=%08x\n", nt ? "NT" : "legacy", format, desc.MiscFlags);
    fflush(stdout);
    ComPtr<ID3D11Texture2D> original, opened;
+   ComPtr<ID3D11RenderTargetView> producer_view, consumer_view;
+   ComPtr<IDXGIKeyedMutex> producer_mutex, consumer_mutex;
    check(producer->CreateTexture2D(&desc, NULL, &original), "Create shared texture");
+   check(producer->CreateRenderTargetView(original.Get(), NULL, &producer_view), "Create producer shared RTV");
+   if (nt) {
+      check(original.As(&producer_mutex), "Get producer keyed mutex");
+      acquire_shared(producer_mutex.Get(), 0, "Acquire producer shared texture");
+   }
+   const FLOAT red[4] = {1, 0, 0, 1}, green[4] = {0, 1, 0, 1};
+   producer_context->ClearRenderTargetView(producer_view.Get(), red);
+   producer_context->Flush();
+   check(producer->GetDeviceRemovedReason(), "Producer GPU write status");
+   if (nt) check(producer_mutex->ReleaseSync(1), "Publish producer GPU contents");
    HANDLE handle = NULL;
    if (nt) {
       ComPtr<IDXGIResource1> resource;
@@ -176,22 +238,39 @@ static void shared_contract(ID3D11Device *producer, ID3D11Device *consumer, bool
          status = device1->OpenSharedResource1(handle, IID_PPV_ARGS(&opened));
       CloseHandle(handle);
       check(status, "Open NT shared resource");
+      check(opened.As(&consumer_mutex), "Get consumer keyed mutex");
+      acquire_shared(consumer_mutex.Get(), 1, "Acquire producer GPU contents");
    } else {
       ComPtr<IDXGIResource> resource;
       check(original.As(&resource), "Query legacy resource");
       check(resource->GetSharedHandle(&handle), "Get legacy shared handle");
-      /* A legacy handle is not an NT handle: never CloseHandle it. */
       check(consumer->OpenSharedResource(handle, IID_PPV_ARGS(&opened)), "Open legacy shared resource");
    }
    printf("Shared contract handle=%p\n", handle);
    fflush(stdout);
-   original.Reset();
    D3D11_TEXTURE2D_DESC actual = {};
    opened->GetDesc(&actual);
-   if (memcmp(&actual, &desc, sizeof(desc)))
-      throw std::runtime_error("opened resource descriptor differs");
-   opened.Reset();
-   marker(nt ? "NT resource association/open/release passed" : "Legacy resource association/open/release passed");
+   if (memcmp(&actual, &desc, sizeof(desc))) throw std::runtime_error("opened resource descriptor differs");
+   shared_pixels(consumer, consumer_context.Get(), opened.Get(), true, "producer-to-consumer");
+   check(consumer->CreateRenderTargetView(opened.Get(), NULL, &consumer_view), "Create consumer shared RTV");
+   consumer_context->ClearRenderTargetView(consumer_view.Get(), green);
+   consumer_context->Flush();
+   check(consumer->GetDeviceRemovedReason(), "Consumer GPU write status");
+   if (nt) {
+      check(consumer_mutex->ReleaseSync(2), "Publish consumer GPU contents");
+      acquire_shared(producer_mutex.Get(), 2, "Acquire consumer GPU contents");
+   }
+   shared_pixels(producer.Get(), producer_context.Get(), original.Get(), false, "consumer-to-producer");
+   if (nt) check(producer_mutex->ReleaseSync(3), "Release producer ownership");
+   producer_context->ClearState();
+   producer_view.Reset(); producer_mutex.Reset(); original.Reset();
+   producer_context.Reset(); producer.Reset();
+   marker("Sharing producer device released");
+   if (nt) acquire_shared(consumer_mutex.Get(), 3, "Acquire after producer release");
+   shared_pixels(consumer, consumer_context.Get(), opened.Get(), false, "after-producer-device-release");
+   if (nt) check(consumer_mutex->ReleaseSync(4), "Release consumer ownership");
+   consumer_view.Reset(); consumer_mutex.Reset(); opened.Reset();
+   marker(nt ? "NT shared GPU contents/lifetime passed" : "Legacy shared GPU contents/lifetime passed");
 }
 
 static void images(ID3D11Device *device, ID3D11DeviceContext *context, DXGI_FORMAT format)
@@ -498,17 +577,11 @@ int main(int argc, char **argv)
       }
       report_runtime_modules();
       if (shared) {
-         ComPtr<ID3D11Device> consumer;
-         ComPtr<ID3D11DeviceContext> consumer_context;
-         D3D_FEATURE_LEVEL consumer_level = {};
-         check(D3D11CreateDevice(adapter.Get(), hardware ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_WARP,
-                                NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT, &requested, 1,
-                                D3D11_SDK_VERSION, &consumer, &consumer_level, &consumer_context),
-                "Create sharing consumer");
-         if (consumer_level != requested) throw std::runtime_error("unexpected consumer feature level");
-         shared_contract(device.Get(), consumer.Get(), false);
-         shared_contract(device.Get(), consumer.Get(), true);
-         check(consumer->GetDeviceRemovedReason(), "Consumer status after sharing");
+         shared_contract(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_B8G8R8A8_UNORM, false);
+         shared_contract(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, false);
+         shared_contract(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_B8G8R8A8_UNORM, true);
+         shared_contract(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, true);
+         check(device->GetDeviceRemovedReason(), "Consumer status after sharing");
       } else if (sample) {
          sampled_images(device.Get(), context.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
          sampled_images(device.Get(), context.Get(), DXGI_FORMAT_B8G8R8A8_UNORM);
@@ -536,7 +609,7 @@ int main(int argc, char **argv)
    }
    if (module) FreeLibrary(module);
    if (!result)
-      marker(shared ? "Windows D3D runtime resource association passed; GPU access and presentation were not exercised" :
+      marker(shared ? "Windows D3D shared texture contents and producer-device lifetime passed; presentation was not exercised" :
                       "Windows D3D runtime clear/draw/readback passed; sharing and presentation were not exercised");
    return result;
 }
