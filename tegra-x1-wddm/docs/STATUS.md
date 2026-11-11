@@ -21,10 +21,18 @@ bits before the format query and image creation. ARM64 UMD
 entry pass at 21:42:21 UTC. Native sampled pixels and desktop repair are pending.
 KMD/ICD, memory budget and display direction are unchanged.
 
-**Cleanup failure remains:** after the BGRA comparisons, the probe exits
+**Cleanup correction ready for native validation:** after the BGRA comparisons,
+the preceding probe exits
 `c0000005` in `zink_bind_vertex_elements_state` from `cso_unbind_context`.
-The earlier frontend unbind correction is insufficient on the real backend.
-RGBA is not reached. Do not label that lifetime path or the full desktop fixed.
+The frontend now transfers the owning buffer reference through Gallium's
+`resource_release`, allowing Zink to retire retained bindings before freeing.
+The revised regression models that delayed unbind: the old frontend fails,
+and immediate/deferred cases both pass with the correction at 21:47:41 UTC.
+Combined UMD `buffer-release-v2-20261111-umd+e99798fa9668` builds and its
+callback/DLL-entry controls pass at 21:48:39. The next native comparison checks
+original layout, all ordered variants and cleanup. Neither this lifetime path
+nor the full desktop is yet verified fixed on hardware.
+[Buffer-release ownership correction](D3D_RUNTIME_SHARING.md#buffer-release-ownership-correction)
 
 All 158 returned files (99,970,500 bytes), including five early copies, match
 device lengths/hashes. The finalized trace retains 45 successful DWM flips,

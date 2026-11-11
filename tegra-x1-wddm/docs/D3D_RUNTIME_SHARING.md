@@ -1677,3 +1677,37 @@ Only the two planned boots are observed: setup at 21:32:58 and recovery at
 verified at 21:39:54; saved portrait verification is unchanged at 21:40:21.
 No native test remains running. Shell window geometry and successful Present
 callbacks still do not establish complete physical taskbar content.
+
+### Buffer-release ownership correction
+
+The native cleanup exception exposes a missing ownership handoff.
+`DestroyResource` used `pipe_resource_reference(..., NULL)` on the frontend's
+owning buffer reference. Zink can retain a borrowed vertex binding after
+`set_vertex_buffers(0, NULL)`, until a later vertex-element change. Its
+`resource_release` callback marks a bound buffer for deferred release; the
+direct reference decrement bypassed that callback and could free the object
+before `cso_unbind_context` inspected the retained binding.
+
+D3D buffer destruction now transfers its owning reference through
+`pipe_resource_release` and clears the frontend pointer. The backend retires
+that ownership after its remaining uses. This also corrects the earlier
+comment that assumed the count-zero binding call immediately removed every
+backend reference.
+
+The real DDI fixture now supports both immediate and deferred vertex
+unbinding. The latter retains the pointer until vertex elements are unbound,
+rejects early destruction, and checks that the transferred reference is freed
+during device cleanup. At 21:47:41 UTC on `.59` Code 0, the pre-fix executable
+`aa20ebde478f` exits 1 at `resources && borrowed_vertex != resource`; fixed
+`e78a960b728c` passes both modes with exit 0 and empty stderr. All returned
+outputs match device hashes. This is a controlled lifetime regression, not
+native Zink execution.
+
+UMD `buffer-release-v2-20261111-umd+e99798fa9668` includes this correction and
+the image-usage fix above. Its ARM64 build and exact-artifact shared, primary,
+Present, adapter, device and DLL-entry controls pass at 21:48:39 UTC, with
+114 valid finalized trace records and no reported loss. The next native trial
+uses the original shared-layout mode followed by the unchanged ordered probe
+`5fcfd6671788`; KMD `.153` and ICD `6e2fad99d742` remain the same. Full BGRA/RGBA
+pixels, normal teardown and physical desktop content still require native
+evidence.

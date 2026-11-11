@@ -31,6 +31,9 @@ static pipe_transfer transfer = {};
 static unsigned char mapped_bytes[16];
 static unsigned vertex_elements, vertex_binds, draws;
 static pipe_resource *borrowed_vertex;
+static pipe_resource *deferred_resource;
+static bool defer_vertex_unbind;
+static unsigned resource_releases;
 static unsigned vertex_unbinds;
 static unsigned vertex_element_handle;
 static unsigned runtime_contexts, fence_refs, fence_waits, fence_token;
@@ -111,7 +114,24 @@ d3d10_create_screen(HANDLE, const D3DDDI_ADAPTERCALLBACKS *, pipe_screen **resul
       };
       context.bind_vs_state = context.bind_fs_state = [](pipe_context *, void *) {};
       context.bind_blend_state = context.bind_rasterizer_state = context.bind_vs_state;
-      context.bind_depth_stencil_alpha_state = context.bind_vertex_elements_state = context.bind_vs_state;
+      context.bind_depth_stencil_alpha_state = context.bind_vs_state;
+      context.bind_vertex_elements_state = [](pipe_context *, void *state) {
+         if (!state && borrowed_vertex) {
+            CHECK(resources && borrowed_vertex->reference.count > 0);
+            borrowed_vertex = NULL;
+            pipe_resource_reference(&deferred_resource, NULL);
+         }
+      };
+      context.resource_release = [](pipe_context *, pipe_resource *resource) {
+         CHECK(resource == &buffer);
+         ++resource_releases;
+         if (borrowed_vertex == resource) {
+            CHECK(!deferred_resource);
+            deferred_resource = resource;
+         } else {
+            pipe_resource_reference(&resource, NULL);
+         }
+      };
       context.flush = [](pipe_context *, pipe_fence_handle **fence, unsigned) {
          if (fence) { *fence = reinterpret_cast<pipe_fence_handle *>(&fence_token); ++fence_refs; }
       };
@@ -125,10 +145,15 @@ d3d10_create_screen(HANDLE, const D3DDDI_ADAPTERCALLBACKS *, pipe_screen **resul
          CHECK(state == &vertex_element_handle && vertex_elements); --vertex_elements;
       };
       context.set_vertex_buffers = [](pipe_context *, unsigned count, const pipe_vertex_buffer *buffers) {
-         /* Gallium borrows these pointers. Even teardown may inspect the old
-          * binding, so the frontend must unbind before dropping its last ref. */
+         /* Zink can retain a borrowed binding after count=0, until vertex
+          * elements are unbound. The owner must use resource_release so that
+          * the backend can defer destruction through that final use. */
          if (borrowed_vertex) CHECK(resources && borrowed_vertex->reference.count > 0);
-         if (!count) { borrowed_vertex = NULL; ++vertex_unbinds; return; }
+         if (!count) {
+            if (!defer_vertex_unbind) borrowed_vertex = NULL;
+            ++vertex_unbinds;
+            return;
+         }
          CHECK(count <= PIPE_MAX_ATTRIBS && buffers[0].buffer.resource == &buffer);
          for (unsigned i = 0; i < count; ++i) {
             CHECK(!buffers[i].is_user_buffer);
@@ -168,8 +193,10 @@ d3d10_create_screen(HANDLE, const D3DDDI_ADAPTERCALLBACKS *, pipe_screen **resul
    return S_OK;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+   CHECK(argc == 1 || (argc == 2 && !strcmp(argv[1], "--deferred-bindings")));
+   defer_vertex_unbind = argc == 2;
    D3D10_2DDI_ADAPTERFUNCS adapter_functions = {};
    D3D10DDIARG_OPENADAPTER open = {};
    open.pAdapterFuncs_2 = &adapter_functions;
@@ -299,19 +326,26 @@ int main(void)
    const unsigned unbinds = vertex_unbinds;
    const D3D10DDI_HRESOURCE none = {};
    functions.pfnIaSetVertexBuffers(create.hDrvDevice, 0, 1, &none, &stride, &offset);
-   CHECK(!borrowed_vertex && vertex_unbinds == unbinds + 1);
+   CHECK(borrowed_vertex == (defer_vertex_unbind ? &buffer : NULL));
+   CHECK(vertex_unbinds == unbinds + 1);
    functions.pfnIaSetIndexBuffer(create.hDrvDevice, {}, DXGI_FORMAT_UNKNOWN, 0);
    functions.pfnIaSetInputLayout(create.hDrvDevice, {});
    functions.pfnDestroyElementLayout(create.hDrvDevice, layout); free(layout.pDrvPrivate);
+   const unsigned previous_releases = resource_releases;
    functions.pfnDestroyResource(create.hDrvDevice, handle); free(handle.pDrvPrivate);
-   CHECK(!resources);
+   CHECK(resource_releases == previous_releases + 1);
+   CHECK(resources == (defer_vertex_unbind ? 1u : 0u));
+   CHECK(deferred_resource == (defer_vertex_unbind ? &buffer : NULL));
    DXGI_DDI_ARG_PRESENT present = {};
    present.hDevice = reinterpret_cast<DXGI_DDI_HDEVICE>(create.hDrvDevice.pDrvPrivate);
    CHECK(dxgi.pfnPresent(&present) == E_INVALIDARG);
    functions.pfnDestroyDevice(create.hDrvDevice);
    CHECK(!contexts && !runtime_contexts && !shaders && !vertex_elements && !fence_refs);
+   CHECK(!resources && !borrowed_vertex && !deferred_resource);
    free(create.hDrvDevice.pDrvPrivate);
    CHECK(adapter_functions.pfnCloseAdapter(open.hAdapter) == S_OK && screen_destroys == 1);
    puts("D3D UMD runtime context ownership, GPU fence completion/loss cleanup and four draw paths pass (controlled Gallium backend)");
+   printf("Buffer release ownership passed with %s vertex unbinding\n",
+          defer_vertex_unbind ? "deferred" : "immediate");
    return 0;
 }

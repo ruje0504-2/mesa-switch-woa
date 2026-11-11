@@ -129,10 +129,10 @@ IaSetVertexBuffers(D3D10DDI_HDEVICE hDevice,                                    
    Device *pDevice = CastDevice(hDevice);
    unsigned i;
 
-   /* The next draw installs the new bindings, but Gallium still borrows the
-    * old buffers until then. Drop that binding before releasing our refs;
-    * ClearState/device teardown need not be followed by another draw. CSO
-    * also clears u_vbuf's borrowed state when vertex translation is active. */
+   /* The next draw installs the new bindings. Notify Gallium before releasing
+    * our binding refs, including when no further draw follows ClearState.
+    * DestroyResource transfers the owning buffer ref through resource_release
+    * because a backend can defer retirement of its borrowed state. */
    if (NumBuffers)
       cso_set_vertex_buffers(pDevice->cso, 0, NULL);
 

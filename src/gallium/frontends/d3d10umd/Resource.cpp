@@ -580,7 +580,14 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
     * object wrapper until a later batch cleanup. */
    HRESULT completion = RuntimeResourceFinish(CastDevice(hDevice), pResource);
 #endif
-   pipe_resource_reference(&pResource->resource, NULL);
+   if (pResource->buffer) {
+      /* The backend can retain borrowed buffer bindings after ClearState.
+       * Transfer our ownership so it can finish those uses before freeing. */
+      pipe_resource_release(pipe, pResource->resource);
+      pResource->resource = NULL;
+   } else {
+      pipe_resource_reference(&pResource->resource, NULL);
+   }
 #ifdef D3D10_UMD_HARDWARE
    HRESULT released = RuntimeResourceDestroy(pResource->runtime_memory);
    pResource->runtime_memory = NULL;
