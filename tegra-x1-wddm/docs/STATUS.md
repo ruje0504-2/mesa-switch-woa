@@ -16,8 +16,8 @@ extensions, creates its instances/Zink screens and receives three successful
 D3D UMD CreateDevice returns. The trace records six fresh and six cached
 snapshots, all successful. Native FL10_0 rendering still matches 16,384
 pixels. The desktop capture remains black, and DWM subsequently exits with
-`c0000409`; the exact later failure is not yet identified. Next trace the
-post-device resource/runtime path before claiming composition or Present.
+`c0000409`; the later exception capture below identifies an unsupported
+shader opcode. Composition and Present remain unverified.
 .59 Code 0, environment cleanup, portrait preference and unchanged power
 settings are verified after rollback.
 [Diagnosis, controls and validation](PORTING.md#windows-icd-manifest-path)
@@ -29,10 +29,33 @@ four constant buffers and two vertex buffers. The finalized trace has
 22,407 valid events and no recorded loss; it contains no DWM runtime-error
 callback. DWM still exits with `c0000409`, and the per-DWM WER attempt
 produces no dump. The last successful buffer is not a fault location.
-Next obtain exception context and cover shader/state DDIs, without guessing
-capability changes. All 134 returned files match device hashes; .59, portrait,
+The subsequent exception capture below covers the shader failure. All 134
+returned files match device hashes; .59, portrait,
 power policy, temporary environment and dump settings/ACLs are restored.
 [Post-device evidence](PORTING.md#post-device-ddi-trace)
+
+**DWM sampling fix reaches the next contract boundary:** the matched ProcDump for PID
+484 identifies fast-fail 7 in `ucrtbase`, called from the UMD's
+`ttn_parse_tgsi` at RVA `21de44`. Register w26 is 145 (`TGSI_OPCODE_SAMPLE`),
+and disassembly matches the unsupported-opcode `abort()` branch. The
+`dwm-exception-auto-20261111` run has been recovered to .59; its dump hash
+matches the device. SAMPLE lowering and independent texture/sampler
+descriptors are implemented. Six ARM64 semantic controls and a WARP sampling
+control (24,576 matching pixels) pass. On LUID `9a316`, the subsequent native
+trial records 172 successful DWM resource creations, including 36 full-size
+720x1280 BGRA textures across repeated device attempts. Nine `_SetDisplayMode`
+calls explicitly return `DXGI_ERROR_UNSUPPORTED` from the existing hardware
+stub. This is a concrete remaining presentation boundary.
+
+The device restarts before the native drawing probes finish. The retained
+34,774-event trace is not finalized; absence of a later event is not proof
+of nonexecution. Native sampling, the latest ordinary-draw regression and
+desktop composition remain unverified. All 121 returned files match device
+hashes; .59 Code 0, portrait and unchanged power policy are restored.
+Next connect the actual primary-resource allocation to the runtime's display
+mode callback, alongside the pending resource/presentation bridge. The cause
+of the trial restart is not established by this record.
+[Exception context and sampling work](PORTING.md#dwm-tgsi-sample-abort)
 
 **Host-memory audit (2026-11-11):** no page-size/alignment or 512 MiB unit
 error was found in the inspected paths. The current instance path uses

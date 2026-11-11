@@ -4,12 +4,14 @@
 #include <initguid.h>
 #include <windows.h>
 #include <d3d11_1.h>
+#include <d3dcompiler.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <stdexcept>
 
 #include "tri_vs_4_0.h"
@@ -282,16 +284,144 @@ static void images(ID3D11Device *device, ID3D11DeviceContext *context, DXGI_FORM
    context->Flush();
 }
 
+/* Different t/s slots and deliberately conflicting bindings catch accidental
+ * conversion to the legacy combined-sampler model. No presentation is used. */
+static void sampled_images(ID3D11Device *device, ID3D11DeviceContext *context,
+                           DXGI_FORMAT format)
+{
+   struct compiler_module {
+      HMODULE handle = LoadLibraryExW(L"d3dcompiler_47.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+      ~compiler_module() { if (handle) FreeLibrary(handle); }
+   } compiler;
+   if (!compiler.handle) throw std::runtime_error("system shader compiler unavailable");
+   auto compile = reinterpret_cast<pD3DCompile>(GetProcAddress(compiler.handle, "D3DCompile"));
+   if (!compile) throw std::runtime_error("D3DCompile unavailable");
+   static const char source[] =
+      "Texture2D<float4> image : register(t5);\n"
+      "SamplerState filtering : register(s2);\n"
+      "float4 main(float4 p : SV_Position) : SV_Target {\n"
+      " return image.Sample(filtering, p.xy * 0.125 + 0.25).bgra;\n"
+      "}\n";
+   ComPtr<ID3DBlob> code, errors;
+   HRESULT status = compile(source, sizeof(source) - 1, "sample-slots.hlsl", NULL, NULL,
+                            "main", "ps_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0,
+                            &code, &errors);
+   if (FAILED(status) && errors)
+      fprintf(stderr, "%.*s\n", (int)errors->GetBufferSize(), (const char *)errors->GetBufferPointer());
+   check(status, "Compile SAMPLE pixel shader");
+   ComPtr<ID3D11VertexShader> vs;
+   ComPtr<ID3D11PixelShader> ps;
+   check(device->CreateVertexShader(g_VS, sizeof(g_VS), NULL, &vs), "Create sample VS");
+   check(device->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(), NULL, &ps), "Create sample PS");
+   const FLOAT vertices[3][8] = {
+      {-1, -1, 0.5f, 1, 1, 1, 1, 1},
+      {-1,  3, 0.5f, 1, 1, 1, 1, 1},
+      { 3, -1, 0.5f, 1, 1, 1, 1, 1},
+   };
+   const D3D11_INPUT_ELEMENT_DESC elements[] = {
+      {"POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+      {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 16, D3D11_INPUT_PER_VERTEX_DATA, 0},
+   };
+   ComPtr<ID3D11InputLayout> layout;
+   check(device->CreateInputLayout(elements, 2, g_VS, sizeof(g_VS), &layout), "Create sample layout");
+   const D3D11_BUFFER_DESC bd = {sizeof(vertices), D3D11_USAGE_IMMUTABLE, D3D11_BIND_VERTEX_BUFFER, 0, 0, 0};
+   const D3D11_SUBRESOURCE_DATA vertex_data = {vertices, 0, 0};
+   ComPtr<ID3D11Buffer> buffer;
+   check(device->CreateBuffer(&bd, &vertex_data, &buffer), "Create sample vertices");
+   D3D11_TEXTURE2D_DESC desc = {};
+   desc.Width = desc.Height = 64; desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+   desc.Format = format; desc.Usage = D3D11_USAGE_DEFAULT; desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+   ComPtr<ID3D11Texture2D> target, staging;
+   check(device->CreateTexture2D(&desc, NULL, &target), "Create sample target");
+   desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = 0; desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+   check(device->CreateTexture2D(&desc, NULL, &staging), "Create sample staging");
+   ComPtr<ID3D11RenderTargetView> view;
+   check(device->CreateRenderTargetView(target.Get(), NULL, &view), "Create sample RTV");
+   const uint32_t texels[3][4] = {
+      {0xff0000ff, 0xff00ff00, 0xffff0000, 0xffffffff},
+      {0xff804020, 0xff201080, 0xff408010, 0xff102040},
+      {0xffc92111, 0xffc92111, 0xffc92111, 0xffc92111},
+   };
+   ComPtr<ID3D11Texture2D> textures[3];
+   ComPtr<ID3D11ShaderResourceView> views[3];
+   desc.Width = desc.Height = 2; desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+   desc.Usage = D3D11_USAGE_IMMUTABLE; desc.BindFlags = D3D11_BIND_SHADER_RESOURCE; desc.CPUAccessFlags = 0;
+   for (unsigned i = 0; i < 3; ++i) {
+      const D3D11_SUBRESOURCE_DATA data = {texels[i], 8, 16};
+      check(device->CreateTexture2D(&desc, &data, &textures[i]), "Create sample texture");
+      check(device->CreateShaderResourceView(textures[i].Get(), NULL, &views[i]), "Create sample SRV");
+   }
+   D3D11_SAMPLER_DESC sd = {};
+   sd.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT; sd.MaxAnisotropy = 1;
+   sd.ComparisonFunc = D3D11_COMPARISON_NEVER; sd.MaxLOD = D3D11_FLOAT32_MAX;
+   ComPtr<ID3D11SamplerState> samplers[2];
+   for (unsigned i = 0; i < 2; ++i) {
+      sd.AddressU = sd.AddressV = sd.AddressW = i ? D3D11_TEXTURE_ADDRESS_CLAMP : D3D11_TEXTURE_ADDRESS_WRAP;
+      check(device->CreateSamplerState(&sd, &samplers[i]), "Create sample sampler");
+   }
+   D3D11_RASTERIZER_DESC rd = {};
+   rd.FillMode = D3D11_FILL_SOLID; rd.CullMode = D3D11_CULL_NONE; rd.DepthClipEnable = TRUE;
+   ComPtr<ID3D11RasterizerState> raster;
+   check(device->CreateRasterizerState(&rd, &raster), "Create sample rasterizer");
+   const D3D11_VIEWPORT viewport = {0, 0, 64, 64, 0, 1};
+   const UINT stride = sizeof(vertices[0]), offset = 0;
+   ID3D11Buffer *vb = buffer.Get(); ID3D11RenderTargetView *rt = view.Get();
+   context->OMSetRenderTargets(1, &rt, NULL);
+   context->VSSetShader(vs.Get(), NULL, 0); context->PSSetShader(ps.Get(), NULL, 0);
+   context->IASetInputLayout(layout.Get()); context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+   context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+   context->RSSetState(raster.Get()); context->RSSetViewports(1, &viewport);
+   ID3D11ShaderResourceView *poison = views[2].Get();
+   context->PSSetShaderResources(2, 1, &poison);
+   for (unsigned pass = 0; pass < 3; ++pass) {
+      const unsigned palette = pass == 2, clamp = pass == 1;
+      ID3D11ShaderResourceView *texture = views[palette].Get();
+      ID3D11SamplerState *filter = samplers[clamp].Get(), *wrong = samplers[!clamp].Get();
+      context->PSSetShaderResources(5, 1, &texture);
+      context->PSSetSamplers(2, 1, &filter); context->PSSetSamplers(5, 1, &wrong);
+      const FLOAT clear[4] = {0, 0, 0, 0};
+      context->ClearRenderTargetView(view.Get(), clear); context->Draw(3, 0);
+      context->CopyResource(staging.Get(), target.Get()); context->Flush();
+      D3D11_MAPPED_SUBRESOURCE map = {};
+      check(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &map), "Map sampled pixels");
+      if (!map.pData || map.RowPitch < 256 || (map.RowPitch & 3)) {
+         context->Unmap(staging.Get(), 0); throw std::runtime_error("invalid sample mapping");
+      }
+      unsigned mismatches = 0;
+      for (unsigned y = 0; y < 64; ++y) {
+         const volatile uint32_t *row = (const volatile uint32_t *)((const char *)map.pData + y * map.RowPitch);
+         for (unsigned x = 0; x < 64; ++x) {
+            float u = (x + 0.5f) * 0.125f + 0.25f, v = (y + 0.5f) * 0.125f + 0.25f;
+            if (!clamp) { u -= floorf(u); v -= floorf(v); }
+            const unsigned tx = u >= 0.5f, ty = v >= 0.5f;
+            const uint32_t rgba = texels[palette][ty * 2 + tx];
+            const uint32_t expected = format == DXGI_FORMAT_B8G8R8A8_UNORM ? rgba :
+               (rgba & 0xff00ff00u) | ((rgba & 0xffu) << 16) | ((rgba >> 16) & 0xffu);
+            const uint32_t observed = row[x];
+            if (observed != expected && mismatches++ < 8)
+               printf("Sample mismatch (%u,%u): %08x expected %08x\n", x, y, observed, expected);
+         }
+      }
+      context->Unmap(staging.Get(), 0);
+      printf("Sample %s pass %u: t5/s2 palette=%u clamp=%u pixels=4096 mismatches=%u\n",
+             format == DXGI_FORMAT_B8G8R8A8_UNORM ? "BGRA" : "RGBA", pass, palette, clamp, mismatches);
+      fflush(stdout);
+      if (mismatches) throw std::runtime_error("sampled pixel mismatch");
+   }
+   context->ClearState(); context->Flush();
+}
+
 int main(int argc, char **argv)
 {
    const bool implicit = argc == 4 && !strcmp(argv[3], "--implicit-release");
    const bool shared = argc > 2 && !strcmp(argv[argc - 1], "--shared-contract");
    const bool features = argc > 2 && !strcmp(argv[argc - 1], "--feature-levels");
-   const bool hardware = (argc == 3 || implicit || (argc == 4 && (shared || features))) && !strcmp(argv[1], "--luid");
-   const bool software = (argc == 3 || (argc == 4 && features)) && !strcmp(argv[1], "--software");
-   const bool warp = (argc == 2 || (argc == 3 && (shared || features))) && !strcmp(argv[1], "--warp");
+   const bool sample = argc > 2 && !strcmp(argv[argc - 1], "--sample");
+   const bool hardware = (argc == 3 || implicit || (argc == 4 && (shared || features || sample))) && !strcmp(argv[1], "--luid");
+   const bool software = (argc == 3 || (argc == 4 && (features || sample))) && !strcmp(argv[1], "--software");
+   const bool warp = (argc == 2 || (argc == 3 && (shared || features || sample))) && !strcmp(argv[1], "--warp");
    if (!hardware && !software && !warp) {
-      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract|--feature-levels] | --software dll [--feature-levels] | --warp [--shared-contract|--feature-levels]\n", argv[0]);
+      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract|--feature-levels|--sample] | --software dll [--feature-levels|--sample] | --warp [--shared-contract|--feature-levels|--sample]\n", argv[0]);
       return 2;
    }
    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -377,6 +507,9 @@ int main(int argc, char **argv)
          shared_contract(device.Get(), consumer.Get(), false);
          shared_contract(device.Get(), consumer.Get(), true);
          check(consumer->GetDeviceRemovedReason(), "Consumer status after sharing");
+      } else if (sample) {
+         sampled_images(device.Get(), context.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
+         sampled_images(device.Get(), context.Get(), DXGI_FORMAT_B8G8R8A8_UNORM);
       } else {
          images(device.Get(), context.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
          images(device.Get(), context.Get(), DXGI_FORMAT_B8G8R8A8_UNORM);

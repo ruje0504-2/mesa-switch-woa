@@ -1309,7 +1309,8 @@ get_image_type(struct ntv_context *ctx, struct nir_variable *var,
                bool is_sampler, bool is_buffer)
 {
    SpvId image_type = get_bare_image_type(ctx, var, is_sampler);
-   return is_sampler && ctx->stage != MESA_SHADER_KERNEL && !is_buffer ?
+   return is_sampler && ctx->stage != MESA_SHADER_KERNEL && !is_buffer &&
+          !glsl_type_is_texture(glsl_without_array(var->type)) ?
           spirv_builder_type_sampled_image(&ctx->builder, image_type) :
           image_type;
 }
@@ -4676,7 +4677,7 @@ emit_deref_array(struct ntv_context *ctx, nir_deref_instr *deref)
          type = spirv_builder_type_sampler(&ctx->builder);
       else
          type = get_image_type(ctx, var,
-                               glsl_type_is_sampler(gtype),
+                               glsl_type_is_sampler(gtype) || glsl_type_is_texture(gtype),
                                glsl_get_sampler_dim(gtype) == GLSL_SAMPLER_DIM_BUF);
       break;
    }

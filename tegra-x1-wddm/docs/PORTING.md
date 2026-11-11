@@ -713,6 +713,108 @@ bytes) match remote lengths and SHA-256 values. ETL:
 `4fce9ece9e3a54050decff0384681af60f929ebfd36b50201e74cdaf5e0fe1c0`;
 UMD export: `0b23877d5637bcd68e7758f4a444f27ec9d9815a1c70a3c7eb63bb91e01e0002`.
 
+### DWM TGSI SAMPLE abort
+
+The `dwm-exception-auto-20261111` trial uses the unchanged post-device UMD,
+the corrected ICD manifest and the signed .144 miniport. A bounded ProcDump
+attachment captures an ARM64 exception dump from DWM PID 484, thread 1708.
+The exception is `c0000409`, fast-fail parameter 7, at
+`ucrtbase.dll+76d8c`. The first exact UMD return address is
+`TegraGpuD3D.dll+21de48`; the preceding instruction at RVA `21de44` calls
+`abort()`. The matching binary's `ttn_parse_tgsi` disassembly identifies the
+unsupported-opcode branch, with w26 = `0x91` = `TGSI_OPCODE_SAMPLE`.
+This locates a shader-translation failure; it is not evidence of exhausted
+memory or a reason to change the feature-level advertisement.
+
+The 5,906,251-byte dump SHA-256 is
+`9150b32e8fb38ccdcd83570b9a43b47bdef88d59d7cddcc54aceba798f699197`.
+Matching UMD SHA-256:
+`b00ba41c916c69b905a1f8b40abdcf1339472b2e92710d5e4b35b3c5ca23bf89`.
+The ARM64 stream/context parser retains raw addresses and labels any masked
+address interpretation separately; the fault and UMD caller above match
+without masking. Its independent fast-fail-7 control also produces a valid
+exception stream. ProcDump exits 1 after that control capture, so a zero
+tool exit code is not used as the dump-validity criterion.
+[ProcDump capture options](https://learn.microsoft.com/en-us/sysinternals/downloads/procdump)
+
+Ordinary native FL10_0 rendering still matches 16,384 pixels on LUID
+`9120c`, 08:07:31–08:07:38 UTC, exit 0 without timeout. The debugger-stop
+helper then rejects a changed controller-process identity after ProcDump
+has exited; automatic collection stops, while independent rollback succeeds.
+The finalized ETL and dump are collected after recovery. The dump-copy
+summary initially also fails because its records are hashtables; changing
+them to objects fixes the summary, and the original error remains recorded.
+All 132 returned records (44,042,686 bytes) match device lengths and hashes.
+.59 Code 0, original driver/ACPI hashes, cleanup and unchanged power policy
+are verified at 08:15:53; portrait verification passes at 08:19:31.
+
+The working-tree fix lowers ordinary `SAMPLE` with independent texture-view
+and sampler-state indices, the declared texture target, array coordinates,
+offsets and result swizzles. Zink retains the separate NIR texture and bare
+sampler, assigns nonoverlapping graphics bindings, and accounts for sampled
+images separately from combined descriptors in its pools. Other SAMPLE
+variants are not claimed by this change. The legacy combined TEX path remains
+covered, and no feature level, GPU budget or scanout configuration changes.
+
+On .59, the first six-case semantic run finds an incorrect texture-usage bit
+inherited from the sampler declaration mask. Recording texture usage from
+instructions fixes it. All six cases then pass on ARM64. The D3D runtime
+sampling probe uses texture slot t5 and sampler s2, with deliberately wrong
+bindings at t2 and s5. Its WARP control checks point wrap/clamp, rebinding
+and channel swizzles across RGBA/BGRA targets: 24,576 pixels match. The first
+control wrapper fails to retain process exit codes; a corrected wrapper
+records both exits as 0 without timeout at 09:15:17–09:15:18 UTC. Original
+results remain under `runs/sample-control-20261111/`. These are CPU/software
+controls, not a native sampling or desktop-composition pass.
+
+The next `sample-native-auto-20261111` trial runs without an exception
+debugger. The signed .144 miniport reaches Code 0 with successful hardware
+and panel initialization; the UMD traces and native command use LUID `9a316`.
+The retained first ETL exports 34,774 valid UMD records, including 26,116
+from DWM. DWM receives nine successful CreateDevice returns and 172 successful
+resource creations. These include 36 720x1280 BGRA textures across repeated
+device attempts (27 ordinary and nine with `DISPLAYABLE_SURFACE` misc flag
+`0x20000`),
+plus one 50x50 BGRA texture. Nine `SetDisplayMode` records explicitly carry
+`887a0004` (`DXGI_ERROR_UNSUPPORTED`), matching the hardware stub in
+`DxgiFns.cpp`. Eight device teardown pairs complete. The retained Application
+event reports one Tegra-attributed DWM exit with `8898008d`.
+
+The trial then restarts; a new boot is observed at 09:22:10 UTC. The command
+log reaches the feature-level probe, but the ordinary and sampling probes
+have no completed result. The direct identity output contains zero bytes
+instead of JSON. The first ETL has `EndTime=0` and `BuffersWritten=0`, so its
+zero recorded loss counters and lack of RuntimeError/Present events do not
+establish a complete trace. The final event is not a fault location, and this
+record does not identify the restart's cause. Native sampling, the latest
+ordinary-draw regression and desktop composition remain unverified.
+
+The consumed permit prevents another native start. The automatic trial's
+second invocation refuses its existing marker and starts rollback; its new
+transcript replaces the earlier automatic transcript. The driver/ACPI,
+temporary environment/registration and power-policy verification passes at
+09:28:09 on .59 Code 0. Portrait restore/verify is a no-op at 09:28:39.
+All 121 returned records (63,349,783 bytes) match device lengths and hashes.
+First ETL SHA-256:
+`bd8993c71059d314a0819132e19b603c895237a5b6489b28c08468637f383447`;
+UMD export: `a26ef33d8beb7bfc696742b8100c40e6f4a5a701236776464f59449614e44671`.
+Tested UMD: `bfceb207ad4accba3b7610fa3735594144f1ce512628a703a1c142b455920171`.
+A subsequent source review expands the compact program-layout arrays for
+separate sampler states plus storage images. That rebuild passes, with UMD
+SHA-256 `8170b20f06f64cc2e472b6a2a90d17f818224ce9614f22fb9d2744eafc28b4bc`;
+this capacity adjustment is not part of the native trial above. The semantic
+fixture and sampling probe hashes are unchanged.
+
+The next presentation step is a real primary allocation/resource bridge.
+Translate the DXGI resource/subresource to the corresponding primary
+allocation, marked as primary when allocated, and call `pfnSetDisplayModeCb`
+from the SetDisplayMode DDI on its calling thread. Preserve its HRESULT and
+the required format-negotiation behavior. A successful texture creation does
+not supply this missing runtime association by itself.
+[Primary allocation contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgi1_1_ddi_base_functions)
+[Display mode callback](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/nc-d3dumddi-pfnd3dddi_setdisplaymodecb)
+[D3D11 callback-thread requirements](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/changes-from-direct3d-10)
+
 ### Host allocation and budget audit
 
 The 2026-11-11 audit follows the reported DWM instance OOM into the actual

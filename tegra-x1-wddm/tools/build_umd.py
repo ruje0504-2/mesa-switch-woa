@@ -56,9 +56,12 @@ def main():
     names = ["TegraGpuD3D.dll", "test_d3d10_nvk_adapter.exe", "test_d3d10_nvk_entry.exe",
              "test_d3d10_nvk_device.exe", "nvk_d3d_check.exe", "nvk_d3d_runtime_check.exe",
              "d3d10-trace-export.exe"]
-    subprocess.run(["ninja", "-C", str(build), *(target + name for name in names)], check=True)
+    sample_test = "src/gallium/auxiliary/gallium-aux.exe"
+    subprocess.run(["ninja", "-C", str(build), *(target + name for name in names), sample_test], check=True)
     for name in names:
         shutil.copyfile(build / target / name, out / name)
+    shutil.copyfile(build / sample_test, out / "test_tgsi_to_nir.exe")
+    names.append("test_tgsi_to_nir.exe")
     (out / "manifest.json").write_text(json.dumps({
         "scope": "Experimental NVK D3D10 UMD, controlled fixtures, and explicit DDI/Windows-runtime drawing probes",
         "files": {name: hashlib.sha256((out / name).read_bytes()).hexdigest() for name in names},
