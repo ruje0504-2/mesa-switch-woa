@@ -44,6 +44,15 @@ does not validate shared image contents or synchronization. The production
 UMD's runtime resource bridge is still incomplete.
 [Runtime contract evidence](../../../../tegra-x1-wddm/docs/D3D_RUNTIME_SHARING.md)
 
+Append `--feature-levels` to `--luid 16-hex-digits`, `--warp` or `--software
+path/to/dll` to probe 11_1, 11_0, 10_1 and 10_0 separately, then negotiate
+the full ordered list. It records HRESULT, selected level, adapter identity
+and native UMD path. It does not render or claim DWM acceptance. The normal
+rendering regression deliberately requests only 10_0, so that test alone
+does not establish a feature-level ceiling. The present frontend's ceiling
+also follows from `SUPPORT_D3D10_1=0`, `SUPPORT_D3D11=0` and its supported
+device-interface table; advertising 11_0 requires implementing its DDIs.
+
 ## GDI software backend
 
 When compiled with `gallium-driver=llvmpipe` or `gallium-driver=softpipe` the resulting libgallium_d3d10.dll implements D3D10's software rendering interface, like WARP.

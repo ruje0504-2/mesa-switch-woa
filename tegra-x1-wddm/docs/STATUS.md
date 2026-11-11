@@ -13,6 +13,17 @@ presentation is not established. Check the input desktop and capture
 DPI/coordinates alongside composition and scanout; the samples do not
 validate the whole image.
 
+**Present audit:** the same .144 journal retains an owned, visible
+`Displayed` address `fc9a6000`, populated after active-bank confirmation.
+This establishes an initial latch, not continuous refresh or correct cube
+pixels. That trial's Application log has 35 Tegra-attributed DWM exits with
+`8898008d`. A subsequent SYSTEM control cannot load `vulkan-1.dll` by name
+(error 126), but can load the explicit app-local copy; the experimental NVK
+opt-in is also absent there. DWM's exact failing UMD call is not yet traced.
+Resolve the compositor's loader/ICD environment and missing Present/shared
+resource contracts before treating a higher Feature Level as the fix.
+[Feature-level, loader and latch audit](PORTING.md#present-contract-audit)
+
 **User display baseline:** the previous 90-degree rollback did not restore
 the user's portrait preference. Their manually corrected 720x1280,
 orientation-0 mode is now saved and matches the registry; .59 is Code 0.
@@ -33,7 +44,9 @@ stride and scanout layout, alongside the presentation work. The current
 native path still accepts only 720x1280 identity scanout. Validate complete,
 correctly oriented visible output and sustained refresh before claiming
 an on-screen pass. The user's saved portrait setting remains the rollback
-target while landscape capability is developed.
+target while landscape capability is developed. The user reaffirmed
+rotation support, but withdrew the request to try rotation-register writes
+as an immediate black-screen experiment.
 [Build and physical evidence](PORTING.md#win32-vkcube)
 
 **Current work: D3D UMD/DWM.** .144 passes native Vulkan OPAQUE_WIN32

@@ -94,6 +94,57 @@ static uint64_t luid_value(LUID luid)
    return (uint64_t)(uint32_t)luid.HighPart << 32 | luid.LowPart;
 }
 
+/* Probe negotiation separately from the FL10_0 rendering regression. A
+ * successful device creation is neither feature conformance nor DWM Present.
+ */
+static void feature_levels(IDXGIAdapter *adapter, D3D_DRIVER_TYPE type,
+                           HMODULE module, uint64_t selected)
+{
+   const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0,
+                                     D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0};
+   unsigned successes = 0;
+   for (unsigned i = 0; i <= ARRAYSIZE(levels); ++i) {
+      const bool combined = i == ARRAYSIZE(levels);
+      ComPtr<ID3D11Device> device;
+      ComPtr<ID3D11DeviceContext> context;
+      D3D_FEATURE_LEVEL actual = {};
+      const HRESULT hr = D3D11CreateDevice(adapter, type, module,
+         D3D11_CREATE_DEVICE_BGRA_SUPPORT, combined ? levels : &levels[i],
+         combined ? ARRAYSIZE(levels) : 1, D3D11_SDK_VERSION, &device, &actual, &context);
+      printf("Feature negotiation requested=%04x combined=%u status=%08lx actual=%04x\n",
+             combined ? 0 : levels[i], combined, (unsigned long)hr, actual);
+      fflush(stdout);
+      if (FAILED(hr)) continue;
+      if (!combined && actual != levels[i])
+         throw std::runtime_error("runtime returned a different explicit feature level");
+      ComPtr<IDXGIDevice> dxgi;
+      ComPtr<IDXGIAdapter> actual_adapter;
+      check(device.As(&dxgi), "Query negotiated DXGI device");
+      check(dxgi->GetAdapter(&actual_adapter), "Get negotiated adapter");
+      DXGI_ADAPTER_DESC desc = {};
+      check(actual_adapter->GetDesc(&desc), "Get negotiated adapter identity");
+      const uint64_t luid = luid_value(desc.AdapterLuid);
+      printf("Negotiated adapter %016llx vendor=%04x device=%04x\n",
+             (unsigned long long)luid, desc.VendorId, desc.DeviceId);
+      if (selected && luid != selected)
+         throw std::runtime_error("feature probe changed the requested hardware adapter");
+      if (selected) {
+         HMODULE umd = GetModuleHandleA("TegraGpuD3D.dll");
+         char path[MAX_PATH];
+         if (!umd || !GetModuleFileNameA(umd, path, sizeof(path)))
+            throw std::runtime_error("feature probe did not load the native UMD");
+         printf("Negotiated UMD: %s\n", path);
+      }
+      check(device->GetDeviceRemovedReason(), "Negotiated device status");
+      context.Reset();
+      device.Reset();
+      ++successes;
+   }
+   if (!successes) throw std::runtime_error("no requested feature level created a device");
+   report_runtime_modules();
+   marker("Feature negotiation recorded; rendering, DWM and scanout were not exercised");
+}
+
 /* Exercise the runtime's resource association independently of rendering.
  * Legacy shared handles and NT handles have different ownership contracts.
  */
@@ -235,11 +286,12 @@ int main(int argc, char **argv)
 {
    const bool implicit = argc == 4 && !strcmp(argv[3], "--implicit-release");
    const bool shared = argc > 2 && !strcmp(argv[argc - 1], "--shared-contract");
-   const bool hardware = (argc == 3 || implicit || (argc == 4 && shared)) && !strcmp(argv[1], "--luid");
-   const bool software = argc == 3 && !strcmp(argv[1], "--software");
-   const bool warp = (argc == 2 || (argc == 3 && shared)) && !strcmp(argv[1], "--warp");
+   const bool features = argc > 2 && !strcmp(argv[argc - 1], "--feature-levels");
+   const bool hardware = (argc == 3 || implicit || (argc == 4 && (shared || features))) && !strcmp(argv[1], "--luid");
+   const bool software = (argc == 3 || (argc == 4 && features)) && !strcmp(argv[1], "--software");
+   const bool warp = (argc == 2 || (argc == 3 && (shared || features))) && !strcmp(argv[1], "--warp");
    if (!hardware && !software && !warp) {
-      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract] | --software dll | --warp [--shared-contract]\n", argv[0]);
+      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract|--feature-levels] | --software dll [--feature-levels] | --warp [--shared-contract|--feature-levels]\n", argv[0]);
       return 2;
    }
    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -277,6 +329,14 @@ int main(int argc, char **argv)
       } else if (software) {
          module = LoadLibraryA(argv[2]);
          if (!module) throw std::runtime_error("software UMD load failed");
+      }
+
+      if (features) {
+         feature_levels(adapter.Get(), hardware ? D3D_DRIVER_TYPE_UNKNOWN :
+                        software ? D3D_DRIVER_TYPE_SOFTWARE : D3D_DRIVER_TYPE_WARP,
+                        module, selected);
+         if (module) FreeLibrary(module);
+         return 0;
       }
 
       ComPtr<ID3D11Device> device;

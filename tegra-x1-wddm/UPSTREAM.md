@@ -23,3 +23,9 @@ The Windows resource and display model draws on Microsoft's public graphics
 driver samples. GM20B page tables, power sequences and engine initialization
 also draw on Nouveau, Switchroot and NVIDIA sources. Individual source files
 and the notice identify the relevant revisions and copyrights. [Notices](NOTICE)
+
+The display audit also reviews Switchroot's NVIDIA DC code at
+`3c40adf1081096bc61a7c1280434c163e7e79b48`, specifically `window.c` and
+`dc.c`, for surface layout, update/activation and active-bank readback rules.
+This is a GPL-2.0 hardware reference, not imported driver implementation.
+[Pinned Switchroot source](https://gitlab.com/switchroot/kernel/l4t-kernel-nvidia/-/tree/3c40adf1081096bc61a7c1280434c163e7e79b48/drivers/video/tegra/dc)

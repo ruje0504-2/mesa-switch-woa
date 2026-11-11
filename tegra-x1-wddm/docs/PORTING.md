@@ -237,6 +237,77 @@ present identity-only KMD is not a rotation implementation. Check an
 asymmetric corner pattern, full-image contents and sustained visible output
 before the next on-screen success claim.
 
+### Present contract audit
+
+The 2026-11-11 follow-up separates DWM initialization, UMD presentation and
+the Display A latch. No driver, mode, power setting or rotation register was
+changed during this audit; the device remains on .59 Code 0.
+
+The frontend enables neither D3D10.1 nor D3D11 DDIs in `State.h`, and
+`CreateDevice` accepts only the D3D10 interface versions. The prior runtime
+regression explicitly requests FL10_0, so its output alone is not a maximum
+capability test. The new `nvk_d3d_runtime_check.exe --luid <luid>
+--feature-levels` checks individual 11_1/11_0/10_1/10_0 requests and their
+ordered list without changing the driver's claims. The ARM64 build and
+`--warp --feature-levels` control pass on Windows: all four explicit requests
+succeed, and the combined list selects 11_1 on Microsoft 1414:008c, LUID
+`5427`. The native matrix has not yet run. These are device-creation results,
+not DWM or feature-conformance results.
+
+The Application-log interval 01:25–01:44 UTC contains 35 `Dwminit` exits
+attributed to Tegra X1 with `0x8898008d` (`MILERR_NO_HARDWARE_DEVICE`), plus
+one separately attributed to BasicDisplay. On .59, the system has no
+`System32/vulkan-1.dll`; the tested loader copy is in the .144 application folder.
+The NVK opt-in is absent from machine/user settings and the SSH environment.
+A separate SYSTEM task in a directory without a loader confirms that
+`LoadLibraryW(L"vulkan-1.dll")` fails with error 126, while loading the
+explicit .144 app-local path succeeds. Its process also lacks the opt-in.
+This control is not the DWM process, but identifies a deployment prerequisite:
+Zink uses name-only loader discovery, and the nonconformant GM20B NVK path
+requires the opt-in. Neither the app-local tests nor their environment proves
+that DWM can create the same device. Trace DWM's actual initialization result
+after supplying its loader/ICD/test environment.
+
+Independent functional gaps remain: hardware `_Present` returns
+`DXGI_ERROR_UNSUPPORTED`, `_Blt` currently returns success without a copy,
+and the runtime shared-image bridge is unfinished. Raising the advertised
+Feature Level does not implement these contracts.
+
+The retained `cube-pixels-contract.bin` (SHA-256
+`6fb44bb06efec7d220ec6e0494230f78c2155822dda61ae17f49206eaaa01c13`)
+contains fixed slot 46 at offset `ee0`, tag 68: success, scanout segment base
+and cached `Displayed.Address` both `fc9a6000`, IRQL 2. The retrieved .144
+SYS matches `e9cc6c5e576afd6861047983567eb2b4628209a5f227cdadc3ef48e86d59144c`.
+Binary/source comparison verifies the record producer at RVA `2be4` and
+the Displayed update at `1e370`: it reads through `tg_t214_dc_latched_scanout`
+at `1cea0`, checks Window A's pending activation, selects the active register
+bank, reads address/visibility and restores the selector. Initial POST
+state uses a different address. This record supports a completed initial
+latch; it is a retained cached state, not a live register sample concurrent
+with every cube frame. Full-image contents and continuous updates still
+require correlated capture.
+
+Switchroot's NVIDIA display source at
+`3c40adf1081096bc61a7c1280434c163e7e79b48` supplies a useful hardware
+comparison: `window.c` programs the surface address and stride, transfers
+assembly state to the armed bank, requests activation, and checks completion
+for immediate flips; `dc.c` distinguishes active and assembly register
+views. This supports the existing latch checks but does not replace WDDM
+resource sharing, D3D UMD callbacks or DWM device creation. The reference is
+GPL-2.0; no implementation was copied into the MIT driver.
+[Switchroot display source](https://gitlab.com/switchroot/kernel/l4t-kernel-nvidia/-/blob/3c40adf1081096bc61a7c1280434c163e7e79b48/drivers/video/tegra/dc/window.c)
+
+Probe builds, downloaded Windows records, the signed binary comparison and
+the pinned reference manifest are retained under
+`/Users/rujian/.local/share/mesa-switch-woa-build/runs/present-contract-20261111/`
+and `references/switchroot-display/`. The next native trial must distinguish
+loader/device negotiation from presentation and preserve the user's saved
+portrait baseline. Rotation capability remains planned; ad hoc rotation
+register writes are not part of this audit.
+All 11 returned Windows records (526,873 bytes) match device lengths and
+SHA-256 values. The feature probe executable has SHA-256
+`9081c87021f358bcb52f5454f1bd32e7dc7bc49f5434bdd7ee80db53499a375c`.
+
 ## Direct3D UMD and DWM
 
 The user clarified the staging and authorization on 2026-11-10: **first
