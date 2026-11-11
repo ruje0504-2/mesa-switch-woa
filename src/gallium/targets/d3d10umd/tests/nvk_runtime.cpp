@@ -492,11 +492,51 @@ static void sampled_images(ID3D11Device *device, ID3D11DeviceContext *context,
    if (total_mismatches) throw std::runtime_error("sampled pixel mismatch");
 }
 
+/* Optional checkpoints intentionally add GPU readback/synchronization. Keep
+ * the original layout mode available to compare without these operations. */
+static void shared_pattern_checkpoint(ID3D11Device *device, ID3D11DeviceContext *context,
+                                      ID3D11Texture2D *image, const char *stage)
+{
+   D3D11_TEXTURE2D_DESC desc = {};
+   image->GetDesc(&desc);
+   desc.Usage = D3D11_USAGE_STAGING; desc.BindFlags = desc.MiscFlags = 0;
+   desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+   ComPtr<ID3D11Texture2D> staging;
+   check(device->CreateTexture2D(&desc, NULL, &staging), "Create pattern checkpoint staging");
+   context->CopyResource(staging.Get(), image); context->Flush();
+   D3D11_MAPPED_SUBRESOURCE map = {};
+   check(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &map), "Map pattern checkpoint");
+   if (!map.pData || map.RowPitch < desc.Width * 4) {
+      context->Unmap(staging.Get(), 0);
+      throw std::runtime_error("invalid checkpoint readback");
+   }
+   unsigned mismatches = 0, zero_alpha = 0;
+   for (unsigned y = 0; y < desc.Height; ++y) for (unsigned x = 0; x < desc.Width; ++x) {
+      unsigned red = (x / 32) & 1, green = (y / 24) & 1, blue = red ^ green;
+      const unsigned char expected[] = {
+         static_cast<unsigned char>((desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM ? blue : red) * 255),
+         static_cast<unsigned char>(green * 255),
+         static_cast<unsigned char>((desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM ? red : blue) * 255), 255};
+      const auto pixel = static_cast<const unsigned char *>(map.pData) + y * map.RowPitch + x * 4;
+      zero_alpha += pixel[3] == 0;
+      if (memcmp(pixel, expected, 4) && mismatches++ < 8)
+         printf("Pattern checkpoint mismatch stage=%s format=%u (%u,%u): %02x%02x%02x%02x expected %02x%02x%02x%02x\n",
+                stage, desc.Format, x, y, pixel[0], pixel[1], pixel[2], pixel[3],
+                expected[0], expected[1], expected[2], expected[3]);
+   }
+   context->Unmap(staging.Get(), 0);
+   check(device->GetDeviceRemovedReason(), "Pattern checkpoint device status");
+   printf("Pattern checkpoint: stage=%s format=%u pixels=%u mismatches=%u zero_alpha=%u\n",
+          stage, desc.Format, desc.Width * desc.Height, mismatches, zero_alpha);
+   fflush(stdout);
+   if (mismatches) throw std::runtime_error("shared pattern checkpoint mismatch");
+}
+
 /* Nonuniform shared sampling at desktop scale. The producer has padded rows;
  * the consumer uses translated/scaled viewports and clipped, rebound uniforms.
  * CPU expectations are integer coordinates, independent of the shader. */
 static void shared_layout(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVEL level,
-                          ID3D11Device *consumer, DXGI_FORMAT format)
+                          ID3D11Device *consumer, DXGI_FORMAT format, bool checkpoints)
 {
    ComPtr<ID3D11Device> producer;
    ComPtr<ID3D11DeviceContext> pc, cc;
@@ -560,9 +600,11 @@ static void shared_layout(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVE
    ID3D11RenderTargetView *sv=source_view.Get(); pc->OMSetRenderTargets(1,&sv,NULL);
    D3D11_VIEWPORT source_vp={0,0,577,961,0,1}; pc->RSSetViewports(1,&source_vp);
    pc->Draw(3,0); pc->Flush(); check(producer->GetDeviceRemovedReason(),"Shared pattern producer status");
+   if (checkpoints) shared_pattern_checkpoint(producer.Get(), pc.Get(), original.Get(), "producer");
    ComPtr<IDXGIResource> share; check(original.As(&share),"Query pattern sharing");
    HANDLE handle=NULL; check(share->GetSharedHandle(&handle),"Get pattern legacy handle");
    check(consumer->OpenSharedResource(handle,IID_PPV_ARGS(&opened)),"Open pattern shared image");
+   if (checkpoints) shared_pattern_checkpoint(consumer, cc.Get(), opened.Get(), "consumer-import");
    ComPtr<ID3D11ShaderResourceView> texture; check(consumer->CreateShaderResourceView(opened.Get(),NULL,&texture),"Create pattern SRV");
    ID3D11ShaderResourceView *srv=texture.Get(); cc->PSSetShaderResources(5,1,&srv);
    D3D11_SAMPLER_DESC sd={}; sd.Filter=D3D11_FILTER_MIN_MAG_MIP_POINT;
@@ -618,13 +660,14 @@ int main(int argc, char **argv)
    const bool implicit = argc == 4 && !strcmp(argv[3], "--implicit-release");
    const bool shared = argc > 2 && !strcmp(argv[argc - 1], "--shared-contract");
    const bool features = argc > 2 && !strcmp(argv[argc - 1], "--feature-levels");
-   const bool layout = argc > 2 && !strcmp(argv[argc - 1], "--shared-layout");
+   const bool checkpoints = argc > 2 && !strcmp(argv[argc - 1], "--shared-layout-checkpoints");
+   const bool layout = checkpoints || (argc > 2 && !strcmp(argv[argc - 1], "--shared-layout"));
    const bool sample = argc > 2 && !strcmp(argv[argc - 1], "--sample");
    const bool hardware = (argc == 3 || implicit || (argc == 4 && (shared || features || sample || layout))) && !strcmp(argv[1], "--luid");
    const bool software = (argc == 3 || (argc == 4 && (features || sample))) && !strcmp(argv[1], "--software");
    const bool warp = (argc == 2 || (argc == 3 && (shared || features || sample || layout))) && !strcmp(argv[1], "--warp");
    if (!hardware && !software && !warp) {
-      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract|--shared-layout|--feature-levels|--sample] | --software dll [--feature-levels|--sample] | --warp [--shared-contract|--shared-layout|--feature-levels|--sample]\n", argv[0]);
+      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract|--shared-layout|--shared-layout-checkpoints|--feature-levels|--sample] | --software dll [--feature-levels|--sample] | --warp [--shared-contract|--shared-layout|--shared-layout-checkpoints|--feature-levels|--sample]\n", argv[0]);
       return 2;
    }
    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -705,8 +748,8 @@ int main(int argc, char **argv)
          shared_contract(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, true);
          check(device->GetDeviceRemovedReason(), "Consumer status after sharing");
       } else if (layout) {
-         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_B8G8R8A8_UNORM);
-         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
+         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_B8G8R8A8_UNORM, checkpoints);
+         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, checkpoints);
       } else if (sample) {
          sampled_images(device.Get(), context.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
          sampled_images(device.Get(), context.Get(), DXGI_FORMAT_B8G8R8A8_UNORM);

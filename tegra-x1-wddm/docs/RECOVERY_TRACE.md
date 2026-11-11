@@ -49,11 +49,21 @@ trace may also overwrite earlier records. No matching event does **not** prove
 that no failure occurred. Check `TraceStatus`, provider enablement, export
 identity, ETL finalization and loss counts with the existing evidence.
 
+This event covers engine-recovery requests. A malformed virtual submission
+returned as `STATUS_INVALID_PARAMETER` can instead put its calling device in
+an error state without requesting engine recovery. The current provider does
+not separately record that rejection. Check this path if device loss has no
+corresponding recovery event; see Microsoft's
+[SubmitCommandVirtual return contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_submitcommandvirtual).
+
 Windows ARM64 context/worker models verify first-status retention, duplicate
 suppression, emission before OS notification, spinlock release, PASSIVE_LEVEL
 submission failure and DISPATCH_LEVEL preemption failure. Decoder tests cover
 fixed wire bytes and truncated/incompatible exports. These controls do not
-prove live kernel ETW delivery; the first native `.153` trial must do that.
+prove live kernel ETW delivery. The completed `.153` trial confirms provider
+registration and enablement; its finalized trace retains no recovery event,
+so actual kernel event emission remains unverified. That trial exposes a
+shared-pattern pixel mismatch with S_OK producer/consumer device status.
 
 The implementation follows Microsoft's
 [EtwRegister](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-etwregister),

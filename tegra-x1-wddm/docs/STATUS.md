@@ -3,7 +3,30 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Latest `.152` result:** native LUID `bbde7` reaches Code 0 at 19:57:57 UTC.
+**Latest `.153` result:** native LUID `b3c87` reaches Code 0 and the patterned
+probe completes its first 720x1280 BGRA case: **73,584 mismatches out of
+921,600 pixels**. Producer and consumer device status are both S_OK. This is
+an actual content failure, not a passing draw. The retained UMD trace has 70
+successful DWM flips and two successful Explorer windowed Presents, without
+ZinkFailure or RuntimeError records. Complete physical desktop is unverified.
+
+The finalized ETL exports 309,805 records with no reported loss. The new KMD
+provider is registered/enabled, but emits no retained recovery event; direct
+packet rejection and trace coverage limits still apply. All 151 returned files
+(107,778,029 bytes) match device hashes, including the five early copies.
+An additional startup occurs during recovery before `.59` is staged; its cause
+is unconfirmed. `.59` Code 0, cleanup and unchanged power are verified at
+20:38:44 UTC, with unchanged portrait verified at 20:39:26.
+[Native pattern failure, trace scope and restart timeline](D3D_RUNTIME_SHARING.md#native-patterned-layout-and-recovery-trace)
+
+**Next probe (`073007e7440e`):** optional `--shared-layout-checkpoints` reads the
+producer image and consumer import before sampling, to locate where content
+first differs. The original `--shared-layout` mode is unchanged. Both modes
+pass WARP on `.59` at 20:39:27 UTC; the checkpoint mode verifies 5,904,388
+pixels. Native checkpoint execution remains pending. No UMD, ICD or KMD change
+is bundled with this probe.
+
+**Prior `.152` result:** native LUID `bbde7` reaches Code 0 at 19:57:57 UTC.
 Explorer's shared Blt-mode Present now returns S_OK through the runtime; the
 corresponding kernel event is a successful `RedirectedFlip`. DWM opens that
 image and retains 63 successful flip callbacks, followed by device loss. The
@@ -16,12 +39,24 @@ Code 0, cleanup and unchanged power settings are verified at 20:05:11 UTC;
 portrait verification at 20:06:35 is a no-op. No native test remains running.
 [Native result and restart timeline](D3D_RUNTIME_SHARING.md#native-windowed-present-retest)
 
-**Next diagnostic candidate (`.153`, not installed):** record the first KMD
+**Diagnostic implementation (`.153`, `110d9882`):** record the first KMD
 recovery status and triggering path in ETW before notifying Dxgkrnl, including
 DISPATCH_LEVEL preemption and legacy-submit failures. Host/WDK builds and
 Windows ARM64 context/worker controls pass at 20:16:20 UTC. They check first
 error retention, lock release and notification ordering; live kernel ETW
-delivery remains untested. [Payload and capture limits](RECOVERY_TRACE.md)
+event delivery remains untested because the native run retains no such event.
+The first deployment registers the provider
+successfully (`TraceStatus=0`) but aborts before native grant: the operator
+called the low-level bind/arm helpers without the UMD-registration wrapper.
+`.59` Code 0, cleanup and unchanged power are verified at 20:25:41 UTC;
+portrait verification at 20:26:00 is a no-op. The retry uses `bind-cube.ps1`
+and checks registration metadata before staging boot state; the signed driver
+is unchanged. The missing-registration check passes on `.59` at 20:27:06 UTC
+without changing boot state. The corrected retry completes the native probe
+and recovery described above. Evidence directories:
+`recovery153-native-20261111` (89 verified files from aborted setup),
+`recovery153b-native-20261111` (completed retry).
+[Payload and capture limits](RECOVERY_TRACE.md)
 
 **Latest `.151` result:** native LUID `baff1` completes legacy BGRA/RGBA shared
 GPU writes/readbacks in both directions and after producer-device release:
@@ -99,7 +134,7 @@ The `.152` native trial confirms successful Explorer and DWM callbacks, followed
 by device loss; it is recovered to `.59`. Native layout checks and complete
 windowed composition still require validation; callback success is not pixel proof.
 
-**Next validation:** capture the first internal recovery cause, complete windowed Present and test nonuniform shared patterns,
+**Next validation:** localize the native shared-pattern failure, complete windowed Present and test nonuniform shared patterns,
 offset/scale/clipping and the complete desktop, then hardware landscape and
 Win32 `vkcube`. NT-handle/keyed-mutex sharing remains a separate D3D interface
 contract to implement. Do not treat raising Feature Level as a fix for the
@@ -226,15 +261,16 @@ Present and shared-image opens were unfinished at that point.
 
 **Version labels:** Device Manager shows the installed INF package's version.
 Earlier experiments reused the signed `.144` KMD while replacing the test UMD
-and ICD. The last native KMD candidate is versioned `.152`; `.153` currently adds recovery diagnostics only. Standalone build manifests
+and ICD. The last native KMD candidate is versioned `.153`, adding recovery diagnostics. Standalone build manifests
 name their component and include a readable `artifact_id` with the DLL hash.
-The completed `.152` native trial used:
+The completed `.153` native trial used:
 
 | Component | Candidate identifier |
 | --- | --- |
-| Signed KMD package | `0.1.0.152` (source `24c1ca9a`, SYS `22c86127cd25`; KMD behavior unchanged from `.151`) |
+| Signed KMD package | `0.1.0.153` (source `110d9882`, SYS `94bcb716d824`; first-recovery tracing) |
 | D3D UMD / Zink | `runtime-windowed-20261111-umd+11116dc1b815` (source `24c1ca9a`) |
 | NVK ICD | `runtime-shared-20261111-icd+6e2fad99d742` |
+| Runtime probe | Native trial `3dbbc5770d96`; next checkpoint probe `073007e7440e` (WARP controls only) |
 
 These are test-deployment identifiers. Rollback reinstalls `.59`; a future
 complete driver-package release must version its INF and catalog together

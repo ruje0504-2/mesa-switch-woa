@@ -1437,3 +1437,63 @@ failure-reporting path, before OS notification. Context/worker models pass on
 Windows ARM64 `.59` at 20:16:20 UTC, including failed synchronization retry
 and DISPATCH_LEVEL preemption. Native delivery and the actual failure cause
 remain pending. [Recovery event schema and limits](RECOVERY_TRACE.md).
+
+### Native patterned layout and recovery trace
+
+`recovery153b-native-20261111` pairs KMD source `110d9882`, signed `.153`
+SYS `94bcb716d824`, unchanged UMD `11116dc1b815`, ICD `6e2fad99d742` and
+probe `3dbbc5770d96`. The new KMD provider is registered successfully and
+enabled at level 2, keyword 1. Native LUID `b3c87` reaches Code 0 at 20:30:46
+UTC; the layout probe runs from 20:31:07 to 20:31:10 and returns exit 1.
+
+Both D3D devices, the 577x961 padded shared BGRA image, its consumer import,
+SRV, sampler and 720x1280 target are created successfully. Producer and
+consumer `GetDeviceRemovedReason` both return S_OK. The first BGRA pass reads
+921,600 pixels and reports **73,584 mismatches**, equal to the 584x126 scissor
+area. The first eight reported pixels are zero, including alpha, instead of
+the expected pattern. The remaining pass and RGBA cases do not run after this
+failure. The log does not separately count all zero pixels or prove that every
+mismatch lies inside the scissor rectangle.
+
+The complete result file survives; the native task finishes at 20:31:53 and
+collection at 20:32:28. The finalized ETL has 309,805 exported records, 65,455
+valid UMD records, `BuffersWritten=1177` and nonzero EndTime, without reported
+event/buffer loss. Its adapter report matches Tegra LUID `b3c87`. The UMD has
+70 successful DWM flips and two successful Explorer windowed Presents, with
+no ZinkFailure or RuntimeError record. No retained ReserveResource failure or
+new KMD recovery event appears. Registration/enablement is verified; actual
+recovery-event emission is not. Callback success, window geometry and an absent
+recovery event do not establish correct physical desktop pixels.
+
+After collection, recovery begins and an additional startup is observed at
+20:33:41 UTC while `.153` is still installed with its gate closed. No cause is
+assigned. The repeated recovery stages `.59` at 20:36:32; the final recovery
+boot is 20:37:16. `.59` Code 0, baseline hashes, cleanup and unchanged power
+are verified at 20:38:44, followed by a no-op portrait verification at 20:39:26.
+All 151 returned files (107,778,029 bytes) match remote lengths and SHA256;
+five early copies match the final files. Raw export SHA256 is
+`d1c942d92f4ea3959146c67bd670c578e071dbd0e2592466d2b5f29686498fc3`.
+
+The first `.153` setup attempt (`recovery153-native-20261111`) did not grant
+native execution: the operator invoked the low-level bind/arm helpers instead
+of `bind-cube.ps1`, omitting registration metadata. Automatic recovery returned
+to `.59`, verified at 20:25:41; all 89 files (1,516,919 bytes) match device
+hashes. The retry uses the complete wrapper and adds an early registration
+precondition. A Windows control at 20:27:06 confirms missing metadata is
+rejected before changing the binding, table, permit, trace or task state.
+
+The next probe (`shared-checkpoints-20261111`, EXE `073007e7440e`) adds optional
+`--shared-layout-checkpoints`: read back the producer's pattern and the opened
+consumer image before sampling, each checking 554,497 pixels per format. This
+separates producer rendering/writeback, shared-image visibility and sampling.
+It deliberately adds readback and synchronization; retain the unchanged
+`--shared-layout` mode for comparison so a checkpoint cannot silently mask an
+ordering defect. The current hardware UMD's Flush already calls
+`RuntimeDeviceFinish`, including a GPU-fence wait; generic D3D Flush semantics
+alone do not explain this native failure.
+
+Only the probe executable is rebuilt. On Windows `.59` at 20:39:27, WARP
+passes the original mode's 3,686,400 pixels and the checkpoint mode's 5,904,388
+pixels, including both producer/import checkpoints in BGRA and RGBA. Both exit
+0 with empty stderr and matching returned log hashes. Native checkpoint
+execution and the underlying pixel fix remain pending.
