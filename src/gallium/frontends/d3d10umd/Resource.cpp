@@ -38,6 +38,10 @@
 
 #include "Debug.h"
 #include "Trace.h"
+#ifdef D3D10_UMD_HARDWARE
+#include "RuntimeMemory.h"
+#include "frontend/winsys_handle.h"
+#endif
 
 #include "util/u_math.h"
 #include "util/u_rect.h"
@@ -315,7 +319,33 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
       }
    }
 
-   pResource->resource = screen->resource_create(screen, &templat);
+#ifdef D3D10_UMD_HARDWARE
+   if (pCreateResource->pPrimaryDesc) {
+      if (!screen->resource_from_handle) {
+         SetError(hDevice, DXGI_ERROR_UNSUPPORTED);
+         return;
+      }
+      HRESULT hr = RuntimePrimaryCreate(CastDevice(hDevice), pCreateResource,
+                                        hRTResource, &pResource->runtime_primary);
+      if (FAILED(hr)) { SetError(hDevice, hr); return; }
+      struct winsys_handle handle = {};
+      handle.type = WINSYS_HANDLE_TYPE_WDDM_ALLOCATION;
+      handle.com_obj = const_cast<wsi_win32_memory *>(RuntimePrimaryMemory(pResource->runtime_primary));
+      handle.stride = 720 * 4;
+      handle.size = 720ull * 1280 * 4;
+      handle.format = templat.format;
+      pResource->resource = screen->resource_from_handle(screen, &templat, &handle,
+                                                         PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE);
+      if (!pResource->resource) {
+         hr = RuntimePrimaryError(pResource->runtime_primary);
+         RuntimePrimaryDestroy(pResource->runtime_primary);
+         pResource->runtime_primary = NULL;
+         SetError(hDevice, hr);
+         return;
+      }
+   } else
+#endif
+      pResource->resource = screen->resource_create(screen, &templat);
    if (!pResource->resource) {
       DebugPrintf("%s: failed to create resource\n", __func__);
       SetError(hDevice, E_OUTOFMEMORY);
@@ -327,7 +357,8 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
                                                           sizeof *pResource->transfers);
    if (!pResource->transfers) {
       pResource->NumSubResources = 0;
-      pipe_resource_reference(&pResource->resource, NULL);
+      DestroyResource(hDevice, hResource);
+      memset(pResource, 0, sizeof *pResource);
       SetError(hDevice, E_OUTOFMEMORY);
       return;
    }
@@ -485,7 +516,19 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
    }
    free(pResource->transfers);
 
+#ifdef D3D10_UMD_HARDWARE
+   /* The runtime resource is no longer valid after this DDI returns. Finish
+    * GPU use before releasing its allocation, even if Zink retains a cached
+    * object wrapper until a later batch cleanup. */
+   HRESULT completion = RuntimePrimaryFinish(CastDevice(hDevice), pResource);
+#endif
    pipe_resource_reference(&pResource->resource, NULL);
+#ifdef D3D10_UMD_HARDWARE
+   HRESULT released = RuntimePrimaryDestroy(pResource->runtime_primary);
+   pResource->runtime_primary = NULL;
+   if (FAILED(completion)) SetError(hDevice, completion);
+   else if (FAILED(released)) SetError(hDevice, released);
+#endif
 }
 
 

@@ -12,6 +12,7 @@ if d3d10_backend == 'gdi'
   _d3d10_kmt_sources += files('D3DKMT.cpp')
 else
   _c_args_d3d10umd += '-DD3D10_UMD_HARDWARE'
+  _d3d10_kmt_sources += files('RuntimeMemory.cpp')
 endif
 
 libd3d10umd = static_library(

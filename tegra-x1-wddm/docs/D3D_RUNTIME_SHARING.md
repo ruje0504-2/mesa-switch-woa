@@ -144,3 +144,117 @@ The two .144 native result JSON files and the .145 native result JSON were
 recovered from the device into `recovered-evidence/`; all three match the
 original verified hashes. This does not restore the former host build trees
 or the .145 diagnostic source.
+
+## Runtime primary bridge work
+
+The 2026-11-11 working tree connects the D3D primary's allocation owner to
+Zink/NVK. This addresses the explicitly unsupported SetDisplayMode boundary
+observed after the SAMPLE fix; it is not yet a native presentation result.
+
+`RuntimeMemory.cpp` allocates through the runtime's callback with the real
+`hRTResource`, `Primary` flag and VidPN source. It retains the returned
+allocation handle separately from the optional kernel resource handle.
+Residency, paging-fence waits and GPU/CPU mappings use that same device's
+callbacks and paging queue. No runtime opaque handle is cast to a KMT device
+or NT shared-resource handle. The implementation currently targets the KMD's
+existing 720x1280 BGRA primary, 2880-byte pitch and 3,686,400-byte allocation.
+The 16 MiB scanout segment and overall 512 MiB ceiling are unchanged.
+[Resource association](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/ns-d3dumddi-_d3dddicb_allocate)
+[Primary description](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgi_ddi_primary_desc)
+
+Zink passes a typed, Mesa-internal owner description through the existing
+WSI allocation chain. NVK checks its adapter LUID, size, access and callbacks,
+retains the owner, and maps this allocation into its GPUVA reservation.
+The owner completes its paging fence before returning success. Process-wide
+GPUVA makes the allocation addressable by the NVK context without sending
+the runtime's allocation to an unrelated device's paging queue. An explicit
+import acknowledgement prevents an older/different ICD from silently
+allocating unrelated memory. This is not a new public Vulkan external-handle
+type; it cannot be exported as OPAQUE_WIN32 memory.
+[GPUVA process scope](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/gpu-virtual-memory-in-wddm-2-0)
+[Mapping and paging completion](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dukmdt/ns-d3dukmdt-d3dddi_mapgpuvirtualaddress)
+
+For the explicit native pitch, NVK uses its existing tiled-shadow rendering
+and GPU resolve implementation for linear images. The internal image query
+does not change the public linear-image format capabilities or advertise a
+DRM extension on Windows. There is no CPU pixel-copy presentation path in
+this change. The UMD waits for rendering before calling `pfnSetDisplayModeCb`
+with the actual primary allocation and returns its HRESULT unchanged.
+Other modes, format conversion and rotation remain work beyond this fixed
+primary layout; Present and shared-resource opens are also still unfinished.
+
+Resource destruction waits for GPU use, releases the complete GPUVA
+reservations, and then deallocates through the runtime resource handle.
+The owner context survives delayed Zink/NVK object cleanup; subsequent frees
+of already-released ranges are no-ops and further mapping requests fail.
+This ordering matters because runtime deallocation automatically releases
+associated GPUVAs and those addresses can be reused immediately.
+[Free/deallocate ordering](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/nc-d3dumddi-pfnd3dddi_freegpuvirtualaddresscb)
+
+Both ARM64 builds pass. On .59 Code 0 at 10:18:44 UTC, the new controlled
+primary fixture passes ownership, allocation flags, exact byte count,
+residency/map waits, failure cleanup, mode HRESULT propagation and delayed
+cleanup without a second VA free. Existing UMD adapter, device and DLL-entry
+controls also pass; their finalized ETL exports 46 valid events with no
+recorded loss. These callbacks are substitutes, not real GPU allocations.
+The candidate `runtime-primary-auto-20261111` reused the signed .144 miniport.
+UMD SHA-256:
+`78d45f3d4352c37da1ca6780a5482ffe3fe9fd9cd844506afed4c88c70a01cb9`;
+ICD: `f828845c38b7bfb6e34ef83beb1c873009c2f89afcd014090a82ec4f926a2f30`.
+
+On native LUID `9750b`, DWM creates fourteen real runtime primary allocations
+of 3,686,400 bytes, all successfully. Each `MakeResident` then returns
+`8000000a` (`E_PENDING`), with paging fence `1b59`. The first implementation
+incorrectly treated the HRESULT failure bit as a terminal error and
+deallocated each primary without waiting. It therefore did not reach the
+display-mode callback. The finalized ETL has 57,369 valid events, with no
+recorded loss. All 131 returned files (44,406,284 bytes) match device hashes.
+.59 Code 0 and unchanged power settings were verified at 10:29:21 UTC;
+portrait restoration was a no-op at 10:29:36 UTC.
+
+`MakeResidentCb` and `MapGpuVirtualAddressCb` explicitly permit `E_PENDING`:
+the operation has been queued, and the returned paging fence must complete
+before GPU access. The implementation now handles this status only for
+these paging callbacks, preserving their raw trace values and propagating
+a failed wait. This does not turn arbitrary failed HRESULTs into success.
+The extended ARM64 fixture passes queued residency/mapping and failed-wait
+cases on .59 at 10:41:09 UTC; existing UMD controls export 46 valid events.
+[Residency return values](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/nc-d3dumddi-pfnd3dddi_makeresidentcb)
+[Mapping return values](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/nc-d3dumddi-pfnd3dddi_mapgpuvirtualaddresscb)
+
+The same native trial matches 16,384 ordinary clear/triangle pixels, but its
+explicit device release faults with `c0000005`. The matching UMD's PC RVA
+`112f18` reads a freed `curr_program->last_variant_hash` during shader unbind;
+LR `111530` is in `zink_bind_fs_state`. Program pruning now clears the
+context's non-owning selected-program pointer and its hash contribution
+before releasing references. Native sampling separately reports 2,940
+mismatches in 4,096 pixels, a pattern consistent with clamp addressing
+instead of the requested wrap. This does not yet distinguish an incorrect
+sampler binding from a missing/default state. The next probe runs all three
+sampler/palette cases and retains its SPIR-V.
+
+`runtime-paging-auto-20261111` tests the paging and lifetime fixes with UMD
+artifact `runtime-primary-20261111-umd+d17a557b3a76` and the same ICD above.
+Its updated probe passes the WARP reference (24,576 pixels); native results
+are pending. Its first automatic attempt observes Code 0 and a consumed
+start permit while `HardwareStatus` is still `ffffffff`, then prematurely
+starts rollback before the drawing probes. `runtime-paging-wait-auto-20261111`
+adds a bounded wait for a terminal hardware status while retaining that
+first snapshot; it uses the same UMD/ICD binaries. The harness records each
+probe's exit status separately and recognizes negative Windows exception
+codes as failures.
+
+ETW numeric event 29 is `RuntimeMemory`. The high 32 bits of `arg0` identify
+the operation; the low 32 bits contain the allocation handle when available.
+`arg1` is the byte count, paging-fence value or paging-queue handle, as relevant.
+
+| Stage | Operation |
+| --- | --- |
+| 1 | Allocate runtime primary |
+| 2 | Make resident |
+| 3 | Wait for paging completion |
+| 4 | Map GPUVA |
+| 5 | Free GPUVA reservation |
+| 6 | Deallocate runtime resource |
+| 7 / 8 | CPU lock / unlock |
+| 9 / 10 | Create / destroy paging queue |

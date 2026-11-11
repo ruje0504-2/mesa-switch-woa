@@ -373,6 +373,7 @@ static void sampled_images(ID3D11Device *device, ID3D11DeviceContext *context,
    context->RSSetState(raster.Get()); context->RSSetViewports(1, &viewport);
    ID3D11ShaderResourceView *poison = views[2].Get();
    context->PSSetShaderResources(2, 1, &poison);
+   unsigned total_mismatches = 0;
    for (unsigned pass = 0; pass < 3; ++pass) {
       const unsigned palette = pass == 2, clamp = pass == 1;
       ID3D11ShaderResourceView *texture = views[palette].Get();
@@ -406,9 +407,10 @@ static void sampled_images(ID3D11Device *device, ID3D11DeviceContext *context,
       printf("Sample %s pass %u: t5/s2 palette=%u clamp=%u pixels=4096 mismatches=%u\n",
              format == DXGI_FORMAT_B8G8R8A8_UNORM ? "BGRA" : "RGBA", pass, palette, clamp, mismatches);
       fflush(stdout);
-      if (mismatches) throw std::runtime_error("sampled pixel mismatch");
+      total_mismatches += mismatches;
    }
    context->ClearState(); context->Flush();
+   if (total_mismatches) throw std::runtime_error("sampled pixel mismatch");
 }
 
 int main(int argc, char **argv)

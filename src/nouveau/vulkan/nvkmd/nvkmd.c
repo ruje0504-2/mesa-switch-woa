@@ -181,6 +181,24 @@ nvkmd_dev_import_dma_buf(struct nvkmd_dev *dev,
 }
 
 VkResult MUST_CHECK
+nvkmd_dev_import_wsi_win32_memory(struct nvkmd_dev *dev,
+                                 struct vk_object_base *log_obj,
+                                 const struct wsi_win32_memory *memory,
+                                 uint64_t size_B, uint64_t align_B,
+                                 uint8_t pte_kind, enum nvkmd_mem_flags flags,
+                                 struct nvkmd_mem **mem_out)
+{
+   if (!dev->ops->import_wsi_win32_memory)
+      return VK_ERROR_INVALID_EXTERNAL_HANDLE;
+   VkResult result = dev->ops->import_wsi_win32_memory(dev, log_obj, memory,
+                                                      size_B, align_B, pte_kind,
+                                                      flags, mem_out);
+   if (result == VK_SUCCESS)
+      nvkmd_dev_add_mem(dev, *mem_out);
+   return result;
+}
+
+VkResult MUST_CHECK
 nvkmd_dev_import_win32_handle(struct nvkmd_dev *dev,
                              struct vk_object_base *log_obj,
                              void *handle, uint64_t size_B, uint64_t align_B,

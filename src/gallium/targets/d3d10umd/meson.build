@@ -40,6 +40,12 @@ libgallium_d3d10 = shared_library(
 )
 
 if with_tests and d3d10_backend == 'nvk'
+  test('d3d10_runtime_primary', executable(
+    'test_d3d10_runtime_primary',
+    files('tests/runtime_primary.cpp', '../../frontends/d3d10umd/RuntimeMemory.cpp'),
+    include_directories : [inc_include, inc_src, inc_gallium, inc_gallium_aux, inc_d3d10umd, inc_winddk],
+    dependencies : [idep_mesautilformat],
+  ), suite : ['d3d10'])
   executable(
     'd3d10-trace-export',
     files('tests/trace_export.cpp'),

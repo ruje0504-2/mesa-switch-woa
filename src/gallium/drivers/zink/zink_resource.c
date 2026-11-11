@@ -38,6 +38,7 @@
 #endif
 
 #include "vk_format.h"
+#include "vk_internal_exts.h"
 #include "util/u_blitter.h"
 #include "util/u_debug.h"
 #include "util/format/u_format.h"
@@ -998,9 +999,24 @@ struct mem_alloc_info {
    VkExternalMemoryHandleTypeFlags export_types;
 };
 
+static bool
+is_wddm_allocation(const struct winsys_handle *handle)
+{
+#ifdef _WIN32
+   return handle && handle->type == WINSYS_HANDLE_TYPE_WDDM_ALLOCATION;
+#else
+   return false;
+#endif
+}
+
 static inline bool
 get_export_flags(struct zink_screen *screen, const struct pipe_resource *templ, struct mem_alloc_info *alloc_info)
 {
+   if (is_wddm_allocation(alloc_info->whandle)) {
+      alloc_info->shared = false;
+      alloc_info->need_dedicated = true;
+      return true;
+   }
    bool needs_export = (templ->bind & (ZINK_BIND_VIDEO | ZINK_BIND_DMABUF)) != 0;
    if (alloc_info->whandle) {
       if (alloc_info->whandle->type == WINSYS_HANDLE_TYPE_FD ||
@@ -1107,7 +1123,7 @@ allocate_bo(struct zink_screen *screen, const struct pipe_resource *templ,
       NULL,
    };
 
-   if (alloc_info->whandle) {
+   if (alloc_info->whandle && !is_wddm_allocation(alloc_info->whandle)) {
       imfi.pNext = NULL;
       imfi.handleType = alloc_info->external;
       /* Win32 imports retain the payload without consuming the handle. */
@@ -1118,6 +1134,19 @@ allocate_bo(struct zink_screen *screen, const struct pipe_resource *templ,
    }
 #endif
 
+#endif
+
+   bool runtime_imported = false;
+#ifdef _WIN32
+   struct wsi_memory_allocate_info wsi_memory = {
+      .sType = VK_STRUCTURE_TYPE_WSI_MEMORY_ALLOCATE_INFO_MESA,
+      .pNext = mai.pNext,
+   };
+   if (is_wddm_allocation(alloc_info->whandle)) {
+      wsi_memory.win32_memory = alloc_info->whandle->com_obj;
+      wsi_memory.win32_imported = &runtime_imported;
+      mai.pNext = &wsi_memory;
+   }
 #endif
 
    VkImportMemoryHostPointerInfoEXT imhpi = {
@@ -1171,6 +1200,12 @@ allocate_bo(struct zink_screen *screen, const struct pipe_resource *templ,
           heap = ZINK_HEAP_DEVICE_LOCAL;
    };
 
+   /* An ICD that ignores the Mesa-internal import must not silently give
+    * the frontend unrelated memory for its runtime primary. */
+   if (obj->bo && is_wddm_allocation(alloc_info->whandle) && !runtime_imported) {
+      zink_bo_unref(screen, obj->bo);
+      obj->bo = NULL;
+   }
    return obj->bo ? roc_success : roc_fail_and_cleanup_object;
 }
 
@@ -1441,6 +1476,7 @@ struct image_pnext_state {
    VkImageDrmFormatModifierExplicitCreateInfoEXT idfmeci;
    VkImageDrmFormatModifierListCreateInfoEXT idfmlci;
    VkSubresourceLayout plane_layouts[4];
+   struct wsi_image_create_info wsi;
 };
 
 static void
@@ -1458,6 +1494,19 @@ setup_image_pnext(struct zink_screen *screen, const struct pipe_resource *templ,
    };
 
    obj->render_target = (ici->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0;
+
+#ifdef _WIN32
+   if (is_wddm_allocation(alloc_info->whandle)) {
+      s->wsi = (struct wsi_image_create_info) {
+         .sType = VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA,
+         .pNext = ici->pNext,
+         .scanout = true,
+         .win32_row_pitch = alloc_info->whandle->stride,
+      };
+      ici->pNext = &s->wsi;
+      return;
+   }
+#endif
 
    if (ici->tiling == VK_IMAGE_TILING_OPTIMAL) {
       alloc_info->external &= ~VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
@@ -1609,7 +1658,33 @@ create_image(struct zink_screen *screen, struct zink_resource_object *obj,
 
    bool success = false;
    VkImageFormatListCreateInfo *fmtlist = (formats[0] && formats[1]) ? &format_list : NULL;
-   uint64_t mod = negotiate_image_config(screen, &ici, templ, templ->bind, ici_modifier_count, ici_modifiers, fmtlist, &success);
+   uint64_t mod = DRM_FORMAT_MOD_INVALID;
+#ifdef _WIN32
+   if (is_wddm_allocation(alloc_info->whandle)) {
+      ici.flags = 0;
+      ici.pNext = NULL;
+      struct wsi_image_create_info wsi = {
+         .sType = VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA,
+         .scanout = true,
+         .win32_row_pitch = alloc_info->whandle->stride,
+      };
+      VkPhysicalDeviceImageFormatInfo2 info = {
+         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2,
+         .pNext = &wsi,
+         .format = ici.format,
+         .type = ici.imageType,
+         .tiling = ici.tiling,
+         .usage = ici.usage,
+      };
+      VkImageFormatProperties2 properties = {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2,
+      };
+      success = VKSCR(GetPhysicalDeviceImageFormatProperties2)(screen->pdev, &info, &properties) == VK_SUCCESS &&
+         ici.extent.width <= properties.imageFormatProperties.maxExtent.width &&
+         ici.extent.height <= properties.imageFormatProperties.maxExtent.height;
+   } else
+#endif
+      mod = negotiate_image_config(screen, &ici, templ, templ->bind, ici_modifier_count, ici_modifiers, fmtlist, &success);
    if (ici.format == VK_FORMAT_A8_UNORM_KHR && !success) {
       ici.format = zink_get_format(screen, zink_format_get_emulated_alpha(templ->format));
       mod = negotiate_image_config(screen, &ici, templ, templ->bind, ici_modifier_count, ici_modifiers, fmtlist, &success);
@@ -1655,7 +1730,10 @@ create_image(struct zink_screen *screen, struct zink_resource_object *obj,
 #endif
 
    if (!(templ->bind & ZINK_BIND_VIDEO)) {
-      obj->vkfeats = get_format_feature_flags(ici, screen, templ);
+      VkImageCreateInfo feature_info = ici;
+      if (is_wddm_allocation(alloc_info->whandle))
+         feature_info.tiling = VK_IMAGE_TILING_OPTIMAL; /* NVK renders through its tiled shadow. */
+      obj->vkfeats = get_format_feature_flags(feature_info, screen, templ);
       if (obj->vkfeats & VK_FORMAT_FEATURE_DISJOINT_BIT)
          ici.flags |= VK_IMAGE_CREATE_DISJOINT_BIT;
    }
@@ -1690,7 +1768,7 @@ create_image(struct zink_screen *screen, struct zink_resource_object *obj,
       assert(num_dmabuf_planes <= 4);
    }
 
-   alloc_info->need_dedicated = get_image_memory_requirement(screen, obj, num_planes, &reqs);
+   alloc_info->need_dedicated |= get_image_memory_requirement(screen, obj, num_planes, &reqs);
    if (templ->usage == PIPE_USAGE_STAGING && ici.tiling == VK_IMAGE_TILING_LINEAR)
       alloc_info->flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
    else
@@ -2314,6 +2392,20 @@ zink_resource_from_handle(struct pipe_screen *pscreen,
                  struct winsys_handle *whandle,
                  unsigned usage)
 {
+   if (is_wddm_allocation(whandle)) {
+      if (!whandle->com_obj || !whandle->stride || whandle->offset || whandle->plane ||
+          templ->target != PIPE_TEXTURE_2D || templ->array_size != 1 ||
+          templ->last_level || util_res_sample_count(templ) != 1 ||
+          templ->format != PIPE_FORMAT_B8G8R8A8_UNORM)
+         return NULL;
+      struct pipe_resource linear = *templ;
+      linear.bind |= PIPE_BIND_LINEAR;
+      struct pipe_resource *resource = resource_create(pscreen, &linear, whandle,
+         usage, NULL, 0, NULL, NULL);
+      if (resource)
+         zink_resource(resource)->obj->immutable_handle = true;
+      return resource;
+   }
 #ifdef ZINK_USE_DMABUF
    struct zink_screen *screen = zink_screen(pscreen);
 

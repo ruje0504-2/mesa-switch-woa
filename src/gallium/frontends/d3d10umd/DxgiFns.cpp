@@ -38,6 +38,9 @@
 
 #include "Debug.h"
 #include "Trace.h"
+#ifdef D3D10_UMD_HARDWARE
+#include "RuntimeMemory.h"
+#endif
 
 #include "util/format/u_format.h"
 
@@ -122,11 +125,21 @@ _GetGammaCaps( DXGI_DDI_ARG_GET_GAMMA_CONTROL_CAPS *GetCaps )
 HRESULT APIENTRY
 _SetDisplayMode( DXGI_DDI_ARG_SETDISPLAYMODE *SetDisplayMode )
 {
-   LOG_UNSUPPORTED_ENTRYPOINT();
+   LOG_ENTRYPOINT();
 
 #ifdef D3D10_UMD_HARDWARE
-   D3D10Trace(D3D10_TRACE_SET_DISPLAY_MODE, DXGI_ERROR_UNSUPPORTED, 0, 0);
-   return DXGI_ERROR_UNSUPPORTED;
+   if (!SetDisplayMode || !SetDisplayMode->hDevice || !SetDisplayMode->hResource)
+      return E_INVALIDARG;
+   Device *device = CastDevice(SetDisplayMode->hDevice);
+   Resource *resource = CastResource(SetDisplayMode->hResource);
+   HRESULT hr = RuntimePrimaryFinish(device, resource);
+   if (SUCCEEDED(hr))
+      hr = RuntimePrimarySetMode(resource->runtime_primary, device->hDevice,
+                                 SetDisplayMode->SubResourceIndex);
+   D3D10Trace(D3D10_TRACE_SET_DISPLAY_MODE, hr,
+      resource->runtime_primary ? RuntimePrimaryMemory(resource->runtime_primary)->allocation : 0,
+      SetDisplayMode->SubResourceIndex);
+   return hr;
 #else
    return S_OK;
 #endif

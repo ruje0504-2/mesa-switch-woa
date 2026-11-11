@@ -39,7 +39,14 @@ struct wsi_image_create_info {
 
     /* if true, the image is a blit source */
     bool blit_src;
+#ifdef _WIN32
+    /* Explicit pitch of a runtime-owned linear scanout allocation. Zero
+     * leaves ordinary Vulkan/WSI image layout selection unchanged. */
+    uint32_t win32_row_pitch;
+#endif
 };
+
+struct wsi_win32_memory;
 
 struct wsi_memory_allocate_info {
     VkStructureType sType;
@@ -61,6 +68,13 @@ struct wsi_memory_allocate_info {
      * GL driver in the X server).
      */
     bool dma_buf_sync_file;
+
+#ifdef _WIN32
+    /* Optional runtime-owned WDDM memory, not a public external handle.
+     * The importing driver retains this owner through its callbacks. */
+    const struct wsi_win32_memory *win32_memory;
+    bool *win32_imported;
+#endif
 };
 
 /* To be chained into VkSurfaceCapabilities2KHR */

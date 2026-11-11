@@ -170,6 +170,8 @@ CheckDeviceRemoved(D3D10DDI_HDEVICE hDevice)
 }
 
 
+struct RuntimePrimary;
+
 struct Resource
 {
    DXGI_FORMAT Format;
@@ -179,6 +181,7 @@ struct Resource
    struct pipe_resource *resource;
    struct pipe_transfer **transfers;
    struct pipe_stream_output_target *so_target;
+   RuntimePrimary *runtime_primary;
 };
 
 

@@ -57,6 +57,38 @@ mode callback, alongside the pending resource/presentation bridge. The cause
 of the trial restart is not established by this record.
 [Exception context and sampling work](PORTING.md#dwm-tgsi-sample-abort)
 
+**Primary bridge WIP (2026-11-11):** the working tree now creates the portrait
+primary through the D3D runtime, imports that same allocation into NVK through
+Mesa-internal owner callbacks, and routes SetDisplayMode to the real runtime
+callback. Zink/NVK retain the explicit 2880-byte pitch and use GPU tiled-shadow
+rendering. The owner releases GPUVA reservations before runtime deallocation,
+so delayed object cleanup cannot free a reused address. The first native trial
+successfully allocates fourteen primary surfaces, then incorrectly rejects
+`E_PENDING` from residency. The paging callbacks now wait for that queued
+operation; the extended ARM64 controls pass. Ordinary drawing matches 16,384
+pixels but reveals a stale Zink program pointer at device release, also fixed
+in the next candidate. Sampling still has wrong pixels. The follow-up harness
+prematurely rejects a pending hardware-start field; its bounded wait is being
+corrected before repeating with the same binaries. Present and shared-resource
+opens remain unfinished.
+[Primary bridge contract and controls](D3D_RUNTIME_SHARING.md#runtime-primary-bridge-work)
+
+**Version labels:** Device Manager shows the installed INF package's version.
+Recent experiments reuse the signed `.144` KMD while replacing the test UMD
+and ICD; they are not unchanged GPU builds. Standalone build manifests now
+name their component and include a readable `artifact_id` with the DLL hash.
+The current primary-bridge candidate uses:
+
+| Component | Candidate identifier |
+| --- | --- |
+| Signed KMD package | `0.1.0.144` (reused binary) |
+| D3D UMD / Zink | `runtime-primary-20261111-umd+d17a557b3a76` |
+| NVK ICD | `runtime-primary-20261111-icd-v2+f828845c38b7` |
+
+These are test-deployment identifiers. Rollback reinstalls `.59`; a future
+complete driver-package release must version its INF and catalog together
+with the bundled UMD/ICD, even if a component's binary is reused.
+
 **Host-memory audit (2026-11-11):** no page-size/alignment or 512 MiB unit
 error was found in the inspected paths. The current instance path uses
 ordinary CRT allocation; GPU section allocation uses committed,

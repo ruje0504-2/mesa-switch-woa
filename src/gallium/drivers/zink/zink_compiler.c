@@ -5939,6 +5939,21 @@ gfx_shader_prune(struct zink_screen *screen, struct zink_shader *shader)
       struct hash_entry *he = _mesa_hash_table_search(ht, prog->shaders);
       assert(he && he->data == prog);
       _mesa_hash_table_remove(ht, he);
+      /* Binding a replacement shader leaves the last program selected until
+       * the next draw. Deleting its old shaders can drop the final program
+       * reference first. Clear these non-owning context pointers while the
+       * program is still alive, including its contribution to the hash. */
+      struct zink_context *ctx = prog->base.ctx;
+      if (ctx->curr_program == prog) {
+         ctx->gfx_pipeline_state.final_hash ^= prog->last_variant_hash;
+         ctx->curr_program = NULL;
+         ctx->gfx_dirty = true;
+      }
+      if (ctx->mesh_program == prog) {
+         ctx->gfx_pipeline_state.mesh_final_hash ^= prog->last_variant_hash;
+         ctx->mesh_program = NULL;
+         ctx->mesh_dirty = true;
+      }
       prog->base.removed = true;
       simple_mtx_unlock(lock);
 

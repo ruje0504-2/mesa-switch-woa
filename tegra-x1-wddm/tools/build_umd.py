@@ -55,16 +55,20 @@ def main():
     target = "src/gallium/targets/d3d10umd/"
     names = ["TegraGpuD3D.dll", "test_d3d10_nvk_adapter.exe", "test_d3d10_nvk_entry.exe",
              "test_d3d10_nvk_device.exe", "nvk_d3d_check.exe", "nvk_d3d_runtime_check.exe",
-             "d3d10-trace-export.exe"]
+             "d3d10-trace-export.exe", "test_d3d10_runtime_primary.exe"]
     sample_test = "src/gallium/auxiliary/gallium-aux.exe"
     subprocess.run(["ninja", "-C", str(build), *(target + name for name in names), sample_test], check=True)
     for name in names:
         shutil.copyfile(build / target / name, out / name)
     shutil.copyfile(build / sample_test, out / "test_tgsi_to_nir.exe")
     names.append("test_tgsi_to_nir.exe")
+    hashes = {name: hashlib.sha256((out / name).read_bytes()).hexdigest() for name in names}
     (out / "manifest.json").write_text(json.dumps({
+        "component": "d3d10-umd",
+        "artifact_id": out.name + "+" + hashes["TegraGpuD3D.dll"][:12],
+        "mesa": subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip(),
         "scope": "Experimental NVK D3D10 UMD, controlled fixtures, and explicit DDI/Windows-runtime drawing probes",
-        "files": {name: hashlib.sha256((out / name).read_bytes()).hexdigest() for name in names},
+        "files": hashes,
     }, indent=2) + "\n")
     print(f"Built the NVK D3D UMD and controlled tests in {out}")
 

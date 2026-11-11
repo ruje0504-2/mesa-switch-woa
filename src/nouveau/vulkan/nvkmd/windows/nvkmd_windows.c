@@ -5,6 +5,7 @@
 #include "util/u_math.h"
 #include "vk_log.h"
 #include "vk_sync_binary.h"
+#include "vk_wsi_win32_memory.h"
 #include "allocation_abi.h"
 
 struct nvkmd_windows_pdev {
@@ -17,6 +18,7 @@ struct nvkmd_windows_pdev {
 struct nvkmd_windows_mem {
    struct nvkmd_mem base;
    struct tg_kmt_allocation allocation;
+   struct wsi_win32_memory wsi;
    SRWLOCK map_lock;
    uint32_t maps;
    void *cpu;
@@ -25,6 +27,7 @@ struct nvkmd_windows_mem {
 struct nvkmd_windows_va {
    struct nvkmd_va base;
    struct tg_kmt_va va;
+   struct wsi_win32_memory wsi;
 };
 
 VkResult
@@ -77,7 +80,12 @@ static void
 win_free_va(struct nvkmd_va *base)
 {
    struct nvkmd_windows_va *va = container_of(base, struct nvkmd_windows_va, base);
-   tg_kmt_free_va(&nvkmd_windows_dev(base->dev)->kmt, &va->va);
+   if (va->wsi.version) {
+      va->wsi.free_gpu(va->wsi.context, va->va.reserved_base, va->va.reserved_size);
+      va->wsi.release(va->wsi.context);
+   } else {
+      tg_kmt_free_va(&nvkmd_windows_dev(base->dev)->kmt, &va->va);
+   }
    free(va);
 }
 
@@ -88,6 +96,24 @@ win_bind_mem(struct nvkmd_va *base, struct vk_object_base *log, uint64_t va_offs
    struct nvkmd_windows_va *va = container_of(base, struct nvkmd_windows_va, base);
    struct nvkmd_windows_mem *memory = container_of(mem, struct nvkmd_windows_mem, base);
    const bool read_only = mem->flags & NVKMD_MEM_GPU_READ_ONLY;
+   if (memory->wsi.version) {
+      if (!size || ((va_offset | mem_offset | size) & (TG_KMT_PAGE_SIZE - 1)) ||
+          va_offset > va->va.size || size > va->va.size - va_offset ||
+          mem_offset > memory->wsi.size || size > memory->wsi.size - mem_offset ||
+          (memory->wsi.read_only && !read_only))
+         return vk_error(log, VK_ERROR_UNKNOWN);
+      if (va->wsi.version && va->wsi.context != memory->wsi.context)
+         return vk_error(log, VK_ERROR_UNKNOWN);
+      if (!va->wsi.version) {
+         va->wsi = memory->wsi;
+         va->wsi.retain(va->wsi.context);
+      }
+      VkResult result = memory->wsi.map_gpu(memory->wsi.context,
+         va->va.address + va_offset, mem_offset, size, base->pte_kind, read_only,
+         va->va.reserved_base, va->va.reserved_size);
+      return result == VK_SUCCESS ? result :
+         vk_errorf(log, result, "runtime allocation GPU mapping failed");
+   }
    LONG status = tg_kmt_map(&nvkmd_windows_dev(base->dev)->kmt, &va->va, va_offset,
                             &memory->allocation, mem_offset, size, base->pte_kind, read_only);
    return nvkmd_windows_status(log, "D3DKMTMapGpuVirtualAddress", status,
@@ -137,11 +163,20 @@ win_alloc_va(struct nvkmd_dev *dev, struct vk_object_base *log,
 }
 
 static void
+win_release_allocation(struct nvkmd_dev *dev, struct nvkmd_windows_mem *mem)
+{
+   if (mem->wsi.version)
+      mem->wsi.release(mem->wsi.context);
+   else
+      tg_kmt_free(&nvkmd_windows_dev(dev)->kmt, &mem->allocation);
+}
+
+static void
 win_free_mem(struct nvkmd_mem *base)
 {
    struct nvkmd_windows_mem *mem = container_of(base, struct nvkmd_windows_mem, base);
    nvkmd_va_free(base->va);
-   tg_kmt_free(&nvkmd_windows_dev(base->dev)->kmt, &mem->allocation);
+   win_release_allocation(base->dev, mem);
    simple_mtx_destroy(&base->map_mutex);
    free(mem);
 }
@@ -155,6 +190,21 @@ win_map_mem(struct nvkmd_mem *base, struct vk_object_base *log,
       return vk_error(log, VK_ERROR_MEMORY_MAP_FAILED);
 
    AcquireSRWLockExclusive(&mem->map_lock);
+   if (mem->wsi.version) {
+      VkResult result = VK_SUCCESS;
+      if (!mem->wsi.map_cpu || !mem->wsi.unmap_cpu) {
+         ReleaseSRWLockExclusive(&mem->map_lock);
+         return vk_error(log, VK_ERROR_MEMORY_MAP_FAILED);
+      }
+      if (!mem->maps)
+         result = mem->wsi.map_cpu(mem->wsi.context, &mem->cpu);
+      if (result == VK_SUCCESS) {
+         mem->maps++;
+         *cpu = mem->cpu;
+      }
+      ReleaseSRWLockExclusive(&mem->map_lock);
+      return result;
+   }
    LONG status = 0;
    if (!mem->maps)
       status = tg_kmt_lock(&nvkmd_windows_dev(base->dev)->kmt, &mem->allocation, &mem->cpu);
@@ -174,7 +224,10 @@ win_unmap_mem(struct nvkmd_mem *base, enum nvkmd_mem_map_flags flags, void *cpu)
    struct nvkmd_windows_mem *mem = container_of(base, struct nvkmd_windows_mem, base);
    AcquireSRWLockExclusive(&mem->map_lock);
    if (--mem->maps == 0) {
-      tg_kmt_unlock(&nvkmd_windows_dev(base->dev)->kmt, &mem->allocation);
+      if (mem->wsi.version)
+         mem->wsi.unmap_cpu(mem->wsi.context);
+      else
+         tg_kmt_unlock(&nvkmd_windows_dev(base->dev)->kmt, &mem->allocation);
       mem->cpu = NULL;
    }
    ReleaseSRWLockExclusive(&mem->map_lock);
@@ -218,7 +271,7 @@ win_finish_mem(struct nvkmd_dev *dev, struct vk_object_base *log,
    return VK_SUCCESS;
 
 fail_allocation:
-   tg_kmt_free(&nvkmd_windows_dev(dev)->kmt, &mem->allocation);
+   win_release_allocation(dev, mem);
    free(mem);
    return result;
 }
@@ -273,11 +326,40 @@ win_import_mem(struct nvkmd_dev *dev, struct vk_object_base *log, void *handle,
    return win_finish_mem(dev, log, mem, alignment, kind, flags, out);
 }
 
+static VkResult
+win_import_wsi_memory(struct nvkmd_dev *dev, struct vk_object_base *log,
+                       const struct wsi_win32_memory *memory,
+                       uint64_t size, uint64_t alignment, uint8_t kind,
+                       enum nvkmd_mem_flags flags, struct nvkmd_mem **out)
+{
+   const struct tg_gpu_adapter_info *adapter = nvkmd_windows_adapter(dev->pdev);
+   const uint64_t luid = (uint64_t)(uint32_t)adapter->luid_high << 32 | adapter->luid_low;
+   if (!memory || memory->version != WSI_WIN32_MEMORY_VERSION ||
+       !memory->allocation || memory->adapter_luid != luid ||
+       !size || size > memory->size || (memory->size & (TG_KMT_PAGE_SIZE - 1)) ||
+       !memory->retain || !memory->release || !memory->map_gpu || !memory->free_gpu ||
+       (flags & (NVKMD_MEM_VRAM | NVKMD_MEM_SHARED)) ||
+       (memory->read_only && !(flags & NVKMD_MEM_GPU_READ_ONLY)) ||
+       ((flags & NVKMD_MEM_CAN_MAP) && (!memory->map_cpu || !memory->unmap_cpu)))
+      return vk_error(log, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+
+   struct nvkmd_windows_mem *mem = calloc(1, sizeof(*mem));
+   if (!mem)
+      return vk_error(log, VK_ERROR_OUT_OF_HOST_MEMORY);
+   mem->wsi = *memory;
+   mem->allocation.handle = memory->allocation;
+   mem->allocation.size = memory->size;
+   memory->retain(memory->context);
+   return win_finish_mem(dev, log, mem, alignment, kind, flags, out);
+}
+
 VkResult
 nvkmd_windows_export_memory(struct nvkmd_mem *base, struct vk_object_base *log,
                             const VkExportMemoryWin32HandleInfoKHR *info, HANDLE *handle)
 {
    struct nvkmd_windows_mem *mem = container_of(base, struct nvkmd_windows_mem, base);
+   if (mem->wsi.version)
+      return vk_error(log, VK_ERROR_INVALID_EXTERNAL_HANDLE);
    /* Only handles returned to the application may be inherited. */
    SECURITY_ATTRIBUTES security = {.nLength = sizeof(security)};
    if (info && info->pAttributes)
@@ -319,6 +401,7 @@ static const struct nvkmd_dev_ops win_dev_ops = {
    .alloc_mem = win_alloc_mem,
    .alloc_tiled_mem = win_alloc_tiled_mem,
    .import_win32_handle = win_import_mem,
+   .import_wsi_win32_memory = win_import_wsi_memory,
    .alloc_va = win_alloc_va,
    .create_ctx = nvkmd_windows_create_ctx,
 };

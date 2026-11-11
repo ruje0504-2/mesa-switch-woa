@@ -17,6 +17,7 @@
 #include "nvkmd/switch/nvkmd_switch.h"
 #endif
 #include "util/u_atomic.h"
+#include "vk_internal_exts.h"
 
 #include <inttypes.h>
 
@@ -181,7 +182,11 @@ nvk_allocate_memory(VkDevice device,
       handle_types |= fd_info->handleType;
 
    bool is_win32_import = false;
+   bool is_wsi_win32_import = false;
 #ifdef _WIN32
+   const struct wsi_memory_allocate_info *wsi_info =
+      vk_find_struct_const(pAllocateInfo->pNext, WSI_MEMORY_ALLOCATE_INFO_MESA);
+   is_wsi_win32_import = wsi_info && wsi_info->win32_memory;
    const VkImportMemoryWin32HandleInfoKHR *win32_import =
       vk_find_struct_const(pAllocateInfo->pNext, IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR);
    const VkExportMemoryWin32HandleInfoKHR *win32_export =
@@ -194,9 +199,13 @@ nvk_allocate_memory(VkDevice device,
       result = vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
       goto fail_alloc;
    }
+   if (is_wsi_win32_import && (handle_types || mem->vk.host_ptr)) {
+      result = vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
+      goto fail_alloc;
+   }
 #endif
 
-   const bool not_shared = handle_types == 0 && !switch_shared;
+   const bool not_shared = handle_types == 0 && !switch_shared && !is_wsi_win32_import;
    bool pinned_to_vram = false;
 
    /* Align to os page size (typically 4K) as a start as this works for
@@ -280,14 +289,21 @@ nvk_allocate_memory(VkDevice device,
    const uint64_t aligned_size =
       align64(pAllocateInfo->allocationSize, alignment);
 
-   const bool is_import = (fd_info && fd_info->handleType) || is_win32_import;
+   const bool is_import = (fd_info && fd_info->handleType) || is_win32_import || is_wsi_win32_import;
    const bool is_host_import = mem->vk.host_ptr != NULL;
 #ifdef __SWITCH__
    const bool is_nvmap_import = switch_nvmap_id != 0;
 #else
    const bool is_nvmap_import = false;
 #endif
-   if (is_nvmap_import) {
+   if (is_wsi_win32_import) {
+#ifdef _WIN32
+      result = nvkmd_dev_import_wsi_win32_memory(dev->nvkmd, &dev->vk.base,
+         wsi_info->win32_memory, aligned_size, alignment, pte_kind, flags, &mem->mem);
+      if (result != VK_SUCCESS)
+         goto fail_alloc;
+#endif
+   } else if (is_nvmap_import) {
 #ifdef __SWITCH__
       result = nvkmd_switch_dev_import_nvmap(dev->nvkmd, &dev->vk.base,
                                              switch_nvmap_id, aligned_size,
@@ -433,6 +449,10 @@ nvk_allocate_memory(VkDevice device,
    p_atomic_add(&heap->used, mem->mem->size_B);
 
    *pMem = nvk_device_memory_to_handle(mem);
+#ifdef _WIN32
+   if (is_wsi_win32_import && wsi_info->win32_imported)
+      *wsi_info->win32_imported = true;
+#endif
 
    return VK_SUCCESS;
 

@@ -91,10 +91,13 @@ def main():
     files = [dll, out / "nvk-windows-check.exe", out / "test-kmt.exe",
              out / "test-kmt-shared.exe", out / "nvk-windows-shared-check.exe",
              out / "nvk-windows-vulkan-shared-check.exe", manifest]
+    hashes = {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files}
     (out / "manifest.json").write_text(json.dumps({
+        "component": "nvk-icd",
+        "artifact_id": out.name + "+" + hashes[dll.name][:12],
         "mesa": rev, "mesa_switch_base": REV, "build_id": digest.hexdigest(), "sdk_kmt_layout_verified": True,
         "scope": "NVK ICD with Windows KMT transport gated by the native-submit KMD flag",
-        "files": {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files},
+        "files": hashes,
     }, indent=2) + "\n")
 
 
