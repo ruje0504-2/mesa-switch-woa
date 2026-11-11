@@ -38,6 +38,7 @@
 
 #include "Debug.h"
 #include "Format.h"
+#include "cso_cache/cso_context.h"
 
 
 /*
@@ -127,6 +128,13 @@ IaSetVertexBuffers(D3D10DDI_HDEVICE hDevice,                                    
 
    Device *pDevice = CastDevice(hDevice);
    unsigned i;
+
+   /* The next draw installs the new bindings, but Gallium still borrows the
+    * old buffers until then. Drop that binding before releasing our refs;
+    * ClearState/device teardown need not be followed by another draw. CSO
+    * also clears u_vbuf's borrowed state when vertex translation is active. */
+   if (NumBuffers)
+      cso_set_vertex_buffers(pDevice->cso, 0, NULL);
 
    for (i = 0; i < NumBuffers; i++) {
       struct pipe_vertex_buffer *vb = &pDevice->vertex_buffers[StartBuffer + i];

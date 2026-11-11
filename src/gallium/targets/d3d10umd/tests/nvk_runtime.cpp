@@ -536,7 +536,7 @@ static void shared_pattern_checkpoint(ID3D11Device *device, ID3D11DeviceContext 
  * the consumer uses translated/scaled viewports and clipped, rebound uniforms.
  * CPU expectations are integer coordinates, independent of the shader. */
 static void shared_layout(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVEL level,
-                          ID3D11Device *consumer, DXGI_FORMAT format, bool checkpoints)
+                          ID3D11Device *consumer, DXGI_FORMAT format, bool checkpoints, bool variants)
 {
    ComPtr<ID3D11Device> producer;
    ComPtr<ID3D11DeviceContext> pc, cc;
@@ -587,9 +587,10 @@ static void shared_layout(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVE
       c->IASetInputLayout(layout.Get()); c->IASetVertexBuffers(0,1,&buffer,&stride,&offset);
       c->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
       c->VSSetShader(vs.Get(),NULL,0); c->PSSetShader(ps.Get(),NULL,0); c->RSSetState(raster.Get());
+      return ps;
    };
    configure(producer.Get(),pc.Get(),pattern.Get(),false);
-   configure(consumer,cc.Get(),sample.Get(),true);
+   auto sample_shader = configure(consumer,cc.Get(),sample.Get(),true);
    D3D11_TEXTURE2D_DESC desc={}; desc.Width=577; desc.Height=961;
    desc.MipLevels=desc.ArraySize=desc.SampleDesc.Count=1; desc.Format=format;
    desc.BindFlags=D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE; desc.MiscFlags=D3D11_RESOURCE_MISC_SHARED;
@@ -606,6 +607,16 @@ static void shared_layout(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVE
    check(consumer->OpenSharedResource(handle,IID_PPV_ARGS(&opened)),"Open pattern shared image");
    if (checkpoints) shared_pattern_checkpoint(consumer, cc.Get(), opened.Get(), "consumer-import");
    ComPtr<ID3D11ShaderResourceView> texture; check(consumer->CreateShaderResourceView(opened.Get(),NULL,&texture),"Create pattern SRV");
+   ComPtr<ID3D11Texture2D> private_copy;
+   ComPtr<ID3D11ShaderResourceView> copied_texture;
+   if (variants) {
+      D3D11_TEXTURE2D_DESC copy_desc = desc;
+      copy_desc.MiscFlags = 0;
+      check(consumer->CreateTexture2D(&copy_desc, NULL, &private_copy), "Create private pattern copy");
+      cc->CopyResource(private_copy.Get(), opened.Get());
+      shared_pattern_checkpoint(consumer, cc.Get(), private_copy.Get(), "private-copy");
+      check(consumer->CreateShaderResourceView(private_copy.Get(), NULL, &copied_texture), "Create copied pattern SRV");
+   }
    ID3D11ShaderResourceView *srv=texture.Get(); cc->PSSetShaderResources(5,1,&srv);
    D3D11_SAMPLER_DESC sd={}; sd.Filter=D3D11_FILTER_MIN_MAG_MIP_POINT;
    sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP; sd.MaxAnisotropy=1;
@@ -623,8 +634,30 @@ static void shared_layout(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVE
    ID3D11RenderTargetView *tv=target_view.Get(); cc->OMSetRenderTargets(1,&tv,NULL);
    const D3D11_VIEWPORT viewports[]={{41,1001,638,238,0,1},{91,17,512,700,0,1}};
    const D3D11_RECT clips[]={{73,1113,657,1239},{110,51,550,650}};
-   for(unsigned pass=0;pass<2;++pass) {
+   ComPtr<ID3D11PixelShader> literal_shaders[2];
+   if (variants) for (unsigned pass = 0; pass < 2; ++pass) {
+      const auto &v = viewports[pass];
+      char source[512];
+      snprintf(source, sizeof(source),
+         "Texture2D<float4> image:register(t5); SamplerState pointSampler:register(s2);"
+         "float4 main(float4 p:SV_Position):SV_Target { return image.Sample(pointSampler,"
+         "(p.xy-float2(%.0f.0,%.0f.0))/float2(%.0f.0,%.0f.0)); }",
+         v.TopLeftX, v.TopLeftY, v.Width, v.Height);
+      auto literal = compile(source);
+      check(consumer->CreatePixelShader(literal->GetBufferPointer(), literal->GetBufferSize(), NULL,
+                                       &literal_shaders[pass]), "Create literal-coordinate PS");
+   }
+   unsigned total_mismatches = 0;
+   for(unsigned variant=0;variant<(variants ? 4u : 1u);++variant) for(unsigned pass=0;pass<2;++pass) {
       const auto &vp=viewports[pass]; const auto &clip=clips[pass];
+      if (variants) {
+         ID3D11ShaderResourceView *selected = variant & 2 ? copied_texture.Get() : texture.Get();
+         cc->PSSetShaderResources(5, 1, &selected);
+         cc->PSSetShader(variant & 1 ? literal_shaders[pass].Get() : sample_shader.Get(), NULL, 0);
+         printf("Layout variant: format=%u variant=%u image=%s coordinates=%s pass=%u\n", format, variant,
+                variant & 2 ? "private-copy" : "shared", variant & 1 ? "literal" : "buffer", pass);
+         fflush(stdout);
+      }
       const FLOAT rect[]={vp.TopLeftX,vp.TopLeftY,vp.Width,vp.Height},clear[]={0,0,0,1};
       cc->UpdateSubresource(placement.Get(),0,NULL,rect,0,0);
       cc->RSSetViewports(1,&vp); cc->RSSetScissorRects(1,&clip);
@@ -649,9 +682,11 @@ static void shared_layout(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVE
       }
       cc->Unmap(staging.Get(),0); check(consumer->GetDeviceRemovedReason(),"Shared layout consumer status");
       printf("Shared layout: format=%u pass=%u pixels=921600 mismatches=%u\n",format,pass,mismatches); fflush(stdout);
-      if(mismatches) throw std::runtime_error("shared layout mismatch");
+      total_mismatches += mismatches;
+      if(mismatches && !variants) throw std::runtime_error("shared layout mismatch");
    }
    pc->ClearState(); pc->Flush(); cc->ClearState(); cc->Flush();
+   if (total_mismatches) throw std::runtime_error("shared layout variant mismatch");
    marker("Shared nonuniform sampling, placement and clipping passed; no presentation exercised");
 }
 
@@ -660,14 +695,15 @@ int main(int argc, char **argv)
    const bool implicit = argc == 4 && !strcmp(argv[3], "--implicit-release");
    const bool shared = argc > 2 && !strcmp(argv[argc - 1], "--shared-contract");
    const bool features = argc > 2 && !strcmp(argv[argc - 1], "--feature-levels");
-   const bool checkpoints = argc > 2 && !strcmp(argv[argc - 1], "--shared-layout-checkpoints");
+   const bool variants = argc > 2 && !strcmp(argv[argc - 1], "--shared-layout-variants");
+   const bool checkpoints = variants || (argc > 2 && !strcmp(argv[argc - 1], "--shared-layout-checkpoints"));
    const bool layout = checkpoints || (argc > 2 && !strcmp(argv[argc - 1], "--shared-layout"));
    const bool sample = argc > 2 && !strcmp(argv[argc - 1], "--sample");
    const bool hardware = (argc == 3 || implicit || (argc == 4 && (shared || features || sample || layout))) && !strcmp(argv[1], "--luid");
    const bool software = (argc == 3 || (argc == 4 && (features || sample))) && !strcmp(argv[1], "--software");
    const bool warp = (argc == 2 || (argc == 3 && (shared || features || sample || layout))) && !strcmp(argv[1], "--warp");
    if (!hardware && !software && !warp) {
-      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract|--shared-layout|--shared-layout-checkpoints|--feature-levels|--sample] | --software dll [--feature-levels|--sample] | --warp [--shared-contract|--shared-layout|--shared-layout-checkpoints|--feature-levels|--sample]\n", argv[0]);
+      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract|--shared-layout|--shared-layout-checkpoints|--shared-layout-variants|--feature-levels|--sample] | --software dll [--feature-levels|--sample] | --warp [--shared-contract|--shared-layout|--shared-layout-checkpoints|--shared-layout-variants|--feature-levels|--sample]\n", argv[0]);
       return 2;
    }
    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -748,8 +784,8 @@ int main(int argc, char **argv)
          shared_contract(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, true);
          check(device->GetDeviceRemovedReason(), "Consumer status after sharing");
       } else if (layout) {
-         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_B8G8R8A8_UNORM, checkpoints);
-         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, checkpoints);
+         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_B8G8R8A8_UNORM, checkpoints, variants);
+         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, checkpoints, variants);
       } else if (sample) {
          sampled_images(device.Get(), context.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
          sampled_images(device.Get(), context.Get(), DXGI_FORMAT_B8G8R8A8_UNORM);

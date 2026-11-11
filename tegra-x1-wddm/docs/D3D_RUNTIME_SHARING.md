@@ -1497,3 +1497,68 @@ passes the original mode's 3,686,400 pixels and the checkpoint mode's 5,904,388
 pixels, including both producer/import checkpoints in BGRA and RGBA. Both exit
 0 with empty stderr and matching returned log hashes. Native checkpoint
 execution and the underlying pixel fix remain pending.
+
+### Shared sampling checkpoints and vertex-buffer lifetime
+
+`shared-checkpoints153-native-20261111` keeps KMD `.153` (`94bcb716d824`),
+UMD `11116dc1b815` and ICD `6e2fad99d742`, replacing only the probe with
+`073007e7440e` from `ad3fd568`. Native LUID `af705` reaches Code 0 at 20:51:25
+UTC. The original mode exits 1 at 20:51:49 with the same 73,584 mismatches.
+
+The checkpoint mode verifies **554,497 producer pixels and 554,497 imported
+consumer pixels**, all matching the nonuniform BGRA pattern, with zero
+zero-alpha pixels. Its first sampled-layout case still has 73,584 mismatches
+out of 921,600 pixels; both device-status checks return S_OK. Thus this pattern
+is rendered and imported correctly, and the added readback/synchronization
+does not repair its sampled output. The remaining rectangle and RGBA cases
+are not reached. This narrows the next comparison to sampling/shader state;
+it does not establish correct desktop composition.
+
+After reporting the mismatch, the checkpoint process exits `c0000005` during
+exception cleanup. The exact UMD binary resolves the fault at RVA `12c00c` to
+`zink_bind_vertex_elements_state`, with LR `13910` in `cso_unbind_context`.
+The faulting instruction reads an old vertex-buffer resource at offset `e8`.
+`IaSetVertexBuffers` previously released frontend references immediately but
+deferred the Gallium binding update until another draw. Zink's borrowed binding
+can then outlive the resource when ClearState is followed directly by device
+destruction. CSO/u_vbuf also retain borrowed bindings, so changing only the
+Zink teardown dereference would leave the lifetime error intact.
+
+The correction calls `cso_set_vertex_buffers(..., 0, NULL)` before releasing
+old frontend references. That existing helper clears the underlying pipe
+binding in both direct and u_vbuf paths. The next draw still installs the new
+bindings through the existing dirty-state path. A controlled Gallium backend
+now records its borrowed pointer and rejects resource destruction while bound.
+On Windows ARM64 `.59` at 21:02:53 UTC, the pre-fix executable exits 1 at the
+immediate-unbind assertion and the fixed executable exits 0 through all four
+draw paths and teardown. Both logs match device hashes. The fix builds as
+UMD `vertex-unbind-20261111-umd+7fd712e9882c`; native confirmation of the
+captured exception fix remains pending.
+
+The exact candidate DLL and its newly built shared, primary, Present, adapter,
+device and DLL-entry controls pass on `.59` at 21:08:38 UTC. The finalized
+controlled trace has 114 valid events with no reported loss, and all returned
+files match device hashes. This checks the UMD artifact and controlled callback
+contracts, not native rendering or the captured exception path on Zink.
+
+The native task still records its results at 20:52:36. Its finalized ETL has
+301,418 exported records and 65,454 valid UMD events, with no reported loss;
+68 DWM flip callbacks and two Explorer windowed Presents succeed. No
+ZinkFailure, RuntimeError or KMD recovery event is retained. All 154 returned
+files (107,256,504 bytes) match remote lengths/hashes, including the seven early
+copies. Raw export SHA256:
+`209108f152bc658907e7a3ae637bb60d7915af579361828aa9eaaa4450269707`.
+An additional startup is observed during recovery at 20:54:34, still `.153`
+with the gate closed; its cause is unconfirmed. `.59` is staged at 20:57:26,
+boots at 20:57:57, and is verified Code 0 with cleanup and unchanged power at
+20:59:39. Saved portrait is unchanged at 21:01:05.
+
+Probe `sampling-variants-20261111`, EXE `3f22d2913f19`, adds
+`--shared-layout-variants`. It first verifies the producer, consumer import
+and ordinary private copy, then compares four combinations: shared versus
+private-copy texture, each sampled with constant-buffer versus literal
+coordinates. It retains the original modes and reports every combination
+before failing the aggregate pixel check. On WARP at 21:02:57 UTC, the original
+mode passes 3,686,400 pixels and all variant checks pass 18,072,582 pixels in
+BGRA and RGBA. These controls validate the comparison itself; native variants
+and the sampled-content correction remain pending. The KMD and ICD are unchanged.

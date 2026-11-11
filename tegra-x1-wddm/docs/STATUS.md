@@ -1,30 +1,36 @@
 # GPU status
 
-**Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
+**Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Latest `.153` result:** native LUID `b3c87` reaches Code 0 and the patterned
-probe completes its first 720x1280 BGRA case: **73,584 mismatches out of
-921,600 pixels**. Producer and consumer device status are both S_OK. This is
-an actual content failure, not a passing draw. The retained UMD trace has 70
-successful DWM flips and two successful Explorer windowed Presents, without
-ZinkFailure or RuntimeError records. Complete physical desktop is unverified.
+**Latest `.153` checkpoint result:** native LUID `af705` verifies all 554,497
+BGRA pattern pixels on the producer and again after consumer import. The
+original and checkpoint modes still report 73,584 mismatches in the first
+720x1280 sampled-layout case. Readback/synchronization does not remove that
+failure. Sampling/shader state is the next boundary; complete desktop pixels
+and landscape remain unverified.
 
-The finalized ETL exports 309,805 records with no reported loss. The new KMD
-provider is registered/enabled, but emits no retained recovery event; direct
-packet rejection and trace coverage limits still apply. All 151 returned files
-(107,778,029 bytes) match device hashes, including the five early copies.
-An additional startup occurs during recovery before `.59` is staged; its cause
-is unconfirmed. `.59` Code 0, cleanup and unchanged power are verified at
-20:38:44 UTC, with unchanged portrait verified at 20:39:26.
-[Native pattern failure, trace scope and restart timeline](D3D_RUNTIME_SHARING.md#native-patterned-layout-and-recovery-trace)
+The checkpoint process then raises `c0000005` while device teardown unbinds
+vertex buffers. The captured UMD fault is in `zink_bind_vertex_elements_state`,
+called from `cso_unbind_context`. The frontend can release its old vertex-buffer
+references before its deferred Gallium bindings are updated.
 
-**Next probe (`073007e7440e`):** optional `--shared-layout-checkpoints` reads the
-producer image and consumer import before sampling, to locate where content
-first differs. The original `--shared-layout` mode is unchanged. Both modes
-pass WARP on `.59` at 20:39:27 UTC; the checkpoint mode verifies 5,904,388
-pixels. Native checkpoint execution remains pending. No UMD, ICD or KMD change
-is bundled with this probe.
+**Fix and next comparison:** immediately clear CSO/u_vbuf vertex bindings before
+releasing those references. ARM64 build passes; the controlled old frontend
+fails the borrowed-pointer assertion and the fixed frontend passes at 21:02:53
+UTC. New UMD: `vertex-unbind-20261111-umd+7fd712e9882c`; its DLL-entry and
+runtime callback controls also pass at 21:08:38. Native confirmation is
+pending. Probe `3f22d2913f19` compares shared/private-copy images with
+constant-buffer/literal coordinates. Its WARP variant mode checks 18,072,582
+pixels without mismatch; native variants are pending. KMD/ICD are unchanged.
+
+All 154 returned files (107,256,504 bytes), including seven early copies, match
+device lengths/hashes. The trace is finalized with no reported loss; 68 DWM
+flips and two Explorer windowed Presents succeed, with no retained KMD recovery
+event. An additional startup occurs during recovery, cause unconfirmed.
+`.59` Code 0, cleanup and unchanged power are verified at 20:59:39 UTC;
+portrait verification at 21:01:05 is unchanged. No native test remains running.
+[Checkpoint evidence, lifetime correction and next comparison](D3D_RUNTIME_SHARING.md#shared-sampling-checkpoints-and-vertex-buffer-lifetime)
 
 **Prior `.152` result:** native LUID `bbde7` reaches Code 0 at 19:57:57 UTC.
 Explorer's shared Blt-mode Present now returns S_OK through the runtime; the
@@ -270,7 +276,7 @@ The completed `.153` native trial used:
 | Signed KMD package | `0.1.0.153` (source `110d9882`, SYS `94bcb716d824`; first-recovery tracing) |
 | D3D UMD / Zink | `runtime-windowed-20261111-umd+11116dc1b815` (source `24c1ca9a`) |
 | NVK ICD | `runtime-shared-20261111-icd+6e2fad99d742` |
-| Runtime probe | Native trial `3dbbc5770d96`; next checkpoint probe `073007e7440e` (WARP controls only) |
+| Runtime probe | Checkpoint trial `073007e7440e`; next variant probe `3f22d2913f19` (WARP controls only) |
 
 These are test-deployment identifiers. Rollback reinstalls `.59`; a future
 complete driver-package release must version its INF and catalog together

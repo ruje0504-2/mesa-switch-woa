@@ -30,6 +30,8 @@ static unsigned maps, unmaps;
 static pipe_transfer transfer = {};
 static unsigned char mapped_bytes[16];
 static unsigned vertex_elements, vertex_binds, draws;
+static pipe_resource *borrowed_vertex;
+static unsigned vertex_unbinds;
 static unsigned vertex_element_handle;
 static unsigned runtime_contexts, fence_refs, fence_waits, fence_token;
 static bool fail_context, fail_wait;
@@ -82,7 +84,10 @@ d3d10_create_screen(HANDLE, const D3DDDI_ADAPTERCALLBACKS *, pipe_screen **resul
       pipe_reference_init(&buffer.reference, 1);
       return &buffer;
    };
-   screen.resource_destroy = [](pipe_screen *, pipe_resource *) { CHECK(resources); --resources; };
+   screen.resource_destroy = [](pipe_screen *, pipe_resource *resource) {
+      CHECK(resources && borrowed_vertex != resource);
+      --resources;
+   };
    screen.fence_reference = [](pipe_screen *, pipe_fence_handle **dst, pipe_fence_handle *src) {
       if (*dst) { CHECK(*dst == reinterpret_cast<pipe_fence_handle *>(&fence_token) && fence_refs); --fence_refs; }
       if (src) ++fence_refs;
@@ -120,12 +125,16 @@ d3d10_create_screen(HANDLE, const D3DDDI_ADAPTERCALLBACKS *, pipe_screen **resul
          CHECK(state == &vertex_element_handle && vertex_elements); --vertex_elements;
       };
       context.set_vertex_buffers = [](pipe_context *, unsigned count, const pipe_vertex_buffer *buffers) {
-         if (!count) return;
+         /* Gallium borrows these pointers. Even teardown may inspect the old
+          * binding, so the frontend must unbind before dropping its last ref. */
+         if (borrowed_vertex) CHECK(resources && borrowed_vertex->reference.count > 0);
+         if (!count) { borrowed_vertex = NULL; ++vertex_unbinds; return; }
          CHECK(count <= PIPE_MAX_ATTRIBS && buffers[0].buffer.resource == &buffer);
          for (unsigned i = 0; i < count; ++i) {
             CHECK(!buffers[i].is_user_buffer);
             if (i) CHECK(!buffers[i].buffer.resource);
          }
+         borrowed_vertex = &buffer;
          ++vertex_binds;
       };
       context.draw_vbo = [](pipe_context *, const pipe_draw_info *info, unsigned,
@@ -286,8 +295,11 @@ int main(void)
    functions.pfnDrawIndexed(create.hDrvDevice, 3, 0, 0);
    functions.pfnDrawIndexedInstanced(create.hDrvDevice, 3, 2, 0, 0, 0);
    CHECK(draws == 4 && vertex_binds && !resource_error);
+   CHECK(borrowed_vertex == &buffer);
+   const unsigned unbinds = vertex_unbinds;
    const D3D10DDI_HRESOURCE none = {};
    functions.pfnIaSetVertexBuffers(create.hDrvDevice, 0, 1, &none, &stride, &offset);
+   CHECK(!borrowed_vertex && vertex_unbinds == unbinds + 1);
    functions.pfnIaSetIndexBuffer(create.hDrvDevice, {}, DXGI_FORMAT_UNKNOWN, 0);
    functions.pfnIaSetInputLayout(create.hDrvDevice, {});
    functions.pfnDestroyElementLayout(create.hDrvDevice, layout); free(layout.pDrvPrivate);
