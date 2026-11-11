@@ -199,6 +199,12 @@ int main()
       check_identities(rtv, srv); CHECK(live_views == 3);
       expected_src = expected[0]; CHECK(_Present(&p) == S_OK);
    }
+   /* No destination allocation means its subresource index is unused. */
+   p.DstSubResourceIndex = 7;
+   CHECK(_Present(&p) == S_OK);
+   p.hDstResource = handles[1];
+   before = flushes;
+   CHECK(_Present(&p) == DXGI_ERROR_UNSUPPORTED && flushes == before);
    D3D10DDI_HSHADERRESOURCEVIEW empty[2] = {};
    PsSetShaderResources(hdevice, 0, 2, empty); SetRenderTargets(hdevice, NULL, 0, 2, {});
    for (destroying = 0; destroying < 3; ++destroying) {

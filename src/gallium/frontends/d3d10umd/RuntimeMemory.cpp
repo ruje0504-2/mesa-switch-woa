@@ -341,7 +341,8 @@ HRESULT RuntimePresent(const DXGI_DDI_ARG_PRESENT *args)
       return E_INVALIDARG;
    /* The KMD's native MMIO flip path accepts these runtime primaries. Its
     * separate GDI copy context is not this UMD context; do not fake a blt. */
-   if (args->Flags.Value != 2 || args->SrcSubResourceIndex || args->DstSubResourceIndex ||
+   if (args->Flags.Value != 2 || args->SrcSubResourceIndex ||
+       (destination && args->DstSubResourceIndex) ||
        (unsigned)args->FlipInterval > DXGI_DDI_FLIP_INTERVAL_FOUR ||
        !device->hContext || !device->pDXGIBaseCallbacks ||
        !device->pDXGIBaseCallbacks->pfnPresentCb || !source->runtime_primary ||
