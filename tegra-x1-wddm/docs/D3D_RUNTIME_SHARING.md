@@ -1562,3 +1562,54 @@ before failing the aggregate pixel check. On WARP at 21:02:57 UTC, the original
 mode passes 3,686,400 pixels and all variant checks pass 18,072,582 pixels in
 BGRA and RGBA. These controls validate the comparison itself; native variants
 and the sampled-content correction remain pending. The KMD and ICD are unchanged.
+
+### Native sampling variants and ordered probe
+
+`sampling-variants153-native-20261111` pairs the fixed UMD `7fd712e9882c`
+and probe `3f22d2913f19` from `d65fd675`, with unchanged `.153` KMD
+`94bcb716d824` and ICD `6e2fad99d742`. Native LUID `b21ac` reaches Code 0
+at 21:15:36 UTC. The original mode again reports 73,584 mismatches in its
+first 921,600-pixel layout and exits normally with code 1 at 21:15:58. Its
+retained UMD events include both device teardown completions. This is useful
+native lifetime evidence, but is not the checkpoint exception path that
+motivated the correction.
+
+The variant mode begins at 21:15:59. It verifies all 554,497 producer pixels
+and all 554,497 imported pixels, with zero mismatches or zero-alpha pixels.
+Its last retained stdout line is successful shared SRV creation. No private
+copy completion, four-combination result or final process status survives.
+An additional startup at 21:16:28 interrupts the trial. No timeout result is
+retained, so neither the 30-second probe bound nor the last successful record
+is established as the cause. The native ETL is also unfinalized; missing later
+events cannot prove that those operations were never executed.
+
+The first export has 285,388 records and 45,487 valid UMD events, including
+43 successful DWM flip callbacks and one successful Explorer windowed
+Present. It retains no ZinkFailure, RuntimeError or first-KMD-recovery event.
+Its header has EndTime=0 and BuffersWritten=0, with no reported loss; zero
+reported loss does not repair the missing finalization. The second export
+is finalized with 172,029 records and no UMD events, from the subsequent
+closed-gate boot. Its desktop events are not continued Tegra rendering.
+The display decoder also retains 1,270 Dwm-Core event-203 payload-length
+mismatches rather than interpreting those records with the wrong template.
+
+All 144 returned files (144,521,396 bytes) match device lengths and SHA256.
+Raw export hashes are respectively
+`f978c77fde3fa1862bbd9b35b5a915b4c5aaa3cea2fc76c2b806e00611bfb5b7`
+and `5209cb3d3a24e9009c3adb44221ab19bd0a8a3db03e84326781f295ee73a1e9c`.
+The planned setup boots at 21:13:09; the additional 21:16:28 startup precedes
+the final `.59` recovery boot at 21:19:49. `.59` Code 0, environment/task
+cleanup and unchanged power settings are verified at 21:21:32. Saved portrait
+verification is unchanged at 21:23:12. Flashing alone is not a reboot count;
+these times come from the operating system's recorded boot identity.
+
+The next probe, `sampling-order-20261111+5fcfd6671788`, defers ordinary-copy
+creation until the shared-image constant-buffer and literal-coordinate cases
+have completed. It logs each case before its setup and retains all four
+combinations and their pixel checks. This improves the order of independent
+evidence; it does not fix the sampled pixels or infer a private-copy fault.
+On `.59` WARP at 21:24:58 UTC, the original mode passes 3,686,400 pixels and
+the variant mode passes 18,072,582 pixels, both exit 0 with empty stderr and
+matching returned hashes. The next native trial uses only the variant mode
+with a 75-second bound, omits the unrelated 40-second desktop observation,
+and keeps the same UMD/KMD/ICD and automatic recovery.

@@ -609,14 +609,8 @@ static void shared_layout(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVE
    ComPtr<ID3D11ShaderResourceView> texture; check(consumer->CreateShaderResourceView(opened.Get(),NULL,&texture),"Create pattern SRV");
    ComPtr<ID3D11Texture2D> private_copy;
    ComPtr<ID3D11ShaderResourceView> copied_texture;
-   if (variants) {
-      D3D11_TEXTURE2D_DESC copy_desc = desc;
-      copy_desc.MiscFlags = 0;
-      check(consumer->CreateTexture2D(&copy_desc, NULL, &private_copy), "Create private pattern copy");
-      cc->CopyResource(private_copy.Get(), opened.Get());
-      shared_pattern_checkpoint(consumer, cc.Get(), private_copy.Get(), "private-copy");
-      check(consumer->CreateShaderResourceView(private_copy.Get(), NULL, &copied_texture), "Create copied pattern SRV");
-   }
+   D3D11_TEXTURE2D_DESC copy_desc = desc;
+   copy_desc.MiscFlags = 0;
    ID3D11ShaderResourceView *srv=texture.Get(); cc->PSSetShaderResources(5,1,&srv);
    D3D11_SAMPLER_DESC sd={}; sd.Filter=D3D11_FILTER_MIN_MAG_MIP_POINT;
    sd.AddressU=sd.AddressV=sd.AddressW=D3D11_TEXTURE_ADDRESS_CLAMP; sd.MaxAnisotropy=1;
@@ -651,12 +645,20 @@ static void shared_layout(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVE
    for(unsigned variant=0;variant<(variants ? 4u : 1u);++variant) for(unsigned pass=0;pass<2;++pass) {
       const auto &vp=viewports[pass]; const auto &clip=clips[pass];
       if (variants) {
-         ID3D11ShaderResourceView *selected = variant & 2 ? copied_texture.Get() : texture.Get();
-         cc->PSSetShaderResources(5, 1, &selected);
-         cc->PSSetShader(variant & 1 ? literal_shaders[pass].Get() : sample_shader.Get(), NULL, 0);
          printf("Layout variant: format=%u variant=%u image=%s coordinates=%s pass=%u\n", format, variant,
                 variant & 2 ? "private-copy" : "shared", variant & 1 ? "literal" : "buffer", pass);
          fflush(stdout);
+         /* Finish the shared-image comparisons before allocating their
+          * ordinary counterpart, so either stage retains useful results. */
+         if (variant == 2 && pass == 0) {
+            check(consumer->CreateTexture2D(&copy_desc, NULL, &private_copy), "Create private pattern copy");
+            cc->CopyResource(private_copy.Get(), opened.Get());
+            shared_pattern_checkpoint(consumer, cc.Get(), private_copy.Get(), "private-copy");
+            check(consumer->CreateShaderResourceView(private_copy.Get(), NULL, &copied_texture), "Create copied pattern SRV");
+         }
+         ID3D11ShaderResourceView *selected = variant & 2 ? copied_texture.Get() : texture.Get();
+         cc->PSSetShaderResources(5, 1, &selected);
+         cc->PSSetShader(variant & 1 ? literal_shaders[pass].Get() : sample_shader.Get(), NULL, 0);
       }
       const FLOAT rect[]={vp.TopLeftX,vp.TopLeftY,vp.Width,vp.Height},clear[]={0,0,0,1};
       cc->UpdateSubresource(placement.Get(),0,NULL,rect,0,0);

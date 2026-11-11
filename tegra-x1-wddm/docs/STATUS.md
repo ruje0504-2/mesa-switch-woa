@@ -3,34 +3,35 @@
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Latest `.153` checkpoint result:** native LUID `af705` verifies all 554,497
-BGRA pattern pixels on the producer and again after consumer import. The
-original and checkpoint modes still report 73,584 mismatches in the first
-720x1280 sampled-layout case. Readback/synchronization does not remove that
-failure. Sampling/shader state is the next boundary; complete desktop pixels
-and landscape remain unverified.
+**Latest `.153` result:** `sampling-variants153-native-20261111` tests fixed
+UMD `7fd712e9882c` and probe `3f22d2913f19` with unchanged KMD/ICD. Native
+LUID `b21ac` reaches Code 0 at 21:15:36 UTC. Original layout still reports
+73,584 mismatches in 921,600 pixels, then exits normally with code 1. The
+variant probe verifies all 554,497 producer pixels and again after import,
+but retains no four-combination result before an additional startup at
+21:16:28. Its cause is unconfirmed; no timeout result survives.
 
-The checkpoint process then raises `c0000005` while device teardown unbinds
-vertex buffers. The captured UMD fault is in `zink_bind_vertex_elements_state`,
-called from `cso_unbind_context`. The frontend can release its old vertex-buffer
-references before its deferred Gallium bindings are updated.
+The vertex-binding lifetime correction builds and passes a regression that
+fails with the old frontend. Its native original-layout process also records
+both device teardowns. The interrupted variant process does not establish
+that the formerly crashing checkpoint cleanup path is fixed on hardware.
+Sampling/shader state remains the next boundary; complete desktop pixels and
+landscape are unverified.
 
-**Fix and next comparison:** immediately clear CSO/u_vbuf vertex bindings before
-releasing those references. ARM64 build passes; the controlled old frontend
-fails the borrowed-pointer assertion and the fixed frontend passes at 21:02:53
-UTC. New UMD: `vertex-unbind-20261111-umd+7fd712e9882c`; its DLL-entry and
-runtime callback controls also pass at 21:08:38. Native confirmation is
-pending. Probe `3f22d2913f19` compares shared/private-copy images with
-constant-buffer/literal coordinates. Its WARP variant mode checks 18,072,582
-pixels without mismatch; native variants are pending. KMD/ICD are unchanged.
+All 144 returned files (144,521,396 bytes) match device lengths/hashes. The
+native ETL is unfinalized; it retains 43 successful DWM flips, one successful
+Explorer windowed Present and no KMD recovery event. These are callback
+results, not proof of correct desktop pixels. `.59` Code 0, cleanup and
+unchanged power are verified at 21:21:32 UTC; saved portrait is unchanged at
+21:23:12. No native test remains running.
+[Variant result and restart timeline](D3D_RUNTIME_SHARING.md#native-sampling-variants-and-ordered-probe)
 
-All 154 returned files (107,256,504 bytes), including seven early copies, match
-device lengths/hashes. The trace is finalized with no reported loss; 68 DWM
-flips and two Explorer windowed Presents succeed, with no retained KMD recovery
-event. An additional startup occurs during recovery, cause unconfirmed.
-`.59` Code 0, cleanup and unchanged power are verified at 20:59:39 UTC;
-portrait verification at 21:01:05 is unchanged. No native test remains running.
-[Checkpoint evidence, lifetime correction and next comparison](D3D_RUNTIME_SHARING.md#shared-sampling-checkpoints-and-vertex-buffer-lifetime)
+**Next comparison:** probe `sampling-order-20261111+5fcfd6671788` finishes the
+shared-image constant-buffer/literal-coordinate cases before creating the
+ordinary private copy. All four combinations remain. ARM64 build and both
+WARP modes pass at 21:24:58 UTC (18,072,582 variant pixels). The next bounded
+native trial runs only this comparison, retaining the same UMD/KMD/ICD.
+[Earlier checkpoint evidence and lifetime correction](D3D_RUNTIME_SHARING.md#shared-sampling-checkpoints-and-vertex-buffer-lifetime)
 
 **Prior `.152` result:** native LUID `bbde7` reaches Code 0 at 19:57:57 UTC.
 Explorer's shared Blt-mode Present now returns S_OK through the runtime; the
@@ -274,9 +275,9 @@ The completed `.153` native trial used:
 | Component | Candidate identifier |
 | --- | --- |
 | Signed KMD package | `0.1.0.153` (source `110d9882`, SYS `94bcb716d824`; first-recovery tracing) |
-| D3D UMD / Zink | `runtime-windowed-20261111-umd+11116dc1b815` (source `24c1ca9a`) |
+| D3D UMD / Zink | `vertex-unbind-20261111-umd+7fd712e9882c` (source `d65fd675`) |
 | NVK ICD | `runtime-shared-20261111-icd+6e2fad99d742` |
-| Runtime probe | Checkpoint trial `073007e7440e`; next variant probe `3f22d2913f19` (WARP controls only) |
+| Runtime probe | Native variant trial `3f22d2913f19`; next ordered probe `5fcfd6671788` (WARP controls only) |
 
 These are test-deployment identifiers. Rollback reinstalls `.59`; a future
 complete driver-package release must version its INF and catalog together
