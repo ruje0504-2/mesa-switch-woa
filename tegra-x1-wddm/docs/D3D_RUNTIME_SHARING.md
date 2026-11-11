@@ -522,7 +522,8 @@ its public symbol GUID is `797F457A-6488-C67C-8E55-B0F3E771DC32`.
 Our old whole-structure assignment returns Rotation=0, while all current
 image layouts are unrotated and the active portrait mode reports identity
 (1). The full 180-byte old function is byte-identical to a sequence at file
-offset 73180 in the signed `.144` SYS, whose hash is recorded above. The
+offset 73180 in the signed `.144` SYS, SHA-256
+`e9cc6c5e576afd6861047983567eb2b4628209a5f227cdadc3ef48e86d59144c`. The
 fix explicitly reports `D3DDDI_ROTATION_IDENTITY`; it neither rotates pixels
 nor advertises a new orientation. The public DescribeAllocation page calls
 Rotation reserved, so the observed OS behavior must be distinguished from
@@ -541,3 +542,68 @@ The controls and binary analysis are retained externally under
 `runs/dwm-mode-analysis-20261111/`. A newly signed `.146` package, rebuilt
 from source with the documented gate, is the native validation candidate;
 the controls alone do not establish a desktop or hardware rotation pass.
+
+### Native identity-rotation trial
+
+The first `.146` controller attempt aborts before arming the GPU because its
+new directory lacks two capture utilities. No native startup is claimed for
+that attempt. It returns to `.59` Code 0 with the original display/power
+state, and all 99 returned files match device hashes. The corrected preflight
+checks those utilities before installing the unchanged signed package.
+
+`describe-rotation-native-v2-20261111` uses the source-built `.146` KMD,
+SHA-256 `2b88feb19ec679ebc80caa16b0249222ed633ed8b29654705df7d56934ca55d6`,
+with the previously validated `41f76160496e` UMD and `f828845c38b7` ICD.
+This also replaces the lost temporary entry wrapper with the tracked native
+gate; it is not a binary-only single-field A/B experiment. Hardware startup
+completes with Code 0 and a consumed permit. On LUID `92611`, the probes run
+at 13:37:06.926–13:37:27.406 UTC: all 16,384 clear/draw pixels and 24,576
+sampling pixels match, both devices explicitly release and both tests exit
+0 without timeout or a removed-device error.
+
+In the retained 13:37:05.364–13:37:33.911 UTC window, DWM PID 812 creates
+15 devices identified as **Tegra X1 (GM20B), LUID `92611`, FL10_0**. All 14
+complete fullscreen transitions return S_OK, set `NewWindowed=0`, and report
+a non-null primary. The journal contains no SetDisplayMode failure in that
+window. These positive DXGI results establish passage through the mode-setting
+boundary; they go beyond the UMD callback's previously masked success.
+
+The next concrete failure is the existing hardware `_Present` stub in
+`DxgiFns.cpp`: all 14 DWM calls return `887a0004` (unsupported). The runtime
+records 14 driver-internal-error removals (`887a0020`), and the outer DXGI
+Present returns `887a0005`. Feature-level negotiation warnings precede
+successful FL10_0 device creation and must not be substituted for this
+presentation failure. Wire the real runtime presentation callback after
+finishing GPU work and preserving allocation/context ownership. Runtime
+shared-image integration is also still incomplete.
+
+The 13:37:27 capture is no longer black: it contains the Windows wallpaper
+and desktop icons. Its immediately preceding visibility record identifies
+the native ACPI adapter, `Default` input desktop, origin (0,0), 96 DPI,
+720x1280 source/signal and identity rotation. Capture SHA-256 is
+`d98de373862ee54a5408a3edb39cd3e4b58a56c61ea9377090c2841dbd8e2394`.
+This is a desktop capture, not a physical panel photograph, a verified
+hardware-composited frame, or evidence of sustained successful Present.
+Hardware rotation and final 1280x720 landscape remain to be implemented.
+
+The raw export contains 235,099 complete records: 176,364 DxgKrnl, 7,625
+DXGI, 1,250 Dwm-Core, 46 Direct3D11, 49,812 UMD and two trace headers.
+All four OS providers decode with exact payload lengths and no unknown
+events. Raw-export SHA-256 is
+`c2147e5828e78ab172c1bd40b1945d74b953bfe7a33f5283036bfff0ad650a87`.
+The original exporter summary files are filled with zero bytes. A read-only re-export
+from the retained ETL produces the identical 49,812-event UMD JSONL hash
+`7c2fdbdcead5af166f70ec6cd9e5b7637109825b83551547ab4e790f5cb71cb8`:
+ProcessTrace=0, invalid=0, events/buffers lost=0, nonzero EndTime and 2,444
+buffers written. This validates finalization of the retained circular trace,
+not coverage of the entire startup.
+
+A further Windows boot at 13:38:58 is observed before a durable completion
+record from collection/restoration. The record does not establish its cause.
+The consumed permit keeps the restarted `.146` closed; the subsequent
+recovery restores `.59` Code 0, original driver/table hashes, cleared test
+registration/tasks/environment and unchanged power policy at 13:43:47 UTC.
+Portrait restore/verification at 13:44:09 is a no-op. All 149 returned files
+(76,015,725 bytes, including the re-export) match device SHA-256. Evidence,
+strict decoding and summaries are under the external build root's
+`runs/describe-rotation-native-v2-20261111/` directory.

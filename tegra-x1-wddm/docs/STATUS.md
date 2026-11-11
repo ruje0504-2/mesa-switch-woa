@@ -3,21 +3,25 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Current WIP:** `DescribeAllocation` now returns identity rotation for the
-currently unrotated image layouts. This OS initializes that output to `-1`
-and rejects a different reported rotation from the active mode with
-`c01e0005`; the former whole-structure assignment returned zero instead.
-The installed .144 binary contains the byte-identical 180-byte old function.
-An ARM64 control seeded with the OS sentinel fails at the new assertion on
-the old implementation (exit 675) and passes with the fix (exit 0). Host/core
-build checks pass. The source-built `.146` package and its one-shot desktop
-gate compile and pass the ARM64 gate controls; INF/catalog validation has
-no errors or warnings. The first install reaches the expected closed gate,
-but its controller aborts before GPU startup because two capture tools were
-not copied. `.59` Code 0, portrait, cleanup and unchanged power policy are
-verified at 13:30 UTC; all 99 returned files match device hashes. The tools
-and preflight are corrected for the native rerun. Native mode-setting and
-visible desktop success remain unverified.
+**Latest `.146` native result (2026-11-11):** the rebuilt KMD reaches Code 0
+on LUID `92611`; all 40,960 ordinary/sampled pixels match, and both probes
+release their devices and exit 0. The allocation identity-rotation fix passes
+the mode-setting boundary: all 14 retained complete DXGI fullscreen
+transitions return S_OK with a non-null primary. DWM's 15 recorded device
+creations identify **Tegra X1 / FL10_0**, not Basic Render. The native desktop
+capture now contains the complete Windows desktop, but does not prove
+physical panel output or sustained hardware composition.
+
+**Current boundary:** DWM reaches the UMD `Present` stub, which returns
+`887a0004` 14 times; DXGI then reports device removal. Connect the actual
+runtime presentation callback and finish shared-image handling, then validate
+continuous output together with hardware landscape rotation. Do not raise
+the advertised feature level to bypass this missing implementation.
+The finalized ETL decodes fully with no reported loss. All 149 returned files
+match device hashes. After an additional boot during collection, `.59`
+Code 0, cleanup and unchanged power policy are verified at 13:43:47 UTC;
+portrait restore/verification at 13:44:09 is a no-op.
+[Mode-setting fix and native evidence](D3D_RUNTIME_SHARING.md#native-identity-rotation-trial)
 
 **Final orientation requested by the user:** hardware rotation with a
 1280x720 landscape desktop, left/right controls in their normal handheld
@@ -25,7 +29,7 @@ orientation. Validate the source dimensions, pitch, display fetch/latch and
 complete visible image together, then leave Windows in landscape. The saved
 portrait snapshot is only the recovery target during unvalidated experiments.
 
-**Latest runtime-context result (2026-11-11):** the UMD now registers a real
+**Previous `.144` runtime-context result (2026-11-11):** the UMD now registers a real
 D3D runtime context and completes NVK GPU work before runtime synchronization.
 On native LUID `9b7ff`, all 40,960 ordinary/sampled pixels match and both probes
 release their devices and exit 0. DWM issues 261 GPU synchronization signals
@@ -33,7 +37,7 @@ with nonempty context lists; its 401 recorded GPU waits return S_OK. The
 finalized trace reports no loss, and all 145 returned files match device hashes.
 .59 Code 0, cleanup, portrait and unchanged power policy are verified.
 
-**Current desktop boundary:** the D3D11 journal on native LUID `953d1`
+**Pre-fix `.144` desktop boundary:** the D3D11 journal on native LUID `953d1`
 identifies 144 `SetDisplayMode` failures as `c01e0005`
 (`STATUS_GRAPHICS_PRESENT_MODE_CHANGED`). The runtime saves this failure,
 returns S_OK to the UMD, then reports `887a0025` to DXGI. Callback S_OK does
@@ -42,10 +46,10 @@ the finalized ETL reports no loss. The 132 returned files match device hashes,
 and .59 Code 0, portrait and unchanged power policy are restored.
 
 This was a short observation with unchanged binaries, not another drawing
-test. The prior native `Default` desktop capture remains black. Next, compare
-the primary description and active VidPN state to identify the recurring mode
-change; Present and shared-image integration also remain unfinished. The
-observed failures are not host/device OOM or invalid-parameter return codes.
+test. Its native `Default` desktop capture was black. The `.146` result above
+supersedes this mode-setting boundary; Present and shared-image integration
+remain unfinished. These earlier failures were not host/device OOM or
+invalid-parameter return codes.
 [Runtime context evidence and implementation](D3D_RUNTIME_SHARING.md#runtime-context-registration)
 
 **Primary bridge native result (2026-11-11):** the driver now creates the portrait
@@ -73,14 +77,14 @@ Present and shared-image opens remain unfinished.
 [Primary bridge contract and controls](D3D_RUNTIME_SHARING.md#runtime-primary-bridge-work)
 
 **Version labels:** Device Manager shows the installed INF package's version.
-Recent experiments reuse the signed `.144` KMD while replacing the test UMD
-and ICD; they are not unchanged GPU builds. Standalone build manifests now
+Earlier experiments reused the signed `.144` KMD while replacing the test UMD
+and ICD. The latest KMD is rebuilt and versioned `.146`. Standalone build manifests
 name their component and include a readable `artifact_id` with the DLL hash.
-The latest runtime-context trial uses:
+The latest native trial uses:
 
 | Component | Candidate identifier |
 | --- | --- |
-| Signed KMD package | `0.1.0.144` (reused binary) |
+| Signed KMD package | `0.1.0.146` (rebuilt from source) |
 | D3D UMD / Zink | `runtime-primary-20261111-umd+41f76160496e` |
 | NVK ICD | `runtime-primary-20261111-icd-v2+f828845c38b7` |
 
