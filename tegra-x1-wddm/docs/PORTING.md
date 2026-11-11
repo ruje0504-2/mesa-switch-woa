@@ -492,6 +492,59 @@ files (34,154,872 bytes) match remote hashes. ETL SHA-256:
 `fe772098510997510e3ac1c181aeb9c5079c24794d48c35e519b1e6803109f9f`;
 UMD export: `7ca9594655694a73d9cf783a16b2fdd362c33e43d4b0bca4a31032331bac6579`.
 
+### Instance extension discovery
+
+The `instance-calls-auto-20261111` trial retains version, extension count/list,
+layer count/list and instance-creation results, including the called mask,
+enabled counts, debug-utils availability and cached-snapshot flag. Failed
+API outputs are not treated as valid counts. Successful screen creation
+also supplies the snapshot for comparison with DWM. No initialization
+failure/retry policy is changed by this diagnostic.
+
+The full UMD build and three controls pass (05:35:04 UTC; 27 valid, lossless
+control records). The run uses the final memory-error ICD
+`20a3c7b42bfc6ed05ac5974acb981a518d8b496c12729c4f8e4ac6fd02d0aa4c`
+and the unchanged signed .144 KMD. Visibility and saved portrait verification
+now occur after reboot, before the native startup grant. Both pass on Code
+43 at 05:39:07. This avoids depending on an illuminated desktop during
+local build work. The later Code 0 observer checks visibility again but
+does not repeat the saved-preference comparison; its `PreferenceValid=false`
+means not checked there, not a detected mode mismatch.
+
+Native tests run on matching LUID `92fa3` from 05:40:02.8931785 to
+05:40:07.1119275 UTC, exit 0 without timeout. The feature matrix remains
+FL10_0 and all 16,384 RGBA/BGRA clear/draw pixels match. The black capture
+still hashes to `1affba48e5a5838c73c3371e829823d24c8f541ffbb1bc75ee7b5936c4504aa6`.
+
+The finalized trace contains 1,490 valid UMD records, zero recorded
+event/buffer loss and 548 written buffers. DWM contributes 1,232 records
+from PIDs 464, 1120 and 1376. Its 88 snapshots consist of 44 fresh attempts
+and 44 cached failures. Version enumeration succeeds with 1.4.354; the
+first extension-count query returns -1, so the extension-list call is not
+made. Layer count/list succeed with zero layers; CreateInstance returns -1.
+The called mask is 59, enabled extension/layer counts are zero, and the
+debug-utils availability/chained flags are both absent. Explorer has the
+same sequence in eight snapshots (four fresh/four cached). The native
+runtime probe has ten successful snapshots (six fresh/four cached), 16
+discovered extensions, eight enabled extensions, no layers and a chained
+debug-utils callback.
+
+This moves the first observed failure from CreateInstance to the earlier
+instance-extension query. The missing message does not implicate an
+allocation before callback registration: Zink could not discover the
+debug-utils extension at all. Investigate the loader's ICD discovery and
+extension aggregation, with direct loader diagnostic output. Do not infer
+physical RAM exhaustion, an NVK GPU-budget rejection, or a particular
+loader branch from the generic -1 alone.
+
+Collection completes at 05:40:37.0650533 UTC. Recovery verification passes
+at 05:45:54 (.59 Code 0, original driver/ACPI hashes, removed registrations,
+permit/tasks and unchanged power policy), with loader/opt-in cleanup also
+confirmed. Portrait restore/verify is a no-op at 05:46:06. All 114 returned
+records (34,275,580 bytes) match remote lengths and hashes. ETL SHA-256:
+`c5a314c2bce2dbca294c368daec195bf4c0558d3848e541925f1e31c9d60aa75`;
+UMD export: `a680f1dfe901db9a4749f4dc7054ca4df69aa554c00678a606e1e26ffb7c746f`.
+
 ### Host allocation and budget audit
 
 The 2026-11-11 audit follows the reported DWM instance OOM into the actual
@@ -558,9 +611,10 @@ cause. [Loader privilege rules](https://github.com/KhronosGroup/Vulkan-Loader/bl
 
 At 05:10:45 UTC, .59 Code 0, removed test registration/task and unchanged
 display/sleep power policy are verified. No display driver was switched
-for these controls. The new ICD's GPU path still needs a future native
-regression; the next DWM investigation must retain failures from the
-earlier instance-extension calls and loader/CRT initialization itself.
+for these controls. The subsequent [instance-discovery trial](#instance-extension-discovery)
+passes the new ICD's native rendering regression and identifies the
+earlier extension-count failure in DWM. OS-error injection remains a
+controlled test; DWM presentation is still unresolved.
 
 The final `memory-errors-20261111-icd` build includes the pool/quota error
 classes and the expanded 13-case SDK fixture. At 05:19:04.1921933 UTC,

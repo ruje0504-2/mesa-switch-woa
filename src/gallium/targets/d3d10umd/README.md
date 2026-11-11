@@ -100,6 +100,17 @@ it does not point into a screen-creation caller's stack. Other Zink callers
 that do not request creation-error output keep the existing instance chain.
 Absence of a message does not establish where an API error originated.
 
+`ZinkInstanceCall` snapshots the original result of version enumeration (0),
+extension count/list (1/2), layer count/list (3/4), and instance creation (5).
+`value` is the version/count for a non-error return and zero otherwise.
+`ZinkInstanceInfo` carries the called-bit mask, enabled extension/layer
+counts, and flags: debug-utils available (1), callback chained (2), cached
+snapshot (4), extension allocation failure (8), layer allocation failure
+(16). These diagnostics are returned on successful screen creation too.
+An unset call bit is not a successful result; cached snapshots are not new
+Vulkan calls. Failure of a zero-sized list's optional malloc is not reported
+as an allocation failure.
+
 ## GDI software backend
 
 When compiled with `gallium-driver=llvmpipe` or `gallium-driver=softpipe` the resulting libgallium_d3d10.dll implements D3D10's software rendering interface, like WARP.

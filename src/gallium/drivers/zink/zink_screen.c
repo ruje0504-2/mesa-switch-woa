@@ -2609,7 +2609,7 @@ zink_screen_timeline_wait(struct zink_screen *screen, uint64_t batch_id, uint64_
 }
 
 static uint32_t
-zink_get_loader_version(struct zink_screen *screen)
+zink_get_loader_version(struct zink_screen *screen, struct zink_instance_diagnostics *diagnostics)
 {
 
    uint32_t loader_version = VK_API_VERSION_1_0;
@@ -2619,6 +2619,7 @@ zink_get_loader_version(struct zink_screen *screen)
    if (vk_EnumerateInstanceVersion) {
       uint32_t loader_version_temp = VK_API_VERSION_1_0;
       VkResult result = (*vk_EnumerateInstanceVersion)(&loader_version_temp);
+      zink_record_instance_call(diagnostics, ZINK_INSTANCE_VERSION, result, loader_version_temp);
       if (VK_SUCCESS == result) {
          loader_version = loader_version_temp;
       } else {
@@ -3424,6 +3425,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
                             struct zink_screen_create_error *error)
 {
    struct zink_screen_create_error failure = {.stage = ZINK_SCREEN_CREATE_ALLOCATE};
+   struct zink_instance_diagnostics instance_diagnostics = {0};
    if (error)
       *error = (struct zink_screen_create_error){0};
 #define ZINK_CREATE_FAIL() do { failure.line = __LINE__; goto fail; } while (0)
@@ -3501,11 +3503,15 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
    failure.stage = ZINK_SCREEN_CREATE_INSTANCE;
    simple_mtx_lock(&instance_lock);
    if (++instance_refcount == 1) {
+      memset(&instance_info.diagnostics, 0, sizeof(instance_info.diagnostics));
       instance_info.capture_create_error = error != NULL;
-      instance_info.loader_version = zink_get_loader_version(screen);
+      instance_info.loader_version = zink_get_loader_version(screen, &instance_info.diagnostics);
       instance_info.no_device_select = zink_picks_device(dev_major, adapter_luid);
       instance = zink_create_instance(screen, &instance_info);
    }
+   instance_diagnostics = instance_info.diagnostics;
+   if (instance_refcount > 1)
+      instance_diagnostics.flags |= ZINK_INSTANCE_CACHED;
    if (!instance) {
       failure.result = instance_info.create_result;
       failure.detail = (instance_info.missing_create_entrypoints ? 1 : 0) | (instance_refcount > 1 ? 2 : 0);
@@ -3916,11 +3922,15 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
    screen->frame_marker_emitted = zink_screen_debug_marker_begin(screen, "frame");
    simple_mtx_unlock(screen->queue_lock);
 
+   if (error)
+      error->instance = instance_diagnostics;
    return screen;
 
 fail:
-   if (error)
+   if (error) {
       *error = failure;
+      error->instance = instance_diagnostics;
+   }
    zink_destroy_screen(&screen->base);
    return NULL;
 #undef ZINK_CREATE_FAIL

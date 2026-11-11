@@ -3,22 +3,22 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**DWM first-failure result (2026-11-11):** on the unchanged .144 KMD, LUID
-`8ead0`, all 88 recorded DWM Zink failures identify `vkCreateInstance`
-returning `VK_ERROR_OUT_OF_HOST_MEMORY` (-1): 44 fresh attempts and 44
-cached failures. This identifies the failing API, not actual RAM exhaustion
-or its internal cause. The same round again passes FL10_0 negotiation and
-16,384 native RGBA/BGRA clear/draw pixels; higher feature levels remain
-unsupported. The desktop capture is black. The finalized ETL has 844 valid
-UMD events and no recorded loss after increasing the trace buffers. The
-standard instance-creation error callback yields no message; next isolate
-the loader's failure before/inside instance creation, including the earlier
-extension queries. Do not infer real RAM exhaustion or change capability
-bits from this result. .59 Code 0, environment cleanup, portrait preference
-and unchanged power settings are verified after rollback; 117 returned
-files match device-side hashes. The preceding `8eb74` trace reported 924
-lost events and must not be used as absence-of-execution evidence.
-[Native result and evidence](PORTING.md#dwm-initialization-trace-work)
+**DWM extension-discovery result (2026-11-11):** on the unchanged .144 KMD,
+LUID `92fa3`, version and layer enumeration succeed, but the initial
+`vkEnumerateInstanceExtensionProperties` count query already returns OOM
+(-1). Instance creation subsequently fails too. DWM therefore never
+discovers `debug_utils`, explaining the missing error-callback message.
+The normal runtime probe discovers 16 extensions and creates the instance.
+The trace distinguishes 44 fresh DWM attempts from 44 cached snapshots;
+all 1,490 UMD events decode with no recorded loss. Next capture the loader's
+ICD-discovery error directly; actual RAM exhaustion is not established.
+
+The new ICD passes native FL10_0 rendering with 16,384 matching RGBA/BGRA
+pixels; higher feature levels remain unsupported and the desktop capture
+is still black. .59 Code 0, environment cleanup, portrait preference and
+unchanged power settings are verified after rollback. All 114 returned
+records match device hashes.
+[Native result and evidence](PORTING.md#instance-extension-discovery)
 
 **Host-memory audit (2026-11-11):** no page-size/alignment or 512 MiB unit
 error was found in the inspected paths. The current instance path uses
@@ -27,8 +27,10 @@ write-combined pages without large-page flags. A separate bug collapsed
 section access/privilege errors into host OOM; the source now retains the
 Windows code and distinguishes real memory errors. The SDK control passes
 thirteen injected errors, budget rollback, the exact 512 MiB boundary and GPU
-VA alignment checks on .59. This is not a DWM root-cause fix or a native GPU
-validation of the new ICD. [Scope and evidence](PORTING.md#host-allocation-and-budget-audit)
+VA alignment checks on .59. The subsequent round above supplies the new
+ICD's native rendering regression; the injected OS failures remain
+controlled tests. This is not a DWM root-cause fix.
+[Scope and evidence](PORTING.md#host-allocation-and-budget-audit)
 
 **Win32 presentation investigation (2026-11-11):** the GDI WSI now pairs
 window DC acquisition/release on the presenting thread and flushes GDI

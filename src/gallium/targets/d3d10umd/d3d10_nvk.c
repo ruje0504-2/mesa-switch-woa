@@ -57,6 +57,16 @@ d3d10_create_screen(HANDLE hRTAdapter, const D3DDDI_ADAPTERCALLBACKS *callbacks,
              !length ? 0 : length == 1 && opt_in[0] == '1' ? 1 : 2);
    struct zink_screen_create_error error = {0};
    *screen = zink_win32_create_screen_with_error(luid, &error);
+   const struct zink_instance_diagnostics *instance = &error.instance;
+   for (unsigned i = 0; i < ZINK_INSTANCE_CALL_COUNT; i++) {
+      if (instance->called_mask & (1u << i))
+         D3D10Trace(D3D10_TRACE_ZINK_INSTANCE_CALL, instance->calls[i].result,
+                   i, instance->calls[i].value);
+   }
+   if (instance->called_mask)
+      D3D10Trace(D3D10_TRACE_ZINK_INSTANCE_INFO, S_OK,
+                ((uint64_t)instance->called_mask << 32) | instance->flags,
+                ((uint64_t)instance->enabled_extensions << 32) | instance->enabled_layers);
    if (!*screen) {
       D3D10Trace(D3D10_TRACE_ZINK_FAILURE, DXGI_ERROR_UNSUPPORTED,
                 ((uint64_t)error.stage << 32) | error.line,

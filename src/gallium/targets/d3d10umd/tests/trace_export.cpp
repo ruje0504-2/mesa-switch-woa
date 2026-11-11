@@ -18,7 +18,8 @@ static const char *event_name(USHORT id)
    static const char *names[] = {"invalid", "OpenAdapter10", "OpenAdapter10_2",
       "ScreenQuery", "ScreenIdentity", "ZinkBegin", "ZinkEnd", "OpenResult",
       "SupportedVersion", "GetCaps", "CreateDeviceBegin", "CreateDeviceResult",
-      "OpenResource", "Present", "Blt", "SetDisplayMode", "ZinkFailure", "ZinkMessage"};
+      "OpenResource", "Present", "Blt", "SetDisplayMode", "ZinkFailure", "ZinkMessage",
+      "ZinkInstanceCall", "ZinkInstanceInfo"};
    return id < ARRAYSIZE(names) ? names[id] : "unknown";
 }
 
@@ -76,6 +77,13 @@ static void WINAPI record(EVENT_RECORD *event)
       std::printf(",\"stage\":%u,\"line\":%u,\"detail\":%u,\"code\":%d",
                   (unsigned)(data.arg0 >> 32), (unsigned)data.arg0,
                   (unsigned)(data.arg1 >> 32), (int32_t)data.arg1);
+   if (header.EventDescriptor.Id == D3D10_TRACE_ZINK_INSTANCE_CALL)
+      std::printf(",\"call\":%u,\"code\":%d,\"value\":%u",
+                  (unsigned)data.arg0, data.result, (unsigned)data.arg1);
+   if (header.EventDescriptor.Id == D3D10_TRACE_ZINK_INSTANCE_INFO)
+      std::printf(",\"called_mask\":%u,\"flags\":%u,\"extensions\":%u,\"layers\":%u",
+                  (unsigned)(data.arg0 >> 32), (unsigned)data.arg0,
+                  (unsigned)(data.arg1 >> 32), (unsigned)data.arg1);
    std::puts("}");
 }
 

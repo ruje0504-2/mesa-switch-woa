@@ -57,11 +57,48 @@ enum zink_screen_create_stage {
    ZINK_SCREEN_CREATE_INITIALIZE,
 };
 
+enum zink_instance_call {
+   ZINK_INSTANCE_VERSION,
+   ZINK_INSTANCE_EXTENSION_COUNT,
+   ZINK_INSTANCE_EXTENSIONS,
+   ZINK_INSTANCE_LAYER_COUNT,
+   ZINK_INSTANCE_LAYERS,
+   ZINK_INSTANCE_CREATE,
+   ZINK_INSTANCE_CALL_COUNT,
+};
+
+enum zink_instance_diagnostic_flags {
+   ZINK_INSTANCE_DEBUG_AVAILABLE = 1 << 0,
+   ZINK_INSTANCE_DEBUG_CHAINED = 1 << 1,
+   ZINK_INSTANCE_CACHED = 1 << 2,
+   ZINK_INSTANCE_EXTENSION_ALLOC_FAILED = 1 << 3,
+   ZINK_INSTANCE_LAYER_ALLOC_FAILED = 1 << 4,
+};
+
+struct zink_instance_diagnostics {
+   uint32_t called_mask, flags, enabled_extensions, enabled_layers;
+   struct {
+      int32_t result;
+      uint32_t value; /* Version/count only when the API returned non-error. */
+   } calls[ZINK_INSTANCE_CALL_COUNT];
+};
+
+static inline void
+zink_record_instance_call(struct zink_instance_diagnostics *info,
+                          enum zink_instance_call call, int32_t result, uint32_t value)
+{
+   info->called_mask |= 1u << call;
+   info->calls[call].result = result;
+   info->calls[call].value = result >= 0 ? value : 0;
+}
+
 struct zink_screen_create_error {
    enum zink_screen_create_stage stage;
    int32_t result;
    uint32_t detail, line;
    char message[1024]; /* First instance debug-utils error, when available. */
+   /* Valid on success too; a cached snapshot is not a new set of API calls. */
+   struct zink_instance_diagnostics instance;
 };
 
 struct pipe_screen *
