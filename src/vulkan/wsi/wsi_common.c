@@ -58,6 +58,7 @@ static const struct debug_control debug_control[] = {
    { "linear",       WSI_DEBUG_LINEAR },
    { "dxgi",         WSI_DEBUG_DXGI },
    { "nowlts",       WSI_DEBUG_NOWLTS },
+   { "win32",        WSI_DEBUG_WIN32 },
    { NULL, },
 };
 

@@ -129,6 +129,48 @@ confirms the original 90-degree rotation. All 40 downloaded records
 cube result JSON has SHA-256
 `7895ce876630b876c8d14b3d82250e5204b3df6a377dea369e90439a46583003`.
 
+The subsequent WSI change releases every window `GetDC` with `ReleaseDC`
+on the acquiring thread, rather than retaining a DC across swapchain calls
+and passing it to `DeleteDC`. It also flushes the thread's GDI batch before
+making the DIB available for another present/destruction, checks DIB setup
+failures and uses the bitmap header's actual size. Memory DCs continue to
+use `DeleteDC`. These fix GDI lifetime/synchronization contracts; they have
+not resolved visible desktop presentation.
+[ReleaseDC contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-releasedc)
+[GDI batching contract](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-gdiflush)
+
+`MESA_VK_WSI_DEBUG=win32` writes per-present pixel summaries and GDI results
+to stderr, including in release GUI processes with redirected output.
+On 2026-11-11, 01:39:56–01:40:01 UTC, the unchanged upstream cube executes
+24 presents on matching GM20B/KMT/display LUID `90f83`, exits 0 and does not
+time out. The 256x256 buffers have 1024-byte GPU/DIB row pitches, 24 distinct
+pixel hashes and 64,251–65,536 nonzero RGB pixels per frame. All 24 sampled
+window centers match the corresponding readback RGB values after COLORREF
+channel conversion; every `StretchBlt` and `GdiFlush` succeeds. The center
+samples are grayscale and do not validate the entire image or channel order.
+The desktop capture remains black. Verify its DPI/coordinate mapping and
+the composition/scanout path; these observations alone do not prove which
+later stage fails, or establish a visible cube.
+
+Tested ICD SHA-256:
+`0bb7125a1b96ec8c16b0b7c5e84f9e9bd743819dc54a827ef1d7f73d82712097`.
+Result JSON SHA-256:
+`ba3b1b2b82f94894d4e30fe22dcbf5c382bca7bc4f661f3e482a3e2f0c1923fb`.
+The 33 native records (24,506,536 bytes) match device-side lengths/hashes;
+the transfer resumed after the planned rollback restart. The 01:46:19 UTC
+check confirms .59 Code 0, original driver/ACPI hashes, removed temporary
+registration/permit/tasks and unchanged power settings. The subsequent
+interactive query confirms the original 90-degree rotation. Artifacts and
+the tested source patch are retained under
+`/Users/rujian/.local/share/mesa-switch-woa-build/runs/wsi-gdi-20261111/`.
+
+The user's next-round requirement is real 90-degree landscape support
+together with presentation: update source dimensions, row pitch, VidPN/MPO
+rotation contracts and actual scanout transformation consistently. The
+present identity-only KMD is not a rotation implementation. Check an
+asymmetric corner pattern, full-image contents and sustained visible output
+before the next on-screen success claim.
+
 ## Direct3D UMD and DWM
 
 The user clarified the staging and authorization on 2026-11-10: **first

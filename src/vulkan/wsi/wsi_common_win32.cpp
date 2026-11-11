@@ -22,6 +22,7 @@
  */
 
 #include <assert.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -108,7 +109,7 @@ struct wsi_win32_swapchain {
    VkResult                     status;
    VkExtent2D                 extent;
    HWND wnd;
-   HDC chain_dc;
+   uint64_t gdi_present_count;
    struct wsi_win32_image     images[0];
 };
 
@@ -559,28 +560,35 @@ wsi_win32_image_init(VkDevice device_h,
    if (chain->dxgi)
       return VK_SUCCESS;
 
-   chain->chain_dc = GetDC(chain->wnd);
-   image->sw.dc = CreateCompatibleDC(chain->chain_dc);
-   HBITMAP bmp = NULL;
+   HDC window_dc = GetDC(chain->wnd);
+   if (!window_dc)
+      return VK_ERROR_SURFACE_LOST_KHR;
+   image->sw.dc = CreateCompatibleDC(window_dc);
+   ReleaseDC(chain->wnd, window_dc);
+   if (!image->sw.dc)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   BITMAPINFO info = { 0 };
-   info.bmiHeader.biSize = sizeof(BITMAPINFO);
+   BITMAPINFO info = {};
+   info.bmiHeader.biSize = sizeof(info.bmiHeader);
    info.bmiHeader.biWidth = create_info->imageExtent.width;
    info.bmiHeader.biHeight = -create_info->imageExtent.height;
    info.bmiHeader.biPlanes = 1;
    info.bmiHeader.biBitCount = 32;
    info.bmiHeader.biCompression = BI_RGB;
 
-   bmp = CreateDIBSection(image->sw.dc, &info, DIB_RGB_COLORS, &image->sw.ppvBits, NULL, 0);
-   assert(bmp && image->sw.ppvBits);
+   image->sw.bmp = CreateDIBSection(image->sw.dc, &info, DIB_RGB_COLORS,
+                                    &image->sw.ppvBits, NULL, 0);
+   if (!image->sw.bmp || !image->sw.ppvBits)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
 
-   SelectObject(image->sw.dc, bmp);
+   HGDIOBJ previous = SelectObject(image->sw.dc, image->sw.bmp);
+   if (!previous || previous == HGDI_ERROR)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
 
    BITMAP header;
-   int status = GetObject(bmp, sizeof(BITMAP), &header);
-   (void)status;
+   if (GetObject(image->sw.bmp, sizeof(BITMAP), &header) != sizeof(BITMAP))
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
    image->sw.bmp_row_pitch = header.bmWidthBytes;
-   image->sw.bmp = bmp;
 
    return VK_SUCCESS;
 }
@@ -609,8 +617,6 @@ wsi_win32_swapchain_destroy(struct wsi_swapchain *drv_chain,
 
    for (uint32_t i = 0; i < chain->base.image_count; i++)
       wsi_win32_image_finish(chain, allocator, &chain->images[i]);
-
-   DeleteDC(chain->chain_dc);
 
    if (chain->surface->current_swapchain == chain)
       chain->surface->current_swapchain = NULL;
@@ -834,14 +840,56 @@ wsi_win32_queue_present(struct wsi_swapchain *drv_chain,
 
    char *ptr = (char *)image->base.cpu_map;
    char *dptr = (char *)image->sw.ppvBits;
+   uint32_t hash = 2166136261u;
+   uint64_t nonzero_rgb = 0;
 
    for (unsigned h = 0; h < chain->extent.height; h++) {
       memcpy(dptr, ptr, chain->extent.width * 4);
+      if (WSI_DEBUG & WSI_DEBUG_WIN32) {
+         for (unsigned x = 0; x < chain->extent.width; x++) {
+            uint32_t pixel;
+            memcpy(&pixel, ptr + x * 4, sizeof(pixel));
+            nonzero_rgb += (pixel & 0xffffffu) != 0;
+            hash = (hash ^ pixel) * 16777619u;
+         }
+      }
       dptr += image->sw.bmp_row_pitch;
       ptr += image->base.row_pitches[0];
    }
-   if (!StretchBlt(chain->chain_dc, 0, 0, chain->extent.width, chain->extent.height, image->sw.dc, 0, 0, chain->extent.width, chain->extent.height, SRCCOPY))
-      chain->status = VK_ERROR_MEMORY_MAP_FAILED;
+   /* A common window DC must be acquired and released on the same thread.
+    * Swapchain creation, presentation and destruction may use different
+    * threads, so keep its lifetime within this present call. */
+   HDC window_dc = GetDC(chain->wnd);
+   BOOL copied = FALSE, flushed = FALSE;
+   COLORREF window_center = CLR_INVALID;
+   if (window_dc) {
+      copied = StretchBlt(window_dc, 0, 0, chain->extent.width, chain->extent.height,
+                           image->sw.dc, 0, 0, chain->extent.width, chain->extent.height, SRCCOPY);
+      /* Complete this thread's GDI batch before another present can write
+       * the DIB section or a different thread can destroy its objects. */
+      flushed = GdiFlush();
+      if (WSI_DEBUG & WSI_DEBUG_WIN32)
+         window_center = GetPixel(window_dc, chain->extent.width / 2,
+                                    chain->extent.height / 2);
+      ReleaseDC(chain->wnd, window_dc);
+   }
+   if (!copied || !flushed)
+      chain->status = VK_ERROR_SURFACE_LOST_KHR;
+
+   if (WSI_DEBUG & WSI_DEBUG_WIN32) {
+      uint32_t cpu_center;
+      const char *center = (const char *)image->base.cpu_map +
+         (uint64_t)(chain->extent.height / 2) * image->base.row_pitches[0] +
+         (chain->extent.width / 2) * 4;
+      memcpy(&cpu_center, center, sizeof(cpu_center));
+      fprintf(stderr, "Win32 WSI present %" PRIu64 ": %ux%u gpu_pitch=%u dib_pitch=%d "
+                   "nonzero_rgb=%" PRIu64 " pixel_hash=%08x cpu_center=%08x "
+                   "window_center=%08lx blit=%d flush=%d status=%d\n",
+                   ++chain->gdi_present_count, chain->extent.width, chain->extent.height,
+                   image->base.row_pitches[0], image->sw.bmp_row_pitch, nonzero_rgb,
+                   hash, cpu_center, window_center, copied, flushed, chain->status);
+      fflush(stderr);
+   }
 
    wsi_win32_set_image_idle(chain, image);
 

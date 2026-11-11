@@ -3,15 +3,22 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Win32 vkcube is not visibly working (2026-11-11).** With the unchanged
-.144 miniport and a freshly rebuilt NVK ICD, upstream `vkcube --c 120`
-selects GM20B LUID `91fd4` and exits 0, but both client captures are black;
-the user's panel photo confirms missing content and incorrect orientation.
-The native path supports only 720x1280 identity scanout and loses the
-baseline's 90-degree rotation. This is not an on-screen success or proof
-that rotation alone explains the missing image. .59 Code 0 and 90-degree
-rotation are restored. Next, separate GPU image, GDI/window and scanout
-evidence while continuing DWM/shared-resource integration.
+**Win32 presentation investigation (2026-11-11):** the GDI WSI now pairs
+window DC acquisition/release on the presenting thread and flushes GDI
+before reusing its DIB. On the unchanged .144 miniport, LUID `90f83`, 24
+presents produce 24 different GPU-buffer hashes; all sampled window-center
+pixels match the corresponding CPU readback RGB values. Every blit/flush
+reports success. The desktop capture is still black, so visible cube/DWM
+presentation is not established. Check capture DPI/coordinates alongside
+composition and scanout; the samples do not validate the whole image.
+.59 Code 0 and 90-degree rotation are restored.
+
+**Next display round includes real 90-degree landscape rotation**, as the
+user requested: implement and verify rotation with source dimensions,
+stride and scanout layout, alongside the presentation work. The current
+native path still accepts only 720x1280 identity scanout. Validate complete,
+correctly oriented visible output and sustained refresh before claiming
+an on-screen pass.
 [Build and physical evidence](PORTING.md#win32-vkcube)
 
 **Current work: D3D UMD/DWM.** .144 passes native Vulkan OPAQUE_WIN32
