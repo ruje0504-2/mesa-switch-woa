@@ -435,7 +435,66 @@ investigation is transition completion and the primary/presentation contract,
 not an unsupported feature-level increase or speculative scanout-register
 change.
 
-All 145 returned files (58,992,567 bytes) match device lengths and SHA-256.
+Read-only inspection of the device's `d3d11.dll` 10.0.22621.2715 clarifies
+the apparently successful DDI. `NDXGI::CDevice::SetDisplayModeCB` stores both
+the actual D3DKMT NTSTATUS and a mapped HRESULT in its per-call state, then
+returns S_OK for selected mapped errors, including `887a0025`. The outer
+SetDisplayMode operation consumes that saved result after the UMD returns.
+Consequently, a successful callback alone cannot establish that the kernel
+mode change succeeded. The mapping includes invalid parameters and unsupported
+VidPN modality as well as genuine present-mode/ownership changes; the generic
+DXGI code cannot distinguish them. Its kernel-call wrapper records failures
+in the D3D11 journal, which was not enabled in this trial.
+
+The DLL's SHA-256 is
+`ccc352f7097d0320368000dbe9ff92772d8fc909185d95c8a0753cb8f115f880`.
+The public symbol GUID is `4DD64C1C-37D9-00CB-45AF-89C52B2A1534`; the image
+requests age 1 and the stripped public PDB reports age 2. Relevant native
+callback instructions are at RVA `548a0`–`54b74`; the status-save/masking
+sequence is at `54b1c`–`54b40`. This static inspection motivated the following
+capture; it does not by itself select one of the possible kernel statuses.
+
+### Raw mode-setting status
+
+`mode-journal-auto-20261111` enables the installed Direct3D11 provider's
+JournalEntries keyword (`0x800`, event 1820) with unchanged UMD/ICD/KMD
+binaries. A 12-second DWM observation on native LUID `953d1` runs at
+12:29:40.175–12:29:52.929 UTC. It does not rerun the pixel probes or establish
+a new drawing/presentation pass.
+
+The retained D3D11 journal contains **144 SetDisplayMode failures from DWM
+PID 812/TID 1864**, all `c01e0005`
+(`STATUS_GRAPHICS_PRESENT_MODE_CHANGED`). Each precedes that thread's UMD
+SetDisplayMode S_OK record by 9.5–20.8 microseconds (median 10.7). DXGI reports
+144 corresponding fullscreen failures with `887a0025`. This confirms the
+runtime's status conversion in the observed path. These specific failures
+are neither OOM nor invalid-parameter results. Their cause within mode/
+primary compatibility is still to be established; do not infer a particular
+rotation, format or timing field from the generic mode-change code alone.
+
+The other 15 D3D11 journal entries belong to different process IDs and cover
+UMD access/interface selection. They are not DWM's mode-setting failure.
+The next check is the actual primary description and active VidPN state,
+including the meaning of PreserveVidPn. The existing source's allocation
+description and mode/rotation fields require comparison to that state before
+changing behavior.
+[SetDisplayMode input contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/ns-d3dkmthk-_d3dkmt_setdisplaymode)
+[PreserveVidPn flag](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/ns-d3dkmthk-_d3dkmt_setdisplaymode_flags)
+
+The raw export has 250,385 complete records, including 229,940 DxgKrnl,
+7,984 DXGI, 3,582 Dwm-Core and 159 Direct3D11 events. All four providers
+decode exactly against the device templates; no unknown or malformed
+payloads remain. The finalized UMD export has 8,712 valid events with no
+reported loss. All 132 returned files (57,562,355 bytes) match device hashes.
+Raw-export SHA-256:
+`9f51635babac995098db73d39330ebf8d6251b92cbf43281e71479d466df3dbe`.
+.59 Code 0 and complete cleanup are verified at 12:33:15 UTC after the
+recovery reboot. Portrait restore/verification at 12:33:29 UTC is a no-op,
+and the power reports are unchanged. Artifacts are in the external build
+root's `runs/mode-journal-auto-20261111/` directory.
+
+For the preceding runtime-context drawing trial, all 145 returned files
+(58,992,567 bytes) match device lengths and SHA-256.
 The raw event export hashes to
 `de5210fd632314db473658c25a6c50915cdf47a7608ff80826b02089d18b868a`.
 The automatic rollback is verified at 11:58:44 UTC: .59 Code 0, original

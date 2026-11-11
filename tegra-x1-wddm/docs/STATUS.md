@@ -11,12 +11,19 @@ with nonempty context lists; its 401 recorded GPU waits return S_OK. The
 finalized trace reports no loss, and all 145 returned files match device hashes.
 .59 Code 0, cleanup, portrait and unchanged power policy are verified.
 
-**Current desktop boundary:** DWM's SetFullscreenState returns
-`887a0025` (`DXGI_ERROR_MODE_CHANGE_IN_PROGRESS`) 133 times despite successful
-UMD SetDisplayMode calls. Each attempt leaves the swapchain windowed with no
-primary and is followed by swapchain destruction/recreation. Capture on the
-verified native `Default` desktop remains black. Identify why this transition
-does not complete; Present and shared-image integration also remain unfinished.
+**Current desktop boundary:** the D3D11 journal on native LUID `953d1`
+identifies 144 `SetDisplayMode` failures as `c01e0005`
+(`STATUS_GRAPHICS_PRESENT_MODE_CHANGED`). The runtime saves this failure,
+returns S_OK to the UMD, then reports `887a0025` to DXGI. Callback S_OK does
+not establish kernel mode-setting success. All four providers decode fully;
+the finalized ETL reports no loss. The 132 returned files match device hashes,
+and .59 Code 0, portrait and unchanged power policy are restored.
+
+This was a short observation with unchanged binaries, not another drawing
+test. The prior native `Default` desktop capture remains black. Next, compare
+the primary description and active VidPN state to identify the recurring mode
+change; Present and shared-image integration also remain unfinished. The
+observed failures are not host/device OOM or invalid-parameter return codes.
 [Runtime context evidence and implementation](D3D_RUNTIME_SHARING.md#runtime-context-registration)
 
 **Primary bridge native result (2026-11-11):** the driver now creates the portrait
@@ -28,8 +35,9 @@ so delayed object cleanup cannot free a reused address. After fixing the
 incorrect rejection of `E_PENDING`, native LUID `98df6` completes 116 primary
 allocations, 116 GPUVA maps and 232 paging waits; 115 actual runtime
 SetDisplayMode callbacks return S_OK. The finalized 12,816-event trace has
-no recorded loss or DWM runtime-error callback. This validates the allocation
-and mode-setting bridge, not sustained Present or a visible desktop.
+no recorded loss or DWM runtime-error callback. This validates allocation and
+callback routing, not kernel mode-setting success, sustained Present or a
+visible desktop; see the runtime error-masking finding above.
 All 120 returned files match device hashes; .59, portrait and power policy are
 restored. A bounded-wait rerun on LUID `954c5` validates device release but
 reveals a sampler binding error in the returned SPIR-V. After using Zink's
