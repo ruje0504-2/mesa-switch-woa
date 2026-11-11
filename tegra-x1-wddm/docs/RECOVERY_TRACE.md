@@ -60,10 +60,18 @@ Windows ARM64 context/worker models verify first-status retention, duplicate
 suppression, emission before OS notification, spinlock release, PASSIVE_LEVEL
 submission failure and DISPATCH_LEVEL preemption failure. Decoder tests cover
 fixed wire bytes and truncated/incompatible exports. These controls do not
-prove live kernel ETW delivery. The completed `.153` trial confirms provider
-registration and enablement; its finalized trace retains no recovery event,
-so actual kernel event emission remains unverified. That trial exposes a
-shared-pattern pixel mismatch with S_OK producer/consumer device status.
+prove live kernel ETW delivery. The later `sample-i153-native-20261111` trial
+does retain five valid events on native LUID `b02db`, verifying live delivery.
+They describe paging submissions returning `STATUS_DEVICE_NOT_READY` in
+graphics generations 3 through 7. They follow the first observed device-error
+mark and DWM's generic resource OOM, so none establishes the initial failure.
+Zero cached register values do not establish healthy hardware. The native ETL
+is unfinalized; its raw export and device hashes are retained.
+
+OS-requested reset can also set `RecoveryPending` directly in
+`isolate_backend`, without going through this notification event. Together
+with the malformed-submit path above, that remains an attribution gap to
+resolve before diagnosing the first device error from a later recovery.
 
 The implementation follows Microsoft's
 [EtwRegister](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-etwregister),

@@ -1871,3 +1871,52 @@ claim that shared allocations use 64-byte pitch alignment is rejected:
 by the current code or the passing 720x1280 native sampling probe. No such
 changes are included in this correction. MSAA and the remaining sampling/query
 opcodes remain unfinished; this fix does not claim complete shader conformance.
+
+### SAMPLE_I native retest
+
+`sample-i153-native-20261111` tests UMD `8f9a286a0e2b` and probe `7a9752a1e128`
+from `3531f0ee`, with the same `.153` KMD and `6e2fad99d742` ICD. Startup
+reaches Code 0 at 23:15:32 UTC on LUID `b02db`. The user reports immediate
+black output. An additional boot occurs at 23:16:23 before any native Load
+result, observation-start record or debugger attachment is retained. The
+absence of those records is not proof that every preceding call was unexecuted.
+No native Load-pixel or physical desktop pass is claimed.
+
+The retained native trace has 13 successful DWM flips, seven Explorer
+windowed Presents, three TextInputHost Presents and one StartMenuExperienceHost
+Present. A DWM-associated device is marked erroneous before `Resource.cpp:358`
+reports `8007000e` for a 128x64 BGRA render-target/shader-resource texture;
+the same-trace gap is 0.2719613 seconds. That source line maps any failed
+Gallium resource creation to generic OOM. Subsequent Explorer/TextInputHost
+Zink failures identify timeline-semaphore initialization (`zink_screen.c:3805`).
+These are failure boundaries, not proof of memory exhaustion.
+
+All 352 retained `ReserveResource` returns are zero. Before the initial
+native device-error mark, observed residency peaks total 149,147,648 bytes:
+135,598,080 system-memory bytes, 2,490,368 page-table bytes and 11,059,200
+scanout bytes. Residency is not the entire committed-memory accounting, so
+these numbers neither prove nor definitively exclude the 512-MiB cap.
+
+The `.153` provider emits five valid recovery records, all paging submissions
+with `STATUS_DEVICE_NOT_READY`, in graphics generations 3–7. They occur after
+the earlier device-error mark and OOM. This verifies live kernel event delivery,
+but the first submission/reset cause remains unidentified. The provider does
+not separately record malformed-submit rejection or OS-requested reset; zero
+cached FIFO/MMU/PBDMA fields are not fresh hardware observations. Numeric
+Dxgkrnl device-error reasons are kept uninterpreted.
+
+The native `.001` is unfinalized and contains 227,894 exported records,
+including 23,228 UMD events. The finalized later `.002` has 177,076 records
+and zero UMD events; it belongs to the closed-gate recovery interval. The
+native decoder leaves 1,187 Dwm-Core event-203 payloads uninterpreted. Raw
+export SHA256 values are respectively
+`572d46ffd1c5bf88991d03243abd7d2ebb8302305921b93e208235bead327bc5` and
+`e179b58f91a0f4ef7dd2f6b43a4071bd0d3ad0624494450c7ac11645bff7bcf3`.
+
+Recovery stages `.59` at 23:19:22 and boots it at 23:20:10. Code 0, baseline
+hashes, cleanup and unchanged power are verified at 23:22:05; saved portrait
+is unchanged at 23:22:30. All 156 returned files (136,848,242 bytes) match
+device lengths and hashes. The requested `.148` comparison is cancelled
+before installation. No native test remains running. Continue from the first
+device-error boundary rather than treating the later OOM or last trace record
+as its cause.

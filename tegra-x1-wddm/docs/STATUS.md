@@ -32,11 +32,22 @@ verified at 23:03:02 UTC and saved portrait at 23:06:09.
 
 **Current WIP:** implement samplerless integer texture loads and a D3D
 `Texture.Load` pixel probe. ARM64 builds, twelve translator checks and
-24,576 WARP pixel comparisons pass; native validation is pending. The old
+24,576 WARP pixel comparisons pass. The first native trial
+`sample-i153-native-20261111` reaches Code 0 at 23:15:32 UTC, then the user
+reports black output. An additional boot occurs at 23:16:23 before any
+Load/desktop-observation result is retained. Native LUID `b02db` records a
+DWM-associated device error, then a 128x64 texture's generic OOM 272 ms later,
+followed by five paging-submit recovery requests with `c00000a3`. All 352
+retained resource reservations succeed; budget exhaustion is not established.
+All 156 returned files match device hashes. `.59` Code 0, cleanup and unchanged
+power are verified at 23:22:05 UTC, saved portrait at 23:22:30. The trial is
+finished without a native Load or physical desktop pass.
+The user cancels the proposed `.148` comparison before installation. The old
 translator prints `unknown TGSI opcode: SAMPLE_I` in the minimal regression
 and is stopped after its post-abort process fails to exit within the bound.
 The exact new UMD's callback/loading controls pass at 23:08:54 UTC.
 [Captured abort, correction and review limits](D3D_RUNTIME_SHARING.md#explorer-sample-i-abort)
+[Native retest and first-device-error boundary](D3D_RUNTIME_SHARING.md#sample-i-native-retest)
 
 **Latest `.153` result:** `shared-usage153-native-20261111` tests UMD
 `buffer-release-v2-20261111-umd+e99798fa9668` from `931383e6`, with unchanged
@@ -60,8 +71,10 @@ completes at 21:56:46 UTC; an additional startup occurs during recovery at
 and is verified Code 0 with cleanup and unchanged power at 22:03:37. Saved
 portrait is unchanged at 22:04:35. No native test remains running.
 
-**Next:** localize the remaining DWM/Explorer output failure before hardware
-landscape and Win32 `vkcube`.
+**Next:** identify the initial submit/preempt/reset path before the DWM device
+error; the retained recovery requests occur later. Preserve the underlying
+resource-create failure instead of interpreting generic OOM as budget exhaustion.
+Then complete physical desktop composition, hardware landscape and Win32 `vkcube`.
 The successful shared-pixel probes need not be rerun without a relevant change.
 [Buffer ownership](D3D_RUNTIME_SHARING.md#buffer-release-ownership-correction) ·
 [Shared image usage](D3D_RUNTIME_SHARING.md#native-shared-versus-private-sampling)
@@ -83,8 +96,9 @@ portrait verification at 20:06:35 is a no-op. No native test remains running.
 recovery status and triggering path in ETW before notifying Dxgkrnl, including
 DISPATCH_LEVEL preemption and legacy-submit failures. Host/WDK builds and
 Windows ARM64 context/worker controls pass at 20:16:20 UTC. They check first
-error retention, lock release and notification ordering; live kernel ETW
-event delivery remains untested because the native run retains no such event.
+error retention, lock release and notification ordering. The later
+`sample-i153-native-20261111` trace verifies live kernel delivery with five
+records, but they occur after the first device error and do not explain it.
 The first deployment registers the provider
 successfully (`TraceStatus=0`) but aborts before native grant: the operator
 called the low-level bind/arm helpers without the UMD-registration wrapper.
