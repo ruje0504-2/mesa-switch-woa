@@ -3,39 +3,39 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Latest `.146` native result (2026-11-11):** the new runtime Present bridge
-reaches the kernel on LUID `94aa5`. All 40,960 ordinary/sampled pixels match,
-and both probes release their devices and exit 0. Three retained complete
-DWM fullscreen transitions return S_OK. Each subsequent MMIO Present fails
-with `c00000bb`; the runtime callback returns `80004005`, then DXGI reports
-device removal. The user reports a black physical screen. This is not an
-on-screen pass.
+**Latest `.147` native result (2026-11-11): desktop lights up.** DWM selects
+Tegra X1 / FL10_0 on LUID `a2008`. The retained trace contains 108 successful
+Present calls at all three layers (KMD, UMD callback and outer DXGI), plus
+108 successful rotations of the three swapchain buffers, spanning 24.725
+seconds. The user confirms a normal physical desktop and supplies a photograph
+of wallpaper, Computer Management and Tegra X1 (GM20B) under Display adapters.
+The ordinary and sampling logs match all 40,960 pixels and reach explicit
+teardown and their success messages.
 
-**Current boundary and WIP:** the recorded flips have no DMA buffer and set
-`FlipWithNoWait=1`, which the `.146` KMD's flip filter omits. The source now
-admits this flag through the scheduled MMIO path. The real-WDK fixture fails
-before the change and passes afterward on ARM64; native validation of the
-fix is pending. The UMD routes actual primary flips and rotates swapchain
-storage/views while retaining runtime handles. Five ARM64 controlled fixtures
-and a finalized 111-event trace pass. This buffer-identity rotation is not
-hardware screen rotation, which is still pending alongside shared-image opens.
-Keep the current FL10_0 rather than using a feature-level change to bypass
-these missing contracts.
+**Scope:** this validates the no-wait MMIO-flip fix and an initial visible
+DWM desktop, not long-term stability. A further boot at 15:03:07 interrupts
+collection; the result/exit files are zero-filled and the native ETL is not
+finalized. Its last event is not a fault location. The second ETL is from the
+closed startup gate and Basic Render, not native rendering. All 151 returned
+files match device hashes. `.59` Code 0, complete cleanup and unchanged power
+policy are verified at 15:08:11 UTC; portrait verification at 15:08:32 is a
+no-op. The test package is no longer installed.
+[Native Present result, photo provenance and limits](D3D_RUNTIME_SHARING.md#native-mmio-present-result)
 
-All 154 returned files match device hashes; the finalized native trace has
-20,004 valid UMD events and no reported loss, and all four OS providers decode
-fully. The optional loader capture reaches its duration limit before the
-second control marker; its validation fails and the controller rolls back.
-`.59` Code 0, cleared test state and unchanged power policy are verified at
-14:41:10 UTC. Portrait restore/verification at 14:41:24 is a no-op, and the
-user confirms the physical desktop is restored.
-[Present implementation and native failure](D3D_RUNTIME_SHARING.md#runtime-present-native-trial)
+**Next work:** implement hardware landscape rotation and shared-image opens,
+then validate sustained desktop composition and visible Win32 `vkcube`.
+The current swapchain identity rotation moves storage/views; it does not
+rotate the physical screen. FL10_0 is sufficient for the desktop milestone
+observed here. The latest run changes only the KMD package from `.146` to
+`.147`, retaining the same UMD and ICD binaries and their passed controls.
 
-The previous `.146` run on LUID `92611` passed the allocation-rotation
-mode-setting fix and reached the then-unimplemented UMD Present stub. Its
-desktop capture contained wallpaper/icons, but did not establish physical
-panel output. The newer native result above replaces that Present boundary.
-[Mode-setting fix and earlier evidence](D3D_RUNTIME_SHARING.md#native-identity-rotation-trial)
+The preceding `.146` trial on LUID `94aa5` reached the real runtime Present
+callback but rejected `FlipWithNoWait`, returning `c00000bb` and producing
+black physical output. `.147` supersedes that boundary. The earlier LUID
+`92611` trial passed the allocation-rotation mode check but reached the old
+UMD Present stub. Detailed history remains in the linked implementation notes.
+[Earlier Present failure](D3D_RUNTIME_SHARING.md#runtime-present-native-trial) ·
+[Mode-setting fix](D3D_RUNTIME_SHARING.md#native-identity-rotation-trial)
 
 **Final orientation requested by the user:** hardware rotation with a
 1280x720 landscape desktop, left/right controls in their normal handheld
@@ -61,8 +61,8 @@ and .59 Code 0, portrait and unchanged power policy are restored.
 
 This was a short observation with unchanged binaries, not another drawing
 test. Its native `Default` desktop capture was black. The `.146` result above
-supersedes this mode-setting boundary; Present and shared-image integration
-remain unfinished. These earlier failures were not host/device OOM or
+supersedes this mode-setting boundary; shared-image integration and sustained
+presentation remain unfinished. These earlier failures were not host/device OOM or
 invalid-parameter return codes.
 [Runtime context evidence and implementation](D3D_RUNTIME_SHARING.md#runtime-context-registration)
 
@@ -85,20 +85,20 @@ Vulkan binding instead of the Gallium slot, LUID `92166` matches 24,576
 independent `t5/s2` sample pixels (wrap/clamp/rebinding, RGBA/BGRA) plus the
 16,384 ordinary draw pixels. Both probes complete explicit teardown and exit
 0 without timeout. All 144 final-trial files match device hashes; .59 Code 0,
-cleanup, portrait and unchanged power policy are verified. Desktop capture
-remains black; DWM continues cycling primary resources/mode setting. Actual
-Present and shared-image opens remain unfinished.
+cleanup, portrait and unchanged power policy are verified. That trial's desktop
+capture remained black while DWM cycled primary resources/mode setting. Actual
+Present and shared-image opens were unfinished at that point.
 [Primary bridge contract and controls](D3D_RUNTIME_SHARING.md#runtime-primary-bridge-work)
 
 **Version labels:** Device Manager shows the installed INF package's version.
 Earlier experiments reused the signed `.144` KMD while replacing the test UMD
-and ICD. The latest KMD is rebuilt and versioned `.146`. Standalone build manifests
+and ICD. The latest KMD is rebuilt and versioned `.147`. Standalone build manifests
 name their component and include a readable `artifact_id` with the DLL hash.
 The latest native trial uses:
 
 | Component | Candidate identifier |
 | --- | --- |
-| Signed KMD package | `0.1.0.146` (rebuilt from source) |
+| Signed KMD package | `0.1.0.147` (source `2d351cdf`, SYS `e491932a9fd3`) |
 | D3D UMD / Zink | `runtime-present-20261111-umd+79fa8169fb00` (source `d6635e3d`) |
 | NVK ICD | `runtime-primary-20261111-icd-v2+f828845c38b7` |
 

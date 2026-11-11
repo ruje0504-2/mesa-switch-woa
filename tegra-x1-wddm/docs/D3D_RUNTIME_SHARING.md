@@ -711,3 +711,81 @@ on `.59` Code 0; returned logs match device hashes. Host models and the ARM64
 kernel/fixture build pass. Artifacts are under
 `runs/mmio-nowait-control-20261111/`. This is not yet a native rerun or a
 physical screen-rotation implementation.
+
+### Native MMIO Present result
+
+`mmio-nowait-native-20261111` builds and signs `.147` from `2d351cdf`.
+Its SYS SHA-256 is
+`e491932a9fd3ea6741f890eadaed31c9c96b8d366a4b2a8f5b74756505a553d6`.
+Only SYS, INF and catalog differ from `.146`; firmware and the initial no-D3D
+stub are unchanged. Windows validates the signature and every catalog member.
+The context fixture is byte-identical to the passed no-wait control. The trial
+reuses the exact `79fa8169fb00` UMD and `f828845c38b7` ICD, including their
+previous controlled verification. Hardware startup completes at 15:02:04 UTC
+with Code 0 and a consumed permit.
+
+DWM PID 468 / TID 1948 creates its hardware device on **Tegra X1 (GM20B),
+LUID `a2008`, FL10_0**. Its complete fullscreen transition returns S_OK.
+The retained native trace then contains **108 successful presents at each
+layer**: DxgKrnl Present ReturnStatus=0, UMD Present=0 and outer DXGI
+Present Result=0. All corresponding Flip events have MMIOFlip=1,
+FlipWithNoWait=1, interval 1 and no DMA buffer. All 108 swapchain identity
+rotations return S_OK for three resources. The first and last completed
+presents span 24.725 seconds; this is an observation interval, not a measured
+steady frame rate. It establishes native passage through the actual Present
+boundary that `.146` rejected.
+
+The user confirms a normal desktop during the test and provides a physical
+photograph showing Windows wallpaper, Computer Management and Tegra X1
+(GM20B) under Display adapters, without a visible warning on that adapter's
+icon. The original photo is retained outside the repository as
+`user-desktop-photo.jpg`, SHA-256
+`082f6cf6739e1ecc4549d0f0a6ee056bb743a9acb826e3ed49028ca77eb928a6`.
+It has no independently verified capture timestamp or package-version field;
+its trial attribution comes from the user's report. Together with the native
+Present records, this is an initial visible desktop milestone, not proof of
+all desktop applications, sustained stability or final screen orientation.
+
+Both drawing command lines explicitly select LUID `a2008`. Their logs report
+16,384 ordinary and 24,576 independent sampling pixels with zero mismatches,
+Device status S_OK, explicit device/adapter teardown and the final success
+message. The separate result JSON, identity JSON and exit-code files are
+zero-filled after the subsequent reboot, so no surviving exit-code record
+is claimed. The native input-desktop record at 15:02:19 UTC identifies
+`Default`, the ACPI display, 720x1280 identity mode and origin (0,0).
+No native desktop PNG or completed screenshot-result file is retained.
+
+A further boot at 15:03:07 interrupts the controller's first collection.
+The retained evidence does not establish its cause. The consumed permit keeps
+the restarted `.147` closed; the next controller invocation preserves the
+first attempt and proceeds to recovery. The second ETL reports the gated
+StartDevice failure `c00000a3`, no UMD events, and DWM devices on Microsoft
+Basic Render LUIDs `4dd4`/`4e0d`. Its desktop activity is not additional
+native rendering. The observer's generic desktop-path file was replaced
+after reboot and likewise must not be used as the earlier native LUID proof.
+
+Read-only export after recovery preserves both original ETLs. The first raw
+export contains 115,919 records, including 20,931 valid UMD events. Its
+EndTime and BuffersWritten are zero; the header's zero loss counters do not
+establish complete coverage. The second contains 157,062 records and is
+finalized with 444 buffers written. DxgKrnl, DXGI and Direct3D11 payloads
+decode exactly. Dwm-Core event 203 (`SCHEDULE_GETPRESENTSTATS1`) has a
+52-byte payload where the installed template describes 36 bytes; 388 such
+records in the first trace and 1,250 in the second remain undecoded. They
+are not silently accepted as fully decoded events. The adapter, fullscreen
+and Present events used above decode without those mismatches.
+
+Raw-export SHA-256 values, respectively:
+`ab151a6272ed8387f578a876a30a847a79d0e3bc7be2ff06c93326d701a0220c`
+and `3395d42f046e2f98b39d4753715a873b47f04369f2fbeff1ec158cfdb8e1f772`.
+All 151 final returned files (89,001,905 bytes) match device lengths and
+SHA-256. `.59` Code 0, original driver/table hashes, cleared test state and
+unchanged power reports are verified at 15:08:11 UTC. Portrait restoration
+and verification at 15:08:32 are a no-op. The package and evidence are under
+the external build root's `runs/mmio-nowait-native-20261111/` directory.
+
+Next, implement the requested hardware 1280x720 landscape path and runtime
+shared-image handling, then validate sustained composition and visible
+Win32 `vkcube`. The existing Blt stub and shared-resource OpenResource path
+remain incomplete. A present return or this photograph alone does not close
+those contracts or establish a complete Vulkan implementation.
