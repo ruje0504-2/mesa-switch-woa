@@ -3,22 +3,24 @@
 **Latest physical result** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**DWM extension-discovery result (2026-11-11):** on the unchanged .144 KMD,
-LUID `92fa3`, version and layer enumeration succeed, but the initial
-`vkEnumerateInstanceExtensionProperties` count query already returns OOM
-(-1). Instance creation subsequently fails too. DWM therefore never
-discovers `debug_utils`, explaining the missing error-callback message.
-The normal runtime probe discovers 16 extensions and creates the instance.
-The trace distinguishes 44 fresh DWM attempts from 44 cached snapshots;
-all 1,490 UMD events decode with no recorded loss. Next capture the loader's
-ICD-discovery error directly; actual RAM exhaustion is not established.
+**DWM false OOM located (2026-11-11):** loader diagnostics identify Windows
+error 87 while opening `./libvulkan_nouveau.dll`. The Windows manifest
+generator used a POSIX separator; changing it to a backslash removes the
+working-directory dependency in a four-case physical control. The loader
+also misclassifies error 87 as OOM because its string test for `error 8`
+matches both. This is separate from GPU allocation and the 512 MiB budget.
 
-The new ICD passes native FL10_0 rendering with 16,384 matching RGBA/BGRA
-pixels; higher feature levels remain unsupported and the desktop capture
-is still black. .59 Code 0, environment cleanup, portrait preference and
-unchanged power settings are verified after rollback. All 114 returned
-records match device hashes.
-[Native result and evidence](PORTING.md#instance-extension-discovery)
+**The packaging fix passes the DWM initialization boundary on hardware:**
+with unchanged binaries and LUID `994f3`, DWM discovers all 16 instance
+extensions, creates its instances/Zink screens and receives three successful
+D3D UMD CreateDevice returns. The trace records six fresh and six cached
+snapshots, all successful. Native FL10_0 rendering still matches 16,384
+pixels. The desktop capture remains black, and DWM subsequently exits with
+`c0000409`; the exact later failure is not yet identified. Next trace the
+post-device resource/runtime path before claiming composition or Present.
+.59 Code 0, environment cleanup, portrait preference and unchanged power
+settings are verified after rollback.
+[Diagnosis, controls and validation](PORTING.md#windows-icd-manifest-path)
 
 **Host-memory audit (2026-11-11):** no page-size/alignment or 512 MiB unit
 error was found in the inspected paths. The current instance path uses

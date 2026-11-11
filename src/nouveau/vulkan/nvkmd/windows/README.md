@@ -30,6 +30,14 @@ instance creation can succeed while loader device enumeration returns
 `VK_ERROR_INITIALIZATION_FAILED` and the full identity check exits 10;
 that is not a native-GPU pass.
 
+The Windows manifest uses `.\\libvulkan_nouveau.dll` in JSON (one
+backslash after JSON decoding). Keep it beside the ICD. A POSIX `./` path
+is not resolved against the manifest by the deployed Windows loader and
+can fail outside the ICD directory. For packaging checks, run the probe
+from a separate executable directory and use System32 as its working
+directory; placing the probe beside the ICD can hide the defect.
+[Loader diagnosis and path control](../../../../../tegra-x1-wddm/docs/PORTING.md#windows-icd-manifest-path)
+
 `test-kmt-shared.exe` checks shared storage, named objects and ownership with
 controlled SDK KMT substitutes. `nvk-windows-shared-check.exe` tests live KMT
 storage. `nvk-windows-vulkan-shared-check.exe <absolute-vulkan-1.dll>` tests

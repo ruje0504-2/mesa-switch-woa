@@ -82,8 +82,11 @@ def main():
     dll = out / "libvulkan_nouveau.dll"
     shutil.copyfile(build / "src/nouveau/vulkan/libvulkan_nouveau.dll", dll)
     manifest = out / "nvk_windows_icd.json"
+    # The Windows loader recognizes backslashes when resolving this path
+    # relative to the manifest. A POSIX './' can instead depend on the
+    # application's directory and fail in hosts such as DWM.
     manifest.write_text(json.dumps({"file_format_version": "1.0.0", "ICD": {
-        "library_path": "./libvulkan_nouveau.dll", "api_version": "1.4.0",
+        "library_path": r".\libvulkan_nouveau.dll", "api_version": "1.4.0",
     }}, indent=2) + "\n")
     files = [dll, out / "nvk-windows-check.exe", out / "test-kmt.exe",
              out / "test-kmt-shared.exe", out / "nvk-windows-shared-check.exe",

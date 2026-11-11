@@ -395,8 +395,10 @@ to its requested Feature Level, shared-resource open or Present yet.
 
 The next investigation must retain the precise Zink loader, VkInstance,
 physical-device selection or VkDevice failure in the desktop process. The
-ICD manifest already uses `./libvulkan_nouveau.dll`, relative to the manifest
-directory; a bare-filename manifest is not the current configuration.
+ICD manifest used `./libvulkan_nouveau.dll`. The original assumption that
+this resolved against the manifest directory was incorrect for the deployed
+Windows loader; the [later path control](#windows-icd-manifest-path)
+reproduces the failure and verifies the backslash correction.
 Windows Mesa logging defaults to stderr/OutputDebugString and explicitly
 does not implement `MESA_LOG_FILE`, so setting that variable alone will not
 collect the missing initialization error.
@@ -544,6 +546,119 @@ confirmed. Portrait restore/verify is a no-op at 05:46:06. All 114 returned
 records (34,275,580 bytes) match remote lengths and hashes. ETL SHA-256:
 `c5a314c2bce2dbca294c368daec195bf4c0558d3848e541925f1e31c9d60aa75`;
 UMD export: `a680f1dfe901db9a4749f4dc7054ca4df69aa554c00678a606e1e26ffb7c746f`.
+
+### Windows ICD manifest path
+
+The `loader-debug-auto-20261111` trial keeps the UMD, ICD and signed .144
+KMD unchanged. A bounded, session-1 Microsoft DbgViewCLI ARM64 capture
+collects the loader's `OutputDebugString` output with temporary
+`VK_LOADER_DEBUG=error,warn,driver`. The receiver's independent two-message
+control passes; the trial also retains both boundary markers and exits 0.
+No kernel capture or boot-logging driver is used.
+
+The matching UMD trace identifies DWM PIDs 828, 5896 and 4772. Each has
+uninterleaved loader errors reporting that `./libvulkan_nouveau.dll` cannot
+be opened with Windows error 87. The ICD manifest itself is found.
+The UMD records the same failed extension count and instance creation as
+before: 44 fresh DWM attempts and 44 cached snapshots. All 1,490 events
+decode, with zero recorded event/buffer loss and 517 written buffers.
+Debug output is weaker evidence: of 1,508 captured rows, 69 contain
+interleaved message fragments and are excluded from per-PID conclusions.
+The receiver supplies no ETW-style loss counter.
+
+The deployed loader's disassembly confirms that path processing tests for
+backslash. Its library-open helper first calls `LoadLibraryW`, then on
+error 126 retries `LoadLibraryExW` with flags `0x1100` (DLL load directory
+and default directories). Windows requires an absolute path with the DLL
+load-directory flag. The unresolved relative path is consistent with that
+fallback returning error 87; the subsequent API result is -1. This is a DLL
+loading failure, not evidence that GPU memory allocation exceeded 512 MiB.
+[Windows DLL path and flag contract](https://learn.microsoft.com/en-us/windows/win32/api/libloaderapi/nf-libloaderapi-loadlibraryexw)
+
+The false OOM translation is independently identified in
+`loader_handle_load_library_error`: it tests the formatted message with
+`strstr(error_message, " with error 8")`, which also matches error 87.
+The deployed binary contains that exact string at RVA `62eba`, selects
+library status 22 on a match, and `loader_scanned_icd_add` converts status
+22 to Vulkan -1. The inspected upstream source has the same prefix test.
+This external-loader defect remains a follow-up for the loader build;
+the current fix removes the invalid manifest path without replacing the
+loader or changing its error semantics.
+[Upstream load-error classification](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/loader/loader.c)
+
+The native runtime still passes 16,384 RGBA/BGRA clear/triangle pixels on
+LUID `7e769`, from 06:36:06.3871376 to 06:36:11.5277628 UTC, exit 0 without
+timeout. FL10_0 remains the supported level and the desktop capture is
+still black. The receiver stops at 06:36:31; collection finishes at
+06:36:50. .59 Code 0 and exact driver/ACPI hashes are verified at 06:40:21,
+with removed registration, permit/tasks, temporary loader/debug environment
+and receiver, plus unchanged power settings. Portrait verification is a
+no-op at 06:41:04. All 120 returned records (34,655,792 bytes) match device
+lengths and hashes. ETL SHA-256:
+`9a8be8973f45a70ddc69ee06400f6e3e2610859142a4c8e184ced7f4b49820b6`;
+loader CSV: `ee4bac54a2d671cfe3870d4a687e7a08b3c9dc862473e74c2e8a59a6f461f9ff`.
+
+The `manifest-path-control-20261111` comparison runs the unchanged loader
+and ICD on .59, with the probe executable outside the ICD directory.
+Only the manifest separator and process working directory vary:
+
+| Manifest library path | Working directory | Instance result |
+| --- | --- | --- |
+| `./libvulkan_nouveau.dll` | ICD directory | success |
+| `./libvulkan_nouveau.dll` | System32 | Windows 87, Vulkan -1 |
+| `.\libvulkan_nouveau.dll` | ICD directory | success |
+| `.\libvulkan_nouveau.dll` | System32 | success |
+
+The successful cases subsequently find no native GPU on .59 and the full
+identity utility exits 10; the failing case exits 8 at instance creation.
+The earlier control placed the executable beside the ICD, which masked the
+working-directory dependency. All 24 returned control records (13,859
+bytes) match remote hashes. Temporary legacy ICD registrations are removed
+and .59 Code 0 is rechecked at 06:48:42 UTC.
+
+`build_icd.py` now emits the Windows backslash path through JSON encoding.
+No allocator, budget, feature level or executable binary changes are needed
+for this packaging correction. Creating a loader instance in this control
+does not establish DWM composition or presentation.
+
+The separate `manifest-path-auto-20261111` hardware trial changes only the
+manifest path, retaining the same binaries and capture instrumentation.
+The corrected manifest hashes to
+`829706b27380ae3cc24ce89c85683d3c9377816e219d89e2ece8dd0242610bb3`.
+On matching native LUID `994f3`, DWM PIDs 452, 5124 and 2768 now successfully
+complete version, extension-count/list, layer-count/list and instance
+creation. The twelve snapshots are six fresh and six cached successes:
+16 discovered extensions, eight enabled extensions, no layers, with
+debug-utils available and chained. Zink screen creation and adapter open
+also succeed. Each DWM process reaches a successful D3D UMD CreateDevice
+return for DDI interface `a0009`. These positive records establish that the
+manifest correction removes the observed initial failure.
+
+The finalized ETL exports 420 valid UMD records, including 192 DWM events,
+with zero recorded event/buffer loss and 731 written buffers. It records
+no DWM OpenResource/Present/Blt events. The loader capture has 511 rows;
+some messages interleave, including non-UTF-8 system text. Original bytes
+are retained, and only ASCII diagnostic fields are analyzed. Absence of a
+loader error is not used as the success proof above.
+
+Native tests run from 06:53:37.1285579 to 06:53:42.3160582 UTC, exit 0
+without timeout. FL10_0 still matches 16,384 RGBA/BGRA clear/triangle pixels;
+higher feature levels remain unsupported. The desktop capture is unchanged
+and black. The DWM event log now records three exits with `c0000409`, after
+the successful device returns. The selected Application 1000/1001 query
+for 06:53:15–06:54:25 yields no matching DWM records. The code alone does
+not identify the failing DDI or prove stack/heap corruption. Next retain
+the first post-device resource/runtime failure, then complete sharing and
+Present; this is not yet a desktop-composition pass.
+
+Collection completes at 06:54:20. .59 Code 0, original driver/ACPI hashes,
+removed temporary registration, permit/tasks, loader/debug environment and
+receiver, and unchanged power policy are verified at 06:58:43. Portrait
+restore/verify is a no-op at 06:59:36. All 122 returned records (34,141,870
+bytes), including the later event query, match remote lengths and hashes.
+ETL SHA-256: `e8e30b9dfcd2099526c2fdd806245d1fdcd6139dac3a9efdf0bdb10f6af6bd28`;
+UMD export: `135865f2a4afca0d2528b6e2aea5f5602a2639741cfebf348010c963b0ef56a0`;
+loader CSV: `c0379df4a7433e024754f0eeadb87a85dd4f164a8a859accfde25c9aa17fb054`.
 
 ### Host allocation and budget audit
 
