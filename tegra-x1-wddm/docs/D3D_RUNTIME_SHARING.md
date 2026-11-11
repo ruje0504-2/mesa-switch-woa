@@ -1613,3 +1613,67 @@ the variant mode passes 18,072,582 pixels, both exit 0 with empty stderr and
 matching returned hashes. The next native trial uses only the variant mode
 with a 75-second bound, omits the unrelated 40-second desktop observation,
 and keeps the same UMD/KMD/ICD and automatic recovery.
+
+### Native shared versus private sampling
+
+`sampling-order153-native-20261111` uses probe `5fcfd6671788` from
+`55c1be85`, UMD `7fd712e9882c`, KMD `.153` (`94bcb716d824`) and ICD
+`6e2fad99d742`. Native LUID `b2018` reaches Code 0 at 21:35:25 UTC. The
+ordered probe starts at 21:35:45 and records the following BGRA results;
+each target readback checks 921,600 pixels.
+
+| Coordinates | Shared image, pass 0 / pass 1 mismatches | Private copy, pass 0 / pass 1 mismatches |
+| --- | --- | --- |
+| Constant buffer at b3 | 73,584 / 263,560 | 0 / 0 |
+| Literal coordinates | 73,584 / 263,560 | 0 / 0 |
+
+The producer, imported image and ordinary GPU copy each pass all 554,497
+checkpoint pixels, with no zero-alpha pixels. Four private-copy passes add
+3,686,400 correct target pixels. Shared-image sampling fails equally with
+both coordinate sources, whereas the same pipeline samples the ordinary copy
+correctly. This identifies shared-image sampling as the next boundary; it
+does not support changing constant-buffer coordinates as the current fix.
+
+After these comparisons, cleanup again exits `c0000005`, at 21:35:51 UTC,
+without timeout. Exact UMD base `00007ff9af150000`, fault RVA `12c020` and LR
+RVA `13924` resolve to `zink_bind_vertex_elements_state` and
+`cso_unbind_context`. The preceding frontend unbind fix is insufficient for
+the real Zink lifetime contract; the controlled backend's immediate unbind
+behavior did not cover this retained-binding path. RGBA is not reached.
+The native task still writes its final result at 21:35:52, and collection
+completes at 21:36:26.
+
+The source comparison finds a concrete image-usage omission. `init_ici`
+initializes usage to zero for subsequent format negotiation. The internal
+WDDM import branch bypasses that negotiation without supplying usage. Image
+views [inherit the image's usage](https://docs.vulkan.org/refpages/latest/refpages/source/VkImageViewUsageCreateInfo.html);
+NVK consequently skips its sampled-descriptor creation branch, leaving the
+sampled index zero. The correction requests transfer source/destination and
+the Gallium resource's sampler/color-target uses before both the format query
+and `vkCreateImage`. It preserves the existing pitch, import ownership and
+linear/tiled-shadow path. No feature-level, extension or memory-budget change
+is involved.
+
+Candidate `shared-usage-20261111-umd+6f77f9f90849` builds for Windows ARM64.
+Its shared/primary/Present, adapter, device and DLL-entry controls pass on
+`.59` at 21:42:21 UTC, with 114 valid, finalized ETW events and no reported
+loss. Those controls check existing callback/loading contracts; they do not
+exercise the corrected native image-creation path. Native comparison and
+complete desktop composition remain pending, and the cleanup exception is a
+separate unresolved issue.
+
+All 158 returned native-trial files (99,970,500 bytes) match device lengths and
+SHA256, including five early copies. The finalized ETL has 303,802 exported
+records and 42,873 valid UMD events, no reported loss, 45 successful DWM flip
+callbacks and one successful Explorer windowed Present. It retains no
+ZinkFailure, RuntimeError or KMD recovery event; the process exception above
+is retained separately. The decoder leaves 1,402 Dwm-Core event-203 records
+uninterpreted because their payload length differs from the available template.
+Raw export SHA256:
+`280ae3d1d4813caae11679aef74af7296bef1226efe0a2bf877b2a80eba78cf1`.
+
+Only the two planned boots are observed: setup at 21:32:58 and recovery at
+21:38:02 UTC. `.59` Code 0, environment/task cleanup and unchanged power are
+verified at 21:39:54; saved portrait verification is unchanged at 21:40:21.
+No native test remains running. Shell window geometry and successful Present
+callbacks still do not establish complete physical taskbar content.

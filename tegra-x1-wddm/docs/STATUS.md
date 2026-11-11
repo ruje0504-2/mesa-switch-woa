@@ -3,35 +3,43 @@
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Latest `.153` result:** `sampling-variants153-native-20261111` tests fixed
-UMD `7fd712e9882c` and probe `3f22d2913f19` with unchanged KMD/ICD. Native
-LUID `b21ac` reaches Code 0 at 21:15:36 UTC. Original layout still reports
-73,584 mismatches in 921,600 pixels, then exits normally with code 1. The
-variant probe verifies all 554,497 producer pixels and again after import,
-but retains no four-combination result before an additional startup at
-21:16:28. Its cause is unconfirmed; no timeout result survives.
+**Latest `.153` result:** `sampling-order153-native-20261111` tests probe
+`5fcfd6671788` with unchanged UMD `7fd712e9882c`, KMD and ICD. Native LUID
+`b2018` reaches Code 0 at 21:35:25 UTC. In BGRA, direct shared-image sampling
+fails with both constant-buffer and literal coordinates (73,584 and 263,560
+mismatches in the two rectangles). After an ordinary GPU copy, both coordinate
+variants pass all 3,686,400 target pixels. All three source/import/copy
+checkpoints pass another 1,663,491 pixels. This localizes the next fix to the
+shared-image sampling path; constant-buffer coordinates work on the copy.
 
-The vertex-binding lifetime correction builds and passes a regression that
-fails with the old frontend. Its native original-layout process also records
-both device teardowns. The interrupted variant process does not establish
-that the formerly crashing checkpoint cleanup path is fixed on hardware.
-Sampling/shader state remains the next boundary; complete desktop pixels and
-landscape are unverified.
+**Source correction ready for native validation:** the WDDM import path skips
+Zink's normal usage negotiation, leaving `VkImageCreateInfo::usage=0`. NVK
+then does not create a sampled-image descriptor for the inherited view usage.
+The candidate supplies transfer usage plus the requested sampler/color-target
+bits before the format query and image creation. ARM64 UMD
+`shared-usage-20261111-umd+6f77f9f90849` builds; controlled callbacks and DLL
+entry pass at 21:42:21 UTC. Native sampled pixels and desktop repair are pending.
+KMD/ICD, memory budget and display direction are unchanged.
 
-All 144 returned files (144,521,396 bytes) match device lengths/hashes. The
-native ETL is unfinalized; it retains 43 successful DWM flips, one successful
-Explorer windowed Present and no KMD recovery event. These are callback
-results, not proof of correct desktop pixels. `.59` Code 0, cleanup and
-unchanged power are verified at 21:21:32 UTC; saved portrait is unchanged at
-21:23:12. No native test remains running.
-[Variant result and restart timeline](D3D_RUNTIME_SHARING.md#native-sampling-variants-and-ordered-probe)
+**Cleanup failure remains:** after the BGRA comparisons, the probe exits
+`c0000005` in `zink_bind_vertex_elements_state` from `cso_unbind_context`.
+The earlier frontend unbind correction is insufficient on the real backend.
+RGBA is not reached. Do not label that lifetime path or the full desktop fixed.
 
-**Next comparison:** probe `sampling-order-20261111+5fcfd6671788` finishes the
-shared-image constant-buffer/literal-coordinate cases before creating the
-ordinary private copy. All four combinations remain. ARM64 build and both
-WARP modes pass at 21:24:58 UTC (18,072,582 variant pixels). The next bounded
-native trial runs only this comparison, retaining the same UMD/KMD/ICD.
-[Earlier checkpoint evidence and lifetime correction](D3D_RUNTIME_SHARING.md#shared-sampling-checkpoints-and-vertex-buffer-lifetime)
+All 158 returned files (99,970,500 bytes), including five early copies, match
+device lengths/hashes. The finalized trace retains 45 successful DWM flips,
+one successful Explorer windowed Present and no KMD recovery event, with no
+reported loss. Physical desktop pixels remain unverified. This run has only
+the planned setup and recovery boots (21:32:58 and 21:38:02 UTC). `.59` Code 0,
+cleanup and unchanged power are verified at 21:39:54; saved portrait is unchanged
+at 21:40:21. No native test remains running.
+[Ordered sampling result, usage correction and cleanup limit](D3D_RUNTIME_SHARING.md#native-shared-versus-private-sampling)
+
+The preceding `sampling-variants153-native-20261111` run retained correct
+producer/import pixels but no complete comparison before an additional startup.
+Its unfinalized trace cannot locate that failure. All 144 files were returned
+and `.59` was restored before the ordered trial.
+[Earlier variant result](D3D_RUNTIME_SHARING.md#native-sampling-variants-and-ordered-probe)
 
 **Prior `.152` result:** native LUID `bbde7` reaches Code 0 at 19:57:57 UTC.
 Explorer's shared Blt-mode Present now returns S_OK through the runtime; the
@@ -141,7 +149,7 @@ The `.152` native trial confirms successful Explorer and DWM callbacks, followed
 by device loss; it is recovered to `.59`. Native layout checks and complete
 windowed composition still require validation; callback success is not pixel proof.
 
-**Next validation:** localize the native shared-pattern failure, complete windowed Present and test nonuniform shared patterns,
+**Next validation:** verify the shared-image usage correction and finish buffer lifetime cleanup, then complete windowed Present and test nonuniform shared patterns,
 offset/scale/clipping and the complete desktop, then hardware landscape and
 Win32 `vkcube`. NT-handle/keyed-mutex sharing remains a separate D3D interface
 contract to implement. Do not treat raising Feature Level as a fix for the
@@ -277,7 +285,7 @@ The completed `.153` native trial used:
 | Signed KMD package | `0.1.0.153` (source `110d9882`, SYS `94bcb716d824`; first-recovery tracing) |
 | D3D UMD / Zink | `vertex-unbind-20261111-umd+7fd712e9882c` (source `d65fd675`) |
 | NVK ICD | `runtime-shared-20261111-icd+6e2fad99d742` |
-| Runtime probe | Native variant trial `3f22d2913f19`; next ordered probe `5fcfd6671788` (WARP controls only) |
+| Runtime probe | Native ordered comparison `5fcfd6671788` (source `55c1be85`); BGRA results retained, RGBA not reached |
 
 These are test-deployment identifiers. Rollback reinstalls `.59`; a future
 complete driver-package release must version its INF and catalog together

@@ -1664,6 +1664,14 @@ create_image(struct zink_screen *screen, struct zink_resource_object *obj,
    if (is_wddm_allocation(alloc_info->whandle)) {
       ici.flags = 0;
       ici.pNext = NULL;
+      /* init_ici leaves usage for format negotiation, which this internal
+       * import path bypasses. Views inherit these bits: a zero usage leaves
+       * NVK without a sampled-image descriptor for shared textures. */
+      ici.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+      if (templ->bind & PIPE_BIND_SAMPLER_VIEW)
+         ici.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+      if (templ->bind & PIPE_BIND_RENDER_TARGET)
+         ici.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
       struct wsi_image_create_info wsi = {
          .sType = VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA,
          .scanout = !(templ->bind & PIPE_BIND_SHARED),
