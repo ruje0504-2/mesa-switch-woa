@@ -99,11 +99,11 @@ static BOOLEAN restore_dc(PVOID context)
     struct tg_t214_dc *dc = &panel->Dc;
     panel->Stopping = TRUE;
     tg_t214_dc_set_vblank(dc, false);
-    uint64_t address;
-    bool visible;
+    struct tg_t214_dc_scanout scanout;
     action->Result = TG_T214_DC_BUSY;
-    if (tg_t214_dc_latched_scanout(dc, &address, &visible)) {
-        if (address == T214_GPU_POST_FB_BASE && visible) {
+    if (tg_t214_dc_latched_surface(dc, &scanout)) {
+        if (scanout.address == T214_GPU_POST_FB_BASE && scanout.visible &&
+            scanout.rotation == TG_T214_DC_IDENTITY) {
             action->Result = tg_t214_dc_release(dc);
         } else {
             enum tg_t214_dc_result result = tg_t214_dc_queue_scanout(dc, T214_GPU_POST_FB_BASE, true);

@@ -29,6 +29,13 @@ rotate the physical screen. FL10_0 is sufficient for the desktop milestone
 observed here. The latest run changes only the KMD package from `.146` to
 `.147`, retaining the same UMD and ICD binaries and their passed controls.
 
+**Hardware rotation WIP:** the Display A backend now programs and verifies
+pitch-linear identity/90/180/270-degree fetch layouts. The full-frame address
+model passes all four orientations and portrait restoration. Windows VidPN,
+primary-allocation and MPO/UMD geometry integration remain pending; no new
+orientation is advertised or installed on hardware yet.
+[Implementation and remaining contracts](D3D_RUNTIME_SHARING.md#hardware-rotation-backend)
+
 The preceding `.146` trial on LUID `94aa5` reached the real runtime Present
 callback but rejected `FlipWithNoWait`, returning `c00000bb` and producing
 black physical output. `.147` supersedes that boundary. The earlier LUID

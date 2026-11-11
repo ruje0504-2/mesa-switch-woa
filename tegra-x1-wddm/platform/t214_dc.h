@@ -29,6 +29,8 @@
 #define T214_DC_WIN_A_POSITION     0xb84
 #define T214_DC_WIN_A_SIZE         0xb85
 #define T214_DC_WIN_A_PRESCALED    0xb86
+#define T214_DC_WIN_A_H_INITIAL_DDA 0xb87
+#define T214_DC_WIN_A_V_INITIAL_DDA 0xb88
 #define T214_DC_WIN_A_DDA          0xb89
 #define T214_DC_WIN_A_STRIDE       0xb8a
 #define T214_DC_WIN_A_ADDR         0xbc0
@@ -46,6 +48,10 @@
 #define T214_DC_WIN_A_HCOUNTER     (1u << 2)
 #define T214_DC_DSI_ENABLE         (1u << 29)
 #define T214_DC_WIN_ENABLE         (1u << 30)
+#define T214_DC_WIN_H_DECREMENT    (1u << 0)
+#define T214_DC_WIN_V_DECREMENT    (1u << 2)
+#define T214_DC_WIN_SCAN_COLUMN    (1u << 4)
+#define T214_DC_WIN_ROTATION_MASK  (T214_DC_WIN_H_DECREMENT | T214_DC_WIN_V_DECREMENT | T214_DC_WIN_SCAN_COLUMN)
 #define T214_DC_COLOR_BGRA8888     12u
 #define T214_DC_PACK(h, v)         ((h) | ((v) << 16))
 
@@ -58,6 +64,32 @@
 #define T214_DC_PANEL_FRONT        T214_DC_PACK(136u, 10u)
 #define T214_DC_PANEL_PRESCALED    T214_DC_PACK(T214_DC_PANEL_PITCH, T214_DC_PANEL_HEIGHT)
 #define T214_DC_DDA_IDENTITY       T214_DC_PACK(0x1000u, 0x1000u)
+
+/* Physical source-to-panel rotation, counter-clockwise. These values are
+ * local to the display backend; Windows rotation enums need explicit mapping.
+ * Pixel storage is always pitch-linear BGRA8888, without a rotated copy. */
+enum tg_t214_dc_rotation {
+    TG_T214_DC_IDENTITY,
+    TG_T214_DC_CCW90,
+    TG_T214_DC_CCW180,
+    TG_T214_DC_CCW270,
+};
+
+struct tg_t214_dc_layout {
+    uint32_t width, height, pitch;
+    uint32_t options, h_offset, v_offset;
+};
+
+struct tg_t214_dc_scanout {
+    uint64_t address;
+    enum tg_t214_dc_rotation rotation;
+    bool visible;
+};
+
+/* NVIDIA's T210 Window A has column scan and packed-pixel rotation support.
+ * The decrementing horizontal origin is the last byte, not the last pixel.
+ * Source: NVIDIA L4T 32.7.4 dc/window.c and dc/dc_reg.h; no Linux code imported. */
+bool tg_t214_dc_get_layout(enum tg_t214_dc_rotation rotation, struct tg_t214_dc_layout *layout);
 
 struct tg_t214_dc_io {
     void *context;
@@ -93,6 +125,12 @@ bool tg_t214_dc_ack_vblank(struct tg_t214_dc *dc);
 uint64_t tg_t214_dc_active_address(struct tg_t214_dc *dc);
 /* Read the active bank only after its pending activation has completed. */
 bool tg_t214_dc_latched_scanout(const struct tg_t214_dc *dc, uint64_t *address, bool *visible);
+/* Confirm the active address and complete mutable fetch layout together. */
+bool tg_t214_dc_latched_surface(const struct tg_t214_dc *dc, struct tg_t214_dc_scanout *scanout);
+/* Rotation/visibility changes latch at VBlank even for an immediate request.
+ * Only an address change with the same fetch layout may use HBlank. */
+enum tg_t214_dc_result tg_t214_dc_queue_surface(struct tg_t214_dc *dc,
+    const struct tg_t214_dc_scanout *scanout, bool immediate);
 /* This fixed-mode path scans a contiguous, page-aligned native surface
  * entirely below 4 GiB. The caller owns its backing and cache visibility.
  */

@@ -789,3 +789,63 @@ shared-image handling, then validate sustained composition and visible
 Win32 `vkcube`. The existing Blt stub and shared-resource OpenResource path
 remain incomplete. A present return or this photograph alone does not close
 those contracts or establish a complete Vulkan implementation.
+
+### Hardware rotation backend
+
+The Display A backend now accepts a complete scanout request: physical
+address, visibility and a locally defined counter-clockwise rotation. Window A
+column scan and direction controls select pixels directly from pitch-linear
+BGRA storage. The target DSI timing, 720x1280 output window, prescaled size
+and unit DDA remain unchanged; quarter turns exchange the source dimensions.
+Each orientation consumes the same 3,686,400 bytes.
+
+| Physical transform | Source | Pitch | Rotation option bits | H/V origin |
+| --- | --- | --- | --- | --- |
+| Identity | 720x1280 | 2880 | `0` | `0 / 0` |
+| 90 degrees CCW | 1280x720 | 5120 | column + H decrement | `5119 / 0` |
+| 180 degrees CCW | 720x1280 | 2880 | H + V decrement | `2879 / 1279` |
+| 270 degrees CCW | 1280x720 | 5120 | column + V decrement | `0 / 719` |
+
+The horizontal decrement origin is the final byte of the row. Register
+definitions and origin rules are checked against NVIDIA L4T 32.7.4
+[window programming](https://github.com/OE4T/linux-tegra-4.9/blob/oe4t-patches-l4t-r32.7.4/nvidia/drivers/video/tegra/dc/window.c)
+and [register definitions](https://github.com/OE4T/linux-tegra-4.9/blob/oe4t-patches-l4t-r32.7.4/nvidia/drivers/video/tegra/dc/dc_reg.h).
+The implementation is original MIT code using those hardware facts; no Linux
+source is imported. Pitch-linear column scan still requires physical validation.
+
+A direction, pitch or visibility change always waits for VBlank; an immediate
+address-only update can use HBlank. Latch confirmation reads the active bank's
+address, direction, pitch and origins together. A partially matching layout
+is not a completed flip. Release requires the original visible POST address
+with identity pitch/origins. Windows stop recovery now queues that full
+identity layout even if the address already equals POST. The old scanout
+entry points continue to request identity, so this change alone does not
+expose a landscape mode to Windows.
+
+The host model checks every output pixel's byte address against independent
+coordinate rotation for all four directions, catches incorrect active pitch
+or origin, checks VBlank versus HBlank behavior, and exercises rotated-POST
+restoration. The Windows build and existing ARM64 display/paging/context
+fixtures cover compatibility with the portrait path. These controls do not
+prove rotated physical output.
+Both real-WDK ARM64 fixtures exit 0 on `.59` Code 0 at 15:28:07 UTC on
+2026-11-11; their returned logs match device hashes. The full host models and
+ARM64 build pass. Evidence is retained under the external build root's
+`runs/hardware-rotation-control-20261111/` directory. No native driver is
+installed for these controls.
+
+Remaining integration must preserve the distinct Windows contracts. VidPN
+rotation is counter-clockwise; MPO describes its own plane rotation, and
+DXGI primary flags can describe already-oriented content. Do not apply one
+numeric enum to every layer or rotate the same pixels twice. Also,
+`D3DKMDT_VIDPN_HW_CAPABILITY.DriverRotation=0` denotes rotation directly in
+the display pipeline, while 1 denotes a software/graphics-engine transform.
+[VidPN rotation](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/supporting-rotation-in-a-display-miniport-driver) ·
+[Hardware capability meaning](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmdt/ns-d3dkmdt-_d3dkmdt_vidpn_hw_capability)
+
+Before advertising landscape, connect source-mode enumeration, primary/shadow
+dimensions and pitch, DescribeAllocation orientation, UMD imports, VidPN
+commit/update, MPO and legacy flips to the same layout. Then verify asymmetric
+corners on the physical panel and retain the user's requested normal-handheld
+1280x720 landscape setting. This backend is implementation in progress toward
+that result, not a completed hardware-rotation milestone.
