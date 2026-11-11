@@ -3,6 +3,14 @@
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**Desktop evidence:** automated PNG capture is verified on the recovered `.59`
+at 23:30:12 UTC. Direct image inspection finds the bottom taskbar, Start button
+and right-side tray/clock. Native trials must retain and inspect screenshots;
+shell rectangles and successful Presents do not establish visible content.
+The user's historical screenshot, identified by them as `.146`, lacks the
+taskbar. Wallpaper/icons alone were not a complete desktop pass.
+[Capture procedure and evidence limits](DESKTOP_CAPTURE.md)
+
 **Latest physical desktop result: failed.** In the 120-second `.153` viewing
 trial on LUID `b946a`, the user confirms an incomplete/displaced taskbar followed
 by its disappearance, with four photos retained locally. Most shell snapshots
@@ -30,8 +38,8 @@ process exit, not the separate taskbar-position failure. All 185 returned
 files match device hashes; `.59` Code 0, cleanup and unchanged power are
 verified at 23:03:02 UTC and saved portrait at 23:06:09.
 
-**Current WIP:** implement samplerless integer texture loads and a D3D
-`Texture.Load` pixel probe. ARM64 builds, twelve translator checks and
+**Current WIP:** samplerless integer texture loads and a D3D
+`Texture.Load` pixel probe are implemented. ARM64 builds, twelve translator checks and
 24,576 WARP pixel comparisons pass. The first native trial
 `sample-i153-native-20261111` reaches Code 0 at 23:15:32 UTC, then the user
 reports black output. An additional boot occurs at 23:16:23 before any
