@@ -1711,3 +1711,48 @@ uses the original shared-layout mode followed by the unchanged ordered probe
 `5fcfd6671788`; KMD `.153` and ICD `6e2fad99d742` remain the same. Full BGRA/RGBA
 pixels, normal teardown and physical desktop content still require native
 evidence.
+
+### Native shared sampling and cleanup pass
+
+`shared-usage153-native-20261111` tests the combined image-usage and buffer
+ownership corrections in UMD `e99798fa9668` from `931383e6`, with unchanged
+KMD `.153` (`94bcb716d824`), ICD `6e2fad99d742` and probe `5fcfd6671788`.
+Native LUID `af442` reaches Code 0 at 21:55:00 UTC.
+
+| Native check | Pixel comparisons | Mismatches | Process result |
+| --- | ---: | ---: | --- |
+| Original layout, without intermediate checkpoints | 3,686,400 | 0 | Exit 0 at 21:55:24 |
+| Shared/private-copy with buffer/literal coordinates, both rectangles and formats | 14,745,600 | 0 | Exit 0 at 21:55:28 |
+| Producer, import and private-copy checkpoints in BGRA/RGBA | 3,326,982 | 0 | Included in the variant process |
+
+All **21,758,982** comparisons pass. Both processes report successful device
+status, release their runtime context/device/adapter and reach their final
+success messages. The trace contains six probe device creations and six
+completed probe device destructions. Neither process times out or raises the
+previous `c0000005`. This verifies the normal native cleanup paths exercised
+here and the previous shared-image sampling cases; it is not an exhaustive
+failure-unwind or Vulkan conformance result.
+
+The controller observes the native desktop for another 40 seconds and writes
+its final result at 21:56:11. DWM PID 492 has one successful device creation,
+113 successful resource creations, two shared-image opens and 78 successful
+flip callbacks spanning 72.7939875 seconds. Explorer has two successful
+windowed Presents. No RuntimeError, ZinkFailure or KMD recovery event is
+retained. These callbacks and window geometry do not establish complete
+physical taskbar content. The user's later "normal now" report followed the
+rollback; they then clarified that they had slept through the native interval
+and requested another viewing run.
+
+All 167 returned files (110,632,441 bytes), including six early copies, match
+device lengths and SHA256. The finalized ETL has 325,974 exported records and
+71,139 valid UMD events, with no reported event/buffer loss. The decoder leaves
+1,035 Dwm-Core event-203 records uninterpreted because their payload length
+differs from the available template. Raw export SHA256:
+`c77eab7b7734a1350166c2e9fbcb8802a0604c272733e8650df64985035b8b2d`.
+
+Collection completes at 21:56:46 UTC. A further startup at 21:57:58 interrupts
+recovery, with `.153` still installed and its native gate closed; its cause is
+unconfirmed. The repeated startup task preserves the completed test and resumes
+rollback. `.59` is staged at 22:00:48 and boots at 22:01:26. Code 0, baseline
+hashes, environment/task cleanup and unchanged power are verified at 22:03:37;
+saved portrait is unchanged at 22:04:35. No native test remains running.

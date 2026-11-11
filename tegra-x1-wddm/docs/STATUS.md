@@ -3,51 +3,33 @@
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Latest `.153` result:** `sampling-order153-native-20261111` tests probe
-`5fcfd6671788` with unchanged UMD `7fd712e9882c`, KMD and ICD. Native LUID
-`b2018` reaches Code 0 at 21:35:25 UTC. In BGRA, direct shared-image sampling
-fails with both constant-buffer and literal coordinates (73,584 and 263,560
-mismatches in the two rectangles). After an ordinary GPU copy, both coordinate
-variants pass all 3,686,400 target pixels. All three source/import/copy
-checkpoints pass another 1,663,491 pixels. This localizes the next fix to the
-shared-image sampling path; constant-buffer coordinates work on the copy.
+**Latest `.153` result:** `shared-usage153-native-20261111` tests UMD
+`buffer-release-v2-20261111-umd+e99798fa9668` from `931383e6`, with unchanged
+KMD/ICD and probe `5fcfd6671788`. Native LUID `af442` reaches Code 0 at
+21:55:00 UTC. Original shared layout and all ordered BGRA/RGBA comparisons
+pass **21,758,982 pixel checks with zero mismatches**. Both processes complete
+device teardown and exit 0, without timeout or the prior access violation.
 
-**Source correction ready for native validation:** the WDDM import path skips
-Zink's normal usage negotiation, leaving `VkImageCreateInfo::usage=0`. NVK
-then does not create a sampled-image descriptor for the inherited view usage.
-The candidate supplies transfer usage plus the requested sampler/color-target
-bits before the format query and image creation. ARM64 UMD
-`shared-usage-20261111-umd+6f77f9f90849` builds; controlled callbacks and DLL
-entry pass at 21:42:21 UTC. Native sampled pixels and desktop repair are pending.
-KMD/ICD, memory budget and display direction are unchanged.
+This validates the combined image-usage and buffer-ownership corrections for
+these native cases. DWM has one successful device creation, 113 successful
+resource creations and 78 successful flip callbacks spanning 72.794 seconds;
+Explorer has two successful windowed Presents. The trace retains no RuntimeError,
+ZinkFailure or KMD recovery event. Physical taskbar content is still unverified:
+the user missed the native interval and requested another viewing run.
+[Native pixel results and limits](D3D_RUNTIME_SHARING.md#native-shared-sampling-and-cleanup-pass)
 
-**Cleanup correction ready for native validation:** after the BGRA comparisons,
-the preceding probe exits
-`c0000005` in `zink_bind_vertex_elements_state` from `cso_unbind_context`.
-The frontend now transfers the owning buffer reference through Gallium's
-`resource_release`, allowing Zink to retire retained bindings before freeing.
-The revised regression models that delayed unbind: the old frontend fails,
-and immediate/deferred cases both pass with the correction at 21:47:41 UTC.
-Combined UMD `buffer-release-v2-20261111-umd+e99798fa9668` builds and its
-callback/DLL-entry controls pass at 21:48:39. The next native comparison checks
-original layout, all ordered variants and cleanup. Neither this lifetime path
-nor the full desktop is yet verified fixed on hardware.
-[Buffer-release ownership correction](D3D_RUNTIME_SHARING.md#buffer-release-ownership-correction)
+All 167 returned files (110,632,441 bytes), including six early copies, match
+device lengths/hashes. The ETL is finalized with no reported loss. Collection
+completes at 21:56:46 UTC; an additional startup occurs during recovery at
+21:57:58, cause unconfirmed. `.59` is staged at 22:00:48, boots at 22:01:26,
+and is verified Code 0 with cleanup and unchanged power at 22:03:37. Saved
+portrait is unchanged at 22:04:35. No native test remains running.
 
-All 158 returned files (99,970,500 bytes), including five early copies, match
-device lengths/hashes. The finalized trace retains 45 successful DWM flips,
-one successful Explorer windowed Present and no KMD recovery event, with no
-reported loss. Physical desktop pixels remain unverified. This run has only
-the planned setup and recovery boots (21:32:58 and 21:38:02 UTC). `.59` Code 0,
-cleanup and unchanged power are verified at 21:39:54; saved portrait is unchanged
-at 21:40:21. No native test remains running.
-[Ordered sampling result, usage correction and cleanup limit](D3D_RUNTIME_SHARING.md#native-shared-versus-private-sampling)
-
-The preceding `sampling-variants153-native-20261111` run retained correct
-producer/import pixels but no complete comparison before an additional startup.
-Its unfinalized trace cannot locate that failure. All 144 files were returned
-and `.59` was restored before the ordered trial.
-[Earlier variant result](D3D_RUNTIME_SHARING.md#native-sampling-variants-and-ordered-probe)
+**Next:** repeat a bounded physical desktop observation with these same tested
+binaries, then complete hardware landscape and Win32 `vkcube`. The repeat is
+for the requested visible check; the successful pixel probes need not be rerun.
+[Buffer ownership](D3D_RUNTIME_SHARING.md#buffer-release-ownership-correction) ·
+[Shared image usage](D3D_RUNTIME_SHARING.md#native-shared-versus-private-sampling)
 
 **Prior `.152` result:** native LUID `bbde7` reaches Code 0 at 19:57:57 UTC.
 Explorer's shared Blt-mode Present now returns S_OK through the runtime; the
@@ -157,9 +139,8 @@ The `.152` native trial confirms successful Explorer and DWM callbacks, followed
 by device loss; it is recovered to `.59`. Native layout checks and complete
 windowed composition still require validation; callback success is not pixel proof.
 
-**Next validation:** verify the shared-image usage correction and finish buffer lifetime cleanup, then complete windowed Present and test nonuniform shared patterns,
-offset/scale/clipping and the complete desktop, then hardware landscape and
-Win32 `vkcube`. NT-handle/keyed-mutex sharing remains a separate D3D interface
+**Next validation:** verify complete physical desktop composition, then hardware landscape and
+Win32 `vkcube`. Native shared patterns, offset/scale/clipping and normal teardown pass above. NT-handle/keyed-mutex sharing remains a separate D3D interface
 contract to implement. Do not treat raising Feature Level as a fix for the
 observed Present rejection.
 
@@ -200,8 +181,8 @@ policy are verified at 15:08:11 UTC; portrait verification at 15:08:32 is a
 no-op. The test package is no longer installed.
 [Native Present result, photo provenance and limits](D3D_RUNTIME_SHARING.md#native-mmio-present-result)
 
-**Remaining desktop work:** shared-image opens and device initialization,
-followed by hardware landscape, sustained composition and visible Win32 `vkcube`.
+**Remaining desktop work:** complete visible composition, hardware landscape,
+sustained operation and visible Win32 `vkcube`.
 The current swapchain identity rotation moves storage/views; it does not
 rotate the physical screen. FL10_0 is sufficient for the desktop milestone
 observed here. The `.147` run changed only the KMD package from `.146` to
@@ -291,9 +272,9 @@ The completed `.153` native trial used:
 | Component | Candidate identifier |
 | --- | --- |
 | Signed KMD package | `0.1.0.153` (source `110d9882`, SYS `94bcb716d824`; first-recovery tracing) |
-| D3D UMD / Zink | `vertex-unbind-20261111-umd+7fd712e9882c` (source `d65fd675`) |
+| D3D UMD / Zink | `buffer-release-v2-20261111-umd+e99798fa9668` (source `931383e6`) |
 | NVK ICD | `runtime-shared-20261111-icd+6e2fad99d742` |
-| Runtime probe | Native ordered comparison `5fcfd6671788` (source `55c1be85`); BGRA results retained, RGBA not reached |
+| Runtime probe | `5fcfd6671788` (source `55c1be85`); original and all BGRA/RGBA variants pass with normal teardown |
 
 These are test-deployment identifiers. Rollback reinstalls `.59`; a future
 complete driver-package release must version its INF and catalog together
