@@ -20,6 +20,16 @@ files match device-side hashes. The preceding `8eb74` trace reported 924
 lost events and must not be used as absence-of-execution evidence.
 [Native result and evidence](PORTING.md#dwm-initialization-trace-work)
 
+**Host-memory audit (2026-11-11):** no page-size/alignment or 512 MiB unit
+error was found in the inspected paths. The current instance path uses
+ordinary CRT allocation; GPU section allocation uses committed,
+write-combined pages without large-page flags. A separate bug collapsed
+section access/privilege errors into host OOM; the source now retains the
+Windows code and distinguishes real memory errors. The SDK control passes
+thirteen injected errors, budget rollback, the exact 512 MiB boundary and GPU
+VA alignment checks on .59. This is not a DWM root-cause fix or a native GPU
+validation of the new ICD. [Scope and evidence](PORTING.md#host-allocation-and-budget-audit)
+
 **Win32 presentation investigation (2026-11-11):** the GDI WSI now pairs
 window DC acquisition/release on the presenting thread and flushes GDI
 before reusing its DIB. On the unchanged .144 miniport, LUID `90f83`, 24

@@ -492,6 +492,86 @@ files (34,154,872 bytes) match remote hashes. ETL SHA-256:
 `fe772098510997510e3ac1c181aeb9c5079c24794d48c35e519b1e6803109f9f`;
 UMD export: `7ca9594655694a73d9cf783a16b2fdd362c33e43d4b0bca4a31032331bac6579`.
 
+### Host allocation and budget audit
+
+The 2026-11-11 audit follows the reported DWM instance OOM into the actual
+Windows paths. NVK's `nvk_CreateInstance` requests 8-byte-aligned metadata
+through `vk_default_allocator`, which uses CRT `malloc`; the deployed
+loader's initial instance storage uses `calloc`. The loader has no direct
+VirtualAlloc/large-page import, and the inspected Windows instance path
+does not use the POSIX `os_mmap` wrapper. The tested UMD build also disables
+the shader disk cache. This does not exclude a process-specific CRT/loader
+failure, and does not prove that all physical RAM is healthy.
+
+GPU storage is a later path. `tg_kmt_allocate` rounds byte sizes to 4 KiB
+with an overflow guard. Shared CPU-visible storage uses
+`PAGE_READWRITE | SEC_COMMIT | SEC_WRITECOMBINE`; neither `MEM_LARGE_PAGES`
+nor `SEC_LARGE_PAGES` is requested. GPU virtual-address alignment is handled
+by reserving padding and retaining the original reservation for release;
+it is not a request for Windows CPU large pages. KMD private memory uses
+the WDDM contiguous-memory callback with noncached mapping and page-sized
+range checks. These are distinct APIs and alignment contracts.
+[Microsoft section flags](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createfilemappinga)
+
+The budget constant is `UINT64_C(512) * 1024 * 1024` = 536,870,912 bytes.
+The user-mode counter charges page-rounded bytes, while the current KMD
+source enforces the adapter-wide ceiling after reserving its 16 MiB scanout
+segment (496 MiB left for the counted allocations). Rejected batches restore
+their charges. `nvk_CreateInstance` does not call these KMT charging routines.
+The audit found no byte/page-unit or 32-bit overflow error here. It does
+not establish complete cross-process `VK_EXT_memory_budget` accounting or
+mean that all driver/OS housekeeping memory is part of this reported heap.
+
+One concrete error-translation defect was found: failed shared
+`CreateFileMappingW` calls mapped every error except invalid parameters to
+`STATUS_NO_MEMORY`. The bridge now preserves the SDK's
+`NTSTATUS_FROM_WIN32` value. NVK maps `ERROR_NOT_ENOUGH_MEMORY`,
+`ERROR_OUTOFMEMORY`, pool/resource exhaustion and memory/pagefile/commit
+quota errors to host OOM; unexpected
+access, privilege, parameter or unsupported-operation failures retain their
+code and return `VK_ERROR_UNKNOWN`. The successful allocation flags and
+budget are unchanged. This path follows logical-device/resource creation,
+so it is **not established as the cause of DWM's earlier instance OOM**.
+[Vulkan unexpected-error semantics](https://docs.vulkan.org/refpages/latest/refpages/source/VkResult.html)
+
+The complete ARM64 ICD build passes. The SDK fixture intercepts only the
+section-creation import in its test binary: seven injected errors verify
+exact error preservation, no KMT allocation/residency call, and restored
+budget. Success still calls the real Windows section API and checks its
+write-combined mapping. Additional controls exercise exactly 512 MiB,
+4 KiB rounding, over-budget rejection and 4 KiB/64 KiB/2 MiB GPU-VA
+alignment/release. KMT calls are substituted, so the 512 MiB case commits
+no such physical allocation. All these controls pass on .59 Code 0 at
+05:02:58 UTC under `runs/memory-audit-control-20261111/`.
+
+The same run tests the unchanged physical-baseline loader/ICD from both
+the test directory and System32. The initial elevated SSH process ignores
+`VK_DRIVER_FILES` and returns -9 with no registered ICD; the supposedly
+limited interactive task also still has an administrator token. No UAC
+policy was changed. A temporary, separately named legacy ICD registration
+then lets both working directories create the instance successfully.
+Device enumeration returns -3 and the identity utility exits 10, because
+.59 exposes no native Vulkan GPU; these are not native-rendering passes.
+The temporary registration is removed in the script's finally block.
+This control does not reproduce DWM's -1 or identify its process-specific
+cause. [Loader privilege rules](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderDriverInterface.md#exception-for-elevated-privileges)
+
+At 05:10:45 UTC, .59 Code 0, removed test registration/task and unchanged
+display/sleep power policy are verified. No display driver was switched
+for these controls. The new ICD's GPU path still needs a future native
+regression; the next DWM investigation must retain failures from the
+earlier instance-extension calls and loader/CRT initialization itself.
+
+The final `memory-errors-20261111-icd` build includes the pool/quota error
+classes and the expanded 13-case SDK fixture. At 05:19:04.1921933 UTC,
+the fixture and the new ICD's direct instance/identity control both exit 0
+on .59 (zero native Vulkan devices, no GPU rendering). The original
+seven-case result remains preserved separately. Final ICD SHA-256:
+`20a3c7b42bfc6ed05ac5974acb981a518d8b496c12729c4f8e4ac6fd02d0aa4c`;
+fixture: `46c3835cc63e58c095b055cf732efc5b3d4b0e6e1aaf533567952e3184bb6c89`.
+All 52 returned control records (59,464 bytes) match device-side lengths
+and SHA-256 values in the run's `evidence/verified.json`.
+
 ## Direct3D UMD and DWM
 
 The user clarified the staging and authorization on 2026-11-10: **first

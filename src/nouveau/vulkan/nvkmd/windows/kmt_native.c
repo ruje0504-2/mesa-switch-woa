@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: MIT */
+#define WIN32_NO_STATUS
 #include "kmt_native.h"
+#undef WIN32_NO_STATUS
+#include <ntstatus.h>
 #include <d3dkmthk.h>
 #include <winternl.h>
 #include <stdlib.h>
@@ -190,8 +193,11 @@ allocate_memory(struct tg_kmt_device *dev, uint64_t size, bool cpu_visible,
          PAGE_READWRITE | SEC_COMMIT | SEC_WRITECOMBINE,
          (DWORD)(size >> 32), (DWORD)size, NULL);
       if (!section) {
-         status = GetLastError() == ERROR_INVALID_PARAMETER ?
-                  TG_KMT_INVALID_PARAMETER : TG_KMT_NO_MEMORY;
+         /* Keep the actual Win32 failure. Access/privilege/flag errors are
+          * not evidence of exhausted host memory. The Vulkan boundary
+          * classifies this standard NTWIN32 encoding separately. */
+         const DWORD error = GetLastError();
+         status = error ? NTSTATUS_FROM_WIN32(error) : STATUS_UNSUCCESSFUL;
          goto fail_charge;
       }
       info.hSection = section;

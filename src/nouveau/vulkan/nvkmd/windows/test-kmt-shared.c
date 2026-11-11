@@ -24,6 +24,57 @@ static WCHAR expected_name[128];
 static DWORD expected_access = STANDARD_RIGHTS_READ | SHARED_ALLOCATION_WRITE;
 static PVOID expected_security;
 static bool expected_inherit;
+static DWORD section_error;
+static UINT section_calls;
+static uint64_t expected_allocation_bytes = 8192;
+static uint64_t reserved_base, reserved_size;
+static UINT reserves, frees;
+
+NTSTATUS APIENTRY
+D3DKMTReserveGpuVirtualAddress(D3DDDI_RESERVEGPUVIRTUALADDRESS *args)
+{
+   CHECK(args->hPagingQueue == 3 && !args->BaseAddress &&
+         args->MinimumAddress == TG_KMT_VA_START &&
+         args->MaximumAddress == TG_KMT_VA_END - 1 &&
+         args->ReservationType == D3DDDIGPUVIRTUALADDRESS_RESERVE_NO_ACCESS);
+   reserved_base = args->VirtualAddress = TG_KMT_VA_START + TG_KMT_PAGE_SIZE;
+   reserved_size = args->Size;
+   args->PagingFenceValue = 7;
+   reserves++;
+   return 0;
+}
+
+NTSTATUS APIENTRY
+D3DKMTFreeGpuVirtualAddress(const D3DKMT_FREEGPUVIRTUALADDRESS *args)
+{
+   CHECK(args->BaseAddress == reserved_base && args->Size == reserved_size);
+   frees++;
+   return 0;
+}
+
+typedef HANDLE (WINAPI *create_mapping_fn)(HANDLE, LPSECURITY_ATTRIBUTES,
+                                          DWORD, DWORD, DWORD, LPCWSTR);
+
+static HANDLE WINAPI
+create_mapping_control(HANDLE file, LPSECURITY_ATTRIBUTES security,
+                        DWORD protection, DWORD high, DWORD low, LPCWSTR name)
+{
+   section_calls++;
+   CHECK(file == INVALID_HANDLE_VALUE && !security && !name && !high && low == 8192);
+   CHECK(protection == (PAGE_READWRITE | SEC_COMMIT | SEC_WRITECOMBINE));
+   if (section_error) {
+      SetLastError(section_error);
+      return NULL;
+   }
+   create_mapping_fn real_create = (create_mapping_fn)GetProcAddress(
+      GetModuleHandleW(L"kernel32.dll"), "CreateFileMappingW");
+   CHECK(real_create);
+   return real_create(file, security, protection, high, low, name);
+}
+
+/* Intercept this SDK import in the fixture only. Successful requests still
+ * use the real Windows section API and VirtualQuery checks below. */
+create_mapping_fn __imp_CreateFileMappingW = create_mapping_control;
 
 static void
 check_object_attributes(const OBJECT_ATTRIBUTES *attributes)
@@ -81,7 +132,7 @@ D3DKMTCreateAllocation2(D3DKMT_CREATEALLOCATION *args)
       CHECK(info->PrivateDriverDataSize == sizeof(shared_request));
       request = info->pPrivateDriverData;
    }
-   CHECK(request->version == TG_GPU_ALLOCATION_ABI && request->bytes == 8192 &&
+   CHECK(request->version == TG_GPU_ALLOCATION_ABI && request->bytes == expected_allocation_bytes &&
          request->flags == TG_GPU_ALLOCATION_CPU_VISIBLE);
    if (create_status)
       return create_status;
@@ -204,6 +255,49 @@ int main(void)
    HANDLE handle;
    DWORD flags;
 
+   const DWORD section_errors[] = {ERROR_ACCESS_DENIED, ERROR_PRIVILEGE_NOT_HELD,
+      ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, ERROR_NOT_ENOUGH_MEMORY,
+      ERROR_OUTOFMEMORY, ERROR_COMMITMENT_LIMIT, ERROR_NO_SYSTEM_RESOURCES,
+      ERROR_NONPAGED_SYSTEM_RESOURCES, ERROR_PAGED_SYSTEM_RESOURCES,
+      ERROR_WORKING_SET_QUOTA, ERROR_PAGEFILE_QUOTA, ERROR_NOT_ENOUGH_QUOTA};
+   for (UINT i = 0; i < ARRAYSIZE(section_errors); i++) {
+      section_error = section_errors[i];
+      CHECK(tg_kmt_allocate_shared(&producer, 4097, true, &original) ==
+            (LONG)(UINT32_C(0xc0070000) | section_error));
+      CHECK(section_calls == i + 1 && !producer.allocated && !original.handle &&
+            !next_allocation && !residents);
+   }
+   section_error = 0;
+
+   /* Charge page-rounded byte counts at the actual 512 MiB ceiling without
+    * committing that much RAM: these nonshared KMT calls are substituted. */
+   producer.budget = TG_GPU_MEMORY_BUDGET_BYTES;
+   expected_allocation_bytes = producer.budget - TG_KMT_PAGE_SIZE;
+   CHECK(tg_kmt_allocate(&producer, expected_allocation_bytes, true, &original) == 0);
+   CHECK(tg_kmt_allocate(&producer, TG_KMT_PAGE_SIZE + 1, true, &second) == TG_KMT_NO_VIDEO_MEMORY);
+   expected_allocation_bytes = TG_KMT_PAGE_SIZE;
+   CHECK(tg_kmt_allocate(&producer, 1, true, &second) == 0 &&
+         producer.allocated == UINT64_C(536870912));
+   CHECK(tg_kmt_allocate(&producer, 1, true, &imported) == TG_KMT_NO_VIDEO_MEMORY);
+   CHECK(tg_kmt_free(&producer, &original) == 0 && tg_kmt_free(&producer, &second) == 0 &&
+         !producer.allocated);
+   producer.budget = 65536;
+   expected_allocation_bytes = 8192;
+
+   const uint64_t alignments[] = {TG_KMT_PAGE_SIZE, UINT64_C(65536), UINT64_C(2) * 1024 * 1024};
+   struct tg_kmt_va va;
+   for (UINT i = 0; i < ARRAYSIZE(alignments); i++) {
+      CHECK(tg_kmt_reserve(&producer, TG_KMT_PAGE_SIZE, alignments[i], 0, &va) == 0);
+      CHECK(!(va.address % alignments[i]) && va.address >= reserved_base &&
+            va.address + va.size <= reserved_base + reserved_size &&
+            reserved_size == alignments[i]);
+      CHECK(tg_kmt_free_va(&producer, &va) == 0);
+   }
+   CHECK(tg_kmt_reserve(&producer, TG_KMT_PAGE_SIZE + 1, TG_KMT_PAGE_SIZE, 0, &va) == TG_KMT_INVALID_PARAMETER);
+   CHECK(tg_kmt_reserve(&producer, TG_KMT_PAGE_SIZE, 3 * TG_KMT_PAGE_SIZE, 0, &va) == TG_KMT_INVALID_PARAMETER);
+   CHECK(tg_kmt_reserve(&producer, TG_KMT_PAGE_SIZE, 65536, TG_KMT_VA_START + 1, &va) == TG_KMT_INVALID_PARAMETER);
+   CHECK(reserves == 3 && frees == 3);
+
    CHECK(tg_kmt_allocate(&producer, 4097, true, &original) == 0);
    CHECK(original.size == 8192 && !original.resource && producer.allocated == 8192);
    CHECK(tg_kmt_export_memory(&original, &handle) == TG_KMT_INVALID_PARAMETER && !handle);
@@ -293,7 +387,7 @@ int main(void)
    CHECK(residents >= 6 && destroys == next_allocation);
    for (UINT i = 1; i <= next_allocation; i++)
       CHECK(!allocations[i].alive);
-   const char pass[] = "PASS: SDK shared-resource handles, named objects, security/access/inheritance, repeated imports, budgets and failed-residency cleanup (controlled KMT)\r\n";
+   const char pass[] = "PASS: Win32 section errors and budget rollback, SDK shared-resource handles, named objects, security/access/inheritance, repeated imports and failed-residency cleanup (controlled KMT)\r\n";
    DWORD written;
    CHECK(WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), pass, sizeof(pass) - 1, &written, NULL));
    return 0;

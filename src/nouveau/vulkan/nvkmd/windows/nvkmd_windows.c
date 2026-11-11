@@ -33,6 +33,30 @@ nvkmd_windows_status(struct vk_object_base *log, const char *operation,
 {
    if (status >= 0)
       return status == TG_KMT_TIMEOUT ? VK_TIMEOUT : VK_SUCCESS;
+   /* NTSTATUS_FROM_WIN32 preserves the error from CreateFileMappingW.
+    * An unexpected permission or flag failure must not be reported as OOM.
+    */
+   if (((uint32_t)status & UINT32_C(0xffff0000)) == UINT32_C(0xc0070000)) {
+      const DWORD error = (uint32_t)status & UINT32_C(0xffff);
+      switch (error) {
+      case ERROR_NOT_ENOUGH_MEMORY:
+      case ERROR_OUTOFMEMORY:
+      case ERROR_NO_SYSTEM_RESOURCES:
+      case ERROR_NONPAGED_SYSTEM_RESOURCES:
+      case ERROR_PAGED_SYSTEM_RESOURCES:
+      case ERROR_WORKING_SET_QUOTA:
+      case ERROR_PAGEFILE_QUOTA:
+      case ERROR_COMMITMENT_LIMIT:
+      case ERROR_NOT_ENOUGH_QUOTA:
+         failure = VK_ERROR_OUT_OF_HOST_MEMORY;
+         break;
+      default:
+         failure = VK_ERROR_UNKNOWN;
+         break;
+      }
+      return vk_errorf(log, failure, "%s returned Win32 error %lu (0x%08lx)",
+                       operation, (unsigned long)error, (unsigned long)status);
+   }
    if (status == TG_KMT_NO_MEMORY)
       failure = VK_ERROR_OUT_OF_HOST_MEMORY;
    else if (status == TG_KMT_NO_VIDEO_MEMORY)

@@ -9,8 +9,9 @@
 int main(int argc, char **argv)
 {
    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
-   if (argc != 2) {
-      fprintf(stderr, "usage: nvk-windows-check.exe <absolute-path-to-NVK-DLL>\n");
+   const bool loader = argc == 3 && strcmp(argv[1], "--loader") == 0;
+   if (argc != 2 && !loader) {
+      fprintf(stderr, "usage: nvk-windows-check.exe [--loader] <absolute-DLL-path>\n");
       return 2;
    }
    struct tg_kmt_scan scan;
@@ -19,21 +20,24 @@ int main(int argc, char **argv)
       fprintf(stderr, "KMT scan failed: %08lx\n", (unsigned long)status);
       return 3;
    }
-   HMODULE lib = LoadLibraryExA(argv[1], NULL,
+   HMODULE lib = LoadLibraryExA(argv[loader ? 2 : 1], NULL,
       LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
    if (!lib) {
       fprintf(stderr, "LoadLibrary failed: %lu\n", GetLastError());
       return 4;
    }
    PFN_vkGetInstanceProcAddr gipa =
-      (void *)GetProcAddress(lib, "vk_icdGetInstanceProcAddr");
+      (void *)GetProcAddress(lib, loader ? "vkGetInstanceProcAddr" : "vk_icdGetInstanceProcAddr");
    if (!gipa) { FreeLibrary(lib); return 5; }
    PFN_vkEnumerateInstanceVersion version = (void *)gipa(NULL, "vkEnumerateInstanceVersion");
    PFN_vkCreateInstance create = (void *)gipa(NULL, "vkCreateInstance");
    if (!version || !create) { FreeLibrary(lib); return 6; }
    uint32_t api = 0;
    VkResult r = version(&api);
-   if (r != VK_SUCCESS || api < VK_API_VERSION_1_0) { FreeLibrary(lib); return 7; }
+   if (r != VK_SUCCESS || api < VK_API_VERSION_1_0) {
+      fprintf(stderr, "vkEnumerateInstanceVersion failed: %d, version=%u\n", r, api);
+      FreeLibrary(lib); return 7;
+   }
    const VkApplicationInfo app = {
       .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
       .pApplicationName = "T214 NVK identity check", .apiVersion = VK_API_VERSION_1_1,
@@ -77,11 +81,11 @@ int main(int argc, char **argv)
    }
    destroy(instance, NULL);
    FreeLibrary(lib);
-   printf("{\"scope\":\"NVK Windows ICD identity\",\"api_version\":%u,"
+   printf("{\"scope\":\"NVK Windows ICD identity\",\"loader\":%s,\"api_version\":%u,"
           "\"kmt_adapters\":%u,\"private_queries_ok\":%u,\"matching_kmd\":%u,"
           "\"native_ready_kmd\":%u,\"enumerate_result\":%d,\"physical_devices\":%u,"
           "\"kmt_luid\":\"%016llx\",\"matching_luid\":%s}\n",
-          api, scan.enumerated, scan.queried, scan.matched, scan.native_ready, r, count,
+          loader ? "true" : "false", api, scan.enumerated, scan.queried, scan.matched, scan.native_ready, r, count,
           (unsigned long long)expected, luid_match ? "true" : "false");
    return r == VK_SUCCESS && (scan.native_ready ? luid_match : count == 0) ? 0 : 10;
 }

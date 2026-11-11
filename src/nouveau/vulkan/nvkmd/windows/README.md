@@ -23,6 +23,12 @@ python3 src/nouveau/vulkan/nvkmd/windows/build_icd.py \
 The SDK layout fixture runs at compile time. The build emits the ICD DLL,
 a local ICD manifest, a controlled `test-kmt.exe` and a live adapter probe
 `nvk-windows-check.exe`. Run the latter with the absolute ICD DLL path.
+Use `--loader <absolute-vulkan-1.dll>` to exercise the public loader instead
+of the ICD entry point. A registered manifest is required for elevated
+processes, which ignore `VK_DRIVER_FILES`. On the .59 diagnostic baseline,
+instance creation can succeed while loader device enumeration returns
+`VK_ERROR_INITIALIZATION_FAILED` and the full identity check exits 10;
+that is not a native-GPU pass.
 
 `test-kmt-shared.exe` checks shared storage, named objects and ownership with
 controlled SDK KMT substitutes. `nvk-windows-shared-check.exe` tests live KMT
@@ -31,6 +37,18 @@ native Vulkan buffer/image sharing, GPU writes and readback after releasing
 the producer, and re-export. The latter requires a registered ICD and an
 active native-submit KMD. These live probes are not default build tests.
 [Win32 memory contract and physical evidence](../../../../../tegra-x1-wddm/docs/VULKAN_WIN32_MEMORY.md)
+
+Shared CPU-visible allocations use page-rounded byte counts and
+`PAGE_READWRITE | SEC_COMMIT | SEC_WRITECOMBINE`, without large-page flags.
+Failed `CreateFileMappingW` calls retain their Win32 error in the SDK's
+`NTSTATUS_FROM_WIN32` encoding. The Vulkan boundary maps only memory or
+pool/commit/quota errors to host OOM; unexpected access/privilege/parameter errors
+return `VK_ERROR_UNKNOWN` with the original code. The controlled fixture
+injects thirteen section errors, verifies budget rollback, checks the exact
+512 MiB boundary and tests 4 KiB/64 KiB/2 MiB GPU-VA alignment without
+committing a 512 MiB Windows allocation. Successful small section requests
+still use the real Windows API and verify write-combined mapping.
+[Allocation and budget audit](../../../../../tegra-x1-wddm/docs/PORTING.md#host-allocation-and-budget-audit)
 
 Native offscreen Vulkan and D3D11 runtime rendering at feature level 10_0
 have physical passes on Switch Lite. Win32 Vulkan presentation, D3D runtime
