@@ -3,27 +3,41 @@
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Current priority:** stabilize the frozen `.153` KMD / `e99798fa9668` UMD /
-`6e2fad99d742` ICD combination from `931383e6`, before `3531f0ee`, in local
-branch `stabilize/native-desktop-153`. Complete taskbar/Start-menu composition
-and sustained presentation come before further features or hardware rotation.
-The initial `.147` rollback proposal is superseded. The source
-worktree is `../mesa-switch-woa-stabilize`; the device remains recovered to `.59`.
-The remote Fable desktop review has stopped at its account limit; its commits
-and five unfinished source files are preserved locally. The user's next remote
-assignment is game-facing DX9/10/11 through DXVK, using Fable 5.2/medium in
-English. It has not started: the reported reset is November 12 at 07:10 UTC.
-The latest VPS instructions require read-only analysis and textual patch
-proposals, for local implementation. Desktop DXVK remains unauthorized.
+**Current priority:** extend the successful short `.158` desktop observation
+using the exact `.153`-based KMD / `77dea046dde0` UMD / `6e2fad99d742` ICD set.
+The selected source is `6c854e9f` in `stabilize/native-desktop-153`, worktree
+`../mesa-switch-woa-stabilize`. Retain complete taskbar rendering while checking
+longer presentation and menu interaction before hardware rotation or further
+rendering changes. The `.147` rollback proposal is superseded. The device is
+recovered to `.59`.
+
+Fable 5.2/medium is independently implementing game-facing DX9/10/11 DXVK
+compatibility in English. The user explicitly authorizes remote source edits,
+superseding the earlier read-only restriction. It uses a separate game branch,
+with no GitHub push or credentials; the main agent retrieves and reviews its
+source. The prior desktop-review commits and five unfinished files are
+preserved. Desktop DXVK remains unauthorized.
 
 **Current stabilization build:** `.158` combines the isolated sampler-view
 fix, restored SAMPLE_I lowering (`71d67992`), execution-ordered inherited-state
 validation (`6c854e9f`), and the GR helper-load correction with readback below.
-Host regressions, actual NETB models and the full WDK ARM64 build pass. Its
-Mesa `src/` is identical to `ee7b0d50`, the source of previously validated UMD
-`77dea046dde0`; ICD `6e2fad99d742` is unchanged. The candidate is unsigned and
-not installed. It excludes `.155–.156` diagnostics, the remote SM exception
-policy and unfinished remote worker edits. Evidence: `stabilize158-20261112`.
+Host regressions, actual NETB models, WDK ARM64 build and the Windows context
+fixture pass. Its Mesa `src/` is identical to `ee7b0d50`, retaining UMD
+`77dea046dde0`; ICD `6e2fad99d742` is unchanged. The signed SYS is
+`46d1757674ff`. It excludes `.155–.156` diagnostics, the remote SM exception
+policy and unfinished remote worker edits. Build: `stabilize158-20261112`.
+
+**`.158` short native desktop observation passes:** four hash-verified PNGs
+at 0/15/45/90 seconds show the complete taskbar/tray, with one Explorer PID
+and a normal composition content bridge. The user also reports normal,
+comparatively stable physical output. DWM selects Tegra LUID `bc22f` at FL10_0;
+79 successful flips span 100.544 seconds, all with matching subsequent native
+VSync addresses. The ETL is finalized with zero reported loss and no retained
+native-era device error, UMD failure or KMD recovery. All 184 returned files
+match device hashes. Scheduled `.59` Code 0 recovery/cleanup/unchanged power
+passes at 03:48:56 UTC, portrait at 03:49:33, and the recovery screenshot has a
+complete taskbar. No trial remains active. This is not a long-duration or
+interaction pass. [Exact components, evidence and limits](NATIVE_DESKTOP_158.md)
 
 **Frozen `.153` observation finished, desktop still incomplete:**
 `stabilize153-native-20261112` reaches Code 0 at 02:42:09 UTC on November 12,

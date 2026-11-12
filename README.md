@@ -18,15 +18,16 @@ OpenGL compatibility route.
 | Native Vulkan | NVK rendered an offscreen triangle and read back the expected pixels and guards with driver **0.1.0.87**. A Win32 preview showed that readback. |
 | Display adapter | **0.1.0.130** reached **Code 0**, completed GDI copies and displayed verified RGB bars on the internal panel through the GM20B VidPN and native scanout. |
 | Shared storage | **0.1.0.144** passes Vulkan Win32 buffer/image sharing, GPU read/write after producer-device release, and re-export: 32,768 payload words plus 512 guards match. [Scope and evidence](tegra-x1-wddm/docs/VULKAN_WIN32_MEMORY.md). |
-| Windows desktop | **Incomplete.** .153 passes 21,758,982 shared-sampling pixel checks and teardown. Queue-admission and sampler-view compiler defects are fixed with controlled regressions. The latest .155 trial still fails; its pre-reset trace identifies an active render packet waiting for GPU completion. Complete desktop composition, NT sharing and hardware landscape remain unverified. [Current evidence](tegra-x1-wddm/docs/RECOVERY_TRACE.md#native-155-result). |
+| Windows desktop | **Short native observation passed with .158.** Four inspected screenshots across 90 seconds show the complete taskbar and right-side tray; the user also reports normal physical output. DWM uses Tegra X1 at FL10_0, with 79 successful flips and matching VSync addresses. Extended stability, menu interaction and hardware landscape remain pending. [Exact components and evidence](tegra-x1-wddm/docs/NATIVE_DESKTOP_158.md). |
 
 Package versions above identify KMD test packages. The latest trial pairs
-signed **.155** with UMD **77dea046dde0** (corrected sampler-view operands) and
-the unchanged NVK ICD. The device is restored to **.59** with a complete
-software-rendered taskbar in the inspected screenshot. Next, identify the
-stalled command and complete desktop image, hardware landscape and
-Win32 `vkcube` checks. Automated desktop capture is verified on the recovery
-baseline; it does not by itself prove physical scanout.
+signed **.158** with UMD **77dea046dde0** and NVK ICD **6e2fad99d742**.
+Its selected `.153`-based source includes compiler, queued-state and GR
+helper-load corrections. The device is restored to **.59** with a complete
+software-rendered taskbar in the inspected screenshot. Next, retain this exact
+set for extended desktop and interaction checks, then hardware landscape and
+Win32 `vkcube`. The successful short observation is not a stable-driver release
+or complete Vulkan implementation.
 Each component has its own build manifest and source/artifact identity.
 [Current component identifiers](tegra-x1-wddm/docs/STATUS.md)
 
