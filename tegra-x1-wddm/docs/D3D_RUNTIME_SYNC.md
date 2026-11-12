@@ -161,10 +161,13 @@ Runtime callbacks assert the DDI thread; each mapping is freed once.
 The ARM64 UMD compiles and links. The frozen candidate is
 `desktop158-teardown-order-20261112-umd`, DLL SHA256
 `7f8f821d7b3ca7f56b37bb47d7367e9a5db356bfcee3a838af8a75d81597e3ce`.
-It has **not been installed or tested on the native GPU**. This fixes the
-demonstrated control interleaving; it is not attributed as the cause of the
-reported physical hang. Native pixels and physical desktop acceptance for
-this candidate remain pending. Evidence is retained under
+The subsequent [native trial](NATIVE_DESKTOP_158.md#teardown-order-umd-trial-physical-and-harness-failures)
+reaches `.158` / Code 0 but the owner reports short output followed by
+corruption and black output. An independent missing helper argument aborts
+the timed worker before its pixel checks. This fixes the demonstrated control
+interleaving; it is not a resolution of that physical failure. Native pixels
+and five-minute physical acceptance for this candidate remain pending.
+Control evidence is retained under
 `runs/wddm-destroy-order-20261112/` in the external build workspace.
 
 ## Contracts and source

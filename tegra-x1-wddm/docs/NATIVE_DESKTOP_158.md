@@ -449,3 +449,81 @@ external build workspace. Keep the failed physical result distinct from the
 preceding offscreen pixel pass. Do not repeat the same native trial or move
 to landscape/cube without a concrete source or validation change addressing
 the current desktop boundary.
+
+## Teardown-order UMD trial: physical and harness failures
+
+`desktop158-teardown-order-20261112` tests UMD source
+`1e6a3ba4d4cb603612d43e5af93f74fbea845e97`, DLL SHA256
+`7f8f821d7b3ca7f56b37bb47d7367e9a5db356bfcee3a838af8a75d81597e3ce`,
+with the unchanged `.158` KMD (`46d17576…`) and ICD (`ad686578…`). The
+intended sequence is native identity, five minutes of desktop observation,
+then the known-pixel checks. The latter checks are not reached.
+
+Two distinct failures are retained:
+
+- **Physical:** the owner reports more than ten seconds of output, a diagonal
+  corruption streak after opening Device Manager, then a black screen. The
+  TX1 display device had no warning icon when the corruption appeared. This
+  is consistent with the separately recorded native `.158` / Code 0 interval;
+  it is not reclassified as the later `.59` / Code 10 recovery state. The
+  report has no exact physical-event timestamp, and no cause is assigned.
+- **Harness:** `Assert-NativeDesktop.ps1` in `31ab6eb4` omitted the required
+  `tegragpuno3d.dll` argument to `desktop-path.exe`. The native worker exits 1
+  at this check before starting its timer. It retains no desktop PNG and
+  runs no pixel probe. This invocation error is not a GPU failure, and its
+  correction does not override the independent physical failure.
+
+The existing interactive observer already supplied that argument. At
+22:16:22.181 UTC it records source/target and native KMT LUID
+`00000000000a9493`, `.158` / Code 0. Startup completion is 22:16:17.431;
+the native worker runs 22:16:27.056–22:16:29.518. The controller finishes
+collection at 22:16:52.204. The closed ETL exports 24,270 valid UMD events,
+including 279 successful DWM Flip/interval-one callbacks, with no reported
+event or buffer loss. It contains no `RuntimeError` or retained Mesa/NVK
+error message. Successful callbacks do not establish correct physical pixels
+or explain the reported corruption.
+
+The planned recovery stages `.59` / Code 10 at 22:17:16.750. The boot remains
+unchanged while Windows processes shutdown; one follow-up recovery restart
+request at 22:20:05 returns **1115**, shutdown already in progress. No new
+native start is requested. The recovery boot is observed at 22:21:44.712.
+At 22:24:25.448, `.59` / Code 0, original SYS/ACPI, removed temporary
+registration/loader/tasks/permit, restored opt-in/debug environment and
+unchanged power/display preference verify. CPU remains 1996.8 MHz, fan
+version 12 and Wi-Fi 0.5.7 / Code 0. No shutdown or black-screen cause is
+investigated.
+
+All **132 files / 91,689,439 bytes** match the device's stream measurements
+and SHA256 values, without directory-length corrections. The native result,
+physical observation and recovery are separate records:
+
+| Record | SHA256 |
+| --- | --- |
+| Retained archive | `11a7e52f951e96b9dbb0406cdf89082db6c9a76a4a216527b6e3f982e911cd67` |
+| Native worker result | `3c6eec49fc41a2da106591ff336f03ac29d8ee114c24245a7f7b418a3b953aa0` |
+| Owner's physical observation | `f9fde87e6f4a778d9f632357114de30fee913b9e3e5e728cf71d80f59446058b` |
+| Recovery verification | `7a3d6ec73f2910e4d362a6b809ef0ae50fdfc98d235449fbe93e1bc1f1611a42` |
+
+### Display query invocation correction
+
+The assertion now passes and verifies the frozen query bridge DLL, matching
+the existing observer's invocation, and retains the helper exit code and
+output before validating them. The bridge is a query dependency; the renderer
+remains the candidate `app\TegraGpuD3D.dll`.
+
+An interactive Windows control at 22:29:22–22:29:27 reproduces the missing
+argument exit **2**. The corrected invocation returns the two real display/KMT
+records and exit **4** on `.59`/BasicDisplay, with `nvk_ready=0`; the production
+assertion correctly refuses native acceptance. The fixture changes only its
+expected version to `.59` so the assertion reaches this query, not its
+native-ready/LUID requirements. Current DWM start-time access also succeeds
+under the same interactive task principal. No GPU commands are executed.
+
+All seven control records / 6,272 bytes match device hashes and lengths;
+the control task is removed. Result SHA256:
+`4575eb373895d9a0dd96e8a5fdada29131859774e14c16163c212adebe2baeaa`.
+Corrected assertion SHA256:
+`430756d2813db6a215542ea9a78d1a9198de620a4160cb73a0b8d912122a6d90`.
+Evidence is retained under `runs/native-identity-control-20261112/`.
+Positive native identity and five-minute physical acceptance remain pending;
+the `1e6a3ba4` teardown fix has not resolved the observed desktop boundary.

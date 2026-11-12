@@ -19,9 +19,16 @@ try {
     if($r.Version -ne $m.kmd_version -or $r.Problem -ne 0){throw 'The identified native KMD is not running with Code 0'}
     $helper=Join-Path $p 'desktop-path.exe'
     if((Get-FileHash $helper).Hash -ne $m.helpers.'desktop-path.exe'.Sha256){throw 'Display path helper differs from the trial manifest'}
-    $rows=@(& $helper | ForEach-Object {$_|ConvertFrom-Json})
-    if($LASTEXITCODE -ne 0 -or $rows.Count -ne 2){throw 'Active display path query failed'}
+    # The query helper requires the frozen KMT bridge DLL as argv[1], as in
+    # the interactive observer. The actual renderer is app\TegraGpuD3D.dll.
+    $bridge=Join-Path $p 'tegragpuno3d.dll'
+    if((Get-FileHash $bridge).Hash -ne $m.kmd.'tegragpuno3d.dll'.Sha256){throw 'Display query bridge differs from the trial manifest'}
+    $lines=@(& $helper $bridge)
+    $r.HelperExitCode=$LASTEXITCODE
+    $r.HelperOutput=$lines
+    $rows=@($lines|ForEach-Object {$_|ConvertFrom-Json})
     $r.Paths=$rows
+    if($r.HelperExitCode -ne 0 -or $rows.Count -ne 2){throw 'Active display path query failed'}
     $r.Luid=$rows[1].kmt_luid
     if(!$rows[0].active_path -or !$rows[1].matching_kmd -or !$rows[1].nvk_ready -or
         $rows[0].source_luid -ne $r.Luid -or $rows[0].target_luid -ne $r.Luid -or

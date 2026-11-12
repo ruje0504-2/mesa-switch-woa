@@ -20,7 +20,20 @@ models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
 components remain a short-observation baseline, not a stable desktop release.
 
-**Latest onscreen-only trial failed physically:** the owner reports a frozen
+**Latest teardown-order UMD trial also fails physical acceptance:** with
+UMD `1e6a3ba4` (`7f8f821d…`), the owner reports more than ten seconds of output,
+a diagonal corruption streak after opening Device Manager, then black output.
+TX1 had no warning icon; the observer separately records `.158` / Code 0 on
+native LUID `a9493`. A missing argument in the new display-query assertion
+also aborts the automated worker before its timer/captures/pixels. That script
+bug is now corrected and checked on the real interactive desktop, where it
+still rejects BasicDisplay. It does not erase the physical failure.
+Recovery to `.59` / Code 0 is fully verified at **22:24:25 UTC**, with the
+original configuration restored. All 132 trial records match device hashes
+and lengths. Five-minute desktop acceptance, rotation and cube remain pending.
+[Physical report, separate harness error and recovery](NATIVE_DESKTOP_158.md#teardown-order-umd-trial-physical-and-harness-failures)
+
+**Preceding onscreen-only trial failed physically:** the owner reports a frozen
 image followed by a hang and automatic restart in
 `desktop158-onscreen-20261112`. The candidate reaches `.158` / Code 0 and
 active native LUID `abc37`, but no five-minute timer/result or desktop PNG is
@@ -32,15 +45,16 @@ unchanged CPU/fan/power/display preference. All 128 collected records match
 device hashes and stream lengths. No restart-cause investigation is performed.
 [Exact failed trial and recovery](NATIVE_DESKTOP_158.md#onscreen-only-trial-physical-failure)
 
-**New source fix, native validation pending:** `1e6a3ba4` closes the runtime
+**Teardown source fix passes its control; desktop remains unaccepted:** `1e6a3ba4` closes the runtime
 mapping owner before releasing the frontend's backend resource reference.
 This prevents a delayed Zink/NVK worker release from entering a D3D runtime
 callback while the owner is still live. The real `DestroyResource` control
 reproduces the old wrong-thread callback and passes after the fix; it uses
 substituted runtime/Gallium calls on `.59`, not native GPU execution.
 The ARM64 UMD candidate `7f8f821d…` builds successfully and is retained as
-`desktop158-teardown-order-20261112-umd`. It is not deployed, and no connection
-to the physical hang or successful onscreen fix is claimed.
+`desktop158-teardown-order-20261112-umd`. The subsequent native trial above
+does not pass physical acceptance; the control fix is not claimed as a
+resolution of the reported display failure.
 [Source path, callback contract and before/after evidence](D3D_RUNTIME_SYNC.md#imported-resource-teardown-ordering)
 
 The earlier matched-component `.158` trial **failed onscreen acceptance**:
