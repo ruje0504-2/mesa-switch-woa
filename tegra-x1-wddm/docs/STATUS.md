@@ -12,14 +12,18 @@ worktree is `../mesa-switch-woa-stabilize`; the device remains recovered to `.59
 Fable 5.2/max independently reviews main in English on the VPS, with local
 commits only and no GitHub push. That review does not block stabilization.
 
-**Active stabilization observation:** `stabilize153-native-20261112` verifies
-the archived package/signatures and exact runtime at 02:36:52 UTC on November
-12. `.59`/portrait preflight passes at 02:37:42. The frozen `.153` package is
-installed with its native gate closed at 02:38:56, then the planned Windows
-restart is requested at 02:39:11. Automatic `.59` recovery remains armed.
-This observation adds early/follow-up desktop PNGs at 0/15/45/90 seconds;
-it runs no pixel probes and makes no mode change. Native results and recovery
-verification remain pending; do not start another trial while it runs.
+**Frozen `.153` observation finished, desktop still incomplete:**
+`stabilize153-native-20261112` reaches Code 0 at 02:42:09 UTC on November 12,
+LUID `ba232`. All 35 retained MPO3 flips contain one full-screen 720x1280
+plane, with each address confirmed by a subsequent native VSync. Native shell
+geometry at 02:42:38 places the taskbar at the bottom but shows a zero-size
+Start child and no normal composition content bridge. No native PNG completes;
+an extra boot occurs at 02:43:15. The trace is unfinalized, with no retained
+RuntimeError/ZinkFailure or KMD recovery event. It is not a stable desktop pass.
+All 159 returned files (137,379,552 bytes, including later shell-event collection)
+match device hashes. `.59` Code 0/cleanup/unchanged power are verified at
+02:50:03, saved portrait at 02:50:25. The recovery PNG at 02:52:10 has a complete
+taskbar/tray. No trial remains active. [MPO contract and evidence](MPO_CONTRACT_AUDIT.md)
 
 **`.156` retained candidate, not installed:** retain the stalled application's owned
 command snapshot and read-only PBDMA/USERD fetch state after joining the worker,
