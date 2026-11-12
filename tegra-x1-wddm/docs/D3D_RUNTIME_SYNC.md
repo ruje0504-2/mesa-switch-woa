@@ -102,6 +102,13 @@ same trial still need attribution. DWM signal/wait callbacks and interval-one
 Presents occur, but the ETL's reported event loss prevents complete-history
 claims.
 
+The later [onscreen-only trial](NATIVE_DESKTOP_158.md#onscreen-only-trial-physical-failure)
+uses these same binaries and fails physically: the owner reports a frozen
+image and automatic restart. It retains native identity and a short prefix
+of successful DWM Presents, but no completed five-minute observation.
+No offscreen probe is rerun in that trial. Its recovery is verified; the
+earlier shared-image readback remains valid only for its own offscreen scope.
+
 The native shared-image check uses `--shared-layout-load` first. The
 separate `--shared-layout-checkpoints` diagnostic performs producer and consumer-import CPU
 readbacks before sampling, inserting completion waits that can hide missing

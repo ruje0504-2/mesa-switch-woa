@@ -367,10 +367,85 @@ workspace. SHA256 identities:
 | Active-path observations | `ce2191026a1898fe43f996c1ba8afa59c5975d1d29478009a900a9a22e2100c8` |
 | Recovery verification | `3f0ccca0f26fc6196dab4f5d857e8c670ae0f872265ea52bbeae164205bc9e4b` |
 
-The next observation is explicitly onscreen-only. Before starting its timer
+The subsequent observation below is designed to be onscreen-only. Before starting its timer
 and around each capture, `Assert-NativeDesktop.ps1` must retain a fresh active
 source/target LUID matching native GM20B, the expected KMD/Code 0 and the
 current DWM process's loader record for the trial ICD. A BasicDisplay desktop
 cannot satisfy this check. Its records still do not replace physical screen
 observation. Reuse the offscreen result above instead of counting another
 offscreen probe as progress on presentation.
+
+## Onscreen-only trial: physical failure
+
+`desktop158-onscreen-20261112` retains the same `.158` KMD (`46d17576…`),
+`ca405387` UMD (`0e840c55…`) and `7a771aa6` ICD (`ad686578…`). It deliberately
+omits the already-passed offscreen probes. The intended 300-second desktop
+sequence checks the active GM20B source/target LUID and current DWM loader
+record before starting the timer and around each capture. The new identity
+helper is in main `31ab6eb4`; the target parses all staged PowerShell scripts
+successfully before driver installation. `NVK_DEBUG=log` and the existing
+debug receiver's Mesa-message filter are temporary observation settings,
+saved and restored with the previous environment.
+
+**Physical result: failed.** The owner reports the image freezing, followed
+by a system hang and automatic restart. No five-minute acceptance, rotation
+or cube result is claimed. The collected directory contains no initial native
+identity-guard record, observation-timer marker, native worker result or
+desktop PNG. Absence of those records does not establish the exact interrupted
+instruction; it does establish that no completed observation is retained.
+
+Controller/observer records (UTC):
+
+- 21:42:57: after the owner's manual restart to restore SSH, `.59` / Code 0
+  is verified on boot 21:40:46.842. The uploaded input ZIP/bootstrap hashes
+  match. New preparation completes on BasicDisplay with no native drawing.
+- 21:43:52: the candidate installs as `oem89.inf`, `.158` / Code 43 behind
+  the closed gate. Registration and the setup-restart request follow at
+  21:44:00. The setup boot is 21:44:40.438.
+- 21:46:51.750: startup completion records `Hardware=0`, `Problem=0`,
+  `Permit=0`. At 21:46:56.703, the observer records the active source/target
+  and native KMT adapter on LUID `00000000000abc37`, `.158` / Code 0. These
+  identity records do not establish correct physical pixels.
+- The next observed boot is 21:47:31.817, consistent with the owner's
+  reported restart. At 21:49:40.719, the existing-attempt marker selects
+  recovery, not another native start.
+- 21:50:05.469: recovery stages the original driver/ACPI. The planned
+  recovery boot is 21:50:35.210. `.59` / Code 0 and empty trial tasks are
+  observed at 21:52:15.
+- 21:52:49.724: full recovery verifies the original SYS/ACPI, removed
+  temporary UMD/ICD/loader/permits/tasks, restored `NVK_DEBUG`, loader-debug
+  and opt-in values, unchanged power settings and saved portrait preference.
+  CPU is 1996.8 MHz, fan version 12 and Wi-Fi 0.5.7 / Code 0.
+
+The interrupted first ETL retains 23,070 UMD events, including 13 successful
+DWM Flip/interval-one callbacks over an **8.391-second ETW timestamp span**.
+Its `end_time=0` and `buffers_written=0`; reported zero event loss does not
+make its tail complete. Its converted absolute timestamps do not align with
+the controller/loader wall clock, so they are not used to order startup or
+estimate time to failure. The later closed-gate ETL contains no UMD events.
+No retained Mesa error message or UMD `RuntimeError` identifies a submission
+failure in this prefix. This is not evidence that later execution succeeded.
+No restart cause is investigated or assigned.
+
+All **128 files / 125,879,337 bytes** match device-side hashes and stream
+lengths. Directory enumeration again reported stale lengths for
+`loader-debug.csv` (0 versus 37,055 bytes) and `trace-flush.bin` (32 versus
+4,640). The original manifest/archive are preserved; a second device-side
+read confirms both lengths and the unchanged SHA256 values from the same
+open streams. `Collect-DesktopTrial.ps1` now uses that measurement method for
+future collections; its Windows PowerShell parse and the two real-file stream
+measurements pass. This corrects evidence collection, not GPU rendering.
+
+| Record | SHA256 |
+| --- | --- |
+| Retained archive | `55bc781ba31caf127161239bb6b18d63c9e584f3c5ccfacbf256f542d76ad602` |
+| Owner's physical observation | `e1afd3414d4b0612adfec7a62a8b4f7ea9e29a25a0b9a115cc97049e7d645848` |
+| Active-path observations | `e11abcfa6987a25a905bf8d1c01d009ff87379e0144210ae9880306870f337e1` |
+| Recovery verification | `d13498e54e64d362bdcb4e6e3cbad6374a3b57713f716923de7146682e67c534` |
+| Stream-length correction | `b64fa215f5611fc4c67b8c0599acaa29e428303df478a07174b072f86ba57306` |
+
+Evidence is retained under `runs/desktop158-onscreen-20261112/` in the
+external build workspace. Keep the failed physical result distinct from the
+preceding offscreen pixel pass. Do not repeat the same native trial or move
+to landscape/cube without a concrete source or validation change addressing
+the current desktop boundary.

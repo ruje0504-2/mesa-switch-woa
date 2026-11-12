@@ -19,6 +19,19 @@ geometry and legacy/MPO integration exist in source and pass the documented
 models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
 components remain a short-observation baseline, not a stable desktop release.
+
+**Latest onscreen-only trial failed physically:** the owner reports a frozen
+image followed by a hang and automatic restart in
+`desktop158-onscreen-20261112`. The candidate reaches `.158` / Code 0 and
+active native LUID `abc37`, but no five-minute timer/result or desktop PNG is
+retained. Thirteen successful DWM Present callbacks in an interrupted ETL
+do not override the physical failure. This trial runs no offscreen probe.
+Recovery to `.59` / Code 0 is fully verified at **21:52:49 UTC**, including
+original driver/ACPI, cleaned temporary registration/environment/tasks and
+unchanged CPU/fan/power/display preference. All 128 collected records match
+device hashes and stream lengths. No restart-cause investigation is performed.
+[Exact failed trial and recovery](NATIVE_DESKTOP_158.md#onscreen-only-trial-physical-failure)
+
 The earlier matched-component `.158` trial **failed onscreen acceptance**:
 the owner reports no successful native output, and the run ends before any
 native pixel or desktop-capture result is retained. A short Code 0 record is
