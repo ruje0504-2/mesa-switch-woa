@@ -118,3 +118,24 @@ All eleven returned files match device hashes. Before/after PNG SHA256 values:
 `d98de373862ee54a5408a3edb39cd3e4b58a56c61ea9377090c2841dbd8e2394` and
 `d16c0a27d86d456a98ca48afa11073a6a4af620616970cbf782936a2180f0cc3`.
 The temporary Explorer-recovery task is removed.
+
+## Shell interaction capture
+
+The capture helper accepts an optional `-Shortcut Start`, `QuickSettings` or
+`Dismiss`. The default `None` retains capture-only behavior. It sends a complete
+Win-key, Win+A or Escape sequence on the interactive Default desktop, records
+the inserted event count and foreground window, then captures the result.
+It does not change a setting in the opened panel. The native 64-bit `INPUT`
+layout is checked against SDK 10.0.26100.0. Held modifier keys cause rejection;
+partial insertion releases the injected keys before reporting failure.
+[SendInput contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput)
+
+`shell-interactions158-control-20261112` completes on `.59` at 04:17:11 UTC on
+November 12. All five captures preserve `.59` Code 0. Direct image inspection
+confirms the opened Start menu, opened quick-settings panel and the complete
+taskbar after dismissal. Start inserts two input events, quick settings four,
+and each dismissal two. The foreground popup rectangles and owners are also
+retained; an accepted keyboard sequence alone is not proof of visible content.
+The temporary control task is removed and all returned files match device
+hashes. This validates the interaction fixture on the software baseline;
+the extended native `.158` interaction trial remains separate.
