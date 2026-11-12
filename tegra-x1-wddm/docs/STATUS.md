@@ -77,6 +77,20 @@ cause of the `.158` corruption. The next shared-image probe must first run
 without producer/import CPU readback checkpoints.
 [View contract, fix and validation](PORTING.md#imported-windows-image-views)
 
+The next onscreen trial is prepared locally, **not deployed or accepted**:
+
+| Component | Source | Artifact SHA256 |
+| --- | --- | --- |
+| Frozen KMD `0.1.0.158` | `6c854e9f394c3d761fab85885bead4bbd4588581` | `46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088` |
+| Zink D3D UMD with view-usage fix | `accd9f1e5a9f1c649536e400828b7428e8aca367` | `8a1a765de323906bfef4f2c13c8d7bb60527e89d49667928efc5a94eceee3ffe` |
+| NVK ICD with shared timelines | `7a771aa6602d2c94cb4cd362855777290a2503f2` | `ad6865784890f937a7c29aab0f108841b6d99cbffdca985b7dafbffc1a953625` |
+
+This is a new component combination, not the original `.158` package's result.
+The new ARM64 surface control has SHA256
+`79e02b03d0ae5ccf621fcf159233e40df55895e507b6e0d79d0b30f0cb7e014c`;
+its physical Windows execution and the trial's Windows preflight remain pending.
+The original `.160` UMD package files remain byte-for-byte unchanged.
+
 Mesa's Windows blob-cache backend is implemented and enabled by the UMD/ICD
 build tools. It uses asynchronous writes, atomic file replacement, a shared
 key index and coordinated eviction; Zink includes its own DLL identity in the
