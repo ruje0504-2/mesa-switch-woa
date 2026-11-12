@@ -90,6 +90,24 @@ struct u_vbuf;
 struct pipe_context;
 struct pipe_ml_subgraph;
 
+/**
+ * Synchronize every driver submission with a frontend-owned GPU context.
+ * Both fences must be timeline fences. For each submission the driver uses
+ * a new value greater than initial_value, calls prepare on the calling thread,
+ * waits for wait_fence, executes its commands and signals signal_fence.
+ * submitted is called on that same thread after queue submission, with its
+ * success status. Neither callback may call back into the pipe context.
+ * This includes internal flushes, not only explicit frontend flush calls.
+ */
+struct pipe_submission_sync {
+   struct pipe_fence_handle *wait_fence;
+   struct pipe_fence_handle *signal_fence;
+   uint64_t initial_value;
+   void *data;
+   bool (*prepare)(void *data, uint64_t value);
+   bool (*submitted)(void *data, uint64_t value, bool success);
+};
+
 typedef void (*pipe_draw_func)(struct pipe_context *pipe,
                                const struct pipe_draw_info *info,
                                unsigned drawid_offset,
@@ -834,6 +852,15 @@ struct pipe_context {
    void (*fence_server_signal)(struct pipe_context *pipe,
                                struct pipe_fence_handle *fence,
                                uint64_t timeline_value);
+
+   /**
+    * Install a per-submission frontend synchronization bridge. The driver
+    * takes fence references and copies the descriptor; data remains owned by
+    * the frontend. NULL removes it after the frontend has finished all work.
+    * Returns false if the driver cannot honor the callback-thread contract.
+    */
+   bool (*set_submission_sync)(struct pipe_context *pipe,
+                               const struct pipe_submission_sync *sync);
 
    /**
     * Create a view on a texture to be used by a shader stage.

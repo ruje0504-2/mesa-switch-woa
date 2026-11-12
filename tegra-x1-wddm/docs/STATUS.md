@@ -47,12 +47,14 @@ imported-image sRGB views; its controls do not establish native desktop or
 DXVK acceptance. The new Claude architecture review completed, and the user
 then explicitly delegated implementation as well. That same Fable 5.2/max
 session began a separate native DDI/Vulkan backend in an isolated checkout
-based on main `8fcf9e07`. It stopped on account quota at 09:37:04 UTC;
-the reported reset is 13:30 UTC on November 12. No associated remote process
-remains. All 30 collected files / 518,466 bytes match their recorded hashes.
-The partial backend has build errors and no new commits; it is not integrated
-or accepted on hardware. Local integration and hardware tests remain the
-main agent's responsibility.
+based on main `8fcf9e07`. The user has ended that task. Its 25 source/build
+files were collected again, checked against the previous snapshot and saved
+on [claude-vulkan](https://github.com/ruje0504-2/mesa-switch-woa/tree/claude-vulkan)
+for Claude to continue later. The partial `tgd3d` backend has build errors
+and an unfinished test harness; it is not installed or accepted on hardware.
+The separate application-side DXVK work is delegated to local Gemini 4 Carbon
+in the isolated `gemini-dxvk` worktree, using the earlier commits and unfinished
+indirect-submission patch. Hardware testing remains with the main agent.
 
 **Zink texture/cache work:** runtime-owned BGRA/RGBA imports now declare their
 UNORM/sRGB views at image creation and retain the original allocation when a
@@ -70,8 +72,22 @@ eviction and disable-option checks pass. Executable SHA256:
 This is Windows CPU/filesystem evidence, not GPU execution or a measured
 shader-compilation speedup. The record is retained in
 `build/zink-sync-texture-cache-20261112/cache-control-concurrent.json`.
-Cross-queue synchronization and native visual/performance acceptance remain
-in progress. [Windows cache configuration](PORTING.md#windows-shader-cache)
+Native visual/performance acceptance remains in progress.
+[Windows cache configuration](PORTING.md#windows-shader-cache)
+
+**Runtime/NVK GPU ordering implemented:** every Zink batch now waits for an
+incoming runtime-context timeline and signals an outgoing timeline before
+the runtime queues dependent work. Ordinary Flush/Present and identity
+rotation no longer use the old CPU completion bridge; resource/device
+destruction still drains GPU use. Callback-thread restrictions, failure
+handling and semaphore lifetimes are covered by actual-function controls.
+Zink's internal completion signal follows user signals so batch cleanup
+cannot release a pending signal object. ARM64 and x64 UMD builds pass;
+the runtime bridge and actual Zink batch controls exit 0 under Wine x64,
+along with the existing Present/primary/shared controls. Vulkan/KMT calls
+are substituted: this is not native GPU acceptance or measured speedup.
+The new `.160` pair remains uninstalled pending native verification.
+[Implementation and verification scope](D3D_RUNTIME_SYNC.md)
 
 **Zink synchronization source repair:** Win32 fence import is now gated by
 the semaphore extension, creates the correct binary or timeline semaphore,

@@ -238,8 +238,8 @@ fence_get_fd(struct pipe_screen *pscreen, struct pipe_fence_handle *pfence)
    return fd;
 }
 
-void
-zink_fence_server_signal(struct pipe_context *pctx, struct pipe_fence_handle *pfence, uint64_t value)
+static void
+add_signal(struct pipe_context *pctx, struct pipe_fence_handle *pfence, uint64_t value)
 {
    struct zink_context *ctx = zink_context(pctx);
    struct zink_tc_fence *mfence = (struct zink_tc_fence *)pfence;
@@ -252,7 +252,14 @@ zink_fence_server_signal(struct pipe_context *pctx, struct pipe_fence_handle *pf
    pipe_reference(NULL, &mfence->reference);
    util_dynarray_append(&bs->fences, mfence);
    bs->has_work = true;
+}
 
+void
+zink_fence_server_signal(struct pipe_context *pctx, struct pipe_fence_handle *pfence, uint64_t value)
+{
+   struct zink_context *ctx = zink_context(pctx);
+   struct zink_batch_state *bs = ctx->bs;
+   add_signal(pctx, pfence, value);
 
    /* this must produce a synchronous flush that completes before the function returns */
    pctx->flush(pctx, NULL, 0);
@@ -294,6 +301,60 @@ zink_fence_server_sync(struct pipe_context *pctx, struct pipe_fence_handle *pfen
    util_dynarray_append(&ctx->bs->wait_semaphore_values, value);
    pipe_reference(NULL, &mfence->reference);
    util_dynarray_append(&ctx->bs->fences, mfence);
+}
+
+bool
+zink_set_submission_sync(struct pipe_context *pctx, const struct pipe_submission_sync *sync)
+{
+   struct zink_context *ctx = zink_context(pctx);
+   struct pipe_screen *screen = pctx->screen;
+   if (sync) {
+      /* Runtime callbacks must execute on the thread which entered the DDI,
+       * never the threaded-context worker. The D3D frontend creates an
+       * unthreaded pipe context; the Vulkan submission worker is still used. */
+      if (ctx->tc || !sync->prepare || !sync->submitted ||
+          !sync->wait_fence || !sync->signal_fence ||
+          sync->wait_fence == sync->signal_fence ||
+          !zink_tc_fence(sync->wait_fence)->is_timeline ||
+          !zink_tc_fence(sync->signal_fence)->is_timeline ||
+          !zink_tc_fence(sync->wait_fence)->sem ||
+          !zink_tc_fence(sync->signal_fence)->sem)
+         return false;
+   }
+   struct pipe_fence_handle *wait = NULL, *signal = NULL;
+   if (sync) {
+      screen->fence_reference(screen, &wait, sync->wait_fence);
+      screen->fence_reference(screen, &signal, sync->signal_fence);
+   }
+   screen->fence_reference(screen, &ctx->submission_sync.wait_fence, NULL);
+   screen->fence_reference(screen, &ctx->submission_sync.signal_fence, NULL);
+   ctx->submission_sync = sync ? *sync : (struct pipe_submission_sync){0};
+   ctx->submission_sync.wait_fence = wait;
+   ctx->submission_sync.signal_fence = signal;
+   ctx->submission_sync_value = sync ? sync->initial_value : 0;
+   return true;
+}
+
+bool
+zink_submission_sync_prepare(struct zink_context *ctx)
+{
+   struct pipe_submission_sync *sync = &ctx->submission_sync;
+   if (!sync->prepare)
+      return true;
+   if (ctx->submission_sync_value == UINT64_MAX ||
+       !sync->prepare(sync->data, ++ctx->submission_sync_value))
+      return false;
+   zink_fence_server_sync(&ctx->base, sync->wait_fence, ctx->submission_sync_value);
+   add_signal(&ctx->base, sync->signal_fence, ctx->submission_sync_value);
+   return true;
+}
+
+bool
+zink_submission_sync_complete(struct zink_context *ctx, bool success)
+{
+   struct pipe_submission_sync *sync = &ctx->submission_sync;
+   return !sync->submitted ||
+          sync->submitted(sync->data, ctx->submission_sync_value, success);
 }
 
 static struct zink_tc_fence*

@@ -1130,8 +1130,9 @@ while keeping GM20B resource metadata and submission on the Tegra ABI.
 - **KMT transport and external objects.** Compare GPU VA mapping, paging
   fences, queue waits and signals, and NT-handle resource import with the
   existing Windows NVK backend. NT-handle monitored-fence import/export now
-  exists, with SDK-backed controls executed on Windows; native GPU validation
-  and the runtime/NVK per-submission bridge remain pending. Use
+  exists, with SDK-backed controls executed on Windows. The
+  [runtime/NVK per-submission bridge](D3D_RUNTIME_SYNC.md) now uses incoming
+  and outgoing GPU timelines; its native GPU validation remains pending. Use
   [D3DKMTShareObjects](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtshareobjects)
   and [D3DKMTOpenSyncObjectFromNtHandle2](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtopensyncobjectfromnthandle2)
   with WDK types. Size the runtime, resource

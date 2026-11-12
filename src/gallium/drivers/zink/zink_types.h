@@ -1749,6 +1749,9 @@ struct zink_context {
 
    struct pipe_device_reset_callback reset;
 
+   struct pipe_submission_sync submission_sync;
+   uint64_t submission_sync_value;
+
    struct util_queue_fence unsync_fence; //unsigned during unsync recording (blocks flush ops)
    struct util_queue_fence flush_fence; //unsigned during flush (blocks unsync ops)
 

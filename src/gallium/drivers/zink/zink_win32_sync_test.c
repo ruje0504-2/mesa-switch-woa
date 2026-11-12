@@ -9,6 +9,7 @@
 #include "zink_context.h"
 #include "zink_fence.h"
 #include "zink_screen.h"
+#include "zink_batch.h"
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #x); exit(1); } } while (0)
 
@@ -18,6 +19,95 @@ static VkSemaphoreType created_type;
 static VkExternalSemaphoreHandleTypeFlagBits imported_type;
 static HANDLE imported_handle;
 static const wchar_t *imported_name;
+static DWORD callback_thread;
+static uint64_t prepared_value;
+static unsigned prepares, completions, submissions;
+static bool prepare_ok = true, completion_ok = true, submitted_success;
+static bool expect_submit_worker;
+static bool bridge_active = true;
+static VkResult submit_result = VK_SUCCESS;
+static VkSemaphore bridge_wait, bridge_signal;
+static unsigned idle_waits;
+
+static VKAPI_ATTR VkResult VKAPI_CALL
+queue_wait_idle(VkQueue queue)
+{
+   CHECK(GetCurrentThreadId() == callback_thread);
+   idle_waits++;
+   return VK_SUCCESS;
+}
+
+static bool
+prepare_submission(void *data, uint64_t value)
+{
+   CHECK(data == &prepared_value && GetCurrentThreadId() == callback_thread);
+   CHECK(value > prepared_value);
+   prepared_value = value;
+   prepares++;
+   return prepare_ok;
+}
+
+static bool
+complete_submission(void *data, uint64_t value, bool success)
+{
+   CHECK(data == &prepared_value && value == prepared_value);
+   CHECK(GetCurrentThreadId() == callback_thread);
+   submitted_success = success;
+   completions++;
+   return success && completion_ok;
+}
+
+static VKAPI_ATTR void VKAPI_CALL
+pipeline_barrier(VkCommandBuffer command, VkPipelineStageFlags src,
+                 VkPipelineStageFlags dst, VkDependencyFlags flags,
+                 uint32_t memory_count, const VkMemoryBarrier *memory,
+                 uint32_t buffer_count, const VkBufferMemoryBarrier *buffers,
+                 uint32_t image_count, const VkImageMemoryBarrier *images)
+{
+   CHECK(command);
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL
+end_command_buffer(VkCommandBuffer command)
+{
+   CHECK(command);
+   return VK_SUCCESS;
+}
+
+static VKAPI_ATTR VkResult VKAPI_CALL
+queue_submit(VkQueue queue, uint32_t count, const VkSubmitInfo *infos, VkFence fence)
+{
+   CHECK((GetCurrentThreadId() != callback_thread) == expect_submit_worker);
+   unsigned waits = 0, commands = 0, signals = 0, completions = 0;
+   for (unsigned i = 0; i < count; ++i) {
+      const VkSubmitInfo *info = &infos[i];
+      const VkTimelineSemaphoreSubmitInfo *timeline = info->pNext;
+      for (unsigned j = 0; j < info->waitSemaphoreCount; ++j) {
+         if (info->pWaitSemaphores[j] != bridge_wait) continue;
+         CHECK(timeline && timeline->sType == VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO);
+         CHECK(timeline->pWaitSemaphoreValues[j] == prepared_value);
+         CHECK(info->pWaitDstStageMask[j] == VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+         CHECK(!commands);
+         waits++;
+      }
+      if (info->commandBufferCount) CHECK(waits == (bridge_active ? 1u : 0u) && !signals);
+      commands += info->commandBufferCount;
+      for (unsigned j = 0; j < info->signalSemaphoreCount; ++j) {
+         if (info->pSignalSemaphores[j] == (VkSemaphore)(uintptr_t)0x9000) {
+            CHECK(signals == (bridge_active ? 1u : 0u) && i == count - 1);
+            completions++;
+         }
+         if (info->pSignalSemaphores[j] != bridge_signal) continue;
+         CHECK(timeline && timeline->sType == VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO);
+         CHECK(timeline->pSignalSemaphoreValues[j] == prepared_value && commands == 3);
+         signals++;
+      }
+   }
+   CHECK(waits == (bridge_active ? 1u : 0u) && commands == 3);
+   CHECK(signals == (bridge_active ? 1u : 0u) && completions == 1);
+   submissions++;
+   return submit_result;
+}
 
 static VKAPI_ATTR VkResult VKAPI_CALL
 create_semaphore(VkDevice device, const VkSemaphoreCreateInfo *info,
@@ -69,6 +159,127 @@ release_batch(struct zink_screen *screen, struct zink_batch_state *batch)
    util_dynarray_fini(&batch->wait_semaphore_values);
    util_dynarray_fini(&batch->user_signal_semaphores);
    util_dynarray_fini(&batch->user_signal_semaphore_values);
+}
+
+static struct zink_batch_state *
+submission_batch(struct zink_context *ctx)
+{
+   struct zink_batch_state *batch = calloc(1, sizeof(*batch));
+   CHECK(batch);
+   batch->ctx = ctx;
+   batch->cmdbuf = (VkCommandBuffer)(uintptr_t)1;
+   batch->reordered_cmdbuf = (VkCommandBuffer)(uintptr_t)2;
+   batch->unsynchronized_cmdbuf = (VkCommandBuffer)(uintptr_t)3;
+   batch->has_work = batch->has_reordered_work = batch->has_unsync = true;
+   _mesa_set_init(&batch->dmabuf_exports, NULL, _mesa_hash_pointer, _mesa_key_pointer_equal);
+   cnd_init(&batch->usage.flush);
+   util_queue_fence_init(&batch->flush_completed);
+   ctx->bs = batch;
+   return batch;
+}
+
+static void
+test_submission_bridge(struct zink_context *ctx, struct zink_screen *screen)
+{
+   struct pipe_fence_handle *wait = NULL, *signal = NULL;
+   import_result = VK_SUCCESS;
+   zink_create_fence_win32(&screen->base, &wait, (HANDLE)(uintptr_t)1, NULL,
+                           PIPE_FD_TYPE_TIMELINE_SEMAPHORE_D3D12);
+   zink_create_fence_win32(&screen->base, &signal, (HANDLE)(uintptr_t)2, NULL,
+                           PIPE_FD_TYPE_TIMELINE_SEMAPHORE_D3D12);
+   CHECK(wait && signal);
+   bridge_wait = zink_tc_fence(wait)->sem;
+   bridge_signal = zink_tc_fence(signal)->sem;
+   struct pipe_submission_sync sync = {
+      .wait_fence = wait, .signal_fence = signal, .initial_value = 30,
+      .data = &prepared_value,
+      .prepare = prepare_submission, .submitted = complete_submission,
+   };
+   callback_thread = GetCurrentThreadId();
+   ctx->tc = (struct threaded_context *)(uintptr_t)1;
+   CHECK(!zink_set_submission_sync(&ctx->base, &sync));
+   ctx->tc = NULL;
+   CHECK(zink_set_submission_sync(&ctx->base, &sync));
+   screen->base.fence_reference(&screen->base, &wait, NULL);
+   screen->base.fence_reference(&screen->base, &signal, NULL);
+   ctx->queries_disabled = true;
+   screen->sem = (VkSemaphore)(uintptr_t)0x9000;
+   screen->vk.EndCommandBuffer = end_command_buffer;
+   screen->vk.CmdPipelineBarrier = pipeline_barrier;
+   screen->vk.QueueSubmit = queue_submit;
+   screen->vk.QueueWaitIdle = queue_wait_idle;
+   simple_mtx_t queue_lock;
+   simple_mtx_init(&queue_lock, mtx_plain);
+   screen->queue_lock = &queue_lock;
+   simple_mtx_init(&screen->active_batch_states_lock, mtx_plain);
+   simple_mtx_init(&screen->free_batch_states_lock, mtx_plain);
+
+   /* Invoke the actual batch submission path used by internal flushes. Its
+    * wait must cover unsynchronized, reordered and normal command buffers. */
+   struct zink_batch_state *batches[6];
+   batches[0] = submission_batch(ctx);
+   zink_end_batch(ctx);
+   CHECK(prepares == 1 && completions == 1 && submissions == 1);
+   CHECK(prepared_value == 31 && submitted_success && !screen->device_lost);
+
+   CHECK(util_queue_init(&screen->flush_queue, "test", 4, 1, 0, screen));
+   screen->threaded_submit = expect_submit_worker = true;
+   batches[1] = submission_batch(ctx);
+   zink_end_batch(ctx);
+   CHECK(prepares == 2 && completions == 2 && submissions == 2);
+   CHECK(prepared_value == 32 && submitted_success && !screen->device_lost && !idle_waits);
+
+   /* Submission succeeded, but the runtime rejected its dependent wait.
+    * Drain accepted work before teardown can free runtime-owned mappings. */
+   completion_ok = false;
+   batches[2] = submission_batch(ctx);
+   zink_end_batch(ctx);
+   CHECK(prepares == 3 && completions == 3 && submissions == 3);
+   CHECK(submitted_success && screen->device_lost && idle_waits == 1);
+
+   screen->device_lost = false;
+   completion_ok = true;
+   submit_result = VK_ERROR_DEVICE_LOST;
+   batches[3] = submission_batch(ctx);
+   zink_end_batch(ctx);
+   CHECK(prepares == 4 && completions == 4 && submissions == 4);
+   CHECK(!submitted_success && screen->device_lost && idle_waits == 1);
+   util_queue_destroy(&screen->flush_queue);
+   screen->threaded_submit = expect_submit_worker = false;
+
+   /* Independent prepare-failure injection: never submit an unwaitable
+    * batch and never queue a runtime wait for an unsubmitted signal. */
+   screen->device_lost = false;
+   prepare_ok = false;
+   batches[4] = submission_batch(ctx);
+   zink_end_batch(ctx);
+   CHECK(prepares == 5 && completions == 4 && submissions == 4);
+   CHECK(screen->device_lost && !batches[4]->fences.size && idle_waits == 2);
+   ctx->submission_sync_value = UINT64_MAX;
+   CHECK(!zink_submission_sync_prepare(ctx) && prepares == 5);
+
+   unsigned before = destroys;
+   CHECK(zink_set_submission_sync(&ctx->base, NULL));
+   CHECK(destroys == before); /* batches retain both imported payloads */
+   /* Ordinary Zink contexts still signal their internal completion when
+    * the user-signal submit is empty and removed from the submit array. */
+   screen->device_lost = false;
+   submit_result = VK_SUCCESS;
+   bridge_active = false;
+   batches[5] = submission_batch(ctx);
+   zink_end_batch(ctx);
+   CHECK(submissions == 5 && prepares == 5 && completions == 4);
+   for (unsigned i = 0; i < ARRAY_SIZE(batches); ++i) {
+      release_batch(screen, batches[i]);
+      cnd_destroy(&batches[i]->usage.flush);
+      util_queue_fence_destroy(&batches[i]->flush_completed);
+      _mesa_set_fini(&batches[i]->dmabuf_exports, NULL);
+      free(batches[i]);
+   }
+   CHECK(destroys == before + 2);
+   simple_mtx_destroy(&screen->free_batch_states_lock);
+   simple_mtx_destroy(&screen->active_batch_states_lock);
+   simple_mtx_destroy(&queue_lock);
 }
 
 int main(void)
@@ -141,10 +352,11 @@ int main(void)
                            PIPE_FD_TYPE_TIMELINE_SEMAPHORE_D3D12);
    CHECK(!fence && destroys == before + 1);
 
+   test_submission_bridge(ctx, screen);
    free(second);
    free(first);
    free(ctx);
    free(screen);
-   puts("PASS: actual Zink Win32 imports, timeline wait ordering, and signal lifetime; Vulkan calls mocked, no GPU execution");
+   puts("PASS: actual Zink Win32 imports and per-batch timeline bridge, worker/callback ordering and failure/lifetime controls; Vulkan calls mocked, no GPU execution");
    return 0;
 }
