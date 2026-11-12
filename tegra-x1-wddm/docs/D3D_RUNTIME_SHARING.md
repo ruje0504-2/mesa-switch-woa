@@ -2031,3 +2031,75 @@ change. All 159 returned files (140,632,658 bytes) match device lengths and
 SHA256. No native test or debugger remains running. Next, capture the exact
 malformed-submit substage and OS reset entry/exit, and preserve the worker's
 first failure before a subsequent admission can report only device-not-ready.
+
+### Old UMD comparison on .154
+
+`sample-i-ab154-old-20261112` keeps signed KMD `.154` (`dec82546353e`) and ICD
+`6e2fad99d742`, replacing only the UMD with pre-`SAMPLE_I` `e99798fa9668`.
+Its prepared `8f9a286a0e2b` counterpart uses the same normalized desktop-only
+harness. Neither forces a Load probe through the unsupported old translator.
+The old case reaches native LUID `bb8de` at 00:32:31 UTC on November 12. The
+native display-state record at 00:32:53 reports 720x1280, DPI 96 and identity
+rotation; the screenshot stage begins but retains no completed PNG or result.
+An extra boot occurs at 00:33:30. The user's photo shows absent right-side
+taskbar content; they also report left-shifted central icons and later complete
+taskbar disappearance. The photo's precise native/recovery phase is unconfirmed,
+and perspective alone does not establish incorrect scale.
+
+The interrupted `.001` contains 257,476 exported records, including 34,411 UMD
+events. It retains 44 successful DWM flips spanning 21.512 seconds and one
+Explorer windowed Present, with no retained UMD RuntimeError/ZinkFailure or KMD
+recovery event. It does not contain the later numeric-reason-7/OOM sequence of
+the two new-UMD trials. Missing interrupted records do not prove absence of a
+failure, and the reboot alone does not establish that the old and new stacks
+failed for the same reason. `.002` is finalized with 169,385 records and zero
+UMD events. Export hashes:
+`c3ef317361ac0b3a03281661b98154503e678e0a5ba528dc67c43229e6b5262b` and
+`c0a1e3f3ef75c0bd1b73578d0a4227a8d4637f492b2237f7b9c5eae96199967e`.
+
+All 162 files (140,255,556 bytes) match device lengths/hashes. `.59` Code 0,
+removed trial tasks/registration and unchanged power are verified at 00:47:55;
+saved portrait verification at 00:48:32 changes nothing. No native trial remains
+running. The prepared new-UMD counterpart is not installed after independent
+source review confirms the operand defect below; the A/B experiment is
+incomplete and cannot establish causality.
+
+### Sampler-view operand correction
+
+The user-requested local Gemini 4 Carbon High review completes successfully
+after continuing the same conversation from an observation timeout, explicitly
+using `gemini-4-carbon-high` and high effort. Its strongest independently
+confirmed finding is in `ttn_get_src`: unlike SAMPLER/IMAGE/BUFFER operands,
+`TGSI_FILE_SAMPLER_VIEW` was not excluded from ordinary ALU-source conversion.
+`ttn_emit_instruction` visits all sources before dispatching `SAMPLE` or
+`SAMPLE_I`, so the view reaches `ttn_src_for_file_and_index`'s `bad src file`
+unreachable branch. Release compilation can optimize undefined behavior in
+unpredictable ways; the earlier release-only NIR-structure passes did not
+validate this path. This omission predates `3531f0ee` and affects ordinary
+independent-view `SAMPLE` as well as the newly supported integer loads.
+
+The correction adds the view to the resource-reference early return; `ttn_tex`
+continues to resolve the actual image binding and result swizzle. On restored
+`.59`, complete Windows ARM64 `debugoptimized` builds with `b_ndebug=false`
+give a direct regression: the old binary prints `bad src file` at line 751 in
+`TgsiSample.IndependentBindings` at 00:52:52 UTC and requires termination after
+the 15-second post-assert deadline. That is not a clean abnormal-exit result.
+The corrected binary exits 0 with all twelve tests passing at 00:53:40, including
+separate bindings, high view indices, integer loads, buffers, offsets, arrays
+and signed/unsigned results. Executable SHA256 values:
+`a906e27f11eea35b09f0b46dbdfb2af344ed684454388f4f775727dd1118c467` and
+`71857b6d9148304b228ff59a1400adaf1986448bfd01cc3fdb746ad383bed29d`.
+Both tests run entirely in user mode without GPU submission. Release UMD
+`77dea046dde0777d6c67e62769c983c5249595a9cc9e3dd7f8323805854f9cdf` builds;
+native validation remains pending. An initial attempt to link only a debug
+translator against release NIR fails for missing debug symbols; it is replaced
+by the complete debug build rather than by validation stubs.
+
+The review also identifies unfinished MSAA `LD_MS` sample-index handling and
+buffer-load interaction with the conditional Zink LOD-robustness pass. Source
+inspection confirms those gaps, but no captured desktop shader establishes
+their involvement here. They are not changed by this one-line correction.
+Context creation flags alone do not prove all Vulkan image robustness disabled,
+and passing isolated shader cases would not exclude every desktop workload.
+This fix removes confirmed undefined behavior; it does not yet explain taskbar
+geometry, establish a native `Texture.Load` pass or repair the physical desktop.
