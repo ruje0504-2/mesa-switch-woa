@@ -22,9 +22,18 @@ components remain a short-observation baseline, not a stable desktop release.
 The latest matched-component `.158` trial **failed onscreen acceptance**:
 the owner reports no successful native output, and the run ends before any
 native pixel or desktop-capture result is retained. A short Code 0 record is
-not a rendering pass. The device is restored to `.59` / Code 0, with the
+not a rendering pass. That trial was restored to `.59` / Code 0, with the
 trial tasks, permits and temporary registration removed.
 [Exact retest sequence and recovery](NATIVE_DESKTOP_158.md#matched-component-retest-failed-onscreen-acceptance)
+
+A later **isolated Vulkan timeline trial** retains the default D3D stub
+instead of registering the new desktop UMD. Its last retained state is
+`.158` / Code 43 with the startup gate closed at 17:33:19 UTC. After the
+planned setup reboot request, SSH is unavailable; native execution and
+recovery to `.59` have not been confirmed. The preceding trial's verified
+recovery must not be reused as this new trial's result.
+[Probe scope, exact build and pending device evidence](VULKAN_WIN32_MEMORY.md#gpu-timeline-handoffs)
+
 November 12 inventory at 16:15:57 UTC confirms GPU `0.1.0.59`, Wi-Fi `0.5.7.0`
 and fan `1.0.0.12`. Wi-Fi is owner-confirmed usable, and SSH verifies its exact
 installed SYS hash and Code 0. At the owner's request the CPU returned to 1996.8 MHz, verified by

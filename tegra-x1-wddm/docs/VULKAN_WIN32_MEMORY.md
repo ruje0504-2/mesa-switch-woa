@@ -100,6 +100,25 @@ native results remain pending. Even a native pass establishes only these
 GPU memory and semaphore handoffs: runtime-owned D3D contexts, Zink imports,
 DWM composition and physical screen output require their own evidence.
 
+The isolated November 12 trial `desktop158-gpu-timeline-20261112` uses the
+[frozen `.158` KMD and timeline ICD](NATIVE_DESKTOP_158.md#matched-component-retest-failed-onscreen-acceptance),
+with their previously recorded full hashes unchanged, and the probe from
+`5569ecc3` (SHA256
+`91cb29a6d06b0deba04807a1204a986bb9129e21e6e9fb4ae2e7e3a9c2ec990f`).
+It retains the default `tegragpuno3d.dll` D3D slots and selects the ICD only
+in the probe process. The import-content UMD candidate is not registered
+by this trial. Device preparation verifies the copied artifacts and parses
+all eleven trial scripts before changing the driver.
+
+The last retained device command reports `.158` / Code 43 behind the closed
+startup gate at **17:33:19 UTC**, then stages the test ACPI table and requests
+the planned setup reboot at **17:33:26**. SSH has not returned since that
+request. No native-start, semaphore/readback result or recovery result has
+been retrieved. The automatic recovery task is registered for twelve minutes
+after Windows startup, but registration is not proof that it ran. Both
+native execution and restoration to `.59` remain **unconfirmed**. The
+retained setup records establish neither native rendering nor recovery.
+
 ## Evidence
 
 The downloaded 32 records total 15,317,375 bytes; every length and SHA-256
