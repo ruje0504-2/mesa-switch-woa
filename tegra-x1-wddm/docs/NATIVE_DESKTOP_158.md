@@ -160,3 +160,26 @@ unchanged physical-photo originals and their hashes are retained separately
 under `build/stability158-five-minute-20261112/physical-photos/`; collection
 and observation records are alongside `evidence/verified.json`. Hardware
 landscape and vkcube have not been advanced past this failed visual gate.
+
+The 300-second system PNG also contains white triangular corruption in the
+Quick Settings Bluetooth tile, SHA256
+`51ae7ecb7fc66edf036403d0a319cf5cfe6dde34ca15e679016e52781d68ab3a`.
+The defect is therefore observable in the captured desktop image as well as
+on the physical screen. This does not isolate its rendering/shared-storage/
+synchronization cause, and does not support treating it solely as a final
+display-controller stride problem.
+
+Normal-presentation analysis covers a retained **243.6166229-second slice**
+of the ETW export, not the entire 311-second observation. DWM PID 440 has
+796 DXGI Present entries, all `SyncInterval=1`, and 795 successful returns.
+All 795 native flips use interval 1. The single adapter's 14,606 VSync records
+have spacing p50/p95/p99 of 16.6664/16.6854/16.7083 ms. These records do not
+show an absent VSync limit. Excluding one ambiguous overlapping entry, the
+794 paired DXGI Present calls take 25.084/130.6247/265.581 ms at p50/p95/p99
+in wall-clock time. This is not CPU
+execution time, GPU time or full-frame latency: future performance comparison
+must separate rendering, fence waits and presentation queuing. Counting these
+mixed idle/interactive Presents is not a throughput benchmark. The decoded
+export and `presentation-pacing-summary.json` remain under the trial directory;
+the known Dwm-Core event-203 payload mismatch excludes 1,803 records
+from decoded analysis.
