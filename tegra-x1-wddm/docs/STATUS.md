@@ -3,13 +3,30 @@
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**`.156` local WIP, not installed:** retain the stalled application's owned
+**Current priority:** stabilize the frozen `.153` KMD / `e99798fa9668` UMD /
+`6e2fad99d742` ICD combination from `931383e6`, before `3531f0ee`, in local
+branch `stabilize/native-desktop-153`. Complete taskbar/Start-menu composition
+and sustained presentation come before further features or hardware rotation.
+The initial `.147` rollback proposal is superseded. The source
+worktree is `../mesa-switch-woa-stabilize`; the device remains recovered to `.59`.
+Fable 5.2/max independently reviews main in English on the VPS, with local
+commits only and no GitHub push. That review does not block stabilization.
+
+**Active stabilization observation:** `stabilize153-native-20261112` verifies
+the archived package/signatures and exact runtime at 02:36:52 UTC on November
+12. `.59`/portrait preflight passes at 02:37:42. The frozen `.153` package is
+installed with its native gate closed at 02:38:56, then the planned Windows
+restart is requested at 02:39:11. Automatic `.59` recovery remains armed.
+This observation adds early/follow-up desktop PNGs at 0/15/45/90 seconds;
+it runs no pixel probes and makes no mode change. Native results and recovery
+verification remain pending; do not start another trial while it runs.
+
+**`.156` retained candidate, not installed:** retain the stalled application's owned
 command snapshot and read-only PBDMA/USERD fetch state after joining the worker,
 before destructive reset. Host checks, decoder checks and the WDK build pass;
 Windows ARM64 context/reset models exit 0 at 02:13:09/02:13:18 UTC on November
-12, with `.59` Code 0 unchanged. Native collection remains pending. The user
-requests a separate remote Claude review/fix of taskbar composition and code
-correctness before the next native trial.
+12, with `.59` Code 0 unchanged. Native collection remains pending; this
+candidate is not the selected stabilization package.
 [Packet capture contract](RECOVERY_TRACE.md#reset-packet-capture-in-156)
 
 **Latest `.155` result: failed native desktop, first stalled work retained.**
