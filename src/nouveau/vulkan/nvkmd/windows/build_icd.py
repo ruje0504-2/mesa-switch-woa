@@ -56,6 +56,10 @@ def main():
     run(*sdk_cc, "/O2", "/GS-", "/Zl", f"/Fo{shared_test}", "--", win / "test-kmt-shared.c")
     run(a.cc, shared_test, kmt_object, "-Wl,--gc-sections", "-lgdi32",
         "-o", out / "test-kmt-shared.exe")
+    sync_test = out / "test-kmt-sync.obj"
+    run(*sdk_cc, "/O2", "/GS-", "/Zl", f"/Fo{sync_test}", "--", win / "test-kmt-sync.c")
+    run(a.cc, sync_test, kmt_object, "-Wl,--gc-sections", "-lgdi32", "-ladvapi32",
+        "-o", out / "test-kmt-sync.exe")
     run(a.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
         win / "check-shared.c", win / "kmt.c", kmt_object, "-lgdi32",
         "-o", out / "nvk-windows-shared-check.exe")
@@ -76,12 +80,14 @@ def main():
     run("meson", "setup", build, src, "--cross-file", a.cross_file.resolve(),
         "-Dplatforms=windows", "-Dvulkan-drivers=nouveau", "-Dgallium-drivers=[]",
         "-Dglx=disabled", "-Degl=disabled", "-Dgbm=disabled", "-Dllvm=disabled",
-        "-Dbuild-tests=false", "-Dvideo-codecs=[]", "-Dvalgrind=disabled",
+        "-Dbuild-tests=true", "-Dvideo-codecs=[]", "-Dvalgrind=disabled",
         "-Dlibunwind=disabled", "-Dgles1=disabled", "-Dgles2=disabled", "-Dopengl=false",
         "-Dshader-cache=enabled", "-Dzlib=disabled", "-Dzstd=disabled", "-Dexpat=disabled",
         "-Dmesa-clc=system", "-Dbuildtype=release", f"-Dnvk-windows-kmt-object={kmt_object}",
         "-Dnvk-build-id=" + digest.hexdigest())
-    run("ninja", "-C", build, "src/nouveau/vulkan/libvulkan_nouveau.dll")
+    run("ninja", "-C", build, "src/nouveau/vulkan/libvulkan_nouveau.dll",
+        "src/nouveau/vulkan/test-nvk-win32-sync.exe")
+    shutil.copyfile(build / "src/nouveau/vulkan/test-nvk-win32-sync.exe", out / "test-nvk-win32-sync.exe")
     for source, name in (("check.c", "nvk-windows-check.exe"), ("test-kmt.c", "test-kmt.exe")):
         run(a.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-I" + str(src / "include"),
             "-I" + str(win), win / source, win / "kmt.c", "-o", out / name)
@@ -95,7 +101,8 @@ def main():
         "library_path": r".\libvulkan_nouveau.dll", "api_version": "1.4.0",
     }}, indent=2) + "\n")
     files = [dll, out / "nvk-windows-check.exe", out / "test-kmt.exe",
-             out / "test-kmt-shared.exe", out / "nvk-windows-shared-check.exe",
+             out / "test-kmt-shared.exe", out / "test-kmt-sync.exe", out / "test-nvk-win32-sync.exe",
+             out / "nvk-windows-shared-check.exe",
              out / "nvk-windows-vulkan-shared-check.exe", out / "test-win32-image-flags.exe",
              out / "test-win32-pacing.exe", manifest]
     hashes = {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files}

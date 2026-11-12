@@ -3,6 +3,7 @@
 #include "nvk_device.h"
 #include "submit_abi.h"
 #include "util/os_time.h"
+#include "util/u_atomic.h"
 #include "util/u_math.h"
 #include "vk_log.h"
 #include "vk_sync_binary.h"
@@ -10,6 +11,8 @@
 struct windows_sync {
    struct vk_sync base;
    struct tg_kmt_fence fence;
+   HANDLE export_handle;
+   bool export_inherit;
 };
 
 struct windows_ctx {
@@ -36,7 +39,9 @@ sync_fence(struct vk_sync *sync)
 static VkResult
 win_sync_init(struct vk_device *device, struct vk_sync *sync, uint64_t initial)
 {
-   LONG status = tg_kmt_create_fence(sync_device(device), initial, sync_fence(sync));
+   LONG status = sync->flags & VK_SYNC_IS_SHAREABLE ?
+      tg_kmt_create_shared_fence(sync_device(device), initial, sync_fence(sync)) :
+      tg_kmt_create_fence(sync_device(device), initial, sync_fence(sync));
    return nvkmd_windows_status(&device->base, "create monitored fence", status,
                                VK_ERROR_OUT_OF_DEVICE_MEMORY);
 }
@@ -45,7 +50,65 @@ static void
 win_sync_finish(struct vk_device *device, struct vk_sync *sync)
 {
    (void)device;
+   struct windows_sync *win = container_of(sync, struct windows_sync, base);
+   if (win->export_handle) {
+      CloseHandle(win->export_handle);
+      win->export_handle = NULL;
+   }
    tg_kmt_destroy_fence(sync_fence(sync));
+}
+
+static VkResult
+win_sync_import(struct vk_device *device, struct vk_sync *sync,
+                 void *handle, const wchar_t *name)
+{
+   struct tg_kmt_fence imported;
+   LONG status = tg_kmt_import_fence(sync_device(device), handle, name, &imported);
+   if (status < 0)
+      return nvkmd_windows_status(&device->base, "import monitored fence", status,
+                                  VK_ERROR_INVALID_EXTERNAL_HANDLE);
+   /* A failed import must not discard the existing payload. The new KMT
+    * reference survives the application's CloseHandle after import. */
+   win_sync_finish(device, sync);
+   *sync_fence(sync) = imported;
+   return VK_SUCCESS;
+}
+
+static VkResult
+win_sync_export(struct vk_device *device, struct vk_sync *sync, void **handle)
+{
+   struct windows_sync *win = container_of(sync, struct windows_sync, base);
+   *handle = NULL;
+   if (win->export_handle) {
+      if (!DuplicateHandle(GetCurrentProcess(), win->export_handle,
+                           GetCurrentProcess(), handle, 0, win->export_inherit,
+                           DUPLICATE_SAME_ACCESS))
+         return vk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
+      return VK_SUCCESS;
+   }
+   LONG status = tg_kmt_export_fence_win32(&win->fence, NULL, GENERIC_ALL,
+                                           NULL, handle);
+   return nvkmd_windows_status(&device->base, "export monitored fence", status,
+                               VK_ERROR_OUT_OF_HOST_MEMORY);
+}
+
+static VkResult
+win_sync_export_params(struct vk_device *device, struct vk_sync *sync,
+                        const void *security_attributes, uint32_t access,
+                        const wchar_t *name)
+{
+   struct windows_sync *win = container_of(sync, struct windows_sync, base);
+   const SECURITY_ATTRIBUTES *security = security_attributes;
+   /* Materialize the named/security-qualified handle during creation. Do not
+    * retain caller-owned SECURITY_DESCRIPTOR or UTF-16 pointers. */
+   HANDLE handle;
+   LONG status = tg_kmt_export_fence_win32(&win->fence, security, access, name, &handle);
+   if (status < 0)
+      return nvkmd_windows_status(&device->base, "prepare monitored fence export", status,
+                                  VK_ERROR_OUT_OF_HOST_MEMORY);
+   win->export_handle = handle;
+   win->export_inherit = security && security->bInheritHandle;
+   return VK_SUCCESS;
 }
 
 static VkResult
@@ -60,7 +123,7 @@ static VkResult
 win_sync_value(struct vk_device *device, struct vk_sync *sync, uint64_t *value)
 {
    (void)device;
-   *value = *sync_fence(sync)->value;
+   *value = p_atomic_read(sync_fence(sync)->value);
    return VK_SUCCESS;
 }
 
@@ -70,7 +133,7 @@ win_sync_wait(struct vk_device *device, struct vk_sync *sync, uint64_t value,
 {
    assert(!(flags & VK_SYNC_WAIT_PENDING));
    struct tg_kmt_fence *fence = sync_fence(sync);
-   while (*fence->value < value) {
+   while (p_atomic_read(fence->value) < value) {
       DWORD timeout = INFINITE;
       if (deadline != OS_TIMEOUT_INFINITE) {
          uint64_t now = os_time_get_nano();
@@ -99,6 +162,9 @@ const struct vk_sync_type nvkmd_windows_sync_type = {
    .signal = win_sync_signal,
    .get_value = win_sync_value,
    .wait = win_sync_wait,
+   .import_win32_handle = win_sync_import,
+   .export_win32_handle = win_sync_export,
+   .set_win32_export_params = win_sync_export_params,
 };
 
 static struct tg_kmt_fence *

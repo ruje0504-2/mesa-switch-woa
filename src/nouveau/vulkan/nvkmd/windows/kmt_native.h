@@ -71,6 +71,15 @@ LONG tg_kmt_map(const struct tg_kmt_device *dev, const struct tg_kmt_va *va,
                 uint64_t offset, uint64_t size, uint8_t kind, bool read_only);
 LONG tg_kmt_create_fence(const struct tg_kmt_device *dev, uint64_t initial,
                          struct tg_kmt_fence *fence);
+LONG tg_kmt_create_shared_fence(const struct tg_kmt_device *dev, uint64_t initial,
+                                struct tg_kmt_fence *fence);
+/* Imports retain their own KMT reference without consuming the caller's NT
+ * handle. Exported NT handles belong to the caller, including named exports. */
+LONG tg_kmt_import_fence(const struct tg_kmt_device *dev, HANDLE handle,
+                         LPCWSTR name, struct tg_kmt_fence *fence);
+LONG tg_kmt_export_fence_win32(const struct tg_kmt_fence *fence,
+                              const SECURITY_ATTRIBUTES *security, DWORD access,
+                              LPCWSTR name, HANDLE *handle);
 LONG tg_kmt_destroy_fence(struct tg_kmt_fence *fence);
 LONG tg_kmt_wait_fences(const struct tg_kmt_device *dev, uint32_t count,
                         const uint32_t *handles, const uint64_t *values,

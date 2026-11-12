@@ -1129,9 +1129,12 @@ while keeping GM20B resource metadata and submission on the Tegra ABI.
   [Adapter enumeration](https://gitlab.freedesktop.org/lfrb/mesa/-/commit/7a88cc539b31cfa94f5502b1e4592efb5f9aa08e) · [Thunk generation](https://gitlab.freedesktop.org/lfrb/mesa/-/commit/a793e2045d9fdd43ef734f8f08f5b1315656795f)
 - **KMT transport and external objects.** Compare GPU VA mapping, paging
   fences, queue waits and signals, and NT-handle resource import with the
-  existing Windows NVK backend. The current local monitored fence needs
-  NT-handle import and export for cross-component synchronization. Reuse
-  the public KMT call sequences with WDK types. Size the runtime, resource
+  existing Windows NVK backend. NT-handle monitored-fence import/export now
+  exists, with SDK-backed controls executed on Windows; native GPU validation
+  and the runtime/NVK per-submission bridge remain pending. Use
+  [D3DKMTShareObjects](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtshareobjects)
+  and [D3DKMTOpenSyncObjectFromNtHandle2](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtopensyncobjectfromnthandle2)
+  with WDK types. Size the runtime, resource
   and allocation private-data regions separately when opening shared
   images. Shared images need a Tegra layout and lifetime contract for the
   KMD and importers. AMD allocation blobs and command streams are specific

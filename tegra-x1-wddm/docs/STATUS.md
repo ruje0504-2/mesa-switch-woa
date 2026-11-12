@@ -9,8 +9,12 @@ geometry and legacy/MPO integration exist in source and pass the documented
 models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
 components remain a short-observation baseline, not a stable desktop release.
-The latest trial has ended; the device is restored to `.59`, with no GPU test
-active. Source and non-device validation continue before another native trial.
+The latest native trial has ended; the device is restored to `.59`.
+November 12 inventory confirms GPU `0.1.0.59`, Wi-Fi `0.5.6.0` and fan
+`1.0.0.12`. At the owner's request the CPU returned to 1996.8 MHz, verified by
+the fan driver's clock readback; thermal and screen-off policy remain enabled.
+Windows CPU/API controls run on that recovery configuration before another
+native rendering trial. No `.160` GPU package has been installed.
 
 **Desktop direction updated November 12:** the user authorizes replacing the
 Zink desktop route with a native Vulkan hardware backend and asks Claude to
@@ -72,11 +76,34 @@ The ARM64 UMD and `test-zink-win32-sync.exe` compile and link successfully.
 The fixture invokes actual Zink entry points with Vulkan dispatch substitutes;
 it is not a GPU test. Its SHA256 is
 `7eb6289113528ffd93038ab4942291f69a7f913f3f64d040a58bac26850ca03f`.
-Execution remains pending: the device SSH connection closes during upload
-and on a subsequent read-only connection attempt. No GPU driver is installed
-by this attempt. The NVK monitored-fence Win32 sharing provider and the
-runtime/NVK queue bridge still need implementation; these Zink repairs alone
-do not provide cross-device desktop synchronization or establish a visual fix.
+After Wi-Fi recovery, this Zink control exits 0 on the device. Its intentional
+`vkCreateSemaphore` out-of-host-memory injection writes an expected Mesa error
+to stderr; the process still reaches its final PASS and returns zero. This is
+not an actual device-memory exhaustion or a GPU rendering test.
+
+**NVK Win32 timeline sharing implemented:** the SDK bridge now creates and
+opens NT-shared monitored fences, including named/security-qualified exports.
+Failed imports preserve the old payload, caller handles retain their ownership,
+and mapped values use acquire reads on ARM64. The provider exposes timeline
+OPAQUE_WIN32 and D3D12_FENCE import/export; unsupported binary sharing returns
+zero capability bits. The semaphore runtime accepts export parameters while
+the object is shareable, before the first handle export.
+
+On the physical Windows system, SDK/KMT and actual Vulkan/NVK controls both
+exit 0. They exercise Win32 handle lifetime, import failure preservation,
+bidirectional payload visibility, and the production queue wait/signal
+callbacks using KMT substitutes. No GPU command is executed. The final NVK
+control SHA256 is
+`aaee9386065887fe602f7a5737347c2b60dc76049f8be5b5603fa38c63927ba0`;
+the SDK control is
+`f57975f9e9d1c7813b2c01976364d043bcbc5caffc1bb03f055f42ff2bd4f255`.
+The Win32 image-flags and pacing controls also exit 0; sixty paced calls take
+1.003993 seconds, with thread CPU below the timer's measurement resolution.
+Results are retained in `build/win32-sync-controls-20261112/`.
+The updated ICD links, but is not installed. The runtime/NVK per-submission
+queue bridge remains to be connected: `RuntimeDeviceFinish` still performs
+its CPU fence wait. These controls do not establish desktop correctness,
+native shared-fence behavior, or a measured rendering speedup.
 
 **Five-minute observation completed; visual acceptance failed:** the frozen
 `.158` set remains Code 0 during a 311.057-second observation, but the user's

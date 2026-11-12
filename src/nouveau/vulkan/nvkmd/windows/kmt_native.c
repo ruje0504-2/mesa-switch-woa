@@ -275,7 +275,7 @@ tg_kmt_export_memory(const struct tg_kmt_allocation *allocation, HANDLE *handle)
  * Vulkan. Match the per-session, Local\\ and Global\\ named-object namespaces.
  */
 static LONG
-memory_object_name(LPCWSTR name, UNICODE_STRING *object_name)
+shared_object_name(LPCWSTR name, UNICODE_STRING *object_name)
 {
    WCHAR prefix[64];
    int prefix_len;
@@ -310,19 +310,18 @@ memory_object_name(LPCWSTR name, UNICODE_STRING *object_name)
    return 0;
 }
 
-LONG
-tg_kmt_export_memory_win32(const struct tg_kmt_allocation *allocation,
-                           const SECURITY_ATTRIBUTES *security, DWORD access,
-                           LPCWSTR name, HANDLE *handle)
+static LONG
+export_object_win32(uint32_t object, const SECURITY_ATTRIBUTES *security,
+                     DWORD access, LPCWSTR name, HANDLE *handle)
 {
    if (!handle)
       return TG_KMT_INVALID_PARAMETER;
    *handle = NULL;
-   if (!allocation->resource || !allocation->handle || !allocation->size)
+   if (!object)
       return TG_KMT_INVALID_PARAMETER;
    UNICODE_STRING object_name = {0};
    if (name) {
-      LONG status = memory_object_name(name, &object_name);
+      LONG status = shared_object_name(name, &object_name);
       if (status < 0)
          return status;
    }
@@ -332,9 +331,18 @@ tg_kmt_export_memory_win32(const struct tg_kmt_allocation *allocation,
       .Attributes = security && security->bInheritHandle ? OBJ_INHERIT : 0,
       .SecurityDescriptor = security ? security->lpSecurityDescriptor : NULL,
    };
-   LONG status = D3DKMTShareObjects(1, &allocation->resource, &attributes, access, handle);
+   LONG status = D3DKMTShareObjects(1, &object, &attributes, access, handle);
    free(object_name.Buffer);
    return status;
+}
+
+LONG
+tg_kmt_export_memory_win32(const struct tg_kmt_allocation *allocation,
+                           const SECURITY_ATTRIBUTES *security, DWORD access,
+                           LPCWSTR name, HANDLE *handle)
+{
+   uint32_t object = allocation->handle && allocation->size ? allocation->resource : 0;
+   return export_object_win32(object, security, access, name, handle);
 }
 
 LONG
@@ -346,7 +354,7 @@ tg_kmt_open_memory_name(LPCWSTR name, HANDLE *handle)
    if (!name)
       return TG_KMT_INVALID_PARAMETER;
    UNICODE_STRING object_name;
-   LONG status = memory_object_name(name, &object_name);
+   LONG status = shared_object_name(name, &object_name);
    if (status < 0)
       return status;
    OBJECT_ATTRIBUTES attributes = {
@@ -517,11 +525,14 @@ tg_kmt_map(const struct tg_kmt_device *dev, const struct tg_kmt_va *va, uint64_t
    return wait_paging(dev, args.PagingFenceValue);
 }
 
-LONG
-tg_kmt_create_fence(const struct tg_kmt_device *dev, uint64_t initial, struct tg_kmt_fence *fence)
+static LONG
+create_fence(const struct tg_kmt_device *dev, uint64_t initial, bool shared,
+              struct tg_kmt_fence *fence)
 {
+   *fence = (struct tg_kmt_fence){0};
    D3DKMT_CREATESYNCHRONIZATIONOBJECT2 args = {
       .hDevice = dev->handle, .Info.Type = D3DDDI_MONITORED_FENCE,
+      .Info.Flags = { .Shared = shared, .NtSecuritySharing = shared },
       .Info.MonitoredFence = { .InitialFenceValue = initial, .EngineAffinity = 1 },
    };
    LONG status = D3DKMTCreateSynchronizationObject2(&args);
@@ -532,6 +543,80 @@ tg_kmt_create_fence(const struct tg_kmt_device *dev, uint64_t initial, struct tg
    else
       log_create_failure("D3DKMTCreateSynchronizationObject2", status);
    return status;
+}
+
+LONG
+tg_kmt_create_fence(const struct tg_kmt_device *dev, uint64_t initial,
+                     struct tg_kmt_fence *fence)
+{
+   return create_fence(dev, initial, false, fence);
+}
+
+LONG
+tg_kmt_create_shared_fence(const struct tg_kmt_device *dev, uint64_t initial,
+                            struct tg_kmt_fence *fence)
+{
+   return create_fence(dev, initial, true, fence);
+}
+
+LONG
+tg_kmt_export_fence_win32(const struct tg_kmt_fence *fence,
+                          const SECURITY_ATTRIBUTES *security, DWORD access,
+                          LPCWSTR name, HANDLE *handle)
+{
+   return export_object_win32(fence->handle, security, access, name, handle);
+}
+
+LONG
+tg_kmt_import_fence(const struct tg_kmt_device *dev, HANDLE handle,
+                     LPCWSTR name, struct tg_kmt_fence *fence)
+{
+   *fence = (struct tg_kmt_fence){0};
+   if ((!handle && !name) || (handle && name))
+      return TG_KMT_INVALID_PARAMETER;
+
+   HANDLE named_handle = NULL;
+   if (name) {
+      UNICODE_STRING object_name = {0};
+      LONG status = shared_object_name(name, &object_name);
+      if (status < 0)
+         return status;
+      OBJECT_ATTRIBUTES attributes = {
+         .Length = sizeof(attributes), .ObjectName = &object_name,
+      };
+      D3DKMT_OPENSYNCOBJECTNTHANDLEFROMNAME open = {
+         .dwDesiredAccess = GENERIC_ALL, .pObjAttrib = &attributes,
+      };
+      status = D3DKMTOpenSyncObjectNtHandleFromName(&open);
+      free(object_name.Buffer);
+      if (status < 0)
+         return status;
+      named_handle = handle = open.hNtHandle;
+   }
+
+   /* Zero behavior flags mean waits/signals are enabled and signal happens
+    * after execution, not merely after the commands enter the GPU pipeline. */
+   D3DKMT_OPENSYNCOBJECTFROMNTHANDLE2 open = {
+      .hNtHandle = handle, .hDevice = dev->handle,
+      .MonitoredFence.EngineAffinity = 1,
+   };
+   LONG status = D3DKMTOpenSyncObjectFromNtHandle2(&open);
+   if (named_handle)
+      CloseHandle(named_handle);
+   if (status < 0)
+      return status;
+   if (!open.hSyncObject || !open.MonitoredFence.FenceValueCPUVirtualAddress) {
+      if (open.hSyncObject) {
+         const D3DKMT_DESTROYSYNCHRONIZATIONOBJECT destroy = { .hSyncObject = open.hSyncObject };
+         D3DKMTDestroySynchronizationObject(&destroy);
+      }
+      return TG_KMT_INVALID_PARAMETER;
+   }
+   *fence = (struct tg_kmt_fence) {
+      .handle = open.hSyncObject,
+      .value = open.MonitoredFence.FenceValueCPUVirtualAddress,
+   };
+   return 0;
 }
 
 LONG
