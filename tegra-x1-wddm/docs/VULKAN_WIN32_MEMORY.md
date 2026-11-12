@@ -74,6 +74,32 @@ sharing, overlapping execution, D3D runtime sharing and Vulkan CTS coverage
 remain pending. The D3D regression does not exercise Zink's Win32 import
 branch or establish DWM composition.
 
+### GPU timeline handoffs
+
+`nvk-windows-vulkan-shared-check.exe <absolute-vulkan-1.dll> --gpu-timelines`
+adds a separate native test for the Windows timeline implementation. The
+original mode deliberately retains its host fence waits and device-lifetime
+checks; their earlier results cannot validate GPU-to-GPU synchronization.
+
+The new mode creates two Vulkan devices and shares both storage and two
+timeline semaphores. It queues the consumer's wait before submitting the
+producer's signal. The producer writes one pattern; the consumer reads it
+and writes another; a return submission on the producer waits for the
+consumer's signal and reads the second pattern. Only the final submission
+has a host fence wait. There are no intermediate CPU readback checkpoints.
+The test closes application NT handles immediately after import and uses
+per-device Win32 function pointers, as required by
+[`vkGetDeviceProcAddr`](https://docs.vulkan.org/refpages/latest/refpages/source/vkGetDeviceProcAddr.html).
+Timeline imports are permanent, following the
+[Win32 semaphore import contract](https://docs.vulkan.org/refpages/latest/refpages/source/VkImportSemaphoreWin32HandleInfoKHR.html).
+
+Six cases cover buffers and optimal RGBA/BGRA images with OPAQUE_WIN32 and
+D3D12_FENCE timelines. A complete pass checks 49,152 payload words and 768
+guards. The probe compiles for Windows ARM64 with warnings treated as errors;
+native results remain pending. Even a native pass establishes only these
+GPU memory and semaphore handoffs: runtime-owned D3D contexts, Zink imports,
+DWM composition and physical screen output require their own evidence.
+
 ## Evidence
 
 The downloaded 32 records total 15,317,375 bytes; every length and SHA-256
