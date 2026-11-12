@@ -1150,6 +1150,15 @@ shared-image rendering and onscreen acceptance remain unverified. The prior
 failed `.158` retest remains failed. Evidence is retained in the local build
 workspace under `runs/wddm-import-validity-20261112/`.
 
+The separately packaged candidate is built from
+`ca4053872319e81f71207c1021fbc4f6133f6b4f`. `TegraGpuD3D.dll` has SHA256
+`0e840c55f61cc58cee11c00b36c1bce2586d577de5f8e385a09f8ea4bb6a0f02`.
+Its import-control and runtime-probe binaries exactly match the verified
+hashes above. The package is retained as
+`desktop158-import-content-20261112-umd`; it has not been registered for
+native desktop use. The previously tested `.158`/`.160` artifact sets remain
+separate from this candidate.
+
 ## Windows shader cache
 
 The Windows UMD and NVK ICD builds enable Mesa's persistent blob cache.
