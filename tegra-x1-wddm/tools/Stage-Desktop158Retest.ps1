@@ -99,4 +99,8 @@ $record|ConvertTo-Json|Set-Content (Join-Path $p 'surface-control-result.json') 
 if (!$finished -or $code -ne 0 -or $record.DriverAfter -ne '0.1.0.59' -or $record.ProblemAfter -ne 0) {
     throw 'ARM64 surface control failed or the baseline changed'
 }
-'STAGED: exact .158 KMD, import-content UMD and timeline ICD; native rendering remains untested'
+# Check real loader discovery before installing/starting the native KMD.
+# API substitutes and direct ICD loading cannot detect a SYSTEM task whose
+# driver-path environment override is ignored by the Khronos loader.
+& (Join-Path $PSScriptRoot 'Invoke-NvkCheck.ps1') -Directory $p -LoaderOnly
+'STAGED: exact .158 KMD, import-content UMD and timeline ICD; surface control and registered-ICD loader discovery passed; native rendering remains untested'

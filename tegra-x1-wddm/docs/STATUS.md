@@ -27,12 +27,18 @@ trial tasks, permits and temporary registration removed.
 [Exact retest sequence and recovery](NATIVE_DESKTOP_158.md#matched-component-retest-failed-onscreen-acceptance)
 
 A later **isolated Vulkan timeline trial** retains the default D3D stub
-instead of registering the new desktop UMD. Its last retained state is
-`.158` / Code 43 with the startup gate closed at 17:33:19 UTC. After the
-planned setup reboot request, SSH is unavailable; native execution and
-recovery to `.59` have not been confirmed. The preceding trial's verified
-recovery must not be reused as this new trial's result.
-[Probe scope, exact build and pending device evidence](VULKAN_WIN32_MEMORY.md#gpu-timeline-handoffs)
+instead of registering the new desktop UMD. Native KMD startup reaches
+Code 0, but the probe fails immediately at `vkCreateInstance` with
+`VK_ERROR_INCOMPATIBLE_DRIVER`, before GPU commands or pixel checks. The
+SYSTEM controller relied on a driver-path environment override which the
+loader ignores for elevated processes. Controls reproduce that failure;
+even the requested limited-user task receives an administrator token on
+this device. The corrected registered-ICD entry creates an instance under
+SYSTEM on `.59`, and its temporary registration is removed afterward.
+That is loader evidence only; GPU commands remain untested. SSH returns after the trial, and the
+17:52:02 UTC verification confirms this trial's own `.59` / Code 0 recovery,
+cleanup, unchanged power/CPU/fan settings and Wi-Fi 0.5.7 / Code 0.
+[Probe scope, exact build, entry failure and recovery evidence](VULKAN_WIN32_MEMORY.md#gpu-timeline-handoffs)
 
 November 12 inventory at 16:15:57 UTC confirms GPU `0.1.0.59`, Wi-Fi `0.5.7.0`
 and fan `1.0.0.12`. Wi-Fi is owner-confirmed usable, and SSH verifies its exact

@@ -110,14 +110,61 @@ in the probe process. The import-content UMD candidate is not registered
 by this trial. Device preparation verifies the copied artifacts and parses
 all eleven trial scripts before changing the driver.
 
-The last retained device command reports `.158` / Code 43 behind the closed
-startup gate at **17:33:19 UTC**, then stages the test ACPI table and requests
-the planned setup reboot at **17:33:26**. SSH has not returned since that
-request. No native-start, semaphore/readback result or recovery result has
-been retrieved. The automatic recovery task is registered for twelve minutes
-after Windows startup, but registration is not proof that it ran. Both
-native execution and restoration to `.59` remain **unconfirmed**. The
-retained setup records establish neither native rendering nor recovery.
+The package binds behind the closed startup gate at **17:33:19 UTC**, then
+requests the setup reboot at **17:33:26**. The setup boot is **17:34:02**;
+the controller starts at **17:36:03** and native KMD startup completes with
+Code 0, hardware status 0 and a consumed permit at **17:36:12**.
+
+The Vulkan probe starts at **17:36:12.984** and exits **4** at
+**17:36:13.547**, without timing out. It fails at `vkCreateInstance` with
+`VK_ERROR_INCOMPATIBLE_DRIVER` (`-9`), before creating any Vulkan device,
+submitting GPU commands or checking pixels. This is a loader/instance-entry
+failure, not a failed GPU timeline comparison. The controller's transcript
+confirms it ran as SYSTEM. Its process-only `VK_DRIVER_FILES` selection is
+incompatible with the loader's documented behavior: driver-path environment
+overrides are ignored for elevated applications.
+[Khronos loader driver-discovery contract](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderDriverInterface.md#exception-for-elevated-privileges)
+The loader controls below reproduce the discovery failure and establish a
+working registered-ICD entry before another hardware trial.
+
+Recovery is staged at **17:36:31**, followed by the recovery boot at
+**17:37:07**. SSH returns at **17:51:18**. The **17:52:02** verification
+confirms `.59` / Code 0, the original SYS and ACPI hashes, no permit/grant or
+trial tasks, byte-identical power settings, CPU 1996.8 MHz, fan version 12,
+and Wi-Fi 0.5.7 / Code 0 with its recorded SYS hash. No desktop UMD was
+registered by this trial. Its 54 returned records total **27,401,736 bytes**;
+all lengths and SHA-256 values match. Archive SHA-256:
+`3a0a523d420bd572eb332850a6171b63f93ff6f7fd58de4b08f23c722854eb0a`.
+GPU memory/timeline execution and onscreen acceptance remain unvalidated.
+
+### Loader preflight before native activation
+
+At 18:05 UTC, the same loader/ICD pair fails `vkCreateInstance` under SYSTEM
+and under an interactive task configured with `RunLevel Limited`. Both
+processes actually have enabled administrator membership on this device;
+the loader reports that it found no registered drivers. A task's requested
+run level therefore cannot substitute for checking its effective token or
+for registering the ICD.
+
+`Invoke-NvkCheck.ps1` now uses the documented
+`HKLM\SOFTWARE\Khronos\Vulkan\Drivers` discovery path. It temporarily adds
+only the tested manifest's absolute pathname as a DWORD-zero value,
+preserves existing registrations and removes its value in `finally`.
+It does not change a D3D UMD slot. `Stage-Desktop158Retest.ps1` invokes its
+`-LoaderOnly` mode on `.59` before native driver installation. Native trials
+must also remove that exact manifest value in their existing recovery script
+in case Windows restarts before `finally` can run.
+[Windows driver-discovery contract](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderDriverInterface.md#driver-discovery-on-windows)
+
+The actual SYSTEM check at **18:10:16–18:10:18 UTC** successfully creates
+the Vulkan instance with the identified loader `90371981…` and ICD
+`ad686578…`. The raw identity check exits 10 with zero physical devices and
+enumeration result `-3`, as expected on the gated `.59` baseline; these raw
+values are retained and are not reported as GPU success. The **18:10:24**
+cleanup check confirms unchanged registry values, removal of the control
+task and `.59` / Code 0. Evidence is retained in
+`runs/loader-discovery-control-20261112/` and
+`runs/loader-discovery-registered-20261112/`.
 
 ## Evidence
 

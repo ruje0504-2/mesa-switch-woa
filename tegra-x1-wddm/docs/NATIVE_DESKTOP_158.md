@@ -261,3 +261,25 @@ Before another hardware trial, audit the new submission/shared-image path
 against actual runtime/KMT contracts. A later five-minute visual acceptance
 must exercise the known Quick Settings corruption case as well as desktop
 captures; an idle-desktop sequence alone does not cover that regression.
+
+## Present interval audit
+
+The retained UMD exports distinguish DWM scanout requests from application
+Blt requests:
+
+| Trial | DWM Present calls | Flags | Requested interval | Other Blt calls, interval 0 |
+| --- | --- | --- | --- | --- |
+| Historical short `.158` observation | 79 | Flip (`2`) | One VBlank (`1`) | 20 |
+| Failed matched-component retest | 5 | Flip (`2`) | One VBlank (`1`) | 13 |
+
+All of these retained callbacks return `S_OK`. Microsoft's
+[flip-interval definition](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ne-dxgiddi-dxgi_ddi_flip_interval_type)
+defines interval one as a VSync-paced flip. `RuntimePresent` forwards the
+opaque DXGI context unchanged and leaves the interval-override fields unset,
+following the [runtime callback contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgiddicb_present).
+The records therefore do not demonstrate that DWM requested unbounded
+immediate flips. Interval-zero application Blt callbacks must not be counted
+as immediate physical panel flips. These counts do not establish actual
+scanout frequency, GPU completion, correct pixels or sustained presentation;
+the failed trial remains failed. They do not justify adding a CPU timer to
+every DWM Present in place of verifying the existing synchronization path.
