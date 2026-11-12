@@ -32,6 +32,17 @@ unchanged CPU/fan/power/display preference. All 128 collected records match
 device hashes and stream lengths. No restart-cause investigation is performed.
 [Exact failed trial and recovery](NATIVE_DESKTOP_158.md#onscreen-only-trial-physical-failure)
 
+**New source fix, native validation pending:** `1e6a3ba4` closes the runtime
+mapping owner before releasing the frontend's backend resource reference.
+This prevents a delayed Zink/NVK worker release from entering a D3D runtime
+callback while the owner is still live. The real `DestroyResource` control
+reproduces the old wrong-thread callback and passes after the fix; it uses
+substituted runtime/Gallium calls on `.59`, not native GPU execution.
+The ARM64 UMD candidate `7f8f821d…` builds successfully and is retained as
+`desktop158-teardown-order-20261112-umd`. It is not deployed, and no connection
+to the physical hang or successful onscreen fix is claimed.
+[Source path, callback contract and before/after evidence](D3D_RUNTIME_SYNC.md#imported-resource-teardown-ordering)
+
 The earlier matched-component `.158` trial **failed onscreen acceptance**:
 the owner reports no successful native output, and the run ends before any
 native pixel or desktop-capture result is retained. A short Code 0 record is

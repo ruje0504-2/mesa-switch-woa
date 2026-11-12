@@ -1163,9 +1163,11 @@ pending; the trial's later `.59` state is recovery, not native execution.
 The previously tested `.158`/`.160`
 artifact sets remain separate from this candidate.
 
-The mainline `Stage-Desktop158Retest.ps1` now pins this UMD and requires
-`--shared-layout-load` in the trial manifest. It rejects the preceding
-failed UMD combination. This updates preparation only; it does not install
+The mainline `Stage-Desktop158Retest.ps1` now pins the subsequent
+[runtime-teardown candidate](D3D_RUNTIME_SYNC.md#imported-resource-teardown-ordering)
+and its verified Present/teardown control, retaining this import-content fix.
+It still requires `--shared-layout-load` in the trial manifest and rejects
+older UMD combinations. This updates preparation only; it does not install
 the new candidate or change the retained earlier trial scripts/results.
 
 ## Windows shader cache

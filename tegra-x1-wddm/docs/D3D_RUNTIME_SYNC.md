@@ -119,6 +119,54 @@ The [import-content fix](PORTING.md#imported-windows-image-contents) additionall
 preserves existing pixels on the imported image's first render pass; the
 load-preservation scene checks this while retaining GPU-only handoffs.
 
+## Imported-resource teardown ordering
+
+The source audit after the failed onscreen-only trial finds a separate,
+reproducible callback-threading defect. `DestroyResource` previously waited
+for GPU use, dropped the frontend's Gallium resource reference, and only then
+closed `RuntimeResource`. Between the last two steps, Zink's batch worker
+could drop the last imported object reference. NVK's VA destructor would
+then call `free_gpu` while the runtime owner was still live, reaching
+`pfnFreeGpuVirtualAddressCb` on the worker thread.
+
+This frontend exposes the D3D10/10.1 DDI, without the D3D11 free-threaded
+capability. Microsoft's [callback threading rules](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/changes-from-direct3d-10)
+do not grant it the relaxed D3D11 callback model. The
+[GPU-VA free contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/nc-d3dumddi-pfnd3dddi_freegpuvirtualaddresscb)
+also requires completion of GPU use before the synchronous unmap.
+
+Main `1e6a3ba4d4cb603612d43e5af93f74fbea845e97` keeps the existing completion
+wait, closes the runtime owner on the DDI thread, then releases the frontend's
+backend reference. A delayed importer release sees the dead owner and only
+removes retained bookkeeping. Ordinary Flush/Present submission and the
+runtime/NVK GPU timelines are unchanged; no additional GPU wait is added.
+
+The existing Present/identity control now calls the real `DestroyResource`
+DDI and models three imported mappings after swapchain identity rotation.
+Its backend deliberately releases the retained imports on a worker before
+returning, making the previously possible interleaving deterministic.
+Runtime callbacks assert the DDI thread; each mapping is freed once.
+
+- Old production code fails at that thread assertion on Windows ARM64 at
+  22:02:08 UTC, exit 1 without timeout. Control SHA256:
+  `b8378b76dc4ac25a8517363bb2e49eaf683ac43d9070b2385f99645619b99f2f`.
+- The fixed production code passes at 22:03:39. The frozen final control
+  from the committed source passes again at 22:05:50, exit 0 in 100 ms:
+  `f1695ede879a5062ba144997be54a131ec29fcc25d1aa34a662de23d346e88a1`.
+- All runs use controlled runtime/Gallium calls, issue no GPU commands and
+  leave `.59` / Code 0 in place. Nine returned records / 2,112 bytes match
+  device hashes and lengths. Final result SHA256:
+  `efefc77deee7c5658c9153e6c9043312b35804cace341850452edd6d0acaaa42`.
+
+The ARM64 UMD compiles and links. The frozen candidate is
+`desktop158-teardown-order-20261112-umd`, DLL SHA256
+`7f8f821d7b3ca7f56b37bb47d7367e9a5db356bfcee3a838af8a75d81597e3ce`.
+It has **not been installed or tested on the native GPU**. This fixes the
+demonstrated control interleaving; it is not attributed as the cause of the
+reported physical hang. Native pixels and physical desktop acceptance for
+this candidate remain pending. Evidence is retained under
+`runs/wddm-destroy-order-20261112/` in the external build workspace.
+
 ## Contracts and source
 
 - [Create synchronization object callback](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/ns-d3dumddi-_d3dddicb_createsynchronizationobject2)
