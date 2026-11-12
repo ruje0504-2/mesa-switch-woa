@@ -44,3 +44,10 @@ already been installed. Fable 5.2/max independently reviews current main on
 the VPS; its branch must not push to GitHub. The main agent will retrieve and
 review its commits and port only applicable fixes. That review does not block
 this stabilization work.
+
+The initial frozen-stack retry reaches Code 0 but is interrupted by another
+boot before its PNG completes; `.59` recovery is verified. The retained MPO
+submissions contain one full-screen plane with matching VSync addresses,
+while native shell geometry shows an empty Start child. See the
+[MPO contract and observation audit](MPO_CONTRACT_AUDIT.md). This branch is
+still a stabilization starting point, not a stable-driver release.
