@@ -1,5 +1,12 @@
 # GPU status
 
+**Stabilization branch:** return to the frozen `.153` KMD / `e99798fa9668`
+UMD / `6e2fad99d742` ICD combination from source `931383e6`, before
+`3531f0ee`. This branch prioritizes a complete taskbar/Start menu and sustained
+native desktop presentation. The historical entries below are not a statement
+of the currently installed package; the device is recovered to `.59`.
+See [the frozen baseline and work order](STABILIZATION.md).
+
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
