@@ -191,3 +191,73 @@ mixed idle/interactive Presents is not a throughput benchmark. The decoded
 export and `presentation-pacing-summary.json` remain under the trial directory;
 the known Dwm-Core event-203 payload mismatch excludes 1,803 records
 from decoded analysis.
+
+## Matched-component retest: failed onscreen acceptance
+
+The later November 12 run `desktop158-zink-sync-20261112` is **not an
+onscreen success**. The owner explicitly reports no successful native
+output. No `mode-stage.json`, native pixel result, native desktop PNG or
+`native-result.json` is retained. The five-minute observation never reaches
+a retained result; hardware rotation and `vkcube` are not attempted.
+
+This is a different component combination from the historical short pass:
+
+| Component | Source | SHA256 |
+| --- | --- | --- |
+| Frozen KMD `.158` | `6c854e9f394c3d761fab85885bead4bbd4588581` | `46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088` |
+| Zink UMD, shared-image view usage and submission bridge | `accd9f1e5a9f1c649536e400828b7428e8aca367` | `8a1a765de323906bfef4f2c13c8d7bb60527e89d49667928efc5a94eceee3ffe` |
+| NVK ICD, shared timelines | `7a771aa6602d2c94cb4cd362855777290a2503f2` | `ad6865784890f937a7c29aab0f108841b6d99cbffdca985b7dafbffc1a953625` |
+
+The staging tool is retained in main `befdd503`. It replaces an obsolete
+staging script that expected an old ICD hash and reused old UMD control
+results. At 16:18:09 UTC the current ARM64 surface control passes all 16
+cases, exit 0 in 1300 ms; it uses Vulkan substitutes and performs no GPU
+rendering. All 33 scripts parse in Windows PowerShell, and the closed-gate
+and interactive-desktop preflight checks pass on `.59` / Code 0.
+
+Retained controller sequence (UTC):
+
+- 16:20:56: `.158` is installed as `oem89.inf`, Code 43 behind the closed
+  startup gate. The planned setup boot follows at 16:21:39.
+- 16:23:42: the automatic controller starts. The one-shot native start
+  request is issued at 16:23:54. The retained startup completion at
+  16:23:58 records `Hardware=0`, `Problem=0`, `Permit=0`; this proves neither
+  drawing nor physical output.
+- 16:24:26: a new boot is observed before the native pixel/capture stage
+  has produced records. No completed restoration record precedes this boot;
+  it must not be described as a completed test or the planned final recovery.
+  This record does not determine its cause.
+- 16:26:34: the existing attempt marker selects recovery rather than a
+  second native-start attempt. The restore task is observed running at
+  16:26:49 and writes `restore-staged.json` at 16:26:56.
+- 16:27:29: the planned recovery boot. At 16:28:50 the device is `.59` /
+  Code 0 with no remaining `TgGpuDisplay158*` tasks.
+- 16:31:39: full recovery verification completes. The `.59` SYS and ACPI
+  hashes match the originals. Temporary ICD/UMD registration, system loader,
+  opt-in/debug environment, startup permit, grant and tasks are cleared or
+  restored. Power reports match; saved display preference verifies unchanged
+  on BasicDisplay, 720x1280. CPU remains 1996.8 MHz, fan version 12 and Wi-Fi
+  0.5.7.0 / Code 0.
+
+The owner's earlier report of a normal desktop was not tied to successful
+native presentation and is not used as acceptance. Their subsequent explicit
+report of no native onscreen output establishes the failed physical result.
+
+The retained UMD export contains 28,331 records. Its 28 failure-bit statuses
+are residency `E_PENDING` results; runtime-context signal and wait callbacks
+each return success 18 times. This is evidence that the callbacks were
+accepted, not that GPU dependencies completed or pixels reached the panel.
+The interrupted ETL has no completed end timestamp, so its tail cannot be
+treated as a complete execution history or used to identify a restart cause.
+
+All 134 collected files, totaling **98,331,502 bytes**, match device hashes
+and stream lengths. Directory enumeration reported different lengths for
+`loader-debug.csv` and `trace-flush.bin`; a second device-side measurement
+through open file streams confirms the downloaded lengths and hashes. Both
+the original manifest and correction response are retained under
+`runs/desktop158-zink-sync-20261112/` in the local build workspace.
+
+Before another hardware trial, audit the new submission/shared-image path
+against actual runtime/KMT contracts. A later five-minute visual acceptance
+must exercise the known Quick Settings corruption case as well as desktop
+captures; an idle-desktop sequence alone does not cover that regression.

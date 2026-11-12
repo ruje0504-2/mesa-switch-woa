@@ -79,6 +79,14 @@ timings. The subsequent [.160 trial](NATIVE_DESKTOP_160.md) was interrupted
 without usable native results and restored to `.59`. No performance
 improvement or visual fix is claimed yet.
 
+The subsequent [matched-component `.158` retest](NATIVE_DESKTOP_158.md#matched-component-retest-failed-onscreen-acceptance)
+also fails onscreen acceptance. It retains a short Code 0/startup-complete
+record but no native pixel or desktop-capture result; the owner reports no
+successful native output. The retained UMD trace includes successful runtime
+signal/wait callback returns. Callback acceptance does not establish GPU
+completion, cross-context ordering or a rendered frame. The device is restored
+to `.59` with the trial tasks removed.
+
 The next native shared-image check uses `--shared-layout` first. Its optional
 `--shared-layout-checkpoints` mode performs producer and consumer-import CPU
 readbacks before sampling, inserting completion waits that can hide missing

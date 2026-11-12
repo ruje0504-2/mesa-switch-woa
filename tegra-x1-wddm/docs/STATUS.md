@@ -19,7 +19,12 @@ geometry and legacy/MPO integration exist in source and pass the documented
 models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
 components remain a short-observation baseline, not a stable desktop release.
-The latest native trial has ended; the device is restored to `.59`.
+The latest matched-component `.158` trial **failed onscreen acceptance**:
+the owner reports no successful native output, and the run ends before any
+native pixel or desktop-capture result is retained. A short Code 0 record is
+not a rendering pass. The device is restored to `.59` / Code 0, with the
+trial tasks, permits and temporary registration removed.
+[Exact retest sequence and recovery](NATIVE_DESKTOP_158.md#matched-component-retest-failed-onscreen-acceptance)
 November 12 inventory at 16:15:57 UTC confirms GPU `0.1.0.59`, Wi-Fi `0.5.7.0`
 and fan `1.0.0.12`. Wi-Fi is owner-confirmed usable, and SSH verifies its exact
 installed SYS hash and Code 0. At the owner's request the CPU returned to 1996.8 MHz, verified by
@@ -78,8 +83,8 @@ cause of the `.158` corruption. The next shared-image probe must first run
 without producer/import CPU readback checkpoints.
 [View contract, fix and validation](PORTING.md#imported-windows-image-views)
 
-The next onscreen trial's files are staged in a separate device directory;
-the GPU remains on `.59` after preflight. **Native rendering is not accepted**:
+The following matched components were tested in a separate device directory.
+**The run failed onscreen acceptance and is restored to `.59`:**
 
 | Component | Source | Artifact SHA256 |
 | --- | --- | --- |
@@ -100,6 +105,14 @@ script that required an old ICD hash and reused old UMD control results.
 the identified KMD/UMD/ICD/helper inputs and runs the current ARM64 surface
 control before the existing native trial sequence. These preflight results
 do not establish GM20B pixels or a five-minute visual pass.
+After the native start, the retained record reports Code 0 at 16:23:58 UTC,
+then a new boot is observed at 16:24:26 before the pixel/capture stage.
+Recovery is selected at 16:26:34; the recovery boot is at 16:27:29.
+Final verification at 16:31:39 confirms `.59` / Code 0, original ACPI,
+registration/task cleanup, unchanged power/display settings and CPU 1996.8 MHz.
+The owner explicitly reports no successful native onscreen output. Continue
+source/contract audit before another trial; hardware rotation and `vkcube`
+remain behind the unpassed desktop gate.
 The original `.160` UMD package files remain byte-for-byte unchanged.
 
 Mesa's Windows blob-cache backend is implemented and enabled by the UMD/ICD
