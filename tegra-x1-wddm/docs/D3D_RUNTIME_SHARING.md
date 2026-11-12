@@ -1951,7 +1951,7 @@ real GPU work. Executable SHA256 values are respectively
 `076fb1bed47f245f776939064a2c1ae0ca55c556632b7f2fa4ba09d5a0618756`.
 Host checks and the full WDK build pass. The `.154` unsigned SYS hash is
 `b7a508cb14b27cd345d350795a03aacd7bca191541f3091faebdb78222194d65`.
-Native deployment and visual validation remain pending.
+The native retry below does not establish a visual pass.
 
 A genuinely missing inherited binding discovered after admission now follows
 the existing worker-failure/recovery path. It is not retroactively returned as
@@ -1966,7 +1966,8 @@ continued twice with model `gemini-4-carbon-high` and `--effort high`. Both
 calls return review text but report backend stream interruption; neither is
 recorded as a clean completed review. Independent checking rejects its initial
 recommendation to prohibit `STATUS_INVALID_PARAMETER`: Microsoft's documented
-virtual-submit contract permits malformed-packet rejection and requires ordered
+[virtual-submit contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_submitcommandvirtual)
+permits malformed-packet rejection and requires ordered
 last-fence accounting, which the existing rejection marker implements without
 a fabricated DMA interrupt. Carbon withdraws that recommendation on follow-up.
 Its assertion that VidMm never rebinds a system-context root after reset is
@@ -1980,3 +1981,53 @@ This is a source-derived interleaving, not proof that it occurred in the retaine
 trace. Neither the review nor the passing queue model establishes the physical
 taskbar/black-output cause. Raw review output, the corrected interpretation and
 before/after model records are retained with the external build evidence.
+
+### Queued-state native retest
+
+`queued-state154-native-20261111` tests KMD `760d8405`, signed SYS
+`dec82546353ea087ec0bab69c48da136a3445c73d0cb96b0a3281e883e2de6d4`, with
+the unchanged `8f9a286a0e2b` UMD and `6e2fad99d742` ICD. The closed-gate
+installation completes at 23:56:09 UTC, followed by the planned setup boot
+at 23:56:53. Native LUID `baf72` is identified in the trace; the controller
+records Code 0, consumed permit and hardware status 0 at 23:59:21. An extra
+boot occurs at 00:00:09 UTC on November 12. The user did not watch the native
+image, but heard a login/desktop sound and suspected a restart. No native Load
+result, screenshot, observation-start or debugger-attachment record is
+retained. Absence of those records does not prove that preceding calls never
+executed. The planned capture procedure is not counted as a completed capture.
+
+The native trace retains 12 successful DWM flips, seven Explorer windowed
+Presents, three TextInputHost Presents and one StartMenuExperienceHost Present.
+At timestamp `134389151518691212`, Dxgkrnl marks device
+`ffffb10d5a1b0660` erroneous; paging-queue events associate it with DWM PID 760.
+The numeric reason 7 remains uninterpreted. Its preceding scheduler packet
+has submission ID 62 and `pDmaBuffer=0`; that does not establish DMA length or
+which DDI rejected it. DWM's 128x64 BGRA resource creation reports generic
+`8007000e` **0.2818193 seconds after** the device-error mark.
+
+All 359 retained resource-reservation returns are zero. Before that mark,
+observed resident segment peaks total 159,502,336 bytes: 145,952,768 system
+memory, 2,490,368 page tables and 11,059,200 scanout. This is not complete
+committed-memory accounting and does not establish 512-MiB budget exhaustion.
+Five later recovery events report paging-submit `STATUS_DEVICE_NOT_READY`,
+in generations 3–7, with fences 824, 861, 943, 963 and 1025. They are later
+failure boundaries, not the original cause. The successful queue regression
+does not resolve this native failure.
+
+The native `.001` has 232,819 exported records and 23,249 valid UMD events,
+but is unfinalized (`EndTime=0`, `BuffersWritten=0`). The decoder leaves 1,193
+Dwm-Core event-203 payloads uninterpreted because their length differs from the
+available template. The later `.002` has 202,730 records, zero UMD events and
+a finalized 530-buffer log; it belongs to closed-gate recovery. Both report
+zero event/buffer loss, without establishing a complete interrupted native tail.
+Raw export SHA256 values are respectively
+`efe79d5a588eb11e41830b2966eea4193cd85b43ca1fa7c03b73e76777051bfd` and
+`f78862f023663bd2b198ca20e85d030c0a57b156a30354e778ff5c56f11c5267`.
+
+Automatic recovery stages `.59` at 00:03:13 and boots it at 00:03:47. Code 0,
+baseline hashes, removed test tasks/registrations and unchanged power settings
+are verified at 00:06:36. Saved portrait verification at 00:07:19 makes no
+change. All 159 returned files (140,632,658 bytes) match device lengths and
+SHA256. No native test or debugger remains running. Next, capture the exact
+malformed-submit substage and OS reset entry/exit, and preserve the worker's
+first failure before a subsequent admission can report only device-not-ready.

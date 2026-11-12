@@ -15,9 +15,20 @@ taskbar. Wallpaper/icons alone were not a complete desktop pass.
 queued work reaches execution, rather than against stale retired state during
 admission. On `.59`, the old backend rejects the second valid queued MME packet
 in the regression; the corrected ARM64 model passes at 23:47:39 UTC. Host
-checks and the WDK build pass. Native deployment/desktop validation is pending;
-this is not yet an explanation of the `.153` physical failure.
+checks and the WDK build pass. The native retry below does not complete;
+the model result does not establish the `.153` physical failure's cause.
 [Queue correction and Carbon High review](D3D_RUNTIME_SHARING.md#queued-inherited-state-validation)
+
+**`.154` native retry remains incomplete:** native LUID `baf72` reaches Code 0
+at 23:59:21 UTC on November 11, followed by an extra boot at 00:00:09 on
+November 12. No native Load result, screenshot or observation-start record is
+retained. The trace has 12 successful DWM flips and a DWM-associated device
+error preceding generic OOM and five later paging-submit recovery events. All 159
+returned files match device hashes. `.59` Code 0, cleanup and unchanged power
+are verified at 00:06:36 UTC; portrait verification at 00:07:19 is a no-op.
+The trial is finished. The queue regression is fixed, but native desktop
+composition has not passed.
+[Native retry and trace limits](D3D_RUNTIME_SHARING.md#queued-state-native-retest)
 
 **Latest physical desktop result: failed.** In the 120-second `.153` viewing
 trial on LUID `b946a`, the user confirms an incomplete/displaced taskbar followed
@@ -330,16 +341,18 @@ Present and shared-image opens were unfinished at that point.
 
 **Version labels:** Device Manager shows the installed INF package's version.
 Earlier experiments reused the signed `.144` KMD while replacing the test UMD
-and ICD. The last native KMD candidate is versioned `.153`, adding recovery diagnostics. Standalone build manifests
+and ICD. The latest native KMD candidate is `.154`, correcting inherited-state
+validation order and retaining `.153` recovery diagnostics. Standalone build manifests
 name their component and include a readable `artifact_id` with the DLL hash.
-The completed `.153` native trial used:
+The completed `.154` trial used these artifacts; completing the trial does not
+mean its native rendering or desktop checks passed:
 
 | Component | Candidate identifier |
 | --- | --- |
-| Signed KMD package | `0.1.0.153` (source `110d9882`, SYS `94bcb716d824`; first-recovery tracing) |
-| D3D UMD / Zink | `buffer-release-v2-20261111-umd+e99798fa9668` (source `931383e6`) |
+| Signed KMD package | `0.1.0.154` (source `760d8405`, SYS `dec82546353e`; execution-order state validation) |
+| D3D UMD / Zink | `sample-i-20261111-umd+8f9a286a0e2b` (source `3531f0ee`) |
 | NVK ICD | `runtime-shared-20261111-icd+6e2fad99d742` |
-| Runtime probe | `5fcfd6671788` (source `55c1be85`); original and all BGRA/RGBA variants pass with normal teardown |
+| Runtime probe | `7a9752a1e128` (source `3531f0ee`); Load WARP control passes, no retained native Load result |
 
 These are test-deployment identifiers. Rollback reinstalls `.59`; a future
 complete driver-package release must version its INF and catalog together
