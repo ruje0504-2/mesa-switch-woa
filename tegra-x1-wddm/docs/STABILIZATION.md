@@ -51,3 +51,26 @@ submissions contain one full-screen plane with matching VSync addresses,
 while native shell geometry shows an empty Start child. See the
 [MPO contract and observation audit](MPO_CONTRACT_AUDIT.md). This branch is
 still a stabilization starting point, not a stable-driver release.
+
+## First isolated correction
+
+`b0d377f6` ports only the `TGSI_FILE_SAMPLER_VIEW` resource-operand case from
+`ee7b0d50`. The sole production-code difference from `931383e6` is that one
+line in `ttn_get_src`; SAMPLE_I lowering and `.154–.156` KMD changes are not
+imported. This removes the ordinary-SAMPLE undefined behavior previously
+reproduced in a debug build; it does not implement the known missing SAMPLE_I
+instruction or establish a complete desktop fix.
+
+The independent release build produces UMD
+`9cdf0374821021c8d45ce10aef889a4a950628265bade443568d7e45134e4896`.
+Its exact DLL and runtime shared/primary/Present/ownership controls pass on
+recovered `.59` at 02:58:42 UTC, with 114 valid ETW events. The independent
+`debugoptimized`, `b_ndebug=false` translator executable
+`2453f859a13d56ef577fb7aecf950d6ba0fb1447a891d68461df821f60df38b5`
+passes all six `TgsiSample` tests at 03:00:01 UTC, exit 0 and no timeout.
+Device status stays `.59` Code 0 before and after. These are user-mode controls;
+the new UMD has not been installed or tested with native GPU execution.
+
+Evidence directories: `stabilize153-sampler-view-20261112-umd`,
+`stabilize153-sampler-view-control-20261112` and
+`stabilize153-sampler-view-debug-20261112` in the external build root.
