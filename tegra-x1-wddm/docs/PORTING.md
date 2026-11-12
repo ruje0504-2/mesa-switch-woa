@@ -1159,6 +1159,11 @@ hashes above. The package is retained as
 native desktop use. The previously tested `.158`/`.160` artifact sets remain
 separate from this candidate.
 
+The mainline `Stage-Desktop158Retest.ps1` now pins this UMD and requires
+`--shared-layout-load` in the trial manifest. It rejects the preceding
+failed UMD combination. This updates preparation only; it does not install
+the new candidate or change the retained earlier trial scripts/results.
+
 ## Windows shader cache
 
 The Windows UMD and NVK ICD builds enable Mesa's persistent blob cache.

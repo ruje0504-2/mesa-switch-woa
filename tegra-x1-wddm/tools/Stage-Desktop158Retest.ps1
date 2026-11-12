@@ -28,10 +28,10 @@ foreach ($name in 'icd-registration.json','automatic-start.json','native-result.
 $m=[IO.File]::ReadAllText((Join-Path $p 'trial-components.json'))|ConvertFrom-Json
 if ($m.kmd_version -ne '0.1.0.158' -or
     $m.kmd.'tegragpurender.sys'.Sha256 -ne '46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088' -or
-    $m.app.'TegraGpuD3D.dll'.Sha256 -ne '8a1a765de323906bfef4f2c13c8d7bb60527e89d49667928efc5a94eceee3ffe' -or
+    $m.app.'TegraGpuD3D.dll'.Sha256 -ne '0e840c55f61cc58cee11c00b36c1bce2586d577de5f8e385a09f8ea4bb6a0f02' -or
     $m.app.'libvulkan_nouveau.dll'.Sha256 -ne 'ad6865784890f937a7c29aab0f108841b6d99cbffdca985b7dafbffc1a953625' -or
-    $m.shared_probe -ne '--shared-layout (no producer/import CPU readback checkpoints)') {
-    throw 'This entry point expects the identified .158/view-usage/timeline retest components'
+    $m.shared_probe -ne '--shared-layout-load (no producer/import CPU readback checkpoints)') {
+    throw 'This entry point expects the identified .158/import-content/timeline candidate components'
 }
 $app=Join-Path $p 'app'
 foreach ($entry in $m.app.PSObject.Properties) {
@@ -99,4 +99,4 @@ $record|ConvertTo-Json|Set-Content (Join-Path $p 'surface-control-result.json') 
 if (!$finished -or $code -ne 0 -or $record.DriverAfter -ne '0.1.0.59' -or $record.ProblemAfter -ne 0) {
     throw 'ARM64 surface control failed or the baseline changed'
 }
-'STAGED: exact .158 KMD, view-usage UMD and timeline ICD; native rendering remains untested'
+'STAGED: exact .158 KMD, import-content UMD and timeline ICD; native rendering remains untested'
