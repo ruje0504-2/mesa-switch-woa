@@ -8,9 +8,27 @@
 debug builds reproduce `bad src file` on the old ordinary `SAMPLE` test;
 the one-line correction passes all twelve translator tests at 00:53:40 UTC
 on November 12. Release UMD `77dea046dde0` builds and its exact DLL/callback
-controls pass at 00:55:26. Native validation is pending; this fixes confirmed
-undefined behavior, not a proven
-desktop failure cause. [Correction and limits](D3D_RUNTIME_SHARING.md#sampler-view-operand-correction)
+controls pass at 00:55:26. The native retry below still fails. Confirmed undefined
+behavior is corrected; the desktop failure's cause remains unresolved.
+[Correction and limits](D3D_RUNTIME_SHARING.md#sampler-view-operand-correction)
+
+**Latest native run finished:** `sampler-view154-native-20261112` uses unchanged
+signed `.154` KMD/ICD and corrected UMD `77dea046dde0`. Native LUID `bcf28`
+reaches Code 0 at 01:02:54, followed by user-confirmed black output and an extra
+boot at 01:03:41. No Load result or native PNG is retained. The interrupted
+trace has ten DWM flips, a system-preemption packet 2.091 seconds before the
+first DWM device-error mark, then generic OOM 291 ms later. All 158 files match
+device hashes. `.59` Code 0, cleanup and unchanged power are verified at
+01:09:49; saved portrait at 01:10:25. No GPU test remains active.
+[Native result and limits](D3D_RUNTIME_SHARING.md#sampler-view-native-retest)
+
+**Recovered shell repaired:** the user then reports the taskbar missing on
+the `.59` software desktop. The before PNG confirms it; Explorer and DWM load
+WARP. Restarting only Explorer restores the full taskbar/tray in the after PNG
+at 01:15:31, also confirmed by the user. Resolution/DPI remain 720x1280/96.
+This is a software-shell recovery result, not native GPU acceleration or proof
+of the earlier physical taskbar's cause.
+[Before/after evidence](DESKTOP_CAPTURE.md#recovered-shell-with-missing-taskbar)
 
 **Old UMD comparison:** fixed `.154` KMD/ICD with `e99798fa9668` reaches native
 LUID `bb8de` at 00:32:31 UTC, then an extra boot at 00:33:30. It retains 44 DWM
@@ -122,8 +140,8 @@ completes at 21:56:46 UTC; an additional startup occurs during recovery at
 and is verified Code 0 with cleanup and unchanged power at 22:03:37. Saved
 portrait is unchanged at 22:04:35. No native test remains running.
 
-**Next:** identify the initial submit/preempt/reset path before the DWM device
-error; the retained recovery requests occur later. Preserve the underlying
+**Next:** capture the active GPU work and preemption/reset state before the
+DWM device error; the retained recovery requests occur later. Preserve the underlying
 resource-create failure instead of interpreting generic OOM as budget exhaustion.
 Then complete physical desktop composition, hardware landscape and Win32 `vkcube`.
 The successful shared-pixel probes need not be rerun without a relevant change.
@@ -374,7 +392,7 @@ mean its native rendering or desktop checks passed:
 | Component | Candidate identifier |
 | --- | --- |
 | Signed KMD package | `0.1.0.154` (source `760d8405`, SYS `dec82546353e`; execution-order state validation) |
-| D3D UMD / Zink | `sample-i-20261111-umd+8f9a286a0e2b` (source `3531f0ee`) |
+| D3D UMD / Zink | `sampler-view-20261112-umd+77dea046dde0` (source `ee7b0d50`) |
 | NVK ICD | `runtime-shared-20261111-icd+6e2fad99d742` |
 | Runtime probe | `7a9752a1e128` (source `3531f0ee`); Load WARP control passes, no retained native Load result |
 

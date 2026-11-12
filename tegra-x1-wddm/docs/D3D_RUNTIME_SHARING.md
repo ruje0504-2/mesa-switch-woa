@@ -2105,3 +2105,56 @@ Context creation flags alone do not prove all Vulkan image robustness disabled,
 and passing isolated shader cases would not exclude every desktop workload.
 This fix removes confirmed undefined behavior; it does not yet explain taskbar
 geometry, establish a native `Texture.Load` pass or repair the physical desktop.
+
+### Sampler-view native retest
+
+`sampler-view154-native-20261112` tests corrected UMD `77dea046dde0` from
+`ee7b0d50`, unchanged signed `.154` KMD `dec82546353e` and ICD `6e2fad99d742`.
+It schedules the unchanged Load probe before geometry/PNG capture and desktop
+observation. It is not the unstarted desktop-only A/B counterpart. The planned
+setup reboot boots at 01:00:30 UTC; native LUID `bcf28` reaches Code 0 at
+01:02:54. The user reports black output followed by an automatic restart;
+the extra boot is recorded at 01:03:41. No native Load result, screenshot,
+mode-stage or debugger attachment record is retained. Missing tail records
+do not prove that every preceding call was unexecuted.
+
+The native trace retains ten successful DWM flips, six Explorer windowed
+Presents, three TextInputHost Presents and one StartMenuExperienceHost Present.
+DWM PID 780 is associated with device `ffffe089b8f79050` by 208 paging-queue
+records. Its device-error mark is at `134389189556613319`, before the controller's
+Code-0 completion and **0.2907953 seconds before** the generic `8007000e`
+resource-create failure. All 378 retained resource-reservation returns succeed.
+Pre-error observed resident peaks total 161,796,096 bytes, not the complete
+committed-memory accounting. The unchanged 512-MiB ceiling is not established
+as the cause.
+
+A preceding `DmaPacket` start at `134389189535701058` has packet type 3 and
+submission ID 62. Microsoft's public
+[DXGKETW_DMA_PACKET_TYPE](https://learn.microsoft.com/en-us/previous-versions/hh706296(v=vs.85))
+defines type 3 as a system-preemption buffer; its
+[DMA-submit event contract](https://learn.microsoft.com/en-us/previous-versions/hh706295(v=vs.85))
+also reserves `pDmaBuffer` for system use, so zero is not evidence of zero
+command length. This start is **2.0912261 seconds before** the first device
+error. Prior preemption IDs 59–61 have completion records, whereas 62 has none
+before that mark in the retained stream. This narrows investigation to the
+active-work/preemption/reset boundary; it does not identify what stalled the
+GPU or prove a faulty preemption implementation. Numeric device-error reason
+7 remains uninterpreted.
+
+Five later recovery records are again paging-submit `STATUS_DEVICE_NOT_READY`
+in generations 3–7, with fences 774, 804, 870, 902 and 979; they do not identify
+the initial fault. The unfinalized native `.001` has 246,944 exported records
+and 23,268 UMD events; the finalized recovery `.002` has 152,434 records and zero
+UMD events. Both exporters report zero loss without proving a complete native
+tail. Raw export hashes:
+`a69cc07cd154daf2b83da7d25b8a56b7db76668c694481686a2ac50a95257651` and
+`39c9b7994d1286212df0d03961430309f03ce43aa60f600b5854fec3841089bc`.
+
+Recovery stages `.59` at 01:06:36 and boots it at 01:07:09. Code 0, cleanup and
+unchanged power are verified at 01:09:49; saved portrait verification at
+01:10:25 makes no change. All 158 files (133,358,153 bytes) match device hashes.
+The recovered software desktop separately lacks its taskbar until Explorer is
+restarted; [before/after PNGs](DESKTOP_CAPTURE.md#recovered-shell-with-missing-taskbar)
+and the user's confirmation establish that shell recovery at 01:15:31.
+No native GPU or helper task remains active. The compiler defect is corrected,
+but native desktop composition and `Texture.Load` pixels remain unverified.

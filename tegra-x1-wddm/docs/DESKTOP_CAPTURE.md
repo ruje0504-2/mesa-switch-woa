@@ -92,3 +92,29 @@ Start icons and right-side tray/clock. The geometry checkpoint predates image
 completion. PNG SHA256:
 `9b62c53aba9d87b7a82d47738993242e63ed2f271542df9fb65f9bf63480696d`.
 This remains a recovered-baseline capture, not native presentation proof.
+
+## Recovered shell with missing taskbar
+
+After the sampler-view native trial, `.59` Code 0 and driver/registration
+restoration are verified, but the user reports the taskbar missing. The
+01:12:13 UTC PNG in `desktop-after-sampler-view154-20261112` independently
+confirms wallpaper/icons with no taskbar. Its shell rectangle and work area
+are still correct, at DPI 96. The Start child has zero extent and the
+`Windows.UI.Composition.DesktopWindowContentBridge` child is absent. Scoped
+module enumeration finds `D3D10Warp.dll` in both Explorer and DWM, with no
+Tegra/Vulkan UMD in that list; no matching Application error/hang event is
+returned for the current boot. This records the state, not its startup cause.
+
+After retaining that evidence, only the captured Explorer owner is restarted
+in the same interactive user session (PID 4360 to 2800). The 01:15:31 PNG
+shows the complete taskbar, Start icons and tray/clock, also confirmed by the
+user. The content bridge returns and Start/tray rectangles match the earlier
+working control. Driver `.59`, 720x1280 resolution and DPI 96 remain unchanged.
+This establishes recovery of the software shell, not native acceleration and
+not the cause of earlier native misplacement. A restored driver and valid
+outer taskbar rectangle alone are insufficient to declare the desktop restored.
+
+All eleven returned files match device hashes. Before/after PNG SHA256 values:
+`d98de373862ee54a5408a3edb39cd3e4b58a56c61ea9377090c2841dbd8e2394` and
+`d16c0a27d86d456a98ca48afa11073a6a4af620616970cbf782936a2180f0cc3`.
+The temporary Explorer-recovery task is removed.
