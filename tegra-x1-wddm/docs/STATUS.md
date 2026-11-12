@@ -25,6 +25,13 @@ match device hashes. `.59` Code 0/cleanup/unchanged power are verified at
 02:50:03, saved portrait at 02:50:25. The recovery PNG at 02:52:10 has a complete
 taskbar/tray. No trial remains active. [MPO contract and evidence](MPO_CONTRACT_AUDIT.md)
 
+**First isolated stabilization correction:** branch commit `b0d377f6` ports
+only the sampler-view operand fix onto `931383e6`, without SAMPLE_I lowering
+or later KMD changes. New UMD `9cdf03748210` builds; its exact DLL/shared/primary/
+Present controls pass at 02:58:42 UTC. All six assertion-enabled `TgsiSample`
+tests pass at 03:00:01, with `.59` Code 0 unchanged. Native validation is pending;
+the known missing SAMPLE_I path is not fixed by this one-line correction.
+
 **`.156` retained candidate, not installed:** retain the stalled application's owned
 command snapshot and read-only PBDMA/USERD fetch state after joining the worker,
 before destructive reset. Host checks, decoder checks and the WDK build pass;
