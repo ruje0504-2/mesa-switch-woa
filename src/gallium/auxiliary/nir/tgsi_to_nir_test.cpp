@@ -17,16 +17,20 @@ protected:
 
    nir_tex_instr *translate(tgsi_texture_type target, unsigned texture,
                             unsigned sampler, bool swizzle = false,
-                            bool offset = false, bool legacy = false)
+                            bool offset = false, bool legacy = false,
+                            bool fetch = false,
+                            tgsi_return_type type = TGSI_RETURN_TYPE_FLOAT)
    {
       ureg_program *u = ureg_create(MESA_SHADER_FRAGMENT);
-      auto coord = ureg_DECL_fs_input(u, TGSI_SEMANTIC_GENERIC, 0,
-                                      TGSI_INTERPOLATE_PERSPECTIVE);
+      auto coord = fetch ? ureg_imm4u(u, 7, 11, 3, 2) :
+         ureg_DECL_fs_input(u, TGSI_SEMANTIC_GENERIC, 0,
+                           TGSI_INTERPOLATE_PERSPECTIVE);
       auto output = ureg_DECL_output(u, TGSI_SEMANTIC_COLOR, 0);
       auto view = ureg_DECL_sampler_view(u, texture, target,
-         TGSI_RETURN_TYPE_FLOAT, TGSI_RETURN_TYPE_FLOAT,
-         TGSI_RETURN_TYPE_FLOAT, TGSI_RETURN_TYPE_FLOAT);
-      auto state = ureg_DECL_sampler(u, sampler);
+         type, type, type, type);
+      struct ureg_src state = {};
+      if (!fetch)
+         state = ureg_DECL_sampler(u, sampler);
       if (swizzle)
          view = ureg_swizzle(view, TGSI_SWIZZLE_W, TGSI_SWIZZLE_Z,
                             TGSI_SWIZZLE_Y, TGSI_SWIZZLE_X);
@@ -40,9 +44,10 @@ protected:
          tex_offset.SwizzleY = imm.SwizzleY;
          tex_offset.SwizzleZ = imm.SwizzleZ;
       }
-      ureg_tex_insn(u, legacy ? TGSI_OPCODE_TEX : TGSI_OPCODE_SAMPLE,
+      ureg_tex_insn(u, fetch ? TGSI_OPCODE_SAMPLE_I :
+                         legacy ? TGSI_OPCODE_TEX : TGSI_OPCODE_SAMPLE,
                     &output, 1, legacy ? target : TGSI_TEXTURE_UNKNOWN,
-                    &tex_offset, offset, src, legacy ? 2 : 3);
+                    &tex_offset, offset, src, legacy || fetch ? 2 : 3);
       ureg_END(u);
       const tgsi_token *tokens = ureg_get_tokens(u, nullptr);
       shader = tgsi_to_nir_noscreen(tokens, &options);
@@ -142,4 +147,84 @@ TEST_F(TgsiSample, LegacyCombinedBinding)
    EXPECT_EQ(binding(tex, nir_tex_src_texture_deref),
              binding(tex, nir_tex_src_sampler_deref));
    EXPECT_EQ(binding(tex, nir_tex_src_texture_deref)->data.binding, 2);
+}
+
+TEST_F(TgsiSample, IntegerLoadHasNoSampler)
+{
+   auto tex = translate(TGSI_TEXTURE_2D, 63, 0, false, false, false, true);
+   ASSERT_NE(tex, nullptr);
+   EXPECT_EQ(tex->op, nir_texop_txf);
+   EXPECT_EQ(tex->coord_components, 2);
+   ASSERT_NE(binding(tex, nir_tex_src_texture_deref), nullptr);
+   EXPECT_EQ(binding(tex, nir_tex_src_texture_deref)->data.binding, 63);
+   EXPECT_EQ(binding(tex, nir_tex_src_sampler_deref), nullptr);
+   EXPECT_TRUE(BITSET_TEST(shader->info.textures_used_by_txf, 63));
+   EXPECT_TRUE(BITSET_IS_EMPTY(shader->info.samplers_used));
+   int coord = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+   int lod = nir_tex_instr_src_index(tex, nir_tex_src_lod);
+   ASSERT_GE(coord, 0);
+   ASSERT_GE(lod, 0);
+   EXPECT_EQ(nir_scalar_as_uint(nir_scalar_resolved(tex->src[coord].src.ssa, 0)), 7);
+   EXPECT_EQ(nir_scalar_as_uint(nir_scalar_resolved(tex->src[coord].src.ssa, 1)), 11);
+   EXPECT_EQ(nir_scalar_as_uint(nir_scalar_resolved(tex->src[lod].src.ssa, 0)), 2);
+}
+
+TEST_F(TgsiSample, IntegerArrayLoad)
+{
+   auto tex = translate(TGSI_TEXTURE_2D_ARRAY, 3, 0, false, false, false, true);
+   ASSERT_NE(tex, nullptr);
+   EXPECT_TRUE(tex->is_array);
+   EXPECT_EQ(tex->coord_components, 3);
+   int coord = nir_tex_instr_src_index(tex, nir_tex_src_coord);
+   ASSERT_GE(coord, 0);
+   EXPECT_EQ(nir_scalar_as_uint(nir_scalar_resolved(tex->src[coord].src.ssa, 2)), 3);
+}
+
+TEST_F(TgsiSample, BufferLoadIgnoresMip)
+{
+   auto tex = translate(TGSI_TEXTURE_BUFFER, 3, 0, false, false, false, true);
+   ASSERT_NE(tex, nullptr);
+   EXPECT_EQ(tex->sampler_dim, GLSL_SAMPLER_DIM_BUF);
+   EXPECT_EQ(tex->coord_components, 1);
+   EXPECT_LT(nir_tex_instr_src_index(tex, nir_tex_src_lod), 0);
+   EXPECT_EQ(binding(tex, nir_tex_src_sampler_deref), nullptr);
+}
+
+TEST_F(TgsiSample, IntegerLoadOffsetAndSwizzle)
+{
+   auto tex = translate(TGSI_TEXTURE_2D, 3, 0, true, true, false, true);
+   ASSERT_NE(tex, nullptr);
+   int offset = nir_tex_instr_src_index(tex, nir_tex_src_offset);
+   ASSERT_GE(offset, 0);
+   EXPECT_EQ(nir_scalar_as_int(nir_scalar_resolved(tex->src[offset].src.ssa, 0)), -1);
+   EXPECT_EQ(nir_scalar_as_int(nir_scalar_resolved(tex->src[offset].src.ssa, 1)), 2);
+   bool found = false;
+   nir_foreach_use(use, &tex->def) {
+      nir_instr *parent = nir_src_use_instr(use);
+      if (parent->type != nir_instr_type_alu) continue;
+      auto alu = nir_instr_as_alu(parent);
+      if (alu->op != nir_op_mov) continue;
+      found = true;
+      for (unsigned i = 0; i < 4; ++i)
+         EXPECT_EQ(alu->src[0].swizzle[i], 3 - i);
+   }
+   EXPECT_TRUE(found);
+}
+
+TEST_F(TgsiSample, IntegerLoadUnsignedResult)
+{
+   auto tex = translate(TGSI_TEXTURE_3D, 3, 0, false, false, false, true,
+                         TGSI_RETURN_TYPE_UINT);
+   ASSERT_NE(tex, nullptr);
+   EXPECT_EQ(tex->dest_type, nir_type_uint32);
+   EXPECT_EQ(tex->coord_components, 3);
+}
+
+TEST_F(TgsiSample, IntegerLoadSignedResult)
+{
+   auto tex = translate(TGSI_TEXTURE_1D_ARRAY, 3, 0, false, false, false, true,
+                         TGSI_RETURN_TYPE_SINT);
+   ASSERT_NE(tex, nullptr);
+   EXPECT_EQ(tex->dest_type, nir_type_int32);
+   EXPECT_EQ(tex->coord_components, 2);
 }
