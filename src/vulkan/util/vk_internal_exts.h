@@ -103,6 +103,23 @@ struct wsi_surface_supported_counters {
 #define VK_STRUCTURE_TYPE_WSI_SURFACE_SUPPORTED_COUNTERS_MESA_cast \
    struct wsi_surface_supported_counters
 
+/* Chained to VkInstanceCreateInfo by an in-tree Windows user-mode driver that
+ * loads the NVK ICD by path, without a Vulkan loader. It replaces the
+ * NVK_I_WANT_A_BROKEN_VULKAN_DRIVER environment opt-in for that one matched
+ * consumer; it does not make the device conformant. A Vulkan loader never
+ * forwards this structure, so applications cannot supply it.
+ */
+struct nvk_embedded_instance_info {
+    VkStructureType sType;
+    const void *pNext;
+    bool allow_experimental_device;
+};
+
+#define VK_STRUCTURE_TYPE_NVK_EMBEDDED_INSTANCE_INFO_MESA \
+   (VkStructureType)1000001006
+#define VK_STRUCTURE_TYPE_NVK_EMBEDDED_INSTANCE_INFO_MESA_cast \
+   struct nvk_embedded_instance_info
+
 /**
  * Pseudo-extension struct that may be chained into VkRenderingAttachmentInfo
  * to indicate an initial layout for the attachment.  This is only allowed if

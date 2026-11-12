@@ -1,0 +1,661 @@
+/* SPDX-License-Identifier: MIT
+ *
+ * Runtime-owned WDDM allocations: primaries, shared surfaces and surfaces
+ * opened from another device. The D3D runtime owns the allocation; this
+ * driver makes it resident and maps it into the process GPU address space on
+ * the runtime's device, and the Vulkan image is bound to that same backing.
+ * No runtime handle is cast to a KMT device or NT handle, and no path here
+ * copies pixels: a second owner always sees what the first one rendered.
+ *
+ * The allocation and callback contracts follow the earlier, hardware-tested
+ * owner implementation (tegra-x1-wddm/docs/D3D_RUNTIME_SHARING.md); one
+ * paging queue now serves a whole device instead of one per resource.
+ */
+#include "tgd3d.h"
+#include "nouveau/vulkan/nvkmd/windows/allocation_abi.h"
+#include "vulkan/util/vk_internal_exts.h"
+#include "vulkan/util/vk_wsi_win32_memory.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+namespace tgd3d {
+
+struct Mapping {
+   uint64_t address, size;
+   bool freed;
+   Mapping *next;
+};
+
+struct RuntimeResource {
+   wsi_win32_memory memory;
+   LONG refs;
+   SRWLOCK lock;
+   HANDLE device, runtime_resource;
+   D3DDDI_DEVICECALLBACKS callbacks;
+   D3DKMT_HANDLE queue, fence;
+   const volatile UINT64 *fence_value;
+   HRESULT error, cleanup_error;
+   bool cpu_locked, dead, associated, primary;
+   void *cpu;
+   Mapping *mappings;
+};
+
+/* arg0: stage in the high half, allocation handle in the low half. */
+static HRESULT rt_trace(RuntimeResource *p, unsigned stage, HRESULT hr, uint64_t value = 0)
+{
+   trace(TGD3D_TRACE_RUNTIME_MEMORY, hr, (uint64_t)stage << 32 | p->memory.allocation, value);
+   return hr;
+}
+
+static VkResult vk_result(RuntimeResource *p, HRESULT hr)
+{
+   if (SUCCEEDED(hr))
+      return VK_SUCCESS;
+   p->error = hr;
+   if (hr == E_OUTOFMEMORY)
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   if (hr == D3DDDIERR_OUTOFVIDEOMEMORY)
+      return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+   if (hr == D3DDDIERR_DEVICEREMOVED || hr == DXGI_ERROR_DEVICE_REMOVED ||
+       hr == DXGI_ERROR_DEVICE_RESET)
+      return VK_ERROR_DEVICE_LOST;
+   return VK_ERROR_UNKNOWN;
+}
+
+static HRESULT wait_paging(const D3DDDI_DEVICECALLBACKS &cb, HANDLE device, D3DKMT_HANDLE fence,
+                           const volatile UINT64 *current, UINT64 value)
+{
+   if (!value || (current && *current >= value))
+      return S_OK;
+   D3DDDICB_WAITFORSYNCHRONIZATIONOBJECTFROMCPU wait = {};
+   wait.ObjectCount = 1;
+   wait.ObjectHandleArray = &fence;
+   wait.FenceValueArray = &value;
+   return cb.pfnWaitForSynchronizationObjectFromCpuCb(device, &wait);
+}
+
+static void owner_retain(void *context)
+{
+   InterlockedIncrement(&static_cast<RuntimeResource *>(context)->refs);
+}
+
+static void owner_release(void *context)
+{
+   auto p = static_cast<RuntimeResource *>(context);
+   if (!InterlockedDecrement(&p->refs)) {
+      while (p->mappings) {
+         Mapping *next = p->mappings->next;
+         free(p->mappings);
+         p->mappings = next;
+      }
+      free(p);
+   }
+}
+
+static HRESULT free_address(RuntimeResource *p, uint64_t address, uint64_t bytes)
+{
+   D3DDDICB_FREEGPUVIRTUALADDRESS args = {};
+   args.BaseAddress = address;
+   args.Size = bytes;
+   return rt_trace(p, 5, p->callbacks.pfnFreeGpuVirtualAddressCb(p->device, &args), bytes);
+}
+
+static VkResult owner_free_gpu(void *context, uint64_t address, uint64_t bytes)
+{
+   auto p = static_cast<RuntimeResource *>(context);
+   AcquireSRWLockExclusive(&p->lock);
+   Mapping **link = &p->mappings;
+   while (*link && ((*link)->address != address || (*link)->size != bytes))
+      link = &(*link)->next;
+   Mapping *mapping = *link;
+   HRESULT hr = S_OK;
+   /* Deallocating the runtime resource already released its addresses, and
+    * they may have been handed out again. Never free a stale range. */
+   if ((!mapping || !mapping->freed) && !p->dead)
+      hr = free_address(p, address, bytes);
+   if (FAILED(hr))
+      p->cleanup_error = hr;
+   if (mapping) {
+      *link = mapping->next;
+      free(mapping);
+   }
+   VkResult status = vk_result(p, hr);
+   ReleaseSRWLockExclusive(&p->lock);
+   return status;
+}
+
+static VkResult owner_map_gpu(void *context, uint64_t address, uint64_t offset, uint64_t bytes,
+                              uint8_t kind, bool read_only, uint64_t reserved,
+                              uint64_t reserved_size)
+{
+   auto p = static_cast<RuntimeResource *>(context);
+   AcquireSRWLockExclusive(&p->lock);
+   HRESULT hr = E_INVALIDARG;
+   if (p->dead) {
+      hr = D3DDDIERR_DEVICEREMOVED;
+   } else if (bytes && !((address | offset | bytes | reserved | reserved_size) & 4095) && !kind &&
+              offset <= p->memory.size && bytes <= p->memory.size - offset &&
+              address >= reserved && address - reserved <= reserved_size &&
+              bytes <= reserved_size - (address - reserved)) {
+      Mapping *mapping = p->mappings;
+      while (mapping && (mapping->address != reserved || mapping->size != reserved_size))
+         mapping = mapping->next;
+      if (!mapping) {
+         mapping = static_cast<Mapping *>(calloc(1, sizeof(*mapping)));
+         if (!mapping) {
+            vk_result(p, E_OUTOFMEMORY);
+            ReleaseSRWLockExclusive(&p->lock);
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+         }
+         mapping->address = reserved;
+         mapping->size = reserved_size;
+         mapping->next = p->mappings;
+         p->mappings = mapping;
+      }
+      D3DDDI_MAPGPUVIRTUALADDRESS map = {};
+      map.hPagingQueue = p->queue;
+      map.BaseAddress = address;
+      map.hAllocation = p->memory.allocation;
+      map.OffsetInPages = offset / 4096;
+      map.SizeInPages = bytes / 4096;
+      map.Protection.Write = !read_only;
+      hr = rt_trace(p, 4, p->callbacks.pfnMapGpuVirtualAddressCb(p->device, &map), bytes);
+      /* WDDM queues page-table updates with E_PENDING despite its failure
+       * bit; the mapping is usable only after the paging fence. */
+      if (SUCCEEDED(hr) || hr == E_PENDING) {
+         if (map.VirtualAddress != address)
+            hr = E_FAIL;
+         else
+            hr = rt_trace(p, 3, wait_paging(p->callbacks, p->device, p->fence, p->fence_value,
+                                            map.PagingFenceValue), map.PagingFenceValue);
+      }
+   }
+   VkResult status = vk_result(p, hr);
+   ReleaseSRWLockExclusive(&p->lock);
+   return status;
+}
+
+static HRESULT lock_cpu(RuntimeResource *p, void **address)
+{
+   if (p->dead)
+      return D3DDDIERR_DEVICEREMOVED;
+   if (!p->cpu_locked) {
+      D3DDDICB_LOCK2 lock = {};
+      lock.hAllocation = p->memory.allocation;
+      HRESULT hr = rt_trace(p, 7, p->callbacks.pfnLock2Cb(p->device, &lock));
+      if (FAILED(hr))
+         return hr;
+      if (!lock.pData)
+         return E_FAIL;
+      p->cpu = lock.pData;
+      p->cpu_locked = true;
+   }
+   *address = p->cpu;
+   return S_OK;
+}
+
+static VkResult owner_map_cpu(void *context, void **address)
+{
+   auto p = static_cast<RuntimeResource *>(context);
+   AcquireSRWLockExclusive(&p->lock);
+   VkResult status = vk_result(p, lock_cpu(p, address));
+   ReleaseSRWLockExclusive(&p->lock);
+   return status;
+}
+
+static void owner_unmap_cpu(void *context)
+{
+   /* The lock is kept until the resource is destroyed: Lock2 pins nothing
+    * on this adapter and the mapping is reused by the next reader. */
+   (void)context;
+}
+
+HRESULT runtime_destroy(RuntimeResource *p)
+{
+   if (!p)
+      return S_OK;
+   AcquireSRWLockExclusive(&p->lock);
+   HRESULT hr = p->cleanup_error;
+   p->dead = true;
+   /* Order matters: release this device's GPU addresses, drop the CPU lock,
+    * and only then return the allocation to the runtime. */
+   for (Mapping *mapping = p->mappings; mapping; mapping = mapping->next) {
+      if (!mapping->freed) {
+         HRESULT next = free_address(p, mapping->address, mapping->size);
+         if (SUCCEEDED(hr))
+            hr = next;
+         mapping->freed = true;
+      }
+   }
+   if (p->cpu_locked) {
+      D3DDDICB_UNLOCK2 unlock = {};
+      unlock.hAllocation = p->memory.allocation;
+      HRESULT next = rt_trace(p, 8, p->callbacks.pfnUnlock2Cb(p->device, &unlock));
+      if (SUCCEEDED(hr))
+         hr = next;
+      p->cpu_locked = false;
+      p->cpu = nullptr;
+   }
+   if (p->associated) {
+      D3DDDICB_DEALLOCATE deallocate = {};
+      deallocate.hResource = p->runtime_resource;
+      HRESULT next = rt_trace(p, 6, p->callbacks.pfnDeallocateCb(p->device, &deallocate));
+      if (SUCCEEDED(hr))
+         hr = next;
+      p->memory.allocation = 0;
+      p->associated = false;
+   }
+   ReleaseSRWLockExclusive(&p->lock);
+   owner_release(p);
+   return hr;
+}
+
+HRESULT runtime_device_create(Device *dev)
+{
+   const auto &cb = dev->kt;
+   if (!cb.pfnCreateContextVirtualCb || !cb.pfnDestroyContextCb || !cb.pfnAllocateCb ||
+       !cb.pfnDeallocateCb || !cb.pfnCreatePagingQueueCb || !cb.pfnDestroyPagingQueueCb ||
+       !cb.pfnMakeResidentCb || !cb.pfnMapGpuVirtualAddressCb || !cb.pfnFreeGpuVirtualAddressCb ||
+       !cb.pfnWaitForSynchronizationObjectFromCpuCb || !cb.pfnLock2Cb || !cb.pfnUnlock2Cb)
+      return DXGI_ERROR_UNSUPPORTED;
+   /* NVK's kernel context is invisible to the D3D runtime. The runtime
+    * needs a context of its own for implicit synchronization and Present. */
+   D3DDDICB_CREATECONTEXTVIRTUAL context = {};
+   context.EngineAffinity = 1;
+   HRESULT hr = cb.pfnCreateContextVirtualCb(dev->hRTDevice.handle, &context);
+   if (SUCCEEDED(hr) && !context.hContext)
+      hr = E_FAIL;
+   trace(TGD3D_TRACE_RUNTIME_CONTEXT, hr, 1, 0);
+   if (FAILED(hr))
+      return hr;
+   dev->hContext = context.hContext;
+
+   D3DDDICB_CREATEPAGINGQUEUE queue = {};
+   queue.Priority = D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL;
+   hr = cb.pfnCreatePagingQueueCb(dev->hRTDevice.handle, &queue);
+   if (SUCCEEDED(hr) && (!queue.hPagingQueue || !queue.hSyncObject))
+      hr = E_FAIL;
+   trace(TGD3D_TRACE_RUNTIME_CONTEXT, hr, 2, queue.hPagingQueue);
+   if (FAILED(hr))
+      return hr;
+   dev->pagingQueue = queue.hPagingQueue;
+   dev->pagingFence = queue.hSyncObject;
+   dev->pagingFenceValue = static_cast<const volatile UINT64 *>(queue.FenceValueCPUVirtualAddress);
+   return S_OK;
+}
+
+void runtime_device_destroy(Device *dev)
+{
+   if (dev->pagingQueue) {
+      D3DDDI_DESTROYPAGINGQUEUE queue = {};
+      queue.hPagingQueue = dev->pagingQueue;
+      dev->kt.pfnDestroyPagingQueueCb(dev->hRTDevice.handle, &queue);
+      dev->pagingQueue = 0;
+   }
+   if (dev->hContext) {
+      D3DDDICB_DESTROYCONTEXT context = {};
+      context.hContext = dev->hContext;
+      HRESULT hr = dev->kt.pfnDestroyContextCb(dev->hRTDevice.handle, &context);
+      trace(TGD3D_TRACE_RUNTIME_CONTEXT, hr, 6, 0);
+      dev->hContext = nullptr;
+   }
+}
+
+static HRESULT create_owner(Device *dev, D3D10DDI_HRTRESOURCE runtime, RuntimeResource **out)
+{
+   if (!runtime.handle || !dev->pagingQueue)
+      return DXGI_ERROR_UNSUPPORTED;
+   auto p = static_cast<RuntimeResource *>(calloc(1, sizeof(RuntimeResource)));
+   if (!p)
+      return E_OUTOFMEMORY;
+   p->refs = 1;
+   p->device = dev->hRTDevice.handle;
+   p->runtime_resource = runtime.handle;
+   p->callbacks = dev->kt;
+   p->queue = dev->pagingQueue;
+   p->fence = dev->pagingFence;
+   p->fence_value = dev->pagingFenceValue;
+   p->memory.adapter_luid = dev->adapter->luid;
+   InitializeSRWLock(&p->lock);
+   *out = p;
+   return S_OK;
+}
+
+static HRESULT make_ready(RuntimeResource *p, uint64_t bytes)
+{
+   if (!p->memory.allocation)
+      return E_FAIL;
+   D3DDDI_MAKERESIDENT resident = {};
+   resident.hPagingQueue = p->queue;
+   resident.NumAllocations = 1;
+   resident.AllocationList = &p->memory.allocation;
+   HRESULT hr = p->callbacks.pfnMakeResidentCb(p->device, &resident);
+   rt_trace(p, 2, hr, resident.PagingFenceValue);
+   if (SUCCEEDED(hr) || hr == E_PENDING)
+      hr = rt_trace(p, 3, wait_paging(p->callbacks, p->device, p->fence, p->fence_value,
+                                      resident.PagingFenceValue), resident.PagingFenceValue);
+   if (FAILED(hr))
+      return hr;
+   p->memory.version = WSI_WIN32_MEMORY_VERSION;
+   p->memory.size = bytes;
+   p->memory.context = p;
+   p->memory.retain = owner_retain;
+   p->memory.release = owner_release;
+   p->memory.map_gpu = owner_map_gpu;
+   p->memory.free_gpu = owner_free_gpu;
+   p->memory.map_cpu = owner_map_cpu;
+   p->memory.unmap_cpu = owner_unmap_cpu;
+   return S_OK;
+}
+
+/* The KMD owns the storage envelope; the trailing pointer-free payload is
+ * this driver's image description. OpenResource receives the same bytes. */
+struct SharedMetadata {
+   tg_gpu_resource_request storage;
+   uint32_t magic, version;
+   RuntimeSharedDescription description;
+   uint32_t reserved[2];
+};
+static_assert(sizeof(SharedMetadata) == 72, "shared image metadata ABI");
+static constexpr uint32_t shared_magic = 0x52534754; /* TGSR */
+
+static HRESULT shared_layout(const RuntimeSharedDescription &d,
+                             tg_gpu_linear_allocation_request *allocation)
+{
+   if (!d.width || !d.height || d.usage != D3D10_DDI_USAGE_DEFAULT ||
+       (d.bind_flags & ~(D3D10_DDI_BIND_SHADER_RESOURCE | D3D10_DDI_BIND_RENDER_TARGET |
+                         D3D10_DDI_BIND_PRESENT)))
+      return DXGI_ERROR_UNSUPPORTED;
+   uint32_t format;
+   switch (d.format) {
+   case DXGI_FORMAT_B8G8R8A8_UNORM: format = D3DDDIFMT_A8R8G8B8; break;
+   case DXGI_FORMAT_R8G8B8A8_UNORM: format = D3DDDIFMT_A8B8G8R8; break;
+   default: return DXGI_ERROR_UNSUPPORTED;
+   }
+   /* 128-byte rows let the GPU render to the linear surface directly and
+    * sample it through a pitch texture header; four padding rows keep the
+    * last block of a tiled copy inside the allocation. */
+   const uint64_t pitch = ((uint64_t)d.width * 4 + 127) & ~UINT64_C(127);
+   const uint64_t rows = ((uint64_t)d.height + 3) & ~UINT64_C(3);
+   if (pitch > TG_GPU_MEMORY_BUDGET_BYTES || rows > TG_GPU_MEMORY_BUDGET_BYTES / pitch)
+      return D3DDDIERR_OUTOFVIDEOMEMORY;
+   *allocation = {
+      {TG_GPU_ALLOCATION_ABI, TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_LINEAR_SURFACE,
+       (pitch * rows + 4095) & ~UINT64_C(4095)},
+      format, d.width, d.height, (UINT)pitch};
+   return S_OK;
+}
+
+HRESULT runtime_shared_create(Device *dev, const D3D10DDIARG_CREATERESOURCE *desc,
+                              D3D10DDI_HRTRESOURCE runtime, RuntimeResource **out, UINT *pitch)
+{
+   *out = nullptr;
+   if (!desc->pMipInfoList || desc->pPrimaryDesc ||
+       desc->ResourceDimension != D3D10DDIRESOURCE_TEXTURE2D ||
+       desc->MiscFlags != D3D10_DDI_RESOURCE_MISC_SHARED || desc->MapFlags ||
+       desc->MipLevels != 1 || desc->ArraySize != 1 ||
+       desc->SampleDesc.Count != 1 || desc->SampleDesc.Quality ||
+       desc->pMipInfoList[0].TexelDepth != 1)
+      return DXGI_ERROR_UNSUPPORTED;
+   SharedMetadata metadata = {};
+   auto &d = metadata.description;
+   d = {desc->pMipInfoList[0].TexelWidth, desc->pMipInfoList[0].TexelHeight, 0,
+        desc->Format, desc->BindFlags, desc->Usage};
+   tg_gpu_linear_allocation_request request;
+   HRESULT hr = shared_layout(d, &request);
+   if (FAILED(hr))
+      return hr;
+   d.pitch = request.Pitch;
+   metadata.magic = shared_magic;
+   metadata.version = 1;
+   metadata.storage = {TG_GPU_RESOURCE_ABI, sizeof(metadata.storage), 1,
+      sizeof(metadata) - sizeof(metadata.storage), request.Buffer.bytes, {0, 0}};
+   RuntimeResource *p = nullptr;
+   hr = create_owner(dev, runtime, &p);
+   if (FAILED(hr))
+      return hr;
+   D3DDDI_ALLOCATIONINFO2 info = {};
+   info.pPrivateDriverData = &request;
+   info.PrivateDriverDataSize = sizeof(request);
+   D3DDDICB_ALLOCATE allocate = {};
+   allocate.hResource = runtime.handle;
+   allocate.pPrivateDriverData = &metadata;
+   allocate.PrivateDriverDataSize = sizeof(metadata);
+   allocate.NumAllocations = 1;
+   allocate.pAllocationInfo2 = &info;
+   hr = p->callbacks.pfnAllocateCb(p->device, &allocate);
+   rt_trace(p, 1, hr, request.Buffer.bytes);
+   if (FAILED(hr)) {
+      runtime_destroy(p);
+      return hr;
+   }
+   p->associated = true;
+   p->memory.allocation = info.hAllocation;
+   hr = make_ready(p, request.Buffer.bytes);
+   if (FAILED(hr)) {
+      runtime_destroy(p);
+      return hr;
+   }
+   *pitch = request.Pitch;
+   *out = p;
+   return S_OK;
+}
+
+HRESULT runtime_shared_open(Device *dev, const D3D10DDIARG_OPENRESOURCE *args,
+                            D3D10DDI_HRTRESOURCE runtime, RuntimeResource **out,
+                            RuntimeSharedDescription *description)
+{
+   *out = nullptr;
+   *description = {};
+   if (args->NumAllocations != 1 || !args->pOpenAllocationInfo ||
+       !args->hKMResource.handle || !args->pPrivateDriverData ||
+       args->PrivateDriverDataSize != sizeof(SharedMetadata))
+      return DXGI_ERROR_UNSUPPORTED;
+   SharedMetadata metadata;
+   memcpy(&metadata, args->pPrivateDriverData, sizeof(metadata));
+   const auto &s = metadata.storage;
+   if (metadata.magic != shared_magic || metadata.version != 1 ||
+       metadata.reserved[0] || metadata.reserved[1] ||
+       s.version != TG_GPU_RESOURCE_ABI || s.header_bytes != sizeof(s) ||
+       s.allocation_count != 1 || s.driver_data_bytes != sizeof(metadata) - sizeof(s) ||
+       s.reserved[0] || s.reserved[1])
+      return DXGI_ERROR_UNSUPPORTED;
+   tg_gpu_linear_allocation_request expected;
+   HRESULT hr = shared_layout(metadata.description, &expected);
+   if (FAILED(hr))
+      return hr;
+   if (s.allocation_bytes != expected.Buffer.bytes || metadata.description.pitch != expected.Pitch)
+      return DXGI_ERROR_UNSUPPORTED;
+   /* Only the documented INFO/INFO2 common prefix is read. */
+   const auto &info = args->pOpenAllocationInfo[0];
+   if (!info.hAllocation || !info.pPrivateDriverData ||
+       info.PrivateDriverDataSize != sizeof(expected))
+      return DXGI_ERROR_UNSUPPORTED;
+   tg_gpu_linear_allocation_request actual;
+   memcpy(&actual, info.pPrivateDriverData, sizeof(actual));
+   if (memcmp(&actual, &expected, sizeof(actual)))
+      return DXGI_ERROR_UNSUPPORTED;
+   RuntimeResource *p = nullptr;
+   hr = create_owner(dev, runtime, &p);
+   if (FAILED(hr))
+      return hr;
+   /* The runtime has already opened these handles for this device. Keep its
+    * hRTResource for callbacks and teardown; nothing is allocated here and
+    * the producer's handles are never used. */
+   p->associated = true;
+   p->memory.allocation = info.hAllocation;
+   hr = make_ready(p, expected.Buffer.bytes);
+   if (FAILED(hr)) {
+      runtime_destroy(p);
+      return hr;
+   }
+   *description = metadata.description;
+   *out = p;
+   return S_OK;
+}
+
+HRESULT runtime_primary_create(Device *dev, const D3D10DDIARG_CREATERESOURCE *desc,
+                               D3D10DDI_HRTRESOURCE runtime, RuntimeResource **out,
+                               UINT *out_width, UINT *out_height, UINT *out_pitch)
+{
+   *out = nullptr;
+   if (!desc->pPrimaryDesc || !desc->pMipInfoList)
+      return DXGI_ERROR_UNSUPPORTED;
+   const auto &primary = *desc->pPrimaryDesc;
+   const UINT mode_rotation = primary.ModeDesc.Rotation == DXGI_DDI_MODE_ROTATION_UNSPECIFIED ?
+      DXGI_DDI_MODE_ROTATION_IDENTITY : primary.ModeDesc.Rotation;
+   /* NONPREROTATED leaves orientation to the application: keep identity
+    * storage instead of applying the mode's rotation a second time. */
+   const UINT rotation = primary.Flags & DXGI_DDI_PRIMARY_NONPREROTATED ?
+      DXGI_DDI_MODE_ROTATION_IDENTITY : mode_rotation;
+   const bool quarter = rotation == DXGI_DDI_MODE_ROTATION_ROTATE90 ||
+                        rotation == DXGI_DDI_MODE_ROTATION_ROTATE270;
+   /* The fixed panel: 720x1280 identity storage, 1280x720 for quarter turns. */
+   const UINT width = quarter ? 1280 : 720, height = quarter ? 720 : 1280;
+   if (desc->ResourceDimension != D3D10DDIRESOURCE_TEXTURE2D ||
+       desc->Format != DXGI_FORMAT_B8G8R8A8_UNORM || desc->MipLevels != 1 ||
+       desc->ArraySize != 1 || desc->SampleDesc.Count != 1 || desc->SampleDesc.Quality ||
+       primary.VidPnSourceId != 0 || mode_rotation > DXGI_DDI_MODE_ROTATION_ROTATE270 ||
+       (primary.Flags & ~(DXGI_DDI_PRIMARY_OPTIONAL | DXGI_DDI_PRIMARY_NONPREROTATED)) ||
+       desc->pMipInfoList[0].TexelWidth != width || desc->pMipInfoList[0].TexelHeight != height ||
+       !((primary.ModeDesc.Width == width && primary.ModeDesc.Height == height) ||
+         ((mode_rotation == DXGI_DDI_MODE_ROTATION_ROTATE90 ||
+           mode_rotation == DXGI_DDI_MODE_ROTATION_ROTATE270) &&
+          primary.ModeDesc.Width == height && primary.ModeDesc.Height == width)))
+      return DXGI_ERROR_UNSUPPORTED;
+   if (!dev->kt.pfnSetDisplayModeCb)
+      return DXGI_ERROR_UNSUPPORTED;
+   RuntimeResource *p = nullptr;
+   HRESULT hr = create_owner(dev, runtime, &p);
+   if (FAILED(hr))
+      return hr;
+   p->primary = true;
+   const UINT pitch = width * 4;
+   tg_gpu_primary_allocation_request request = {
+      {TG_GPU_ALLOCATION_ABI, TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_DISPLAY_PRIMARY,
+       (uint64_t)pitch * height}, D3DDDIFMT_A8R8G8B8,
+      {primary.ModeDesc.RefreshRate.Numerator, primary.ModeDesc.RefreshRate.Denominator},
+      rotation, width, height, pitch, 0};
+   D3DDDI_ALLOCATIONINFO2 info = {};
+   info.pPrivateDriverData = &request;
+   info.PrivateDriverDataSize = sizeof(request);
+   info.VidPnSourceId = primary.VidPnSourceId;
+   info.Flags.Primary = true;
+   D3DDDICB_ALLOCATE allocate = {};
+   allocate.hResource = runtime.handle;
+   allocate.NumAllocations = 1;
+   allocate.pAllocationInfo2 = &info;
+   hr = p->callbacks.pfnAllocateCb(p->device, &allocate);
+   rt_trace(p, 1, hr, request.Buffer.bytes);
+   if (FAILED(hr)) {
+      runtime_destroy(p);
+      return hr;
+   }
+   p->associated = true;
+   p->memory.allocation = info.hAllocation;
+   hr = make_ready(p, request.Buffer.bytes);
+   if (FAILED(hr)) {
+      runtime_destroy(p);
+      return hr;
+   }
+   *out_width = width;
+   *out_height = height;
+   *out_pitch = pitch;
+   *out = p;
+   return S_OK;
+}
+
+HRESULT runtime_set_display_mode(RuntimeResource *p, Device *dev, UINT subresource)
+{
+   if (!p || !p->primary)
+      return DXGI_ERROR_UNSUPPORTED;
+   if (p->device != dev->hRTDevice.handle || subresource)
+      return E_INVALIDARG;
+   AcquireSRWLockExclusive(&p->lock);
+   D3DDDICB_SETDISPLAYMODE mode = {};
+   mode.hPrimaryAllocation = p->memory.allocation;
+   HRESULT hr = p->dead ? D3DDDIERR_DEVICEREMOVED :
+      p->callbacks.pfnSetDisplayModeCb(p->device, &mode);
+   ReleaseSRWLockExclusive(&p->lock);
+   return hr;
+}
+
+bool runtime_is_primary(const RuntimeResource *p) { return p && p->primary; }
+D3DKMT_HANDLE runtime_allocation(const RuntimeResource *p)
+{
+   return p && !p->dead && p->associated ? p->memory.allocation : 0;
+}
+
+void runtime_rebind(RuntimeResource *p, D3D10DDI_HRTRESOURCE runtime)
+{
+   /* Identity rotation moves storage between logical resources. The
+    * allocation is deallocated through the slot that now holds it. */
+   AcquireSRWLockExclusive(&p->lock);
+   p->runtime_resource = runtime.handle;
+   ReleaseSRWLockExclusive(&p->lock);
+}
+
+HRESULT runtime_bind_image(Device *dev, RuntimeResource *p, VkImage image, VkDeviceMemory *memory)
+{
+   VkMemoryRequirements req;
+   dev->vk.GetImageMemoryRequirements(dev->vkdev, image, &req);
+   if (req.size > p->memory.size)
+      return DXGI_ERROR_UNSUPPORTED;
+   VkMemoryAllocateInfo alloc = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+   bool imported = false;
+   struct wsi_memory_allocate_info owner = {};
+   VkImportMemoryHostPointerInfoEXT host = {VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT};
+   const VulkanAdapter &va = dev->adapter->vk;
+   if (dev->nvk) {
+      /* The driver maps the runtime's allocation at an address it reserves
+       * and retains the owner; nothing is allocated. */
+      owner.sType = VK_STRUCTURE_TYPE_WSI_MEMORY_ALLOCATE_INFO_MESA;
+      owner.win32_memory = &p->memory;
+      owner.win32_imported = &imported;
+      alloc.pNext = &owner;
+      alloc.allocationSize = req.size;
+      alloc.memoryTypeIndex = va.findMemoryType(req.memoryTypeBits, 0);
+   } else {
+      /* Controlled test build: the same backing through its CPU mapping. */
+      void *cpu = nullptr;
+      AcquireSRWLockExclusive(&p->lock);
+      HRESULT hr = lock_cpu(p, &cpu);
+      ReleaseSRWLockExclusive(&p->lock);
+      if (FAILED(hr))
+         return hr;
+      const VkDeviceSize align = va.caps.minHostPointerAlignment;
+      if (!align || ((uintptr_t)cpu & (align - 1)) || (p->memory.size & (align - 1)))
+         return DXGI_ERROR_UNSUPPORTED;
+      host.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+      host.pHostPointer = cpu;
+      alloc.pNext = &host;
+      alloc.allocationSize = p->memory.size;
+      uint32_t types = req.memoryTypeBits;
+      if (dev->vk.GetMemoryHostPointerPropertiesEXT) {
+         VkMemoryHostPointerPropertiesEXT props = {
+            VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
+         if (dev->vk.GetMemoryHostPointerPropertiesEXT(dev->vkdev, host.handleType, cpu,
+                                                       &props) == VK_SUCCESS)
+            types &= props.memoryTypeBits;
+      }
+      alloc.memoryTypeIndex = va.findMemoryType(types, 0);
+      imported = true;
+   }
+   if (alloc.memoryTypeIndex == UINT32_MAX)
+      return DXGI_ERROR_UNSUPPORTED;
+   VkResult result = dev->vk.AllocateMemory(dev->vkdev, &alloc, nullptr, memory);
+   if (result != VK_SUCCESS)
+      return FAILED(p->error) ? p->error : E_OUTOFMEMORY;
+   /* An ICD that ignored the owner structure would have allocated unrelated
+    * memory: the image would render, and nobody else would ever see it. */
+   if (!imported ||
+       dev->vk.BindImageMemory(dev->vkdev, image, *memory, 0) != VK_SUCCESS) {
+      dev->vk.FreeMemory(dev->vkdev, *memory, nullptr);
+      *memory = VK_NULL_HANDLE;
+      return DXGI_ERROR_UNSUPPORTED;
+   }
+   return S_OK;
+}
+
+}

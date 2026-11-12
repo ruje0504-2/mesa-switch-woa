@@ -1,0 +1,96 @@
+/* SPDX-License-Identifier: MIT
+ *
+ * Opt-in ETW provider. Events carry no pointers. Numeric events share the
+ * 88-byte layout of the earlier UMD provider so the same exporter decodes
+ * them with a different event table; timing events add QPC stamps that split
+ * a frame into recording, submission, fence gating and present queuing.
+ */
+#ifndef TGD3D_TRACE_H
+#define TGD3D_TRACE_H
+
+#include <windows.h>
+#include <stdint.h>
+
+/* {5f0c4c6e-7a0b-4b52-9d3a-2f6d1e8b4a11} */
+#define TGD3D_TRACE_GUID_INIT \
+   {0x5f0c4c6e, 0x7a0b, 0x4b52, {0x9d, 0x3a, 0x2f, 0x6d, 0x1e, 0x8b, 0x4a, 0x11}}
+
+enum tgd3d_trace_event {
+   TGD3D_TRACE_OPEN_ADAPTER = 1,   /* arg0 interface, arg1 version */
+   TGD3D_TRACE_ADAPTER_INFO,       /* arg0 flags, arg1 budget bytes */
+   TGD3D_TRACE_VULKAN,             /* arg0 LUID, arg1 api version | nvk << 32 */
+   TGD3D_TRACE_CREATE_DEVICE,      /* arg0 interface, arg1 stage on failure */
+   TGD3D_TRACE_DESTROY_DEVICE,
+   TGD3D_TRACE_RUNTIME_MEMORY,     /* arg0 stage << 32 | allocation, arg1 value */
+   TGD3D_TRACE_RUNTIME_CONTEXT,    /* arg0 stage */
+   TGD3D_TRACE_RESOURCE,           /* arg0 dimension << 32 | bind, arg1 width << 32 | height */
+   TGD3D_TRACE_OPEN_RESOURCE,      /* arg0 width << 32 | height, arg1 pitch */
+   TGD3D_TRACE_SET_DISPLAY_MODE,   /* arg0 allocation */
+   TGD3D_TRACE_ROTATE,             /* arg0 resources */
+   TGD3D_TRACE_BLT,                /* arg0 flags, arg1 rotate */
+   TGD3D_TRACE_SHADER,             /* arg0 stage << 32 | token count, arg1 microseconds */
+   TGD3D_TRACE_ERROR = 20,         /* tgd3d_trace_error */
+   TGD3D_TRACE_MESSAGE = 21,       /* tgd3d_trace_message */
+   TGD3D_TRACE_TIMING = 30,        /* tgd3d_trace_timing */
+};
+
+enum tgd3d_timing_kind {
+   /* qpc: first command, submit enter, submit return.
+    * value: draws, render passes, upload bytes, GPU copy bytes, readback bytes. */
+   TGD3D_TIMING_SUBMIT = 1,
+   /* qpc: enter, after submit, after fence gate, after PresentCb.
+    * value: DDI flags, interval, in-flight submissions, backpressure ns. */
+   TGD3D_TIMING_PRESENT = 2,
+   /* qpc: wait begin, wait end. value: reason, target sequence. */
+   TGD3D_TIMING_CPU_WAIT = 3,
+};
+
+enum tgd3d_wait_reason {
+   TGD3D_WAIT_BACKPRESSURE = 1,
+   TGD3D_WAIT_READBACK = 2,
+   TGD3D_WAIT_DESTROY = 3,
+   TGD3D_WAIT_QUERY = 4,
+};
+
+struct tgd3d_trace_data {
+   int32_t result;
+   uint32_t reserved;
+   uint64_t arg0, arg1;
+   WCHAR image[32];
+};
+
+struct tgd3d_trace_timing {
+   int32_t result;
+   uint32_t kind;
+   uint64_t sequence, completed;
+   uint64_t qpc[4];
+   uint64_t value[6];
+   uint64_t qpc_frequency;
+   WCHAR image[32];
+};
+
+struct tgd3d_trace_message {
+   WCHAR image[32];
+   WCHAR message[256];
+};
+
+struct tgd3d_trace_error {
+   int32_t result;
+   uint32_t line;
+   WCHAR image[32];
+   WCHAR file[64];
+};
+
+#ifdef __cplusplus
+namespace tgd3d {
+void trace(tgd3d_trace_event event, HRESULT result, uint64_t arg0, uint64_t arg1);
+void trace_message(const char *message);
+void trace_error(HRESULT result, const char *file, unsigned line);
+bool trace_timing_enabled();
+void trace_timing(tgd3d_timing_kind kind, HRESULT result, uint64_t sequence, uint64_t completed,
+                  const uint64_t qpc[4], const uint64_t value[6]);
+uint64_t qpc_now();
+}
+#endif
+
+#endif
