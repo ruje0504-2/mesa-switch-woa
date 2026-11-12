@@ -59,6 +59,9 @@ def main():
     run(a.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-I" + str(src / "include"),
         win / "check-vulkan-shared.c", win / "kmt.c",
         "-o", out / "nvk-windows-vulkan-shared-check.exe")
+    run(a.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-static",
+        src / "src/vulkan/wsi/tests/win32_pacing.c",
+        "-o", out / "test-win32-pacing.exe")
     if a.prepare_only:
         print(f"Validated the SDK KMT layout and built the bridge and memory tests in {out}")
         return
@@ -90,7 +93,7 @@ def main():
     }}, indent=2) + "\n")
     files = [dll, out / "nvk-windows-check.exe", out / "test-kmt.exe",
              out / "test-kmt-shared.exe", out / "nvk-windows-shared-check.exe",
-             out / "nvk-windows-vulkan-shared-check.exe", manifest]
+             out / "nvk-windows-vulkan-shared-check.exe", out / "test-win32-pacing.exe", manifest]
     hashes = {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files}
     (out / "manifest.json").write_text(json.dumps({
         "component": "nvk-icd",

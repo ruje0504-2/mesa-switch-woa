@@ -36,12 +36,14 @@
 #include "vk_util.h"
 #include "wsi_common_entrypoints.h"
 #include "wsi_common_private.h"
+#include "wsi_win32_pacing.h"
 
 #include <dxgi1_4.h>
 #include <directx/d3d12.h>
 #include <dxguids/dxguids.h>
 
 #include <dcomp.h>
+#include <dwmapi.h>
 
 #if defined(__GNUC__)
 #pragma GCC diagnostic ignored "-Wint-to-pointer-cast"      // warning: cast to pointer from integer of different size
@@ -110,6 +112,7 @@ struct wsi_win32_swapchain {
    VkExtent2D                 extent;
    HWND wnd;
    uint64_t gdi_present_count;
+   struct wsi_win32_pacer pacer;
    struct wsi_win32_image     images[0];
 };
 
@@ -624,6 +627,8 @@ wsi_win32_swapchain_destroy(struct wsi_swapchain *drv_chain,
    if (chain->dxgi)
       chain->dxgi->Release();
 
+   wsi_win32_pacer_finish(&chain->pacer);
+
    wsi_swapchain_finish(&chain->base);
 
    u_cnd_monotonic_destroy(&chain->acquire_cond);
@@ -838,6 +843,12 @@ wsi_win32_queue_present(struct wsi_swapchain *drv_chain,
       }
    }
 
+   if (!wsi_win32_pacer_wait(&chain->pacer)) {
+      chain->status = VK_ERROR_SURFACE_LOST_KHR;
+      wsi_win32_set_image_idle(chain, image);
+      return chain->status;
+   }
+
    char *ptr = (char *)image->base.cpu_map;
    char *dptr = (char *)image->sw.ppvBits;
    uint32_t hash = 2166136261u;
@@ -874,6 +885,12 @@ wsi_win32_queue_present(struct wsi_swapchain *drv_chain,
       ReleaseDC(chain->wnd, window_dc);
    }
    if (!copied || !flushed)
+      chain->status = VK_ERROR_SURFACE_LOST_KHR;
+
+   /* GdiFlush only drains GDI commands. Join the compositor's presentation
+    * before releasing the image; the timer also caps producers when this
+    * call returns immediately or the desktop refreshes faster than 60 Hz. */
+   if (chain->pacer.timer && chain->status == VK_SUCCESS && FAILED(DwmFlush()))
       chain->status = VK_ERROR_SURFACE_LOST_KHR;
 
    if (WSI_DEBUG & WSI_DEBUG_WIN32) {
@@ -1047,6 +1064,12 @@ wsi_win32_surface_create_swapchain(
    chain->status = VK_SUCCESS;
 
    chain->surface = surface;
+
+   if (!supports_dxgi &&
+       !wsi_win32_pacer_init(&chain->pacer, wsi_device->win32.cpu_present_fps)) {
+      result = VK_ERROR_OUT_OF_HOST_MEMORY;
+      goto fail;
+   }
 
    if (image_params->image_type == WSI_IMAGE_TYPE_DXGI) {
       result = wsi_win32_surface_create_swapchain_dxgi(surface, device, wsi, create_info, chain);

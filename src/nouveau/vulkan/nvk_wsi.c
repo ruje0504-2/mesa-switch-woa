@@ -61,6 +61,10 @@ nvk_init_wsi(struct nvk_physical_device *pdev)
       return result;
 
    pdev->wsi_device.supports_scanout = false;
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+   /* GDI itself does not throttle the producer even with FIFO selected. */
+   pdev->wsi_device.win32.cpu_present_fps = 60;
+#endif
    pdev->wsi_device.supports_modifiers =
       pdev->vk.supported_extensions.table.EXT_image_drm_format_modifier;
 

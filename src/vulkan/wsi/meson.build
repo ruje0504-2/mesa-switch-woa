@@ -29,7 +29,11 @@ endif
 
 if with_platform_windows
   files_vulkan_wsi += files('wsi_common_win32.cpp')
-  platform_deps += dep_dxheaders
+  platform_deps += [dep_dxheaders, cc.find_library('dwmapi')]
+  if with_tests
+    test('win32_pacing', executable('test-win32-pacing',
+      'tests/win32_pacing.c'), suite : ['wsi'])
+  endif
 else
   files_vulkan_wsi += files('wsi_common_headless.c')
 endif
@@ -84,7 +88,7 @@ idep_vulkan_wsi_headers = declare_dependency(
 if get_option('backend').startswith('vs')
   idep_vulkan_wsi = declare_dependency(
     link_with : libvulkan_wsi,
-    dependencies : idep_vulkan_wsi_headers
+    dependencies : [idep_vulkan_wsi_headers, platform_deps]
   )
 else
   idep_vulkan_wsi = declare_dependency(
@@ -92,7 +96,7 @@ else
     # our weak function overloads may not resolve properly.
     link_whole : libvulkan_wsi,
     dependencies : [
-      idep_vulkan_wsi_headers, dep_libudev
+      idep_vulkan_wsi_headers, dep_libudev, platform_deps
     ]
   )
 endif
