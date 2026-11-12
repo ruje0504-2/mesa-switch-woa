@@ -656,6 +656,9 @@ ResourceMap(D3D10DDI_HDEVICE hDevice,                                // IN
       return;
    }
 
+   if (Flags & D3D10_DDI_MAP_FLAG_DONOTWAIT)
+      usage |= PIPE_MAP_DONTBLOCK;
+
    assert(SubResource < pResource->NumSubResources);
 
    unsigned level;
@@ -693,8 +696,14 @@ ResourceMap(D3D10DDI_HDEVICE hDevice,                                // IN
       return;
    }
    if (!map) {
-      DebugPrintf("%s: failed to map resource\n", __func__);
-      SetError(hDevice, E_FAIL);
+      /* Contention is retryable for DONOTWAIT. Device loss was checked
+       * above and must not be hidden behind a pending-map result. */
+      if (usage & PIPE_MAP_DONTBLOCK)
+         SetError(hDevice, DXGI_DDI_ERR_WASSTILLDRAWING);
+      else {
+         DebugPrintf("%s: failed to map resource\n", __func__);
+         SetError(hDevice, E_FAIL);
+      }
       return;
    }
 

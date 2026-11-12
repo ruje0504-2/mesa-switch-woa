@@ -26,6 +26,8 @@ static bool allocate_resource;
 static unsigned resources;
 static pipe_resource buffer = {};
 static bool device_removed, remove_during_map;
+static bool poll_map, map_ready;
+static unsigned expected_map_access;
 static unsigned maps, unmaps;
 static pipe_transfer transfer = {};
 static unsigned char mapped_bytes[16];
@@ -206,8 +208,18 @@ d3d10_create_screen(HANDLE, const D3DDDI_ADAPTERCALLBACKS *, pipe_screen **resul
       context.get_device_reset_status = [](pipe_context *) {
          return device_removed ? PIPE_GUILTY_CONTEXT_RESET : PIPE_NO_RESET;
       };
-      context.buffer_map = context.texture_map = [](pipe_context *, pipe_resource *, unsigned, unsigned, const pipe_box *, pipe_transfer **out) -> void * {
+      context.buffer_map = context.texture_map = [](pipe_context *, pipe_resource *, unsigned, unsigned usage, const pipe_box *, pipe_transfer **out) -> void * {
          ++maps;
+         if (poll_map) {
+            CHECK(usage & PIPE_MAP_DONTBLOCK);
+            CHECK((usage & PIPE_MAP_READ_WRITE) == expected_map_access);
+            CHECK(!*out);
+            if (!map_ready) return NULL;
+            transfer.stride = 16;
+            transfer.layer_stride = 32;
+            *out = &transfer;
+            return mapped_bytes;
+         }
          if (!remove_during_map) return NULL;
          device_removed = true;
          *out = &transfer;
@@ -350,6 +362,49 @@ int main(int argc, char **argv)
    functions.pfnDestroyResource(create.hDrvDevice, handle);
    CHECK(!resources && unmaps == 1);
    free(handle.pDrvPrivate);
+   /* A busy map is a retryable result. Poll both frontend dispatch paths,
+    * then complete the same resource; failed polls must not retain a map. */
+   device_removed = remove_during_map = false;
+   poll_map = true;
+   const unsigned previous_waits = fence_waits;
+   const D3D10_DDI_MAP map_types[] = {
+      D3D10_DDI_MAP_READ, D3D10_DDI_MAP_WRITE, D3D10_DDI_MAP_READWRITE,
+   };
+   const unsigned map_access[] = {PIPE_MAP_READ, PIPE_MAP_WRITE, PIPE_MAP_READ_WRITE};
+   for (unsigned kind = 0; kind < 2; ++kind) {
+      resource.ResourceDimension = kind ? D3D10DDIRESOURCE_TEXTURE2D : D3D10DDIRESOURCE_BUFFER;
+      resource.Format = kind ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_UNKNOWN;
+      resource.MapFlags = D3D10_DDI_CPU_ACCESS_READ | D3D10_DDI_CPU_ACCESS_WRITE;
+      handle.pDrvPrivate = calloc(1, functions.pfnCalcPrivateResourceSize(create.hDrvDevice, &resource));
+      CHECK(handle.pDrvPrivate);
+      resource_error = S_OK;
+      functions.pfnCreateResource(create.hDrvDevice, &resource, handle, {});
+      CHECK(resource_error == S_OK && resources == 1);
+      for (unsigned access = 0; access < ARRAYSIZE(map_types); ++access) {
+         expected_map_access = map_access[access];
+         map_ready = false;
+         for (unsigned poll = 0; poll < 2; ++poll) {
+            memset(&mapped, 0xa5, sizeof(mapped));
+            resource_error = S_OK;
+            functions.pfnStagingResourceMap(create.hDrvDevice, handle, 0, map_types[access],
+                                            D3D10_DDI_MAP_FLAG_DONOTWAIT, &mapped);
+            CHECK(resource_error == DXGI_DDI_ERR_WASSTILLDRAWING);
+            CHECK(!mapped.pData && !mapped.RowPitch && !mapped.DepthPitch);
+         }
+         map_ready = true;
+         resource_error = S_OK;
+         functions.pfnStagingResourceMap(create.hDrvDevice, handle, 0, map_types[access],
+                                         D3D10_DDI_MAP_FLAG_DONOTWAIT, &mapped);
+         CHECK(resource_error == S_OK && mapped.pData == mapped_bytes);
+         CHECK(mapped.RowPitch == 16 && mapped.DepthPitch == 32);
+         functions.pfnStagingResourceUnmap(create.hDrvDevice, handle, 0);
+      }
+      functions.pfnDestroyResource(create.hDrvDevice, handle);
+      CHECK(!resources);
+      free(handle.pDrvPrivate);
+   }
+   CHECK(fence_waits == previous_waits);
+   poll_map = map_ready = false;
    /* Hardware drivers must never receive the dummy CPU pointers in unused
     * D3D vertex slots, including when the real bound input needs no upload.
     */

@@ -2727,6 +2727,8 @@ create_transfer(struct zink_context *ctx, struct pipe_resource *pres, unsigned u
 static void
 destroy_transfer(struct zink_context *ctx, struct zink_transfer *trans)
 {
+   pipe_resource_reference(&trans->staging_res, NULL);
+   pipe_resource_reference(&trans->base.b.resource, NULL);
    if (trans->base.b.usage & PIPE_MAP_THREAD_SAFE) {
       free(trans);
    } else {
@@ -2843,9 +2845,13 @@ zink_buffer_map(struct pipe_context *pctx,
    } else if (usage & PIPE_MAP_DONTBLOCK) {
       /* sparse/device-local will always need to wait since it has to copy */
       if (!res->obj->host_visible)
-         goto success;
-      if (!zink_resource_usage_check_completion(screen, res, ZINK_RESOURCE_ACCESS_WRITE))
-         goto success;
+         goto fail;
+      /* CPU writes conflict with both GPU reads and writes. CPU reads only
+       * need prior GPU writes to finish. Neither path may wait here. */
+      enum zink_resource_access access = usage & PIPE_MAP_WRITE ?
+         ZINK_RESOURCE_ACCESS_RW : ZINK_RESOURCE_ACCESS_WRITE;
+      if (!zink_resource_usage_check_completion(screen, res, access))
+         goto fail;
       usage |= PIPE_MAP_UNSYNCHRONIZED;
    } else if (((usage & PIPE_MAP_READ) && !(usage & PIPE_MAP_PERSISTENT) &&
                ((screen->info.mem_props.memoryTypes[res->obj->bo->base.placement].propertyFlags & VK_STAGING_RAM) != VK_STAGING_RAM)) ||
@@ -2932,7 +2938,6 @@ overwrite:
          util_range_add(&orig_res->base.b, orig_res->real_buffer_range, box->x, box->x + box->width);
    }
 
-success:
    /* ensure the copy context gets unlocked */
    if (ctx == screen->copy_context)
       zink_screen_unlock_context(screen);
@@ -3467,10 +3472,6 @@ transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
          trans->base.b.usage &= ~PIPE_MAP_UNSYNCHRONIZED;
       zink_transfer_flush_region(pctx, ptrans, &box);
    }
-
-   if (trans->staging_res)
-      pipe_resource_reference(&trans->staging_res, NULL);
-   pipe_resource_reference(&trans->base.b.resource, NULL);
 
    destroy_transfer(ctx, trans);
 }
