@@ -28,11 +28,11 @@ foreach ($name in 'icd-registration.json','automatic-start.json','native-result.
 $m=[IO.File]::ReadAllText((Join-Path $p 'trial-components.json'))|ConvertFrom-Json
 if ($m.kmd_version -ne '0.1.0.158' -or
     $m.kmd.'tegragpurender.sys'.Sha256 -ne '46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088' -or
-    $m.app.'TegraGpuD3D.dll'.Sha256 -ne '7f8f821d7b3ca7f56b37bb47d7367e9a5db356bfcee3a838af8a75d81597e3ce' -or
+    $m.app.'TegraGpuD3D.dll'.Sha256 -ne '02248b25419fb5560d0ffb17b3eb7d2b699ca4769a9ae08e0bfe8e6f0083cb13' -or
     $m.app.'test_d3d10_runtime_present.exe'.Sha256 -ne 'f1695ede879a5062ba144997be54a131ec29fcc25d1aa34a662de23d346e88a1' -or
     $m.app.'libvulkan_nouveau.dll'.Sha256 -ne 'ad6865784890f937a7c29aab0f108841b6d99cbffdca985b7dafbffc1a953625' -or
-    $m.shared_probe -ne '--shared-layout-load (no producer/import CPU readback checkpoints)') {
-    throw 'This entry point expects the identified .158/runtime-teardown/timeline candidate components'
+    $m.shared_probe -ne '--shared-layout-updates (event-query completion; no source-image readback)') {
+    throw 'This entry point expects the identified .158/query-poll/timeline candidate components'
 }
 $app=Join-Path $p 'app'
 foreach ($entry in $m.app.PSObject.Properties) {
@@ -104,4 +104,4 @@ if (!$finished -or $code -ne 0 -or $record.DriverAfter -ne '0.1.0.59' -or $recor
 # API substitutes and direct ICD loading cannot detect a SYSTEM task whose
 # driver-path environment override is ignored by the Khronos loader.
 & (Join-Path $PSScriptRoot 'Invoke-NvkCheck.ps1') -Directory $p -LoaderOnly
-'STAGED: exact .158 KMD, runtime-teardown UMD and timeline ICD; surface control and registered-ICD loader discovery passed; native rendering remains untested'
+'STAGED: exact .158 KMD, query-poll UMD and timeline ICD; surface control and registered-ICD loader discovery passed; native rendering remains untested'

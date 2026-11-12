@@ -170,6 +170,77 @@ and five-minute physical acceptance for this candidate remain pending.
 Control evidence is retained under
 `runs/wddm-destroy-order-20261112/` in the external build workspace.
 
+## Nonblocking query polling and event ownership
+
+`760db8b2` fixes two demonstrated query-path defects. The D3D frontend
+passed `D3D10_DDI_GET_DATA_DO_NOT_FLUSH` as Gallium's `wait` boolean. A
+no-flush poll consequently selected an infinite completion wait in Zink.
+Query retrieval now uses nonblocking polling and reports pending/device-loss
+status without changing the caller's output. It also removes the artificial
+first status-only rejection, so an already completed query can report ready.
+
+Gallium's ordinary nonblocking query retrieval may still submit pending
+work. The optional `get_query_result_no_flush` callback supplies the stricter
+path required here: Zink leaves deferred events and unresolved query batches
+unsubmitted, then polls completed/submitted work with a zero timeout. Batch
+generation is checked so reuse does not make an old completed event appear
+pending. This follows the
+[QueryGetData DDI contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_querygetdata).
+
+Zink's event-query destruction also omitted release of the query's fence
+reference. Destruction now drops that reference and removes the wrapper
+from its batch's fence list. These corrections do not assign a cause to the
+reported physical freeze/restart and are not a desktop acceptance result.
+
+The Windows ARM64 controls at 23:08:37–23:08:42 UTC use real frontend/Zink
+functions with substituted backend/runtime/Vulkan operations:
+
+| Control | Before | Fixed |
+| --- | --- | --- |
+| Pending no-flush DDI poll | Exit 1 at `!wait` | Exit 0; pending output untouched, no CPU fence wait |
+| Event-query release | Exit 1 with a retained batch fence reference | Exit 0; reference removed |
+| Status-only completion and device loss | Included in fixed DDI control | Correct status and unchanged output on loss |
+
+The final Zink control adds batch-reuse and detached-fence cases and passes
+at 23:11:45–23:11:46 UTC (185 ms). Its executable SHA256 is
+`74c83d2507150ea7f59879abad720b847f93a04a370e39f34e8103633fc1d7f7`.
+The initial 17 records / 25,222 bytes and final five records / 4,541 bytes
+all match device hashes and lengths. Their result hashes are respectively
+`d353acc06fe8d6bd78e7bdd2cd0e85067895bf2948bdb1df2db7428ffc5f79f8`
+and `db215737e3b85ff6e4b90f0679a5b424ccc7466d0f4ff6b28cd8b253c81870a2`.
+Evidence: `runs/query-poll-20261112/` and `runs/query-poll-final-20261112/`.
+
+### Shared-image update oracle and its synchronization scope
+
+The new `--shared-layout-updates` probe keeps one shared allocation and
+consumer view across four producer epochs, including a partial update and
+a following full update. It checks two placements/clips in BGRA and RGBA.
+The first WARP control, which only called producer `Flush`, reads 36,272
+stale pixels in epoch 3. That is a **test synchronization failure**, not NVK
+evidence: [Flush is asynchronous](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11devicecontext-flush).
+The retained failed control is `runs/shared-image-updates-20261112/`.
+
+Legacy shared-image tests now use an event query to confirm writer completion
+before the other device consumes the image. They do not map/read back the
+shared source to force completion. The NT sharing case retains its keyed
+mutex. This explicitly validates **host-ordered image contents**, not implicit
+DWM ordering or GPU-only cross-device synchronization. Earlier no-checkpoint
+pixel observations remain historical; they cannot prove a handoff contract
+that their application-side synchronization did not establish.
+
+The corrected WARP probe checks 14,745,600 update pixels, 3,686,400 imported
+LOAD pixels and 49,152 legacy/NT sharing pixels with zero mismatches. The
+probe SHA256 is
+`b416139c770b3b84c9e64556f1f2de6233f5d28dfbf52e1e0c69b80a4bf91b03`.
+These are software rendering controls on the physical ARM64 machine.
+`.59` / Code 0, CPU 1996.8 MHz and fan version 12 remain unchanged.
+
+Candidate `desktop158-query-poll-20261112-umd` is built from `760db8b2`,
+UMD SHA256
+`02248b25419fb5560d0ffb17b3eb7d2b699ca4769a9ae08e0bfe8e6f0083cb13`.
+It is not deployed. Use the unchanged `.158` KMD and `ad686578…` ICD for its
+separate native desktop/pixel acceptance; no rotation or cube pass is claimed.
+
 ## Contracts and source
 
 - [Create synchronization object callback](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/ns-d3dumddi-_d3dddicb_createsynchronizationobject2)

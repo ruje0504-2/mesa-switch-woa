@@ -20,6 +20,16 @@ models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
 components remain a short-observation baseline, not a stable desktop release.
 
+**New query-polling fix; native acceptance pending:** `760db8b2` makes D3D
+query retrieval nonblocking, gives Zink an explicit no-submit polling path,
+and releases event-query fence references at destruction. The old DDI
+blocking behavior and Zink reference leak both fail controlled regressions;
+the fixes pass, including recycled/detached batch states. The frozen ARM64
+UMD is `02248b25…`. Its new shared-image reuse probe has a validated WARP
+oracle and explicit producer completion; it is not a DWM ordering test.
+The device remains on `.59` / Code 0; this candidate is not yet deployed.
+[Contracts, controls and exact candidate](D3D_RUNTIME_SYNC.md#nonblocking-query-polling-and-event-ownership)
+
 **Latest corrected-harness recheck fails physical acceptance:**
 `desktop158-identity-guard-20261112` uses the same `.158` KMD, `7f8f821d…`
 UMD and `ad686578…` ICD. Only the query invocation and capture schedule
