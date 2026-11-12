@@ -9,8 +9,21 @@ branch `stabilize/native-desktop-153`. Complete taskbar/Start-menu composition
 and sustained presentation come before further features or hardware rotation.
 The initial `.147` rollback proposal is superseded. The source
 worktree is `../mesa-switch-woa-stabilize`; the device remains recovered to `.59`.
-Fable 5.2/max independently reviews main in English on the VPS, with local
-commits only and no GitHub push. That review does not block stabilization.
+The remote Fable desktop review has stopped at its account limit; its commits
+and five unfinished source files are preserved locally. The user's next remote
+assignment is game-facing DX9/10/11 through DXVK, using Fable 5.2/medium in
+English. It has not started: the reported reset is November 12 at 07:10 UTC.
+The latest VPS instructions require read-only analysis and textual patch
+proposals, for local implementation. Desktop DXVK remains unauthorized.
+
+**Current stabilization build:** `.158` combines the isolated sampler-view
+fix, restored SAMPLE_I lowering (`71d67992`), execution-ordered inherited-state
+validation (`6c854e9f`), and the GR helper-load correction with readback below.
+Host regressions, actual NETB models and the full WDK ARM64 build pass. Its
+Mesa `src/` is identical to `ee7b0d50`, the source of previously validated UMD
+`77dea046dde0`; ICD `6e2fad99d742` is unchanged. The candidate is unsigned and
+not installed. It excludes `.155–.156` diagnostics, the remote SM exception
+policy and unfinished remote worker edits. Evidence: `stabilize158-20261112`.
 
 **Frozen `.153` observation finished, desktop still incomplete:**
 `stabilize153-native-20261112` reaches Code 0 at 02:42:09 UTC on November 12,
