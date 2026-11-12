@@ -94,6 +94,11 @@ struct _TG_GPU_CONTEXT_WORK {
     BOOLEAN GpuCompleted,CpuCompleted,UploadsMme;
     UINT PagingOffset, PagingBytes, PagingCursor, PagingDmaBytes;
     BOOLEAN PagingStarted;
+    /* Last completed observation, copied under Engine.Lock. No extra MMIO. */
+    UINT TracePolls,TraceObserved;
+    UINT TraceFifo,TraceMmu,TracePbdma,TracePbdma1;
+    UINT TraceMc,TraceGr,TraceFecsError,TraceFecsHost;
+    BOOLEAN TraceObservedValid,TraceObservedCpu,TraceMcValid,TraceGrValid;
 };
 
 NTSTATUS TgGpuInitializeContextEngine(TG_GPU_CONTEXT_ENGINE *, const DXGKRNL_INTERFACE *,

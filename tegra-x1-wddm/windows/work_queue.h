@@ -45,6 +45,7 @@ typedef struct _TG_GPU_WORK_QUEUE {
     TG_GPU_QUEUE_ENTRY *CurrentOwned;
     NTSTATUS Failure;
     UINT Preemptions; /* owned markers still in Pending, excludes Current */
+    UINT TraceStage; /* worker phase, published under Lock */
     BOOLEAN Servicing, Paused;
 } TG_GPU_WORK_QUEUE;
 
@@ -85,4 +86,9 @@ NTSTATUS TgGpuResetWorkQueue(TG_GPU_WORK_QUEUE *,const struct tg_gpu_power_io *,
 NTSTATUS TgGpuResumeWorkQueue(TG_GPU_WORK_QUEUE *,const struct tg_gpu_power *);
 /* Detach only after the current item and the pending list have been retired. */
 NTSTATUS TgGpuStopWorkQueue(TG_GPU_WORK_QUEUE *);
+/* Copies scalars under queue/engine locks, emits after releasing both.
+ * Caller keeps the engine/queue alive, as for preemption and reset DDIs. */
+_IRQL_requires_max_(DISPATCH_LEVEL)
+VOID TgGpuTraceExecutionState(TG_GPU_CONTEXT_ENGINE *,enum tg_gpu_execution_source,
+    NTSTATUS,UINT,const DXGKARG_SUBMITCOMMANDVIRTUAL *);
 #endif

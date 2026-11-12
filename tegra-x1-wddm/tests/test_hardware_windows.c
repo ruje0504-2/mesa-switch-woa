@@ -32,6 +32,17 @@ static TG_GPU_WORK_QUEUE queue;
 static TG_GPU_WORKER worker;
 static BOOLEAN fail_join,fail_queue,fail_thread;
 static UINT gate_depth;
+static UINT reset_trace_records;
+static BOOLEAN reset_trace_open;
+static NTSTATUS reset_trace_status;
+VOID TgGpuTraceExecutionState(TG_GPU_CONTEXT_ENGINE *e,enum tg_gpu_execution_source source,
+    NTSTATUS status,UINT fence,const DXGKARG_SUBMITCOMMANDVIRTUAL *submit)
+{
+    CHECK(e==&engine && level==PASSIVE_LEVEL && !engine.Lock && !queue.Lock && !fence && !submit);
+    if(source==TgGpuExecutionResetBegin){CHECK(!reset_trace_open && status==STATUS_PENDING);reset_trace_open=TRUE;}
+    else {CHECK(source==TgGpuExecutionResetEnd && reset_trace_open);reset_trace_open=FALSE;reset_trace_status=status;}
+    ++reset_trace_records;
+}
 static NTSTATUS NTAPI Wait(PVOID object,KWAIT_REASON reason,KPROCESSOR_MODE mode,BOOLEAN alertable,PLARGE_INTEGER timeout)
 {CHECK(object==&queue.DispatchGate && reason==Executive && mode==KernelMode && !alertable && !timeout && level==PASSIVE_LEVEL);++gate_depth;return STATUS_SUCCESS;}
 static LONG NTAPI Release(PRKMUTEX mutex,BOOLEAN wait)
@@ -188,7 +199,9 @@ static void TestReset(void)
         if(failure==1)fail_join=TRUE;
         if(failure==2)fail_queue=TRUE;
         if(failure==3)model.fail_drain=TRUE;
+        UINT trace_before=reset_trace_records;
         NTSTATUS status=TgGpuResetBackend(&engine,&queue,&hardware,&worker);
+        CHECK(reset_trace_records==trace_before+2 && !reset_trace_open && reset_trace_status==status);
         if(failure>=1 && failure<=3) {
             CHECK(!NT_SUCCESS(status) && !model.frees && engine.Resetting && engine.RecoveryPending);
             fail_join=fail_queue=FALSE;model.fail_drain=FALSE;

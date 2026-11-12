@@ -53,6 +53,21 @@ static UINT recovery_records,recovery_interrupts_at_trace;
 static KIRQL recovery_trace_level;
 static TG_GPU_RECOVERY_EVENT recovery_record;
 static TG_GPU_CONTEXT_ENGINE *trace_engine;
+static TG_GPU_EXECUTION_EVENT execution_record;
+static UINT execution_records;
+static KIRQL execution_trace_level;
+static BOOLEAN execution_gate_held;
+VOID TgGpuTraceExecution(const TG_GPU_EXECUTION_EVENT *record)
+{
+    CHECK(record && record->Version==1 && level<=DISPATCH_LEVEL && !in_sync);
+    execution_gate_held=FALSE;
+    if(trace_engine){
+        TG_GPU_WORK_QUEUE *q=trace_engine->QueueOwner;
+        CHECK(!trace_engine->Lock && (!q || !q->Lock));
+        execution_gate_held=q && q->DispatchGate.Header.SignalState<=0;
+    }
+    execution_record=*record;execution_trace_level=level;++execution_records;
+}
 /* Capture the real recovery record without importing kernel ETW into this
  * user-mode fixture. Native ETW delivery is verified separately. */
 VOID TgGpuTraceRecovery(const TG_GPU_RECOVERY_EVENT *record)
@@ -1629,7 +1644,14 @@ static __declspec(noinline) VOID TestPreemption(const DXGKRNL_INTERFACE *dxgk)
     TgGpuRegisterAdapterDdis(&ddi);CHECK(ddi.DxgkDdiPreemptCommand==TgGpuDdiPreemptCommand);
     CHECK(ddi.DxgkDdiResetFromTimeout==TgGpuDdiResetFromTimeout &&
         ddi.DxgkDdiRestartFromTimeout==TgGpuDdiRestartFromTimeout);
+    trace_engine=&e;
+    UINT execution_before=execution_records;
     expected_preemption=500;expected_preempt_completed=17;RequestPreempt(&e,500);
+    CHECK(execution_records==execution_before+1 &&
+        execution_record.Source==TgGpuExecutionPreempt && execution_record.Status==STATUS_SUCCESS &&
+        execution_record.RequestFence==500 && execution_record.LastCompletedFence==17 &&
+        !execution_record.WorkFlags && (execution_record.QueueFlags&24)==24 &&
+        execution_trace_level==DISPATCH_LEVEL && !execution_gate_held);
     CHECK(q.Preemptions==1 && PoolsInUse()==pools+1 && preemption_interrupts==events);
     CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_SUCCESS && preemption_interrupts==events+1);
     CHECK(!q.Preemptions && PoolsInUse()==pools && e.LastCompletedFence==17 && interrupts==dma);
@@ -1657,6 +1679,20 @@ static __declspec(noinline) VOID TestPreemption(const DXGKRNL_INTERFACE *dxgk)
         !*(UINT *)((UCHAR *)e.Commands.CpuAddress+TG_GPU_COMMAND_CAPTURE) &&
         !((UCHAR *)e.Commands.CpuAddress)[TG_GPU_COMMAND_BYTES-1]);
     expected_preemption=502;expected_preempt_completed=202;RequestPreempt(&e,502);
+    CHECK(execution_record.Source==TgGpuExecutionPreempt && execution_record.RequestFence==502 &&
+        execution_record.Context==(UINT64)(ULONG_PTR)c && execution_record.SubmissionFence==202 &&
+        execution_record.LastCompletedFence==201 && execution_record.Stage==TgGpuExecutionGpuFence &&
+        execution_record.DmaBytes==40 && execution_record.Expected==q.Current.Expected &&
+        execution_record.Observed==~execution_record.Expected &&
+        execution_record.Observed==hw.gpu_fence && execution_record.PollCount==1 &&
+        (execution_record.WorkFlags&(1u|256u|32768u))==(1u|256u|32768u) &&
+        !(execution_record.WorkFlags&(1024u|65536u)) && (execution_record.QueueFlags&256u));
+    q.Current.HardwareBusy=TRUE;accesses=hw.reads+hw.writes;
+    TgGpuTraceExecutionState(&e,TgGpuExecutionPreempt,STATUS_SUCCESS,502,NULL);
+    CHECK((execution_record.WorkFlags&64u) && !(execution_record.QueueFlags&256u) &&
+        !execution_record.ChannelStage && !execution_record.ChannelRegister &&
+        !execution_record.ChannelValue && hw.reads+hw.writes==accesses);
+    q.Current.HardwareBusy=FALSE;
     submit.Flags.NullRendering=1;submit.SubmissionFenceId=204;submit.pDmaBufferPrivateData=&entries[2];
     CHECK(SubmitModel(&e,&submit)==STATUS_SUCCESS);
     CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_PENDING && c->References==2);
@@ -1683,12 +1719,20 @@ static __declspec(noinline) VOID TestPreemption(const DXGKRNL_INTERFACE *dxgk)
     CHECK(SubmitModel(&e,&submit)==STATUS_SUCCESS);
     submit.SubmissionFenceId=208;submit.DmaBufferSize=3;submit.pDmaBufferPrivateData=&entries[1];
     CHECK(SubmitModel(&e,&submit)==STATUS_INVALID_PARAMETER);
+    CHECK(execution_record.Source==TgGpuExecutionSubmitFailure &&
+        execution_record.Status==STATUS_INVALID_PARAMETER && execution_record.RequestFence==208 &&
+        execution_record.RequestContext==(UINT64)(ULONG_PTR)c && execution_record.RequestDmaBytes==3 &&
+        execution_record.PrivateBytes==submit.DmaBufferPrivateDataSize && execution_gate_held);
     RequestPreempt(&e,505);expected_preemption=505;expected_preempt_completed=204;
     CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_SUCCESS && e.LastCompletedFence==204 && !c->References);
     CHECK(preemption_interrupts==events+6 && PoolsInUse()==pools);
     /* Failed interrupt synchronization retains the owned marker until reset. */
     RequestPreempt(&e,506);fail_sync=TRUE;
     CHECK(TgGpuServiceWorkQueue(&q,NULL,NULL)==STATUS_UNSUCCESSFUL && e.Notification==&q.Current);
+    CHECK(execution_record.Source==TgGpuExecutionWorkerFailure &&
+        execution_record.Status==STATUS_UNSUCCESSFUL && execution_record.QueueFailure==STATUS_UNSUCCESSFUL &&
+        execution_record.Stage==TgGpuExecutionNotify && execution_gate_held &&
+        execution_trace_level==PASSIVE_LEVEL);
     CHECK(PoolsInUse()==pools+1 && preemption_interrupts==events+6);
     fail_sync=FALSE;CHECK(TgGpuResetWorkQueue(&q,NULL,&power,&clock)==STATUS_SUCCESS);
     CHECK(!e.Notification && !q.Current.Engine && PoolsInUse()==pools && e.LastCompletedFence==204);

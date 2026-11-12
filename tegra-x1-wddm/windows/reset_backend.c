@@ -48,7 +48,10 @@ static NTSTATUS isolate_backend(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_WORK_QUEUE *q,
 NTSTATUS TgGpuResetBackend(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_WORK_QUEUE *q,
     TG_GPU_HARDWARE *h,TG_GPU_WORKER *w)
 {
-    return isolate_backend(e,q,h,w,TRUE);
+    TgGpuTraceExecutionState(e,TgGpuExecutionResetBegin,STATUS_PENDING,0,NULL);
+    NTSTATUS status=isolate_backend(e,q,h,w,TRUE);
+    TgGpuTraceExecutionState(e,TgGpuExecutionResetEnd,status,0,NULL);
+    return status;
 }
 
 NTSTATUS TgGpuSuspendBackend(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_WORK_QUEUE *q,

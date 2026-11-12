@@ -18,13 +18,43 @@ PAYLOAD = bytes.fromhex('''
 ''')
 
 
-def export(payload=PAYLOAD, version=1, count=1):
+def export(payload=PAYLOAD, version=1, count=1, event_id=1):
     return (struct.pack('<8sQQII', b'SWETW001', count, 1337, 12, 48) +
             struct.pack('<Q16sIIHHHHBBB5x', 1337, decoder.PROVIDER,
-                        4, 6020, 2, 1, 0x40, len(payload), 0, version, 2) + payload)
+                        4, 6020, 2, event_id, 0x40, len(payload), 0, version, 2) + payload)
 
 
 class RecoveryDecode(unittest.TestCase):
+    def test_execution_wire_identity(self):
+        payload = bytes.fromhex('''
+            01000000 01000000 88776655 44332211 170000c0 3e000000 09000000 07000000
+            8070605040302010 8877665544332211 0010000001000000
+            e4020000 e3020000 80000000 7f000000 800c0000 21810200 19010000 a30000c0
+            02000000 03000000 34260000 00001000 01000000 02000000 04000000 08000000
+            00100000 00010000 00020000 00040000 14000000 800c0000 00020000 20000000
+        ''')
+        records, summary = decoder.decode(export(payload, event_id=2))
+        self.assertEqual((summary['recovery_records'], summary['execution_records']), (0, 1))
+        r = records[0]
+        self.assertEqual(r['event'], 'ExecutionState')
+        self.assertEqual((r['source_name'], r['stage_name']), ('preempt', 'gpu_fence'))
+        self.assertEqual(r['request_context'], '0x1020304050607080')
+        self.assertEqual(r['context'], '0x1122334455667788')
+        self.assertEqual(r['dma_address'], '0x0000000100001000')
+        self.assertEqual([r[k] for k in ('request_fence', 'submission_fence', 'last_completed_fence',
+                         'expected', 'observed', 'dma_bytes', 'graphics_generation', 'poll_count')],
+                         [62, 740, 739, 128, 127, 3200, 2, 20])
+        self.assertEqual(r['queue_failure'], '0xc00000a3')
+        self.assertEqual(r['work_flags'], '0x00028121')
+        self.assertEqual(r['work_state'], ['active', 'prepared', 'submitted', 'observed_valid', 'mc_valid'])
+        self.assertEqual(r['queue_state'], ['engine', 'preemptions_pending', 'pending', 'channel_fields_valid'])
+        self.assertEqual(r['channel_register'], '0x00002634')
+        self.assertEqual(r['cached_fecs_host'], '0x00000400')
+        self.assertEqual((r['request_dma_bytes'], r['private_bytes'], r['umd_private_bytes']), (3200, 512, 32))
+        for value in (payload[:-1], b'\x02' + payload[1:]):
+            with self.assertRaises(ValueError):
+                decoder.decode(export(value, event_id=2))
+
     def test_wire_identity(self):
         records, summary = decoder.decode(export())
         self.assertEqual(summary['export_records'], 1)

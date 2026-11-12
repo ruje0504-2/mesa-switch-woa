@@ -2,6 +2,63 @@
 #include "work_queue.h"
 #include "../core/nvk_mme_programs.h"
 
+VOID TgGpuTraceExecutionState(TG_GPU_CONTEXT_ENGINE *e,enum tg_gpu_execution_source source,
+    NTSTATUS status,UINT request_fence,const DXGKARG_SUBMITCOMMANDVIRTUAL *submit)
+{
+    TG_GPU_EXECUTION_EVENT record={.Version=1,.Source=source,.Status=status,.RequestFence=request_fence};
+    KIRQL irql,queue_irql;TG_GPU_WORK_QUEUE *q;
+    if(!e)return;
+    if(submit){
+        record.RequestFence=submit->SubmissionFenceId;record.RequestFlags=submit->Flags.Value;
+        record.RequestContext=(UINT64)(ULONG_PTR)submit->hContext;
+        record.RequestDmaBytes=submit->DmaBufferSize;record.PrivateBytes=submit->DmaBufferPrivateDataSize;
+        record.UmdPrivateBytes=submit->DmaBufferUmdPrivateDataSize;
+    }
+    q=e->QueueOwner;
+    if(q)KeAcquireSpinLock(&q->Lock,&queue_irql);
+    KeAcquireSpinLock(&e->Lock,&irql);
+    record.AdapterLuid=e->AdapterLuid;record.LastCompletedFence=e->LastCompletedFence;
+    record.GraphicsGeneration=e->GraphicsGeneration;
+    record.QueueFlags=(e->RecoveryPending?32u:0u)|(e->Resetting?64u:0u)|(e->Stopping?128u:0u);
+    if(q){
+        const TG_GPU_CONTEXT_WORK *w=&q->Current;
+        record.Stage=q->TraceStage;record.QueueFailure=q->Failure;
+        record.QueueFlags|=(q->Engine?1u:0u)|(q->Paused?2u:0u)|(q->Servicing?4u:0u)|
+            (q->Preemptions?8u:0u)|(!IsListEmpty(&q->Pending)?16u:0u);
+        record.Context=(UINT64)(ULONG_PTR)w->Context;record.DmaAddress=w->DmaAddress;
+        record.SubmissionFence=w->SubmissionFence;record.Expected=w->Expected;
+        record.Observed=w->TraceObserved;record.DmaBytes=w->DmaBytes;
+        record.WorkFlags=(w->Engine?1u:0u)|(w->Paging?2u:0u)|(w->Software?4u:0u)|
+            (w->Preemption?8u:0u)|(w->Rejected?16u:0u)|(w->Prepared?32u:0u)|
+            (w->HardwareBusy?64u:0u)|(w->Attempted?128u:0u)|(w->Submitted?256u:0u)|
+            (w->Retired?512u:0u)|(w->GpuCompleted?1024u:0u)|(w->CpuCompleted?2048u:0u)|
+            (w->CompletionReady?4096u:0u)|(w->Signaling?8192u:0u)|(w->Notified?16384u:0u)|
+            (w->TraceObservedValid?32768u:0u)|(w->TraceObservedCpu?65536u:0u)|
+            (w->TraceMcValid?131072u:0u)|(w->TraceGrValid?262144u:0u);
+        record.PollCount=w->TracePolls;
+        record.CachedFifo=w->TraceFifo;record.CachedMmu=w->TraceMmu;
+        record.CachedPbdma=w->TracePbdma;record.CachedPbdma1=w->TracePbdma1;
+        record.CachedMc=w->TraceMc;record.CachedGr=w->TraceGr;
+        record.CachedFecsError=w->TraceFecsError;record.CachedFecsHost=w->TraceFecsHost;
+        /* Channel helpers mutate these outside Engine.Lock while HardwareBusy.
+         * Do not race those writes; the published worker stage still identifies
+         * a blocked helper. Poll caches above are always copied under the lock. */
+        if(!w->HardwareBusy && q->Engine==e){
+            record.QueueFlags|=256u;
+            record.ChannelStage=e->Channel.stage;record.ChannelRegister=e->Channel.last_register;
+            record.ChannelValue=e->Channel.last_value;
+        }
+    }
+    KeReleaseSpinLock(&e->Lock,irql);
+    if(q)KeReleaseSpinLock(&q->Lock,queue_irql);
+    TgGpuTraceExecution(&record);
+}
+
+static VOID trace_stage(TG_GPU_WORK_QUEUE *q,enum tg_gpu_execution_stage stage)
+{
+    KIRQL irql;KeAcquireSpinLock(&q->Lock,&irql);q->TraceStage=stage;KeReleaseSpinLock(&q->Lock,irql);
+}
+
 static VOID free_entry(TG_GPU_QUEUE_ENTRY *entry)
 {
     TgGpuFreeCommandSnapshot(entry->Snapshot);
@@ -272,6 +329,7 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
         /* Cancel/free one detached record at a time at PASSIVE, rather than
          * holding a spin lock across an arbitrarily long admitted prefix. */
         KeReleaseSpinLock(&q->Lock,irql);
+        trace_stage(q,TgGpuExecutionPreemptPrefix);
         status=preempt_prefix(q);
         if(status!=STATUS_SUCCESS)goto done;
         KeAcquireSpinLock(&q->Lock,&irql);
@@ -292,11 +350,13 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
     status=STATUS_SUCCESS;
     if(!w->Engine) goto done;
     if(w->Software || w->Preemption) {
+        trace_stage(q,TgGpuExecutionSoftware);
         status=TgGpuArmSoftwareCompletion(q->Engine,w);
         if(status!=STATUS_SUCCESS)goto done;
         goto notify;
     }
     if(w->Paging) {
+        trace_stage(q,TgGpuExecutionPaging);
         status=TgGpuExecutePagingWork(q->Engine,w,
             (UCHAR *)q->CurrentPaging.CpuAddress+w->PagingOffset,w->PagingBytes,io,power);
         if(status!=STATUS_SUCCESS)goto done;
@@ -304,14 +364,17 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
     }
     if(w->CompletionReady)goto notify;
     if(!w->Expected) {
+        trace_stage(q,TgGpuExecutionMappings);
         if (snapshot && !check_command_mappings(w, snapshot)) {
             status=STATUS_INVALID_ADDRESS;goto done;
         }
+        trace_stage(q,TgGpuExecutionActivate);
         status=TgGpuActivateContextWork(q->Engine,w,info);
         if(status==STATUS_DEVICE_BUSY) { status=STATUS_PENDING;goto done; }
         if(!NT_SUCCESS(status)) goto done;
     }
     if(!w->Prepared) {
+        trace_stage(q,TgGpuExecutionPrepare);
         status=TgGpuPrepareContextWork(q->Engine,w);
         if(!NT_SUCCESS(status)) goto done;
     }
@@ -335,18 +398,23 @@ NTSTATUS TgGpuServiceWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io
                 RtlCopyMemory((UCHAR *)q->Engine->Commands.CpuAddress+TG_GPU_COMMAND_QMD,snapshot->Words,snapshot->Bytes);
             KeMemoryBarrier();++q->Engine->SnapshotUploads;q->Engine->SnapshotBytes+=snapshot->Bytes;
         }
+        trace_stage(q,TgGpuExecutionSubmit);
         status=TgGpuSubmitContextWork(q->Engine,w,io,power);
         if(!NT_SUCCESS(status)) goto done;
     }
+    trace_stage(q,TgGpuExecutionGpuFence);
     status=TgGpuObserveContextWork(q->Engine,w,io,power);
     if(status!=STATUS_SUCCESS) goto done;
     if(!w->Retired) {
+        trace_stage(q,TgGpuExecutionRetire);
         status=TgGpuQuiesceContextWork(q->Engine,w,io,power);
         if(!NT_SUCCESS(status)) goto done;
     }
+    trace_stage(q,TgGpuExecutionCpuFence);
     status=TgGpuObserveContextWork(q->Engine,w,io,power);
     if(status!=STATUS_SUCCESS)goto done;
 notify:
+    trace_stage(q,TgGpuExecutionNotify);
     /* Admission of rejected records uses this same PASSIVE gate. Consume
      * adjacent rejection markers before the real completion callback, so a
      * concurrent QueryCurrentFence never regresses behind those packets. */
@@ -361,7 +429,9 @@ notify:
     KeAcquireSpinLock(&q->Lock,&irql);q->CurrentPrivate=NULL;KeReleaseSpinLock(&q->Lock,irql);
     status=TgGpuSignalContextWork(q->Engine,w,info);
     if(status!=STATUS_SUCCESS) goto done;
+    KeAcquireSpinLock(&q->Lock,&irql);
     RtlZeroMemory(w,sizeof(*w));RtlZeroMemory(&q->CurrentPaging,sizeof(q->CurrentPaging));
+    KeReleaseSpinLock(&q->Lock,irql);
     if(q->CurrentOwned) {
         free_entry(q->CurrentOwned);q->CurrentOwned=NULL;
     }
@@ -369,7 +439,11 @@ notify:
 done:
     KeAcquireSpinLock(&q->Lock,&irql);
     if(!NT_SUCCESS(status)) q->Failure=status;
+    if(status==STATUS_SUCCESS)q->TraceStage=TgGpuExecutionIdle;
     q->Servicing=FALSE;KeReleaseSpinLock(&q->Lock,irql);
+    /* Preserve the original failure before another admission sees only the
+     * failed queue after DispatchGate is released. */
+    if(!NT_SUCCESS(status))TgGpuTraceExecutionState(q->Engine,TgGpuExecutionWorkerFailure,status,0,NULL);
     if(wake) (VOID)KeSetEvent(&q->Wake,IO_NO_INCREMENT,FALSE);
     (VOID)KeReleaseMutex(&q->DispatchGate,FALSE);
     return status;
@@ -397,7 +471,9 @@ NTSTATUS TgGpuResetWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io *
     if(w->CompletionReady && !w->Notified) {
         status=TgGpuCancelContextNotification(q->Engine,w);
         if(!NT_SUCCESS(status)) goto done;
+        KeAcquireSpinLock(&q->Lock,&irql);
         RtlZeroMemory(w,sizeof(*w));q->CurrentPrivate=NULL;
+        KeReleaseSpinLock(&q->Lock,irql);
     }
     if(w->PagingStarted && !w->CompletionReady) {
         status=TgGpuResetContextWork(q->Engine,w,io,power,clock);
@@ -408,8 +484,10 @@ NTSTATUS TgGpuResetWorkQueue(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io *
         else status=TgGpuResetContextWork(q->Engine,w,io,power,clock);
         if(!NT_SUCCESS(status)) goto done;
     }
+    KeAcquireSpinLock(&q->Lock,&irql);
     RtlZeroMemory(w,sizeof(*w));q->CurrentPrivate=NULL;
     RtlZeroMemory(&q->CurrentPaging,sizeof(q->CurrentPaging));
+    KeReleaseSpinLock(&q->Lock,irql);
     if(q->CurrentOwned) {
         free_entry(q->CurrentOwned);q->CurrentOwned=NULL;
     }

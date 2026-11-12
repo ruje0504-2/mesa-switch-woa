@@ -22,6 +22,34 @@ typedef struct _TG_GPU_RECOVERY_EVENT {
 } TG_GPU_RECOVERY_EVENT;
 C_ASSERT(sizeof(TG_GPU_RECOVERY_EVENT)==72);
 
+/* Event 2/version 1: queue state at preemption, failure and reset boundaries.
+ * Addresses are opaque identities; the trace never reads command memory. */
+enum tg_gpu_execution_source {
+    TgGpuExecutionPreempt=1, TgGpuExecutionWorkerFailure,
+    TgGpuExecutionSubmitFailure, TgGpuExecutionResetBegin, TgGpuExecutionResetEnd
+};
+enum tg_gpu_execution_stage {
+    TgGpuExecutionIdle, TgGpuExecutionSoftware, TgGpuExecutionPaging,
+    TgGpuExecutionMappings, TgGpuExecutionActivate, TgGpuExecutionPrepare,
+    TgGpuExecutionSubmit, TgGpuExecutionGpuFence, TgGpuExecutionRetire,
+    TgGpuExecutionCpuFence, TgGpuExecutionNotify, TgGpuExecutionPreemptPrefix
+};
+typedef struct _TG_GPU_EXECUTION_EVENT {
+    ULONG Version,Source;
+    LUID AdapterLuid;
+    NTSTATUS Status;
+    ULONG RequestFence,RequestFlags,Stage;
+    ULONGLONG RequestContext,Context,DmaAddress;
+    ULONG SubmissionFence,LastCompletedFence,Expected,Observed;
+    ULONG DmaBytes,WorkFlags,QueueFlags;
+    NTSTATUS QueueFailure;
+    ULONG GraphicsGeneration,ChannelStage,ChannelRegister,ChannelValue;
+    ULONG CachedFifo,CachedMmu,CachedPbdma,CachedPbdma1;
+    ULONG CachedMc,CachedGr,CachedFecsError,CachedFecsHost;
+    ULONG PollCount,RequestDmaBytes,PrivateBytes,UmdPrivateBytes;
+} TG_GPU_EXECUTION_EVENT;
+C_ASSERT(sizeof(TG_GPU_EXECUTION_EVENT)==152);
+
 _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS TgGpuTraceInitialize(VOID);
 _IRQL_requires_(PASSIVE_LEVEL)
@@ -29,4 +57,6 @@ VOID TgGpuTraceShutdown(VOID);
 /* EtwWrite accepts nonpaged system-memory payloads at elevated IRQL. */
 _IRQL_requires_max_(DISPATCH_LEVEL)
 VOID TgGpuTraceRecovery(const TG_GPU_RECOVERY_EVENT *);
+_IRQL_requires_max_(DISPATCH_LEVEL)
+VOID TgGpuTraceExecution(const TG_GPU_EXECUTION_EVENT *);
 #endif

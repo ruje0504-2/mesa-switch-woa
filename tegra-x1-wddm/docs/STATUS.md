@@ -3,6 +3,14 @@
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**`.155` candidate:** adds execution-state ETW at preemption, worker/submit
+failure and reset entry/exit. It records the current packet, worker phase and
+cached fence/fault observations before reset clears them. Host decoder checks
+and WDK builds pass; Windows ARM64 context and reset models pass at 01:32:25
+and 01:30:38 UTC. The signed package and catalog members are verified at
+01:34:01 UTC; it is not installed.
+[Execution-state payload and limits](RECOVERY_TRACE.md#execution-state-in-155)
+
 **Current correction:** Carbon High review identifies a missing
 `TGSI_FILE_SAMPLER_VIEW` resource-operand case. Independent Windows ARM64
 debug builds reproduce `bad src file` on the old ordinary `SAMPLE` test;
