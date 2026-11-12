@@ -10,8 +10,11 @@ The retired branch is retained as `baseline/native-desktop-158`. Its frozen
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Current priority:** complete the desktop presentation paths and validate
-hardware **1280x720 landscape**. Display-controller rotation, VidPN, allocation
+**Current priority:** audit the implemented but unvalidated desktop path,
+repair demonstrated defects and complete five minutes of visually correct
+native desktop presentation using the `.158` baseline and individually
+identified UMD/ICD changes. Then validate hardware **1280x720 landscape**,
+followed by Win32 `vkcube`. Display-controller rotation, VidPN, allocation
 geometry and legacy/MPO integration exist in source and pass the documented
 models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
@@ -62,6 +65,17 @@ indirect-submission patch. Hardware testing remains with the main agent.
 UNORM/sRGB views at image creation and retain the original allocation when a
 view is added. The format-rule host control passes; this has not yet passed
 native shared-image rendering. The UMD and ICD must be updated together.
+
+The pre-onscreen audit subsequently reproduces a separate Zink view defect:
+ordinary linear-format filtering strips `COLOR_ATTACHMENT` from imported
+WDDM image views. The fix retains the import's accepted attachment capabilities
+for UNORM/sRGB views of the same allocation. The actual surface control fails
+before the fix (`0x07` instead of `0x17`) and passes all 16 cases afterward
+under Wine x64; the actual submission control also passes. ARM64 compilation
+passes. These are CPU/API controls, not a native visual fix or a demonstrated
+cause of the `.158` corruption. The next shared-image probe must first run
+without producer/import CPU readback checkpoints.
+[View contract, fix and validation](PORTING.md#imported-windows-image-views)
 
 Mesa's Windows blob-cache backend is implemented and enabled by the UMD/ICD
 build tools. It uses asynchronous writes, atomic file replacement, a shared

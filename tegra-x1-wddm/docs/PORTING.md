@@ -1050,9 +1050,10 @@ Cross-process sharing, D3D runtime image metadata and DWM remain separate work.
 Mesa's `src/gallium/frontends/d3d10umd` supplies D3D10 DDI and shader-token
 translation code. `State.h` currently disables its D3D10.1 and D3D11 branches.
 The default GDI target still creates softpipe or llvmpipe screens. The NVK
-target links Zink, but `Resource.cpp::OpenResource` still reports an error
-and runtime-owned allocation metadata is not connected. Its Present and
-SetDisplayMode callbacks return unsupported until the native bridge exists.
+target links Zink. Its runtime bridge now associates primary/shared allocations,
+imports their storage, opens legacy shared resources and forwards Present and
+SetDisplayMode through the runtime callbacks. The later per-batch timeline
+bridge still requires native validation; see [submission ordering](D3D_RUNTIME_SYNC.md).
 [Existing frontend](../../src/gallium/frontends/d3d10umd/)
 [GDI target](../../src/gallium/targets/d3d10umd/)
 
@@ -1068,6 +1069,43 @@ evidence. Generic compatibility work is in scope; individual-game debugging
 remains outside this goal.
 [DXVK upstream](https://github.com/doitsujin/dxvk)
 [Current runtime resource investigation](D3D_RUNTIME_SHARING.md)
+
+## Imported Windows image views
+
+The November 12 pre-onscreen audit finds that Zink creates runtime-imported
+images with color-attachment usage, but its surface creation subsequently
+consults ordinary linear-tiling format properties. NVK intentionally exposes
+the internal WDDM attachment support through the private WSI image query,
+including tiled-shadow fallback, rather than its public linear-format
+properties. The mismatch makes Zink attach `VkImageViewUsageCreateInfo` with
+usage `0x07` instead of the image's `0x17`, dropping `COLOR_ATTACHMENT`.
+An explicit image-view usage overrides the inherited image usage.
+[Vulkan view-usage contract](https://docs.vulkan.org/refpages/latest/refpages/source/VkImageViewUsageCreateInfo.html)
+
+Resource objects now retain whether they came from the WDDM import path.
+For those objects, view creation intersects the imported image's accepted
+format features with the view format's optimal features. It preserves
+UNORM/sRGB attachment usage without changing the allocation or public
+linear-image capabilities. Ordinary linear/optimal resources and imports
+without attachment usage retain their existing behavior. Direct3D permits
+typed present resources to use compatible typed views; ordinary typed
+resources do not gain unrestricted reinterpretation.
+[Direct3D resource/view typing](https://learn.microsoft.com/en-us/windows/win32/direct3d11/overviews-direct3d-11-resources-intro#strong-vs-weak-typing)
+
+`test-zink-win32-surface.exe` invokes the actual surface/cache functions with
+Vulkan dispatch substitutes. Before the fix, the first BGRA UNORM case fails
+with `actual=0x07`, `expected=0x17`. Afterward all 16 BGRA/RGBA UNORM/sRGB
+cases pass, including original-image identity, cache reuse, ordinary
+linear/optimal paths and non-attachment imports. The existing actual Zink
+submission control also passes. The ARM64 UMD and new control compile/link;
+the executable results above are Wine x64 CPU/API evidence, not GPU drawing.
+Evidence is retained in `build/wddm-surface-audit-20261112/`.
+
+This corrects a view-usage defect; it does not establish the cause or repair
+of the photographed white polygons. Native shared pixels and sustained
+desktop composition remain required. Run `--shared-layout` before optional
+`--shared-layout-checkpoints`: the latter adds producer/import CPU readback
+and completion waits that can mask the GPU timeline behavior under test.
 
 ## Windows shader cache
 

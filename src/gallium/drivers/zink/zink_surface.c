@@ -112,9 +112,15 @@ apply_view_usage_for_format(struct zink_screen *screen, struct pipe_resource *pr
    /* if this is a renderpass with no draws (i.e., clear-only), allow rendering to emulated alpha */
    if (!rp_draw && zink_format_is_emulated_alpha(format))
       format = zink_format_get_emulated_alpha(format);
-   VkFormatFeatureFlags feats = res->linear ?
-                                zink_get_format_props(screen, format)->linearTilingFeatures :
-                                zink_get_format_props(screen, format)->optimalTilingFeatures;
+   const struct zink_format_props *props = zink_get_format_props(screen, format);
+   /* WDDM imports negotiate NVK's internal attachment support (including
+    * tiled shadows) at image creation. Public linear-tiling properties do
+    * not advertise it. Do not strip that accepted usage from the views of
+    * the same runtime allocation, including its sRGB view. */
+   VkFormatFeatureFlags feats = res->linear && !res->obj->is_wddm_allocation ?
+                                props->linearTilingFeatures : props->optimalTilingFeatures;
+   if (res->obj->is_wddm_allocation)
+      feats &= res->obj->vkfeats;
    uint64_t attachment = (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
    usage_info->usage = res->obj->vkusage & ~attachment;
    if (res->obj->modifier_aspect) {

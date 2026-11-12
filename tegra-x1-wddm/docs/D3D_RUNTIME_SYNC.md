@@ -79,6 +79,13 @@ timings. The subsequent [.160 trial](NATIVE_DESKTOP_160.md) was interrupted
 without usable native results and restored to `.59`. No performance
 improvement or visual fix is claimed yet.
 
+The next native shared-image check uses `--shared-layout` first. Its optional
+`--shared-layout-checkpoints` mode performs producer and consumer-import CPU
+readbacks before sampling, inserting completion waits that can hide missing
+GPU ordering. A checkpoint pass alone cannot validate the bridge. The
+[imported-view audit](PORTING.md#imported-windows-image-views) also corrects
+an attachment-usage mismatch before the next onscreen trial.
+
 ## Contracts and source
 
 - [Create synchronization object callback](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/ns-d3dumddi-_d3dddicb_createsynchronizationobject2)

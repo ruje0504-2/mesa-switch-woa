@@ -1821,6 +1821,7 @@ resource_object_create(struct zink_screen *screen, const struct pipe_resource *t
    obj->unordered_write = true;
    obj->unsync_access = true;
    obj->modifier = DRM_FORMAT_MOD_INVALID;
+   obj->is_wddm_allocation = is_wddm_allocation(whandle);
    obj->last_dt_idx = obj->dt_idx = UINT32_MAX; //TODO: unionize
 
    struct mem_alloc_info alloc_info = {

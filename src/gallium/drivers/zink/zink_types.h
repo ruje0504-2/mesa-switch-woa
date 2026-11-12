@@ -1266,6 +1266,7 @@ struct zink_resource_object {
    bool coherent;
    bool is_aux;
    bool immutable_handle;
+   bool is_wddm_allocation;
 };
 
 /* "gfx" includes mesh here */

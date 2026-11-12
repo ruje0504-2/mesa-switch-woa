@@ -64,7 +64,8 @@ def main():
     binding_test = "src/gallium/drivers/zink/nir_to_spirv/test_zink_descriptor_binding.exe"
     cache_test = "src/util/test-win32-disk-cache.exe"
     sync_test = "src/gallium/drivers/zink/test-zink-win32-sync.exe"
-    subprocess.run(["ninja", "-C", str(build), *(target + name for name in names), sample_test, binding_test, cache_test, sync_test], check=True)
+    surface_test = "src/gallium/drivers/zink/test-zink-win32-surface.exe"
+    subprocess.run(["ninja", "-C", str(build), *(target + name for name in names), sample_test, binding_test, cache_test, sync_test, surface_test], check=True)
     for name in names:
         shutil.copyfile(build / target / name, out / name)
     shutil.copyfile(build / sample_test, out / "test_tgsi_to_nir.exe")
@@ -75,6 +76,8 @@ def main():
     names.append("test-win32-disk-cache.exe")
     shutil.copyfile(build / sync_test, out / "test-zink-win32-sync.exe")
     names.append("test-zink-win32-sync.exe")
+    shutil.copyfile(build / surface_test, out / "test-zink-win32-surface.exe")
+    names.append("test-zink-win32-surface.exe")
     hashes = {name: hashlib.sha256((out / name).read_bytes()).hexdigest() for name in names}
     (out / "manifest.json").write_text(json.dumps({
         "component": "d3d10-umd",
