@@ -527,3 +527,64 @@ Corrected assertion SHA256:
 Evidence is retained under `runs/native-identity-control-20261112/`.
 Positive native identity and five-minute physical acceptance remain pending;
 the `1e6a3ba4` teardown fix has not resolved the observed desktop boundary.
+
+## Corrected-harness recheck: physical failure
+
+`desktop158-identity-guard-20261112` retains the exact `.158` KMD,
+`1e6a3ba4` / `7f8f821d…` UMD and `7a771aa6` / `ad686578…` ICD above.
+It applies the checked helper-argument correction from `feb25fcc` and adds
+early scheduled captures. This is a harness recheck, with **no new GPU
+source fix**. Input archive SHA256:
+`e1c4809bc083db83dc5a56a9d9443238d041425fca9ce159be7f3200c5ec5fec`.
+
+**Physical acceptance fails again.** The owner reports immediate frozen
+output followed by an automatic restart, with a shorter visible interval
+than the preceding trial's more-than-ten-second observation. This is the
+owner's physical report, not a duration derived from callbacks or boot times.
+
+The retained controller records this sequence (UTC):
+
+| Event | Time |
+| --- | --- |
+| Setup restart requested after staging | 22:42:07 |
+| Setup boot | 22:42:44.551 |
+| Native startup completes, Hardware 0 / Permit 0 / Code 0 | 22:44:56.944 |
+| Native interactive task launched | 22:45:05.116 |
+| Additional boot, before the recovery task | 22:45:33.722 |
+| One-shot controller recognizes the previous attempt and enters recovery | 22:47:50.805 |
+| Recovery stages `.59` / Code 10 | 22:48:15.430 |
+| Recovery boot | 22:48:47.565 |
+| Complete `.59` / Code 0 recovery verification | 22:51:12.856 |
+
+No `native-identity-initial.json`, observation-start/completion marker,
+native result, desktop PNG or pixel result is retained. The task launch
+does not establish which later calls executed before the interruption.
+The observer's surviving display-path record belongs to the later closed-gate
+boot and is BasicDisplay; do not reuse it as the native path's identity.
+The corrected guard has therefore still not completed its positive native
+acceptance case. No five-minute desktop pass is claimed.
+
+The interrupted native ETL retains 23,112 valid UMD events, including 14
+successful DWM Flip/interval-one callbacks. Its `end_time=0` and
+`buffers_written=0` indicate an unfinalized trace. Zero reported loss and no
+retained RuntimeError do not establish a complete execution tail or correct
+physical output. No restart or black-screen cause is assigned or investigated.
+
+All **129 files / 125,485,474 bytes** match the device's stream lengths and
+SHA256 values. Recovery verifies original SYS/ACPI, removed temporary
+UMD/ICD/loader/tasks/permit, restored environment, unchanged power and saved
+portrait preference. CPU is 1996.8 MHz, fan version 12 and Wi-Fi 0.5.7 / Code 0.
+
+| Record | SHA256 |
+| --- | --- |
+| Retained archive | `43238678e7eaf5ab24757a658025f6e59bb1a5e34ea48372e4e5b70e60896218` |
+| Owner's physical observation | `afdad97271a00819195074439b22ef64e5ed3ece5e79a606f631f3f32d4883fe` |
+| Recovery verification | `e766f8c7f823aa80a37554a3adefdcb2b629aea1c5380a42dbc2d98ac76b0629` |
+
+The normal-path audit checked resource/view rotation, the runtime/NVK
+submission bridge, separate GDI source/destination pitches, linear-attachment
+shadow copies and the existing completion WFI/cache synchronization. It did
+not establish another GPU defect or a fix for the physical failure. Retain
+that limit rather than changing stride, barriers or timing speculatively.
+Do not repeat this candidate; a demonstrated rendering fix is needed before
+another native desktop trial. Hardware rotation and cube remain pending.

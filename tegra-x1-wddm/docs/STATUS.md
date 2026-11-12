@@ -20,7 +20,20 @@ models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
 components remain a short-observation baseline, not a stable desktop release.
 
-**Latest teardown-order UMD trial also fails physical acceptance:** with
+**Latest corrected-harness recheck fails physical acceptance:**
+`desktop158-identity-guard-20261112` uses the same `.158` KMD, `7f8f821d…`
+UMD and `ad686578…` ICD. Only the query invocation and capture schedule
+change. The owner reports immediate frozen output and an automatic restart,
+shorter than the preceding observation. Code 0 is recorded, but no completed
+native identity assertion, timed observation, PNG or pixel result survives.
+The new boot precedes the recovery task. At **22:51:12 UTC**, `.59` / Code 0
+and the original configuration are verified restored; all 129 returned
+records match device hashes and lengths. This candidate has no stable
+desktop acceptance. Further native deployment requires a demonstrated
+rendering fix; rotation and cube remain pending.
+[Recheck evidence and limits](NATIVE_DESKTOP_158.md#corrected-harness-recheck-physical-failure)
+
+**Preceding teardown-order UMD trial also fails physical acceptance:** with
 UMD `1e6a3ba4` (`7f8f821d…`), the owner reports more than ten seconds of output,
 a diagonal corruption streak after opening Device Manager, then black output.
 TX1 had no warning icon; the observer separately records `.158` / Code 0 on
