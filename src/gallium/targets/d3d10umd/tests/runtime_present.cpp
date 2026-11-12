@@ -5,6 +5,7 @@
 #include "State.h"
 #include "DxgiFns.h"
 #include "OutputMerger.h"
+#include "Resource.h"
 #include "Shader.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,6 +29,22 @@ static pipe_context pipe;
 static Device device;
 static Resource resources[3];
 static unsigned fence_token;
+static DWORD ddi_thread;
+static unsigned freed_mappings;
+static LONG late_releases;
+static wsi_win32_memory imported[3];
+static uint64_t mapping_address(unsigned i) { return UINT64_C(0x1000000) + i * UINT64_C(0x400000); }
+
+static DWORD WINAPI release_import(void *data)
+{
+   unsigned i = static_cast<unsigned>(reinterpret_cast<uintptr_t>(data));
+   CHECK(GetCurrentThreadId() != ddi_thread);
+   auto &memory = imported[i];
+   CHECK(memory.free_gpu(memory.context, mapping_address(i), 0x400000) == VK_SUCCESS);
+   memory.release(memory.context);
+   InterlockedIncrement(&late_releases);
+   return 0;
+}
 
 extern "C" HRESULT d3d10_create_screen(HANDLE, const D3DDDI_ADAPTERCALLBACKS *, pipe_screen **)
 { return E_NOTIMPL; }
@@ -101,11 +118,19 @@ static void check_identities(const RenderTargetView *rtv, const ShaderResourceVi
 
 int main()
 {
+   ddi_thread = GetCurrentThreadId();
    device.hDevice = rt_device; device.hContext = rt_context; device.pipe = &pipe;
    pipe.screen = &screen;
    screen.get_device_luid = [](pipe_screen *, char *luid) { uint64_t id = 0x1234; memcpy(luid, &id, 8); };
    screen.resource_destroy = [](pipe_screen *, pipe_resource *r) {
       CHECK(r >= textures && r < textures + 3); ++destroyed_textures;
+      /* Zink's batch worker can own the last imported-object reference after
+       * the frontend drops its pipe resource. Force that legal interleaving
+       * before DestroyResource returns, using the real runtime memory owner. */
+      HANDLE thread = CreateThread(NULL, 0, release_import,
+         reinterpret_cast<void *>(uintptr_t(r - textures)), 0, NULL);
+      CHECK(thread && WaitForSingleObject(thread, 5000) == WAIT_OBJECT_0);
+      CloseHandle(thread);
    };
    screen.fence_finish = [](pipe_screen *, pipe_context *, pipe_fence_handle *f, uint64_t timeout) {
       CHECK(f == reinterpret_cast<pipe_fence_handle *>(&fence_token) && timeout == UINT64_MAX);
@@ -130,8 +155,18 @@ int main()
    cb.pfnMakeResidentCb = resident;
    cb.pfnSetDisplayModeCb = [](HANDLE, D3DDDICB_SETDISPLAYMODE *) -> HRESULT { return S_OK; };
    cb.pfnWaitForSynchronizationObjectFromCpuCb = [](HANDLE, const D3DDDICB_WAITFORSYNCHRONIZATIONOBJECTFROMCPU *) -> HRESULT { CHECK(false); return E_FAIL; };
-   cb.pfnMapGpuVirtualAddressCb = [](HANDLE, D3DDDI_MAPGPUVIRTUALADDRESS *) -> HRESULT { CHECK(false); return E_FAIL; };
-   cb.pfnFreeGpuVirtualAddressCb = [](HANDLE, const D3DDDICB_FREEGPUVIRTUALADDRESS *) -> HRESULT { CHECK(false); return E_FAIL; };
+   cb.pfnMapGpuVirtualAddressCb = [](HANDLE d, D3DDDI_MAPGPUVIRTUALADDRESS *m) -> HRESULT {
+      CHECK(d == rt_device && m->hAllocation == 0x50 + creating);
+      CHECK(m->BaseAddress == mapping_address(creating) && !m->OffsetInPages && m->SizeInPages == 900);
+      m->VirtualAddress = m->BaseAddress;
+      return S_OK;
+   };
+   cb.pfnFreeGpuVirtualAddressCb = [](HANDLE d, const D3DDDICB_FREEGPUVIRTUALADDRESS *f) -> HRESULT {
+      CHECK(GetCurrentThreadId() == ddi_thread);
+      CHECK(d == rt_device && f->BaseAddress == mapping_address(expected[destroying]) && f->Size == 0x400000);
+      ++freed_mappings;
+      return S_OK;
+   };
    cb.pfnLock2Cb = [](HANDLE, D3DDDICB_LOCK2 *) -> HRESULT { CHECK(false); return E_FAIL; };
    cb.pfnUnlock2Cb = [](HANDLE, const D3DDDICB_UNLOCK2 *) -> HRESULT { CHECK(false); return E_FAIL; };
    D3D10DDI_HDEVICE hdevice = {&device};
@@ -150,7 +185,13 @@ int main()
       t.width0 = 720; t.height0 = 1280; t.depth0 = t.array_size = 1;
       r.device = &device; r.runtime_resource = rt_resource(i); r.resource = &t;
       r.Format = desc.Format; r.MipLevels = r.NumSubResources = 1;
+      r.transfers = static_cast<pipe_transfer **>(calloc(1, sizeof(*r.transfers)));
+      CHECK(r.transfers);
       CHECK(RuntimePrimaryCreate(&device, &desc, {rt_resource(i)}, &r.runtime_memory) == S_OK);
+      imported[i] = *RuntimeResourceMemory(r.runtime_memory);
+      imported[i].retain(imported[i].context);
+      CHECK(imported[i].map_gpu(imported[i].context, mapping_address(i), 0,
+                               imported[i].size, 0, false, mapping_address(i), 0x400000) == VK_SUCCESS);
       handles[i] = reinterpret_cast<DXGI_DDI_HRESOURCE>(&r);
       rtv_handles[i] = {&rtv[i]}; srv_handles[i] = {&srv[i]};
       D3D10DDIARG_CREATERENDERTARGETVIEW v = {};
@@ -211,10 +252,12 @@ int main()
       DestroyShaderResourceView(hdevice, srv_handles[destroying]);
       DestroyRenderTargetView(hdevice, rtv_handles[destroying]);
       CHECK(!resources[destroying].views);
-      pipe_resource_reference(&resources[destroying].resource, NULL);
-      CHECK(RuntimeResourceDestroy(resources[destroying].runtime_memory) == S_OK);
+      DestroyResource(hdevice, {&resources[destroying]});
+      CHECK(!resources[destroying].resource && !resources[destroying].runtime_memory);
    }
    CHECK(!live_views && !live_allocations && !live_queues && destroyed_textures == 3);
+   CHECK(freed_mappings == 3 && late_releases == 3);
+   puts("PASS: imported mappings released on the DDI thread before delayed worker references finish (controlled callbacks; no GPU)");
    puts("PASS: runtime Present preserves owners/context/opaque token/status after GPU completion; swapchain identities, RTV/SRV bindings, failed waits/allocations and cleanup pass (controlled substitutes)");
    return 0;
 }

@@ -579,6 +579,13 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
     * GPU use before releasing its allocation, even if Zink retains a cached
     * object wrapper until a later batch cleanup. */
    HRESULT completion = RuntimeResourceFinish(CastDevice(hDevice), pResource);
+   /* Close the runtime mapping owner on the DDI thread before dropping the
+    * frontend's last backend reference. A Zink batch worker can concurrently
+    * retire the final imported-object reference; its free_gpu callback must
+    * then see a dead owner and only release bookkeeping, not enter the D3D
+    * runtime from that worker. Successful completion above drained GPU use. */
+   HRESULT released = RuntimeResourceDestroy(pResource->runtime_memory);
+   pResource->runtime_memory = NULL;
 #endif
    if (pResource->buffer) {
       /* The backend can retain borrowed buffer bindings after ClearState.
@@ -589,8 +596,6 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
       pipe_resource_reference(&pResource->resource, NULL);
    }
 #ifdef D3D10_UMD_HARDWARE
-   HRESULT released = RuntimeResourceDestroy(pResource->runtime_memory);
-   pResource->runtime_memory = NULL;
    if (FAILED(completion)) SetError(hDevice, completion);
    else if (FAILED(released)) SetError(hDevice, released);
 #endif
