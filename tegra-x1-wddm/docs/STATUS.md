@@ -3,13 +3,23 @@
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**`.155` candidate:** adds execution-state ETW at preemption, worker/submit
-failure and reset entry/exit. It records the current packet, worker phase and
-cached fence/fault observations before reset clears them. Host decoder checks
-and WDK builds pass; Windows ARM64 context and reset models pass at 01:32:25
-and 01:30:38 UTC. The signed package and catalog members are verified at
-01:34:01 UTC; it is not installed.
-[Execution-state payload and limits](RECOVERY_TRACE.md#execution-state-in-155)
+**Latest `.155` result: failed native desktop, first stalled work retained.**
+`execution155-native-20261112` uses UMD `77dea046dde0`/ICD `6e2fad99d742`.
+On native LUID `ba67c`, reset entry captures a 64,864-byte render packet at
+fence **749**, last completed **748**, waiting for GPU marker **80** while
+the observed marker remains **0** after 140 polls. The DWM device-error mark
+occurs about 2.085 seconds after submission; generic OOM follows 281 ms later.
+The command words/fetch position are not retained, so the stalled instruction
+and underlying cause remain unknown. Native Code 0 is recorded at 01:46:05 UTC
+on November 12, after the first error; the user reports black output/reboot,
+and an extra boot occurs at 01:46:50. No native PNG or Load result is retained.
+[Execution-state evidence and limits](RECOVERY_TRACE.md#native-155-result)
+
+**Recovery complete:** all 159 files (136,536,269 bytes) match device hashes.
+`.59` Code 0, cleanup and unchanged power are verified at 01:52:36 UTC;
+saved portrait is unchanged at 01:52:55. The actual restored desktop PNG at
+01:58:42 has the complete bottom taskbar and right-side tray. No Explorer
+restart is needed this time. No native test remains active.
 
 **Current correction:** Carbon High review identifies a missing
 `TGSI_FILE_SAMPLER_VIEW` resource-operand case. Independent Windows ARM64
@@ -20,7 +30,7 @@ controls pass at 00:55:26. The native retry below still fails. Confirmed undefin
 behavior is corrected; the desktop failure's cause remains unresolved.
 [Correction and limits](D3D_RUNTIME_SHARING.md#sampler-view-operand-correction)
 
-**Latest native run finished:** `sampler-view154-native-20261112` uses unchanged
+**Previous native run:** `sampler-view154-native-20261112` uses unchanged
 signed `.154` KMD/ICD and corrected UMD `77dea046dde0`. Native LUID `bcf28`
 reaches Code 0 at 01:02:54, followed by user-confirmed black output and an extra
 boot at 01:03:41. No Load result or native PNG is retained. The interrupted
@@ -148,9 +158,10 @@ completes at 21:56:46 UTC; an additional startup occurs during recovery at
 and is verified Code 0 with cleanup and unchanged power at 22:03:37. Saved
 portrait is unchanged at 22:04:35. No native test remains running.
 
-**Next:** capture the active GPU work and preemption/reset state before the
-DWM device error; the retained recovery requests occur later. Preserve the underlying
-resource-create failure instead of interpreting generic OOM as budget exhaustion.
+**Next:** retain the stalled packet's validated command snapshot and hardware
+fetch position before reset destroys them. `.155` identifies GPU-fence wait,
+but not the exact instruction. Preserve the underlying resource-create failure
+instead of interpreting generic OOM as budget exhaustion.
 Then complete physical desktop composition, hardware landscape and Win32 `vkcube`.
 The successful shared-pixel probes need not be rerun without a relevant change.
 [Buffer ownership](D3D_RUNTIME_SHARING.md#buffer-release-ownership-correction) ·

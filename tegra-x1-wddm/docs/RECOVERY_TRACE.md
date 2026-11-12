@@ -129,6 +129,12 @@ or referenced pointer is dereferenced for tracing.
 The preemption event captures state after admission; concurrently completed
 work may already be absent. Neither that absence nor a cached zero establishes
 healthy hardware. ETW flush/loss and interrupted-tail limits still apply.
+`stage` is the last published worker phase: for example, notification cleanup
+can retain `notify` after current work has been cleared. Interpret a current
+operation only when `active` is set. A DISPATCH-level preemption event can
+interleave before a worker-failure event; timestamp order alone does not assign
+the first cause, even though the worker's original failure is retained before
+its dispatch gate is released.
 Use reset-entry records before reset-exit/generation changes to find the
 original work, rather than diagnosing it from later paging recovery requests.
 
@@ -144,5 +150,71 @@ initializes the complement of the expected marker. That test expectation is
 corrected without changing the driver's completion condition. Its failed
 executable/result remain in the external evidence.
 
-These are user-mode OS/GPU substitutes, not native ETW delivery or a physical
-GPU pass. Evidence is in `execution155-20261112`; live validation is pending.
+These are user-mode OS/GPU substitutes, not a physical GPU pass. Build/model
+evidence is in `execution155-20261112`; the native trial follows below.
+
+## Native .155 result
+
+`execution155-native-20261112` uses signed KMD `add32c094862`, corrected UMD
+`77dea046dde0` and unchanged ICD `6e2fad99d742`. The No3D stub initially lacks
+an embedded signature; staging detects this before installation. The signed
+stub and rebuilt catalog pass verification at 01:39:34 UTC on November 12.
+The existing boot trace enables this provider at level 4.
+
+The first ETL contains 238,953 exported events, including 94 execution-state
+events (75 preemption, nine submit failures, five reset entries and five reset
+exits), five first-recovery events and 23,285 UMD events. Native adapter LUID
+`ba67c` reports the ACPI identity `SWOA0F01`. The retained first failure is:
+
+| UTC | Observation |
+| --- | --- |
+| 01:45:45.908048 | Dxgkrnl starts client render submission 749. |
+| 01:45:47.933467 | Preemption 71 is admitted; current work is still 749 at `gpu_fence`, with 131 polls. |
+| 01:45:47.992958 | The DWM-associated device receives `VidSchMarkDeviceAsError`, numeric reason 7 (uninterpreted). |
+| 01:45:48.099602 | Reset entry retains current 749, last completed 748, expected marker 80, observed 0, and 140 polls. |
+| 01:45:48.120870 | Reset exit returns success; the graphics generation changes from 1 to 3. |
+| 01:45:48.273855 | DWM reports generic `E_OUTOFMEMORY` from resource creation, 281 ms after the device-error mark. |
+
+The active application packet is 64,864 bytes at the private command VA
+`0x04004000`. It is prepared, attempted and submitted, with a valid GPU fence
+observation; GPU/CPU-completed flags remain clear. Queue failure is still zero
+at reset entry. Cached FIFO/MMU/PBDMA and GR/FECS error values are zero.
+`cached_mc=0xd8213120` is **MC_ENABLE**, not an interrupt status. These samples
+do not establish healthy hardware or identify the instruction that stalled.
+The 286 retained resource-reservation exits between native adapter reporting
+and the first device error all return zero; those exit records lack an adapter
+field and are not a complete memory-budget measurement.
+
+Dxgkrnl context/device records associate the work with DWM PID 484 and the
+native adapter. KMD and scheduler context handles differ; they are not equated
+by pointer value. Dxgkrnl emits completion/stop records for 749/750 after the
+device-error mark but just before reset entry, while the KMD still reports
+749 uncompleted. Those cleanup records are not evidence of physical GPU
+completion. Packet type 3 is system preemption, per Microsoft's
+[DMA packet enum](https://learn.microsoft.com/en-us/previous-versions/hh706296(v=vs.85)).
+The five later first-recovery events describe paging failures after reset,
+not this initial fence wait. The command words and hardware fetch position
+are not in event 2; capture those next before choosing a functional fix.
+
+The native trace is **unfinalized** (`EndTime=0`, `BuffersWritten=0`), with no
+reported loss. Its export hash is
+`babaa9de1f73fdfec28c0536ff7823180983c6f17c446c027f2c53f05db35e7a`.
+The second trace is finalized (493 buffers), contains 178,093 exported events
+and no UMD/KMD diagnostic events; its export hash is
+`7346298a7d99a922145cfbafe22693c2c8c5e3aa8ffb40cf5378f0504446410d`.
+The device-template decoder retains a known Dwm-Core event 203 payload-length
+mismatch (1,291 instances); those events are excluded from the interpretation.
+The first trace has 15 successful DWM flip callbacks, but no retained native
+PNG or Load result. Neither those callbacks nor the later controller Code 0
+record at 01:46:05 proves a complete desktop.
+
+The user reports black output/reboot; an extra boot occurs at 01:46:50.
+All 159 returned files (136,536,269 bytes) match device lengths/hashes.
+Recovery `.59` Code 0, cleanup and unchanged power are verified at 01:52:36;
+portrait is unchanged at 01:52:55. The separate capture
+`desktop-after-execution155-20261112/geometry-control.png` at 01:58:42 is
+visually inspected: full taskbar/Start and right-side tray/clock, 720x1280,
+DPI 96, with `.59` before/after. SHA256:
+`f5c7360c560cabfa8b879ff73504e28577c9459cf29d4d43676fbf434e0d308b`.
+No shell repair is needed this time. This is recovery software-display evidence,
+not native GPU acceleration, physical landscape or sustained stability.
