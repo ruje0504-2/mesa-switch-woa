@@ -12,6 +12,8 @@ backend. The replacement excludes the existing Gallium `d3d10umd` and software
 rendering; DXVK is a code-reuse candidate and is also planned for DX9/10/11
 applications. Native Windows UMD/DDI and DWM resource/presentation contracts
 still require implementation. Zink remains a later OpenGL compatibility route.
+The existing Zink desktop baseline is being repaired in parallel for shared
+textures, synchronization and persistent shader caching.
 
 | Area | Status |
 | --- | --- |

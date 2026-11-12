@@ -1181,7 +1181,6 @@ if with_split_debug.allowed() and get_option('debug')
 endif
 
 with_shader_cache = get_option('shader-cache') \
-  .require(host_machine.system() != 'windows', error_message : 'Shader Cache does not currently work on Windows') \
   .allowed()
 
 if with_shader_cache
@@ -1837,7 +1836,7 @@ endif
 with_compression = dep_zlib.found() or dep_zstd.found()
 if with_compression
   pre_args += '-DHAVE_COMPRESSION'
-elif with_shader_cache
+elif with_shader_cache and host_machine.system() != 'windows'
   error('Shader Cache requires compression')
 endif
 

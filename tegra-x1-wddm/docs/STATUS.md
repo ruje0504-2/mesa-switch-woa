@@ -20,16 +20,43 @@ not a substitute for the required Windows UMD/DDI, shared-resource and DWM
 presentation contracts. Direct Flip remains deferred. Preserve the `.158`
 baseline while developing and validating the replacement separately.
 
+The existing Zink desktop baseline is also being repaired in parallel, as
+requested: shared-image correctness, synchronization and persistent shader
+caching. This is distinct from the replacement architecture. No new native
+desktop acceptance is claimed by the source and cache controls below.
+
 The old remote Claude task has ended at the user's request. Six completed
-commits through `9051f49e` are retained in `fable-vps/dxvk-games`, without
-integration into `main`. Its final collection contains 965 files /
+commits through `9051f49e` are retained in `fable-vps/dxvk-games`. The imported
+sRGB-view fix is adapted into `main` as `5538ace5`; the rest of that branch is
+not merged. Its final collection contains 965 files /
 381,337,146 bytes, all checked against remote hashes and lengths. The sixteen
 unfinished indirect-submission files are preserved separately as a patch and
 source snapshot. The additional completed work implements `BltDXGI` and
 imported-image sRGB views; its controls do not establish native desktop or
-DXVK acceptance. Under the user's current VPS rules, the new Claude task is
-read-only architecture/source review; local source integration and hardware
-tests remain the main agent's responsibility.
+DXVK acceptance. The new Claude architecture review completed, and the user
+then explicitly delegated implementation as well. That same Fable 5.2/max
+session now implements a separate native DDI/Vulkan backend in an isolated
+checkout based on main `8fcf9e07`. Local integration and hardware tests remain
+the main agent's responsibility.
+
+**Zink texture/cache work:** runtime-owned BGRA/RGBA imports now declare their
+UNORM/sRGB views at image creation and retain the original allocation when a
+view is added. The format-rule host control passes; this has not yet passed
+native shared-image rendering. The UMD and ICD must be updated together.
+
+Mesa's Windows blob-cache backend is implemented and enabled by the UMD/ICD
+build tools. It uses asynchronous writes, atomic file replacement, a shared
+key index and coordinated eviction; Zink includes its own DLL identity in the
+cache namespace. The ARM64 cache control exits 0 on `.59`/Code 0 at
+09:21:04 UTC: a new process reads a previous process's entry, two simultaneous
+writers produce 64 verified entries, and namespace separation, corruption,
+eviction and disable-option checks pass. Executable SHA256:
+`de5824ed13ac67bcd488c3785a2799947cbb75f2d79fb943fff5f7698cb93fbb`.
+This is Windows CPU/filesystem evidence, not GPU execution or a measured
+shader-compilation speedup. The record is retained in
+`build/zink-sync-texture-cache-20261112/cache-control-concurrent.json`.
+Cross-queue synchronization and native visual/performance acceptance remain
+in progress. [Windows cache configuration](PORTING.md#windows-shader-cache)
 
 **Five-minute observation completed; visual acceptance failed:** the frozen
 `.158` set remains Code 0 during a 311.057-second observation, but the user's

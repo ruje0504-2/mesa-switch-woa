@@ -47,6 +47,9 @@ def main():
         "/imsvc" + str(a.sdk_include / "um"), "/imsvc" + str(a.sdk_include / "shared"),
         "/imsvc" + str(a.wdk_include / "km/crt"))
     run(*sdk_cc, "/Fo" + str(out / "kmt-sdk.obj"), "--", win / "test-kmt-sdk.c")
+    run(a.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-I" + str(src / "include"),
+        "-I" + str(src / "src/vulkan/util"), win / "test-win32-image-flags.c",
+        "-o", out / "test-win32-image-flags.exe")
     kmt_object = out / "kmt-native.obj"
     run(*sdk_cc, "/O2", "/Gy", "/GS-", "/Zl", f"/Fo{kmt_object}", "--", win / "kmt_native.c")
     shared_test = out / "test-kmt-shared.obj"
@@ -75,7 +78,7 @@ def main():
         "-Dglx=disabled", "-Degl=disabled", "-Dgbm=disabled", "-Dllvm=disabled",
         "-Dbuild-tests=false", "-Dvideo-codecs=[]", "-Dvalgrind=disabled",
         "-Dlibunwind=disabled", "-Dgles1=disabled", "-Dgles2=disabled", "-Dopengl=false",
-        "-Dshader-cache=disabled", "-Dzlib=disabled", "-Dzstd=disabled", "-Dexpat=disabled",
+        "-Dshader-cache=enabled", "-Dzlib=disabled", "-Dzstd=disabled", "-Dexpat=disabled",
         "-Dmesa-clc=system", "-Dbuildtype=release", f"-Dnvk-windows-kmt-object={kmt_object}",
         "-Dnvk-build-id=" + digest.hexdigest())
     run("ninja", "-C", build, "src/nouveau/vulkan/libvulkan_nouveau.dll")
@@ -93,7 +96,8 @@ def main():
     }}, indent=2) + "\n")
     files = [dll, out / "nvk-windows-check.exe", out / "test-kmt.exe",
              out / "test-kmt-shared.exe", out / "nvk-windows-shared-check.exe",
-             out / "nvk-windows-vulkan-shared-check.exe", out / "test-win32-pacing.exe", manifest]
+             out / "nvk-windows-vulkan-shared-check.exe", out / "test-win32-image-flags.exe",
+             out / "test-win32-pacing.exe", manifest]
     hashes = {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files}
     (out / "manifest.json").write_text(json.dumps({
         "component": "nvk-icd",

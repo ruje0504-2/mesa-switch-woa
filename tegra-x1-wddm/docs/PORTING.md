@@ -1069,6 +1069,33 @@ remains outside this goal.
 [DXVK upstream](https://github.com/doitsujin/dxvk)
 [Current runtime resource investigation](D3D_RUNTIME_SHARING.md)
 
+## Windows shader cache
+
+The Windows UMD and NVK ICD builds enable Mesa's persistent blob cache.
+`src/util/disk_cache_win32.c` implements the existing cache interface with
+Win32 file operations; Zink's translated shader/pipeline cache and NVK's
+compiled-shader cache use it. Writes run on a low-priority worker and publish
+complete blobs by atomic replacement. A shared index and file lock coordinate
+writers across processes. Invalid or unavailable entries become cache misses.
+
+The default directory is `%LOCALAPPDATA%\mesa_shader_cache_win32` for the
+process identity. `MESA_SHADER_CACHE_DIR` selects the parent directory instead.
+`MESA_SHADER_CACHE_DISABLE=true` disables it and
+`MESA_SHADER_CACHE_SHOW_STATS=true` reports hit/miss counts when a cache is
+destroyed. `MESA_SHADER_CACHE_MAX_SIZE` controls the disk-blob limit (K/M/G,
+default 1 GiB); a fixed key index is additional metadata. This is separate
+from the unchanged 512 MiB dynamic GPU budget. This backend stores blobs
+without compression and does not require zlib or zstd.
+
+The namespace includes driver/device identity and compiler flags; Zink also
+includes its DLL identity before hashing the Vulkan pipeline-cache UUID.
+Keep matched UMD/ICD artifacts when testing shared-image changes. The Windows
+ARM64 cache control validates persistence across process restart, simultaneous
+writers, namespace separation, integrity, eviction and the disable option on
+the restored `.59` adapter. It does not execute GPU work. Native cold/warm
+shader compilation and desktop frame-time comparisons still require a matched
+hardware trial.
+
 ## deko3D Maxwell reference
 
 Consult deko3D alongside Mesa/NVK for GM20B command encoding, texture and

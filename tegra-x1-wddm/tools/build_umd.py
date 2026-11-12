@@ -48,7 +48,7 @@ def main():
         "-Dgallium-d3d10-dll-name=TegraGpuD3D", "-Dglx=disabled", "-Degl=disabled",
         "-Dgbm=disabled", "-Dllvm=disabled", "-Dbuild-tests=true", "-Dvideo-codecs=[]",
         "-Dvalgrind=disabled", "-Dlibunwind=disabled", "-Dgles1=disabled", "-Dgles2=disabled",
-        "-Dopengl=false", "-Dshader-cache=disabled", "-Dzlib=disabled", "-Dzstd=disabled",
+        "-Dopengl=false", "-Dshader-cache=enabled", "-Dzlib=disabled", "-Dzstd=disabled",
         "-Dexpat=disabled", "-Dmesa-clc=system", "-Dbuildtype=release",
         f"-Dc_args={includes}", f"-Dcpp_args={includes}",
     ], check=True)
@@ -59,13 +59,16 @@ def main():
              "test_d3d10_runtime_present.exe", "test_d3d10_runtime_shared.exe"]
     sample_test = "src/gallium/auxiliary/gallium-aux.exe"
     binding_test = "src/gallium/drivers/zink/nir_to_spirv/test_zink_descriptor_binding.exe"
-    subprocess.run(["ninja", "-C", str(build), *(target + name for name in names), sample_test, binding_test], check=True)
+    cache_test = "src/util/test-win32-disk-cache.exe"
+    subprocess.run(["ninja", "-C", str(build), *(target + name for name in names), sample_test, binding_test, cache_test], check=True)
     for name in names:
         shutil.copyfile(build / target / name, out / name)
     shutil.copyfile(build / sample_test, out / "test_tgsi_to_nir.exe")
     names.append("test_tgsi_to_nir.exe")
     shutil.copyfile(build / binding_test, out / "test_zink_descriptor_binding.exe")
     names.append("test_zink_descriptor_binding.exe")
+    shutil.copyfile(build / cache_test, out / "test-win32-disk-cache.exe")
+    names.append("test-win32-disk-cache.exe")
     hashes = {name: hashlib.sha256((out / name).read_bytes()).hexdigest() for name in names}
     (out / "manifest.json").write_text(json.dumps({
         "component": "d3d10-umd",

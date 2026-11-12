@@ -334,6 +334,11 @@ disk_cache_init(struct zink_screen *screen)
    unsigned build_id_len = build_id_length(note);
    assert(note && build_id_len <= BUILD_ID_EXPECTED_HASH_LENGTH);
    _mesa_blake3_update(&ctx, build_id_data(note), build_id_len);
+#elif defined(_WIN32)
+   /* Invalidate translated shaders when the UMD changes independently of
+    * the Vulkan ICD's pipeline cache UUID. */
+   if (!disk_cache_get_function_identifier(disk_cache_init, &ctx))
+      return true;
 #endif
 
    /* Hash in the Vulkan pipeline cache UUID to identify the combination of

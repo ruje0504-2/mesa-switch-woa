@@ -37,6 +37,7 @@ files_mesa_util = files(
   'crc32.h',
   'dag.c',
   'disk_cache.c',
+  'disk_cache_win32.c',
   'disk_cache.h',
   'disk_cache_os.c',
   'disk_cache_os.h',
@@ -319,6 +320,10 @@ if dep_libdrm.found()
   deps_for_libmesa_util += dep_libdrm
 endif
 
+if host_machine.system() == 'windows' and with_shader_cache
+  deps_for_libmesa_util += cc.find_library('shell32')
+endif
+
 if with_platform_android
   deps_for_libmesa_util += dep_android
   files_debug_stack = files('u_debug_stack_android.cpp')
@@ -520,10 +525,15 @@ if with_tests
     )
   endif
 
-  if with_shader_cache
+  if with_shader_cache and host_machine.system() != 'windows'
     files_util_tests += files(
       'tests/cache_test.cpp',
     )
+  endif
+
+  if with_shader_cache and host_machine.system() == 'windows'
+    test('win32_disk_cache', executable('test-win32-disk-cache',
+      'tests/cache_win32_test.c', dependencies : idep_mesautil), suite : ['util'])
   endif
 
   test(
