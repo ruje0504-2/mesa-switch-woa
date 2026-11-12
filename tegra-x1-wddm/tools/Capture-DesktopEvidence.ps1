@@ -6,15 +6,21 @@ param([Parameter(Mandatory=$true)][string]$OutputPrefix)
 $ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
 $started=[DateTime]::UtcNow.ToString('o')
 if((Get-Process -Id $PID).SessionId -eq 0){throw 'Capture requires an interactive session'}
-foreach($suffix in '.png','.json','.pending.png'){
+foreach($suffix in '.png','.json','.pending.png','.geometry.json'){
  if(Test-Path -LiteralPath ($OutputPrefix+$suffix)){throw 'Capture output already exists'}
 }
 Add-Type @'
 using System;
 using System.Text;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 public static class TgDesktopCapture {
  [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left,Top,Right,Bottom; }
+ public sealed class ChildWindow {
+  public string Class; public bool Visible,BoundsValid; public Rect Bounds;
+  public uint Pid,Dpi;
+ }
+ private delegate bool EnumWindowProc(IntPtr window,IntPtr parameter);
  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
  [DllImport("user32.dll")] public static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);
  [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr desktop);
@@ -23,6 +29,23 @@ public static class TgDesktopCapture {
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window,out Rect rect);
  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window,out uint process);
+ [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
+ [DllImport("user32.dll",CharSet=CharSet.Unicode)] private static extern int GetClassName(IntPtr window,StringBuilder name,int count);
+ [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent,EnumWindowProc callback,IntPtr parameter);
+ public static ChildWindow[] Children(IntPtr parent) {
+  var children=new List<ChildWindow>();
+  // A null parent enumerates unrelated top-level windows, not a missing bar.
+  if(parent==IntPtr.Zero) return children.ToArray();
+  EnumChildWindows(parent,delegate(IntPtr window,IntPtr parameter) {
+   var child=new ChildWindow();var name=new StringBuilder(256);
+   GetClassName(window,name,name.Capacity);child.Class=name.ToString();
+   child.Visible=IsWindowVisible(window);
+   child.BoundsValid=GetWindowRect(window,out child.Bounds);
+   GetWindowThreadProcessId(window,out child.Pid);
+   child.Dpi=GetDpiForWindow(window);children.Add(child);return true;
+  },IntPtr.Zero);
+  return children.ToArray();
+ }
  public static string InputDesktop() {
   IntPtr desktop=OpenInputDesktop(0,false,1);
   if(desktop==IntPtr.Zero) throw new InvalidOperationException("Input desktop unavailable");
@@ -46,11 +69,21 @@ try{
  $record.ProblemBefore=(Get-PnpDeviceProperty -InstanceId $id -KeyName DEVPKEY_Device_ProblemCode).Data
  $bounds=[Windows.Forms.Screen]::PrimaryScreen.Bounds
  $record.Bounds=@{X=$bounds.X;Y=$bounds.Y;Width=$bounds.Width;Height=$bounds.Height}
+ $work=[Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+ $record.WorkArea=@{X=$work.X;Y=$work.Y;Width=$work.Width;Height=$work.Height}
+ $record.Screens=@([Windows.Forms.Screen]::AllScreens|ForEach-Object {
+  @{Name=$_.DeviceName;Primary=$_.Primary;Bounds=@{X=$_.Bounds.X;Y=$_.Bounds.Y;Width=$_.Bounds.Width;Height=$_.Bounds.Height}}
+ })
  $bar=[TgDesktopCapture]::FindWindow('Shell_TrayWnd',$null)
  $rect=New-Object TgDesktopCapture+Rect;[uint32]$owner=0
  $valid=[TgDesktopCapture]::GetWindowRect($bar,[ref]$rect)
  $null=[TgDesktopCapture]::GetWindowThreadProcessId($bar,[ref]$owner)
- $record.Taskbar=@{Found=$bar -ne [IntPtr]::Zero;Visible=[TgDesktopCapture]::IsWindowVisible($bar);Pid=$owner;BoundsValid=$valid;Bounds=$rect}
+ $record.Taskbar=@{Found=$bar -ne [IntPtr]::Zero;Visible=[TgDesktopCapture]::IsWindowVisible($bar);Pid=$owner;BoundsValid=$valid;Bounds=$rect;Dpi=[TgDesktopCapture]::GetDpiForWindow($bar);Children=[TgDesktopCapture]::Children($bar)}
+ # Retain geometry even if the controller must terminate CopyFromScreen.
+ $record.GeometryUtc=[DateTime]::UtcNow.ToString('o')
+ $record|ConvertTo-Json -Depth 5|Set-Content -LiteralPath ($OutputPrefix+'.geometry.json') -Encoding UTF8
+ $checkpoint=[IO.File]::Open(($OutputPrefix+'.geometry.json'),[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::Read)
+ try{$checkpoint.Flush($true)}finally{$checkpoint.Dispose()}
  $image=New-Object Drawing.Bitmap($bounds.Width,$bounds.Height)
  try{
   $g=[Drawing.Graphics]::FromImage($image)

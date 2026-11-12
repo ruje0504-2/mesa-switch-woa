@@ -9,7 +9,18 @@ Opening the Start menu remains a separate interaction check.
 The script captures the actual primary-screen bounds in physical pixels,
 without assuming portrait dimensions. Its adjacent JSON records UTC start/end,
 session and input desktop, driver version/problem before and after, taskbar
-owner/rectangle and PNG SHA256. Keep the trial's active display-path/LUID and
+owner/rectangle and PNG SHA256. The geometry extension also records all screen
+bounds, the primary work area, taskbar window DPI and its child-window classes,
+rectangles, visibility and DPI. This distinguishes a shorter/off-screen shell
+layout from missing pixels within a correctly positioned window. Child windows
+do not necessarily correspond to individual XAML task icons; inspect the PNG
+as well. Window DPI is interpreted according to the window's own awareness,
+as documented by [GetDpiForWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdpiforwindow).
+These observations do not change DPI, layout or display settings.
+A separate `.geometry.json` checkpoint is flushed before `CopyFromScreen`, so
+geometry can survive a capture timeout. That checkpoint alone is not a completed
+screenshot; completion still requires the final JSON and matching PNG.
+Keep the trial's active display-path/LUID and
 exact component hashes alongside these files: the installed driver version
 alone does not identify the adapter that composed the image.
 
@@ -67,3 +78,17 @@ The missing taskbar is directly visible. The supplied file has no embedded
 driver identity and is not byte-identical to a retained run PNG, so its `.146`
 attribution remains the user's identification. Wallpaper/icons alone must not
 be described as a complete desktop pass or used as a known-good taskbar baseline.
+
+## Geometry control
+
+`desktop-geometry154-20261112` validates the geometry extension on `.59` Code 0
+at 00:50:13–00:50:21 UTC. All five returned files match device hashes. The image
+is 720x1280, the work area is 720x1232 and the taskbar is `(0,1232)-(720,1280)`
+at DPI 96. Its `TrayNotifyWnd` rectangle is `(462,1232)-(720,1280)`; the `Start`
+child rectangle is `(184,1232)-(229,1280)`. Some legacy children report invisible
+while the PNG contains their XAML-rendered content, illustrating why child-window
+visibility alone is insufficient. Direct inspection confirms the full taskbar,
+Start icons and right-side tray/clock. The geometry checkpoint predates image
+completion. PNG SHA256:
+`9b62c53aba9d87b7a82d47738993242e63ed2f271542df9fb65f9bf63480696d`.
+This remains a recovered-baseline capture, not native presentation proof.

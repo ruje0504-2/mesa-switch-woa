@@ -3,6 +3,30 @@
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**Current correction:** Carbon High review identifies a missing
+`TGSI_FILE_SAMPLER_VIEW` resource-operand case. Independent Windows ARM64
+debug builds reproduce `bad src file` on the old ordinary `SAMPLE` test;
+the one-line correction passes all twelve translator tests at 00:53:40 UTC
+on November 12. Release UMD `77dea046dde0` builds and its exact DLL/callback
+controls pass at 00:55:26. Native validation is pending; this fixes confirmed
+undefined behavior, not a proven
+desktop failure cause. [Correction and limits](D3D_RUNTIME_SHARING.md#sampler-view-operand-correction)
+
+**Old UMD comparison:** fixed `.154` KMD/ICD with `e99798fa9668` reaches native
+LUID `bb8de` at 00:32:31 UTC, then an extra boot at 00:33:30. It retains 44 DWM
+flip callbacks but no completed native screenshot. All 162 files match device
+hashes; `.59` Code 0, cleanup and unchanged power are verified at 00:47:55,
+saved portrait at 00:48:32. The prepared `8f9a286a0e2b` desktop-only counterpart
+is not started after the confirmed source defect is found. This is an incomplete
+A/B comparison. The user reports missing right-side content and left-shifted
+central icons; scaling and exact photo phase remain unconfirmed.
+[Comparison evidence](D3D_RUNTIME_SHARING.md#old-umd-comparison-on-154)
+
+**Capture geometry:** work-area/screen bounds, window DPI and taskbar child
+rectangles are now flushed before pixel capture. The `.59` control passes at
+00:50:21 UTC, with a complete taskbar/tray PNG and DPI 96. Native validation
+of this extension remains pending.
+
 **Desktop evidence:** automated PNG capture is verified on the recovered `.59`
 at 23:30:12 UTC. Direct image inspection finds the bottom taskbar, Start button
 and right-side tray/clock. Native trials must retain and inspect screenshots;

@@ -2091,7 +2091,9 @@ and signed/unsigned results. Executable SHA256 values:
 `71857b6d9148304b228ff59a1400adaf1986448bfd01cc3fdb746ad383bed29d`.
 Both tests run entirely in user mode without GPU submission. Release UMD
 `77dea046dde0777d6c67e62769c983c5249595a9cc9e3dd7f8323805854f9cdf` builds;
-native validation remains pending. An initial attempt to link only a debug
+its exact DLL-loading, shared/primary/Present callbacks and device controls
+exit 0 at 00:55:26 UTC, with 114 valid ETW events and device hashes verified.
+Native validation remains pending. An initial attempt to link only a debug
 translator against release NIR fails for missing debug symbols; it is replaced
 by the complete debug build rather than by validation stubs.
 
