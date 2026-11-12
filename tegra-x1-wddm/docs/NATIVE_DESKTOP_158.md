@@ -131,3 +131,32 @@ summary are alongside it. No native test remains active. Continue source work
 and non-device checks; hardware **1280x720 landscape** still needs its own
 asymmetric-image, dimensions/pitch, latch and physical-output verification
 before another cube acceptance run.
+
+## Five-minute observation and physical corruption
+
+`stability158-five-minute-20261112` uses the exact frozen components above.
+Native startup is Code 0 at 07:25:17 UTC on November 12, LUID `a79e7`.
+Observation begins at 07:25:35 and finishes at 07:30:47 with exit 0 and
+311.0569514 observed seconds. All six scheduled captures (0, 60, 120, 180,
+240 and 300 seconds) record `Shortcut=None`; this script sends no shortcut
+or click inputs. The timed window retains no intervening reboot.
+
+The user supplies four physical photographs and reports tearing, stalls and
+heat. Two photographs clearly show large white polygons covering Quick
+Settings. **Visual acceptance fails despite the completed timed observation.**
+Neither the photographs nor the timer result isolate a stride, shader,
+translation or synchronization defect. Do not assign the cause to Zink or
+stride without evidence from the responsible path.
+
+The planned recovery boot is at 07:32:34, after the observation completes.
+At 07:35:54, `.59` Code 0, original ACPI, test-registration/task cleanup and
+unchanged power settings are verified. Portrait remains unchanged at 07:36:12.
+The recovered desktop PNG at 07:37:04 has SHA256
+`09833d9a0af32e410a1f6da7f79d767ef0ac9d33c1f2954c365d6f97cf8ab620`.
+It is recovery evidence, not an additional native result.
+
+All **196 files / 112,332,491 bytes** match the device-side manifest. The
+unchanged physical-photo originals and their hashes are retained separately
+under `build/stability158-five-minute-20261112/physical-photos/`; collection
+and observation records are alongside `evidence/verified.json`. Hardware
+landscape and vkcube have not been advanced past this failed visual gate.

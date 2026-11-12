@@ -12,16 +12,61 @@ components remain a short-observation baseline, not a stable desktop release.
 The latest trial has ended; the device is restored to `.59`, with no GPU test
 active. Source and non-device validation continue before another native trial.
 
-The existing remote Claude session continues non-device implementation and
-validation, now including the missing D3D `BltDXGI` operation as well as generic
-DX9/10/11 DXVK compatibility. The user explicitly delegates this work; the main
-agent retains physical testing and integration. Four completed remote commits
-through `ec3ffd27` are retrieved but not integrated into `main`; the full ARM64
-ICD links locally and the controlled memory-query fixture passes on `.59`.
-Neither establishes native DXVK or a measured VidMm budget group. Further source
-work stays on the existing independent branch, without GitHub push or device
-access. The prior desktop-review checkout remains preserved; the desktop
-architecture remains D3D UMD -> Zink -> NVK.
+**Desktop direction updated November 12:** the user authorizes replacing the
+Zink desktop route with a native Vulkan hardware backend and asks Claude to
+choose a concrete implementation. Do not use the current Gallium `d3d10umd`
+route or software rendering for the replacement. DXVK is a reuse candidate,
+not a substitute for the required Windows UMD/DDI, shared-resource and DWM
+presentation contracts. Direct Flip remains deferred. Preserve the `.158`
+baseline while developing and validating the replacement separately.
+
+The old remote Claude task has ended at the user's request. Six completed
+commits through `9051f49e` are retained in `fable-vps/dxvk-games`, without
+integration into `main`. Its final collection contains 965 files /
+381,337,146 bytes, all checked against remote hashes and lengths. The sixteen
+unfinished indirect-submission files are preserved separately as a patch and
+source snapshot. The additional completed work implements `BltDXGI` and
+imported-image sRGB views; its controls do not establish native desktop or
+DXVK acceptance. Under the user's current VPS rules, the new Claude task is
+read-only architecture/source review; local source integration and hardware
+tests remain the main agent's responsibility.
+
+**Five-minute observation completed; visual acceptance failed:** the frozen
+`.158` set remains Code 0 during a 311.057-second observation, but the user's
+physical photographs show severe white polygons/corruption in Quick Settings.
+This is not a stable desktop pass. All 196 returned files / 112,332,491 bytes
+match device hashes and lengths. Recovery to `.59` completes normally with
+unchanged sleep/display policy. Hardware landscape and vkcube remain pending.
+[Five-minute evidence](NATIVE_DESKTOP_158.md#five-minute-observation-and-physical-corruption)
+
+**Fan policy deployed separately:** SwitchFan `1.0.0.12` uses the hotter of
+SoC and board sensors: 35/38/40/43/45 C command approximately
+32/50/75/90/100% PWM (76/118/177/212/236). At or below 32 C it stops;
+33–34 C retains the prior duty capped at 76. The existing two-second polling,
+CPU policy and sleep behavior are unchanged. ASan/UBSan curve-boundary,
+hysteresis and PWM controls pass, as do WDK ARM64 build and package signatures.
+Deployment at 08:04:09 UTC records Code 0, version 12, 37 C SoC and duty 76,
+with unchanged display/sleep settings. At 08:20:19, the live poll count has
+advanced to 484, sensor failures remain zero, and 34/33 C holds duty 76.
+These are commanded PWM values, not measured fan RPM or a physical 45 C test.
+The signed SYS SHA256 is
+`6a1c51a93ef0521482cff45bdb74442dd4aa22711f525adbede603dfc8e896ca`;
+nine returned deployment records match their device hashes. Source and INF
+are identical in the main integration and companion WindowsDrivers tree.
+
+**Win32 pacing candidate, not a desktop acceptance result:** the NVK CPU/GDI
+presentation path now uses a private blocking timer capped at 60 Hz and joins
+the compositor through `DwmFlush`. It does not wake or render an idle desktop.
+The full ARM64 ICD links after propagating the Win32 WSI library dependency;
+SHA256 `db77e2d4e8e27671eefcdcbed0e7b53720ea0ebe14af8641c7a20bccb1e74f34`.
+A standalone Windows ARM64 timer control runs on `.59` with exit 0, covering
+the cap, blocking wait, late-frame behavior and timer failure; sixty calls
+take 1.004768 seconds and thread CPU time is below the measurement resolution.
+Its executable SHA256 is
+`b5d271af8f38a967df4344229d142c81f92bfc7c7afd32b96a8962b5f07ba16c`.
+The candidate ICD is not installed and this control executes no GPU work.
+It neither replaces DWM's native resource/fence contract nor proves that
+physical corruption or tearing is fixed. Direct Flip remains deferred.
 
 **Latest `.158` cube attempt is incomplete:** `native-vkcube158-20261112`
 reaches native Code 0 at 07:05:29 UTC on November 12 with the frozen KMD/UMD/ICD.
@@ -632,11 +677,11 @@ NT handle are released. GPU read/write and re-export check 32,768 payload
 words and 512 guards with zero mismatches; exit 0 without timeout.
 [Win32 Vulkan memory result](VULKAN_WIN32_MEMORY.md)
 
-**Current authorized routes: Zink for the desktop UMD, DXVK for games.**
-Use the existing Zink/NVK UMD to light up hardware DWM composition and verify
-the native path quickly. Desktop DXVK is deferred until the end and requires
-the user's explicit confirmation before development or migration starts.
-Zink also remains the OpenGL compatibility route.
+**Current authorized route: a Vulkan desktop backend without Zink.**
+The November 12 instruction supersedes the earlier desktop-DXVK approval gate.
+Choose and implement the Windows UMD/DDI backend needed for hardware DWM;
+DXVK may supply reusable code. The current Gallium `d3d10umd` is excluded from
+the replacement. Zink remains an optional later OpenGL compatibility route.
 
 .145 adds a diagnostic runtime-resource test: legacy allocation/open/release
 passes, but NT shared texture creation returns `E_INVALIDARG`. These are raw
@@ -782,22 +827,20 @@ physical rendering, readback and sustained-presentation tests. Track
 outstanding conformance failures and distinguish local fixtures from
 hardware results. The D3D UMD and DWM work below is an intermediate milestone.
 
-The user's latest clarification on 2026-11-10 is: **first use Windows D3D
-runtime → D3D UMD → Zink → NVK → Tegra KMD to light up and quickly verify
-desktop GPU acceleration**. The DX9/10/11 game path uses **DXVK → NVK →
-Tegra KMD**. Zink also remains the OpenGL compatibility route.
-
-Desktop DXVK is a deferred longer-term direction, to be considered last.
-**Do not start desktop DXVK development or migration until the user explicitly
-confirms it.** This approval gate does not apply to the already authorized
-Zink desktop, game-facing DXVK or native Vulkan/KMD work. It supersedes the
-earlier plan to migrate the desktop immediately after the Zink test.
+The November 12 instruction replaces the earlier Zink-first desktop plan:
+**Windows D3D runtime → native UMD/DDI backend → Vulkan/NVK → Tegra KMD**,
+without Zink or software rendering in the desktop path. The existing Gallium
+`d3d10umd` implementation is excluded from the replacement. Claude is asked
+to assess the concrete backend independently; desktop DXVK development is
+already authorized as a candidate. The DX9/10/11 application route remains
+DXVK over NVK, and Zink remains a later OpenGL compatibility option.
 
 Implement the WDDM resource/synchronization/presentation work needed to
 establish actual DWM rendering and basic desktop refresh on the GM20B LUID.
-Preserve that result as a regression baseline. If desktop DXVK is later
-authorized, its native DDI, shared-resource and sustained-composition paths
-will require their own implementation and validation.
+Preserve the existing result as a regression baseline. The replacement's
+native DDI, shared-resource and sustained-composition paths require their own
+implementation and validation. Do not enable Direct Flip before image
+correctness and performance are established.
 
 Autonomously analyze the WDDM contracts and the Mesa/NVK, Microsoft driver
 samples, lfrb/mesa `wddm2` and deko3D sources, and implement the required changes
@@ -823,8 +866,8 @@ identify adaptations when reusing source.
 
 ## Development order
 
-1. Quickly light up and verify desktop GPU acceleration through the current
-   Zink/NVK D3D UMD.
+1. Replace the desktop translation path with a native Vulkan hardware backend
+   without Zink or the existing Gallium `d3d10umd`.
    Build the Direct3D UMD device,
    rendering, shared-resource and synchronization paths needed by DWM on
    the GM20B LUID. Verify continuous window composition and landscape
@@ -838,8 +881,8 @@ identify adaptations when reusing source.
 
 Use the [build and porting guide](PORTING.md), [driver contracts](DRIVER.md)
 and [RADV Windows reuse notes](PORTING.md#radv-windows-reference) for details.
-DXVK is the selected backend for the DX9/10/11 game path. Desktop DXVK stays
-deferred behind the explicit user-confirmation gate above. Zink provides
-desktop validation and OpenGL compatibility.
+DXVK is the selected backend for the DX9/10/11 application path and a candidate
+for the authorized desktop replacement. Zink is retained for later OpenGL
+compatibility; the previous desktop-DXVK approval gate is superseded.
 The native UMD and DWM requirements are tracked in the
 [Direct3D plan](PORTING.md#direct3d-umd-and-dwm).
