@@ -17,7 +17,8 @@ stability and interaction coverage remain incomplete.
 | D3D UMD | `77dea046dde0777d6c67e62769c983c5249595a9cc9e3dd7f8323805854f9cdf` |
 | NVK ICD | `6e2fad99d742a69033cc59925093fb4a7c8489728a3f7e5e9ebb523c017e0323` |
 
-The former `stabilize/native-desktop-153` development branch is retired.
+The former `stabilize/native-desktop-153` development branch is merged into
+`main` and retired.
 The archival tag `baseline/native-desktop-158` retains its final source and
 observation record at `6cff3356d465bc87e9bbd7fb73ea05b4e7503617`, including
 the exact KMD commit above. This tag preserves the historical short trial;

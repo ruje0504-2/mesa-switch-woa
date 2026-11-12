@@ -1,5 +1,12 @@
 # GPU status
 
+**Historical stabilization work:** the ten commits from
+`stabilize/native-desktop-153` are merged into `main`. Their five source fixes
+were already present through corresponding mainline commits; this merge keeps
+that history and adds the [original stabilization record](STABILIZATION.md).
+The retired branch is retained as `baseline/native-desktop-158`. Its frozen
+`.153` work order is historical, not an instruction to roll back current source.
+
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
