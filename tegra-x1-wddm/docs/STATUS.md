@@ -20,8 +20,10 @@ The latest native trial has ended; the device is restored to `.59`.
 November 12 inventory confirms GPU `0.1.0.59`, Wi-Fi `0.5.6.0` and fan
 `1.0.0.12`. At the owner's request the CPU returned to 1996.8 MHz, verified by
 the fan driver's clock readback; thermal and screen-off policy remain enabled.
-Windows CPU/API controls run on that recovery configuration before another
-native rendering trial. No `.160` GPU package has been installed.
+Windows CPU/API controls run on that recovery configuration before native
+trials. The later `.160` trial was interrupted before usable native results
+were retained; `.59` / Code 0 and the original configuration are restored.
+[Exact .160 components, sequence and recovery](NATIVE_DESKTOP_160.md)
 
 **Desktop direction updated November 12:** the user authorizes replacing the
 Zink desktop route with a native Vulkan hardware backend and asks Claude to
@@ -88,7 +90,8 @@ along with the existing Present/primary/shared controls. Vulkan/KMT calls
 are substituted: this is not native GPU acceptance or measured speedup.
 At 14:42:07 UTC all five controls also exit 0 on physical Windows ARM64,
 with `.59`/Code 0 still installed; these remain CPU/API tests with substitutes.
-The new `.160` pair remains uninstalled pending native verification.
+The `.160` native trial was interrupted and has no completed pixel/desktop
+result; it does not validate this GPU bridge. Recovery to `.59` is verified.
 [Implementation and verification scope](D3D_RUNTIME_SYNC.md)
 
 **Zink synchronization source repair:** Win32 fence import is now gated by

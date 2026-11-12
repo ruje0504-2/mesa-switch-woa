@@ -75,7 +75,8 @@ They still substitute the KMT/Vulkan calls and execute no GPU commands.
 CPU readback remains 1,996,800 kHz and fan driver version 12.
 The new bridge still requires Windows ARM64 runtime callbacks on the device,
 native shared-image readback, sustained composition and measured CPU/GPU
-timings. The prepared `.160` package has not been installed. No performance
+timings. The subsequent [.160 trial](NATIVE_DESKTOP_160.md) was interrupted
+without usable native results and restored to `.59`. No performance
 improvement or visual fix is claimed yet.
 
 ## Contracts and source
