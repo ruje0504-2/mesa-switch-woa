@@ -86,6 +86,8 @@ cannot release a pending signal object. ARM64 and x64 UMD builds pass;
 the runtime bridge and actual Zink batch controls exit 0 under Wine x64,
 along with the existing Present/primary/shared controls. Vulkan/KMT calls
 are substituted: this is not native GPU acceptance or measured speedup.
+At 14:42:07 UTC all five controls also exit 0 on physical Windows ARM64,
+with `.59`/Code 0 still installed; these remain CPU/API tests with substitutes.
 The new `.160` pair remains uninstalled pending native verification.
 [Implementation and verification scope](D3D_RUNTIME_SYNC.md)
 

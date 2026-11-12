@@ -65,6 +65,14 @@ failed fixture evidence and the corrected final results are retained under
 `build/runtime-submission-sync-20261112/` in the local working copy.
 
 These are CPU/API control results, **not GM20B execution or DWM acceptance**.
+At 14:42:07 UTC the same five controls also complete on the physical Windows
+ARM64 system, all with exit 0 and no timeout, while GPU `.59` remains Code 0.
+The new runtime bridge control takes 108 ms (SHA256
+`441e363ce4599a08a682be44c6ac27ee919923ed4c19883bebba6fc64ce283c1`),
+and the Zink batch control takes 83 ms (SHA256
+`59fab065eaa04ccbef08df8fa2905032f9c9f71b4dd4262facdfd43740ec5024`).
+They still substitute the KMT/Vulkan calls and execute no GPU commands.
+CPU readback remains 1,996,800 kHz and fan driver version 12.
 The new bridge still requires Windows ARM64 runtime callbacks on the device,
 native shared-image readback, sustained composition and measured CPU/GPU
 timings. The prepared `.160` package has not been installed. No performance
