@@ -32,6 +32,15 @@ Present controls pass at 02:58:42 UTC. All six assertion-enabled `TgsiSample`
 tests pass at 03:00:01, with `.59` Code 0 unchanged. Native validation is pending;
 the known missing SAMPLE_I path is not fixed by this one-line correction.
 
+**GR policy correction:** Fable's first independent source commit `52e35569`
+is fetched over SSH and selectively ported. The actual NETB writes `0x10beb`
+to `0x419f78`, disabling helper-invocation memory loads; Windows also skips
+NVK's update of that bit. The KMD now clears only bit 3 before golden save,
+with independent write-readback verification. Host regressions, the real NETB
+stream and WDK ARM64 build pass. The `.153`-based `.157` package is signed and
+verified at 03:12:34 UTC but not installed. Native stability and taskbar
+correctness remain pending. [Source, validation and scope](GR_HELPER_LOADS.md)
+
 **`.156` retained candidate, not installed:** retain the stalled application's owned
 command snapshot and read-only PBDMA/USERD fetch state after joining the worker,
 before destructive reset. Host checks, decoder checks and the WDK build pass;

@@ -253,6 +253,37 @@ static bool bundles(const struct tg_gpu_power_io *io, const struct tg_gpu_gr_net
     wr(io,gr_pipe_bundle_config_r(),0);
     return idle(io,s);
 }
+/* gr_pri_gpcs_tpcs_sm_disp_ctrl, the last entry of nvgpu's GM20B user access
+ * map (gr_gm20b_get_access_map); nvgpu itself never writes it and defines no
+ * accessor. Bit 3 disables memory loads in fragment-shader helper
+ * invocations: Linux nouveau 1cb9e2ef66d5, gk110_grctx_generate_r419f78,
+ * which also serves GM107. Upstream NVK clears it from user mode through
+ * NVK_MME_SET_PRIV_REG; the Windows ICD omits that macro and the command
+ * validator rejects it. The supplied NETB context stream sets bit 3 in
+ * 0x10beb, so the KMD must establish the enabled policy. NVK reads
+ * D3D constant buffers with global loads on this GPU. A helper lane that
+ * skips them computes wrong derivatives and can iterate a data-dependent
+ * loop forever, which retires no fence and raises no fault.
+ *
+ * Clear it once, after the netlist streams and before the golden save, so
+ * every cloned context inherits it exactly as nouveau's golden image does.
+ * A read that is not register data is reported without writing it back. */
+#define GR_GPCS_TPCS_SM_DISP_CTRL 0x00419f78u
+#define GR_SM_DISP_CTRL_NO_HELPER_LOADS 0x00000008u
+static bool helper_loads(const struct tg_gpu_power_io *io, struct tg_gpu_gr_context_status *s)
+{
+    const uint32_t value=rd(io,GR_GPCS_TPCS_SM_DISP_CTRL);
+    s->last_register=GR_GPCS_TPCS_SM_DISP_CTRL;s->last_value=value;
+    /* 0xbad..... is the PRI ring's failed-access pattern on this family. */
+    if(value==UINT32_MAX || (value>>20)==0xbad) {s->result=TG_GPU_GR_CTX_REGISTER;return false;}
+    if(value&GR_SM_DISP_CTRL_NO_HELPER_LOADS) {
+        const uint32_t enabled=value&~GR_SM_DISP_CTRL_NO_HELPER_LOADS;
+        io->write32(io->context,GPU+GR_GPCS_TPCS_SM_DISP_CTRL,enabled);
+        s->last_value=rd(io,GR_GPCS_TPCS_SM_DISP_CTRL);
+        if(s->last_value!=enabled) {s->result=TG_GPU_GR_CTX_REGISTER;return false;}
+    }
+    return true;
+}
 enum tg_gpu_gr_context_result tg_gpu_gr_context_init(
     const struct tg_gpu_power_io *io, const struct tg_gpu_power *power,
     struct tg_gpu_frontend_status *fe, const struct tg_gpu_gr_netlist *n,
@@ -330,6 +361,7 @@ enum tg_gpu_gr_context_result tg_gpu_gr_context_init(
     if(!idle(io,s)) goto done;
     method_stream(io,n);
     if(!idle(io,s)) goto done;
+    if(!helper_loads(io,s)) goto done;
     s->stage=6;
     if(tg_gpu_frontend_sync_memory(io,power,fe)!=TG_GPU_FE_OK) {
         s->result=TG_GPU_GR_CTX_VISIBILITY;goto done;

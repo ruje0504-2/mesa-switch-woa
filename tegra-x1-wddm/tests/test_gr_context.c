@@ -13,7 +13,14 @@ struct model {
     unsigned writes,binds,saves,power,reset,flushes;
     bool no_power,no_bind,no_save,bind_fail,save_fail,no_image,bad_magic,pri;
     uint32_t busy_reg;
+    unsigned helper_writes;
+    uint32_t saved_sm_disp_ctrl;
+    bool ignore_helper_write;
 };
+/* gr_pri_gpcs_tpcs_sm_disp_ctrl; bit 3 disables helper-invocation loads. */
+#define SM_DISP_CTRL 0x419f78u
+/* The supplied 32.7.6 NETB context entry, independently checked by hash. */
+#define SM_DISP_CTRL_DEFAULT 0x00010bebu
 static uint32_t read32(void *context,uint32_t address)
 {
     struct model *m=context;uint32_t r=address-GPU;
@@ -44,6 +51,15 @@ static void write32(void *context,uint32_t address,uint32_t value)
     if(r==0x409614) {
         assert(value==(m->reset?0x770u:0x70u));++m->reset;
     }
+    if(r==SM_DISP_CTRL && !(value&8)) {
+        /* Once, on the bound context after its bundle and method streams and
+         * before the golden save. Only the helper-load disable may change. */
+        assert(m->binds==1 && !m->saves && !m->helper_writes);
+        assert(!m->regs[0x400208/4] && m->regs[0x404154/4]==0x800);
+        assert((m->regs[r/4]&8) && value==(m->regs[r/4]&~8u));
+        ++m->helper_writes;
+        if(m->ignore_helper_write)return;
+    }
     if(r==0x409840) {m->regs[0x409800/4]&=~value;return;}
     if(r==0x409504) {
         assert(m->regs[0x409500/4]==0x80080040);
@@ -59,6 +75,9 @@ static void write32(void *context,uint32_t address,uint32_t value)
             assert(m->work[(TG_GPU_GR_GOLD_OFFSET+0x1c)/4]==1);
             assert(!m->work[(TG_GPU_GR_GOLD_OFFSET+0x20)/4]);
             assert(m->work[(TG_GPU_GR_GOLD_OFFSET+256)/4]==TG_GPU_GR_GOLD_SENTINEL);
+            /* The image FECS saves must already allow helper-lane loads. */
+            assert(!(m->regs[SM_DISP_CTRL/4]&8));
+            m->saved_sm_disp_ctrl=m->regs[SM_DISP_CTRL/4];
             ++m->saves;
             if(!m->no_save) m->regs[0x409800/4]|=m->save_fail?3:1;
             if(m->pri) m->regs[0x120058/4]=0x100;
@@ -76,6 +95,7 @@ static void reset(struct model *m)
     regs[0x120078/4]=1;regs[0x22430/4]=1;regs[0x22434/4]=2;
     regs[0x502608/4]=0x40002;regs[0x500c30/4]=3;
     regs[0x409800/4]=0x31; /* An old success/failure reply must be cleared. */
+    regs[SM_DISP_CTRL/4]=SM_DISP_CTRL_DEFAULT;
     for(unsigned i=0;i<TG_GPU_GR_CTX_CAPACITY/4;++i)
         work[TG_GPU_GR_GOLD_OFFSET/4+i]=TG_GPU_GR_GOLD_SENTINEL;
 }
@@ -112,6 +132,9 @@ int main(int argc,char **argv)
     assert(m.regs[0x405b60/4]==0x100 && m.regs[0x405ba0/4]==0x100);
     assert(m.regs[0x400080/4]==0x1234 && m.regs[0x404488/4]==0x80000100);
     assert(!m.regs[0x400208/4] && m.regs[0x404154/4]==0x800);
+    /* Every other bit of the vendor default survives in the saved state. */
+    assert(m.helper_writes==1 && m.regs[SM_DISP_CTRL/4]==(SM_DISP_CTRL_DEFAULT&~8u));
+    assert(m.saved_sm_disp_ctrl==(SM_DISP_CTRL_DEFAULT&~8u));
     {
         struct tg_gpu_power_io io={&m,read32,write32,NULL,NULL,delay};
         struct tg_gpu_power power={.owned=true,.ready=true};
@@ -171,6 +194,25 @@ int main(int argc,char **argv)
         assert(!m.regs[0x400208/4] && m.regs[0x404154/4]==0x800);
     }
     {
+        /* Already enabled: no write. A failed PRI access is never written
+         * back as register data and no golden image is saved from it. */
+        reset(&m);m.regs[SM_DISP_CTRL/4]=SM_DISP_CTRL_DEFAULT&~8u;
+        assert(run(&m,&net,&s)==TG_GPU_GR_CTX_OK && s.stage==9 && !m.helper_writes);
+        assert(m.regs[SM_DISP_CTRL/4]==(SM_DISP_CTRL_DEFAULT&~8u) && m.saves==1);
+        reset(&m);m.ignore_helper_write=true;
+        assert(run(&m,&net,&s)==TG_GPU_GR_CTX_REGISTER && s.stage==5);
+        assert(m.helper_writes==1 && !m.saves && s.last_register==SM_DISP_CTRL &&
+               s.last_value==SM_DISP_CTRL_DEFAULT);
+        const uint32_t unreadable[]={UINT32_MAX,0xbadf1100,0xbadf5040,0xbad00100};
+        for(unsigned i=0;i<sizeof(unreadable)/sizeof(unreadable[0]);++i) {
+            reset(&m);m.regs[SM_DISP_CTRL/4]=unreadable[i];
+            assert(run(&m,&net,&s)==TG_GPU_GR_CTX_REGISTER && s.stage==5);
+            assert(s.last_register==SM_DISP_CTRL && s.last_value==unreadable[i]);
+            assert(!m.helper_writes && !m.saves && m.regs[SM_DISP_CTRL/4]==unreadable[i]);
+            assert(!m.regs[0x400208/4] && m.regs[0x404154/4]==0x800);
+        }
+    }
+    {
         const uint32_t unsupported[]={0x20001,0x20002,0x40001,2,0x30002,0x50002,UINT32_MAX};
         for(unsigned i=0;i<sizeof(unsupported)/sizeof(unsupported[0]);++i) {
             reset(&m);m.regs[0x502608/4]=unsupported[i];
@@ -216,6 +258,6 @@ int main(int argc,char **argv)
         puts("External NETB graphics initialization streams: PASS (model only)");
     }
     free(m.regs);free(m.inst);free(m.work);
-    puts("PASS: GR binding/golden-save order, owned mappings, cache visibility and failure rejection (model only)");
+    puts("PASS: GR binding/golden-save order, helper-load enable, owned mappings, cache visibility and failure rejection (model only)");
     return 0;
 }
