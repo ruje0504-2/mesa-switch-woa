@@ -3,20 +3,36 @@
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Current priority:** extend the successful short `.158` desktop observation
-using the exact `.153`-based KMD / `77dea046dde0` UMD / `6e2fad99d742` ICD set.
-The selected source is `6c854e9f` in `stabilize/native-desktop-153`, worktree
-`../mesa-switch-woa-stabilize`. Retain complete taskbar rendering while checking
-longer presentation and menu interaction before hardware rotation or further
-rendering changes. The `.147` rollback proposal is superseded. The device is
-recovered to `.59`.
+**Current priority:** complete the desktop presentation paths and validate
+hardware **1280x720 landscape**. Display-controller rotation, VidPN, allocation
+geometry and legacy/MPO integration exist in source and pass the documented
+models/ARM64 controls; rotated physical output remains unvalidated. Portrait
+desktop or cube results cannot satisfy this requirement. The frozen `.158`
+components remain a short-observation baseline, not a stable desktop release.
+The latest trial has ended; the device is restored to `.59`, with no GPU test
+active. Source and non-device validation continue before another native trial.
 
-Fable 5.2/medium is independently implementing game-facing DX9/10/11 DXVK
-compatibility in English. The user explicitly authorizes remote source edits,
-superseding the earlier read-only restriction. It uses a separate game branch,
-with no GitHub push or credentials; the main agent retrieves and reviews its
-source. The prior desktop-review commits and five unfinished files are
-preserved. Desktop DXVK remains unauthorized.
+The existing remote Claude session continues non-device implementation and
+validation, now including the missing D3D `BltDXGI` operation as well as generic
+DX9/10/11 DXVK compatibility. The user explicitly delegates this work; the main
+agent retains physical testing and integration. Four completed remote commits
+through `ec3ffd27` are retrieved but not integrated into `main`; the full ARM64
+ICD links locally and the controlled memory-query fixture passes on `.59`.
+Neither establishes native DXVK or a measured VidMm budget group. Further source
+work stays on the existing independent branch, without GitHub push or device
+access. The prior desktop-review checkout remains preserved; the desktop
+architecture remains D3D UMD -> Zink -> NVK.
+
+**Latest `.158` cube attempt is incomplete:** `native-vkcube158-20261112`
+reaches native Code 0 at 07:05:29 UTC on November 12 with the frozen KMD/UMD/ICD.
+No cube launch/result, native PNG or budget-probe result is retained. The user
+reports two automatic restarts. This trial requests no rotation and proves
+neither visible cube presentation nor hardware landscape. Recovery checks pass
+at 07:14:04 UTC: `.59` Code 0, original ACPI, temporary-registration/task cleanup
+and unchanged power. Saved portrait is unchanged at 07:14:19; the inspected
+07:15:22 recovery PNG has the complete taskbar/tray. All 137 returned files /
+113,708,587 bytes match device hashes. No restart-cause investigation is performed.
+[Trial scope and evidence](NATIVE_DESKTOP_158.md#later-attempts)
 
 **Current stabilization build:** `.158` combines the isolated sampler-view
 fix, restored SAMPLE_I lowering (`71d67992`), execution-ordered inherited-state

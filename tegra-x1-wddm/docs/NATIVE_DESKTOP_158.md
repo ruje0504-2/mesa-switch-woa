@@ -88,6 +88,46 @@ The first visible improvement does not isolate a single cause: this candidate
 combines several independently justified fixes. It does not establish the
 Start-menu popup's behavior, interactive stress, long-duration stability,
 hardware landscape, Win32 vkcube, full Vulkan conformance or game compatibility.
-Keep this exact component set for the next extended desktop/interaction trial
-before changing rendering behavior. Main retains later diagnostic source for
-future use; it is not the exact `.158` build tree pinned above.
+Main retains later diagnostic source for future use; it is not the exact `.158`
+build tree pinned above. The later attempts below supersede the instruction to
+repeat the frozen set before further source work.
+
+## Later attempts
+
+`stabilize158-extended-native-20261112` plans 300 seconds of desktop/menu
+observation followed by a separate 32-MiB VidMm query. It retains twelve capture
+records through 195 seconds, then returns failure after the 210-second capture
+times out. The budget probe is not reached. Its archived recovery record confirms
+`.59` Code 0, no remaining trial tasks and unchanged power at 05:00:29 UTC.
+These records do not establish a completed sustained-interaction pass.
+
+`native-vkcube158-20261112` uses the exact KMD, UMD and ICD hashes listed above.
+It plans unmodified Khronos `vkcube` at 256x256, FIFO and 360 frames, desktop
+captures, then the separate 32-MiB VidMm probe. The executable is the previously
+built Vulkan-Tools `1d3fbab1ff5abce9f3eb9f3e7fcf66f455ae4475` sample, SHA256
+`69ca28a36d20da41b6643573e0fe28527109e7d03454000696aa31002402ca38`.
+The trial preserves portrait and requests no hardware rotation.
+
+The initial setup boot is 07:03:03 UTC on November 12. Native startup records
+Code 0, hardware status 0 and a consumed permit at 07:05:29. There is no retained
+`mode-stage.json`, `cube-window.json`, `cube-result.json`, `native-result.json`,
+native PNG or memory-probe result. Consequently even cube execution is
+unproven. The user reports two automatic restarts; no cause is assigned or
+investigated. The repeat-start guard records recovery at 07:08:43, restoration
+is staged at 07:09:23, and the recovered OS boot is 07:09:57.
+
+At 07:14:04 UTC, `.59` Code 0, the original ACPI hash, removed test permit,
+temporary ICD/UMD registrations, loader/debug environment and task cleanup,
+and unchanged display/sleep settings are verified. Saved 720x1280 portrait is
+unchanged at 07:14:19. The recovery PNG at 07:15:22 shows the complete taskbar
+and tray, SHA256
+`9d24d4255750c0202cb6fbd9a51367ab5569d7f120ad5992970c8aef25137c30`.
+This is the recovered software desktop, not a native test image.
+
+All **137 returned files / 113,708,587 bytes** match device hashes and lengths.
+The records are retained under the main checkout's
+`build/native-vkcube158-20261112/evidence/`; the host-side user observation and
+summary are alongside it. No native test remains active. Continue source work
+and non-device checks; hardware **1280x720 landscape** still needs its own
+asymmetric-image, dimensions/pitch, latch and physical-output verification
+before another cube acceptance run.

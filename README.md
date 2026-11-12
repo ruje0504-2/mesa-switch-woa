@@ -24,10 +24,12 @@ Package versions above identify KMD test packages. The latest trial pairs
 signed **.158** with UMD **77dea046dde0** and NVK ICD **6e2fad99d742**.
 Its selected `.153`-based source includes compiler, queued-state and GR
 helper-load corrections. The device is restored to **.59** with a complete
-software-rendered taskbar in the inspected screenshot. Next, retain this exact
-set for extended desktop and interaction checks, then hardware landscape and
-Win32 `vkcube`. The successful short observation is not a stable-driver release
-or complete Vulkan implementation.
+software-rendered taskbar in the inspected screenshot. Later `.158` interaction
+and cube attempts did not complete. Hardware rotation has source and model
+coverage, but **1280x720 landscape has no physical validation**. Complete the
+remaining desktop presentation paths and hardware landscape before another
+Win32 `vkcube` acceptance run. The successful short observation is not a
+stable-driver release or complete Vulkan implementation.
 Each component has its own build manifest and source/artifact identity.
 [Current component identifiers](tegra-x1-wddm/docs/STATUS.md)
 
