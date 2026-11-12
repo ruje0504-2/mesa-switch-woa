@@ -10,6 +10,7 @@
 #include "zink_fence.h"
 #include "zink_screen.h"
 #include "zink_batch.h"
+#include "zink_query.h"
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #x); exit(1); } } while (0)
 
@@ -28,6 +29,87 @@ static bool bridge_active = true;
 static VkResult submit_result = VK_SUCCESS;
 static VkSemaphore bridge_wait, bridge_signal;
 static unsigned idle_waits;
+static struct zink_batch_state *event_batch;
+static unsigned event_flushes, event_polls;
+static bool event_ready;
+
+static void
+event_flush(struct pipe_context *pipe, struct pipe_fence_handle **fence, unsigned flags)
+{
+   CHECK(fence && flags == PIPE_FLUSH_DEFERRED);
+   event_flushes++;
+   struct zink_tc_fence *mfence = zink_create_tc_fence();
+   CHECK(mfence);
+   mfence->fence = &event_batch->fence;
+   mfence->submit_count = event_batch->usage.submit_count;
+   mfence->deferred_ctx = pipe;
+   zink_context(pipe)->deferred_fence = &event_batch->fence;
+   util_dynarray_append(&event_batch->fence.mfences, mfence);
+   *fence = (struct pipe_fence_handle *)mfence;
+}
+
+static bool
+event_finish(struct pipe_screen *screen, struct pipe_context *ctx,
+             struct pipe_fence_handle *fence, uint64_t timeout)
+{
+   CHECK(!ctx && timeout == 0);
+   CHECK(zink_tc_fence(fence)->fence == &event_batch->fence);
+   event_polls++;
+   return event_ready;
+}
+
+static void
+test_query_polling(void)
+{
+   struct zink_screen *screen = calloc(1, sizeof(*screen));
+   struct zink_context *ctx = calloc(1, sizeof(*ctx));
+   event_batch = calloc(1, sizeof(*event_batch));
+   CHECK(screen && ctx && event_batch);
+   zink_screen_fence_init(&screen->base);
+   screen->base.fence_finish = event_finish;
+   ctx->base.screen = &screen->base;
+   ctx->base.flush = event_flush;
+   zink_context_query_init(&ctx->base);
+   struct pipe_query *query = ctx->base.create_query(&ctx->base, PIPE_QUERY_GPU_FINISHED, 0);
+   CHECK(query && ctx->base.get_query_result_no_flush);
+   CHECK(ctx->base.end_query(&ctx->base, query));
+   union pipe_query_result result = {0};
+   /* QueryEnd deferred this event. A no-flush poll must neither submit it
+    * nor ask fence_finish to wait on an unsubmitted fence. */
+   CHECK(!ctx->base.get_query_result_no_flush(&ctx->base, query, &result));
+   CHECK(event_flushes == 1 && event_polls == 0);
+   /* Model an internal batch submission, without a frontend Flush call.
+    * The same query must become pollable and later report completion. */
+   ctx->deferred_fence = NULL;
+   event_batch->usage.submit_count++;
+   CHECK(!ctx->base.get_query_result_no_flush(&ctx->base, query, &result));
+   CHECK(event_flushes == 1 && event_polls == 1);
+   event_ready = true;
+   CHECK(ctx->base.get_query_result_no_flush(&ctx->base, query, &result) && result.b);
+   CHECK(event_flushes == 1 && event_polls == 2);
+   /* Reusing the batch for a new deferred event must not make this old,
+    * completed query appear unsubmitted again. */
+   ctx->deferred_fence = &event_batch->fence;
+   CHECK(ctx->base.get_query_result_no_flush(&ctx->base, query, &result) && result.b);
+   CHECK(event_flushes == 1 && event_polls == 3);
+   ctx->base.destroy_query(&ctx->base, query);
+   CHECK(!event_batch->fence.mfences.size);
+   query = ctx->base.create_query(&ctx->base, PIPE_QUERY_GPU_FINISHED, 0);
+   CHECK(query && ctx->base.end_query(&ctx->base, query));
+   /* Batch destruction detaches completed fence wrappers. Exercise the real
+    * fence_finish path for this terminal state, not the completion spy. */
+   struct zink_tc_fence *detached = *util_dynarray_element(&event_batch->fence.mfences, struct zink_tc_fence *, 0);
+   detached->fence = NULL;
+   util_dynarray_clear(&event_batch->fence.mfences);
+   ctx->deferred_fence = NULL;
+   zink_screen_fence_init(&screen->base);
+   CHECK(ctx->base.get_query_result_no_flush(&ctx->base, query, &result) && result.b);
+   CHECK(event_flushes == 2 && event_polls == 3);
+   ctx->base.destroy_query(&ctx->base, query);
+   util_dynarray_fini(&event_batch->fence.mfences);
+   free(event_batch); event_batch = NULL;
+   free(ctx); free(screen);
+}
 
 static VKAPI_ATTR VkResult VKAPI_CALL
 queue_wait_idle(VkQueue queue)
@@ -353,10 +435,12 @@ int main(void)
    CHECK(!fence && destroys == before + 1);
 
    test_submission_bridge(ctx, screen);
+   test_query_polling();
    free(second);
    free(first);
    free(ctx);
    free(screen);
    puts("PASS: actual Zink Win32 imports and per-batch timeline bridge, worker/callback ordering and failure/lifetime controls; Vulkan calls mocked, no GPU execution");
+   puts("PASS: actual Zink event-query no-flush polling before submission, pending and completed; fence completion mocked");
    return 0;
 }

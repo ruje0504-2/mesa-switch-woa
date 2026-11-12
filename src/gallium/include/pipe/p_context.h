@@ -285,6 +285,14 @@ struct pipe_context {
                             bool wait,
                             union pipe_query_result *result);
 
+   /** Optional nonblocking query poll which must not submit pending work.
+    * Unlike get_query_result(wait=false), this leaves unsubmitted query work
+    * in its current batch. Used by frontends with an explicit no-flush poll.
+    */
+   bool (*get_query_result_no_flush)(struct pipe_context *pipe,
+                                     struct pipe_query *q,
+                                     union pipe_query_result *result);
+
    /**
     * Get results of a query, storing into resource. Note that this may not
     * be used with batch queries.

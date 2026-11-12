@@ -228,23 +228,13 @@ QueryGetData(D3D10DDI_HDEVICE hDevice,                      // IN
 {
    LOG_ENTRYPOINT();
 
+   if (CheckDeviceRemoved(hDevice))
+      return;
    Device *pDevice = CastDevice(hDevice);
    struct pipe_context *pipe = pDevice->pipe;
    Query *pQuery = CastQuery(hQuery);
    struct pipe_query *state = pQuery->handle;
 
-   /*
-    * Never return data for recently emitted queries immediately, to make
-    * wgfasync happy.
-    */
-   if (DataSize == 0 &&
-       (pQuery->SeqNo - pDevice->LastFinishedQuerySeqNo) > 0 &&
-       (pQuery->GetDataCount++) == 0) {
-      SetError(hDevice, DXGI_DDI_ERR_WASSTILLDRAWING);
-      return;
-   }
-
-   bool wait = !!(Flags & D3D10_DDI_GET_DATA_DO_NOT_FLUSH);
    union pipe_query_result result;
 
    memset(&result, 0, sizeof result);
@@ -252,12 +242,20 @@ QueryGetData(D3D10DDI_HDEVICE hDevice,                      // IN
    bool ret;
 
    if (state) {
-      ret = pipe->get_query_result(pipe, state, wait, &result);
+      /* QueryGetData polls; DO_NOT_FLUSH never means wait for completion.
+       * Zink's ordinary nonblocking poll can submit an unfinished batch, so
+       * use its no-submit path when the runtime explicitly forbids that. */
+      if ((Flags & D3D10_DDI_GET_DATA_DO_NOT_FLUSH) && pipe->get_query_result_no_flush)
+         ret = pipe->get_query_result_no_flush(pipe, state, &result);
+      else
+         ret = pipe->get_query_result(pipe, state, false, &result);
    } else {
       LOG_UNSUPPORTED(true);
       ret = true;
    }
 
+   if (CheckDeviceRemoved(hDevice))
+      return;
    if (!ret) {
       SetError(hDevice, DXGI_DDI_ERR_WASSTILLDRAWING);
       return;

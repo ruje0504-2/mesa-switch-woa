@@ -2,6 +2,7 @@
 
 #include "zink_context.h"
 #include "zink_clear.h"
+#include "zink_fence.h"
 #include "zink_program.h"
 #include "zink_resource.h"
 #include "zink_screen.h"
@@ -423,6 +424,8 @@ destroy_query(struct zink_context *ctx, struct zink_query *query)
 {
    ASSERTED struct zink_screen *screen = zink_screen(ctx->base.screen);
    assert(zink_screen_usage_check_completion(screen, query->batch_uses));
+   if (query->type == PIPE_QUERY_GPU_FINISHED)
+      screen->base.fence_reference(&screen->base, &query->fence, NULL);
    struct zink_query_buffer *qbo, *next;
 
    struct zink_query_start *starts = query->starts.data;
@@ -1183,6 +1186,33 @@ zink_get_query_result(struct pipe_context *pctx,
    return get_query_result(pctx, q, wait, result);
 }
 
+static bool
+zink_get_query_result_no_flush(struct pipe_context *pctx, struct pipe_query *q,
+                               union pipe_query_result *result)
+{
+   struct zink_query *query = (void *)q;
+   struct zink_context *ctx = zink_context(pctx);
+
+   if (query->type == PIPE_QUERY_GPU_FINISHED) {
+      struct zink_tc_fence *fence = zink_tc_fence(query->fence);
+      /* A deferred event has no submitted batch yet. Passing this context
+       * to fence_finish would submit it even with a zero timeout. Match the
+       * generation too: an old fence may refer to a now-reused batch. */
+      if (ctx->deferred_fence && fence->deferred_ctx == pctx &&
+          fence->fence == ctx->deferred_fence &&
+          fence->submit_count == zink_batch_state(fence->fence)->usage.submit_count)
+         return false;
+      result->b = pctx->screen->fence_finish(pctx->screen, NULL, query->fence, 0);
+      return result->b;
+   }
+
+   /* Batch submission resolves ended queries into their result buffers.
+    * Leave both pending resolve commands and their batches untouched. */
+   if (query->needs_update || zink_batch_usage_is_unflushed(query->batch_uses))
+      return false;
+   return zink_get_query_result(pctx, q, false, result);
+}
+
 static void
 suspend_query(struct zink_context *ctx, struct zink_query *query)
 {
@@ -1545,6 +1575,7 @@ zink_context_query_init(struct pipe_context *pctx)
    pctx->begin_query = zink_begin_query;
    pctx->end_query = zink_end_query;
    pctx->get_query_result = zink_get_query_result;
+   pctx->get_query_result_no_flush = zink_get_query_result_no_flush;
    pctx->get_query_result_resource = zink_get_query_result_resource;
    pctx->set_active_query_state = zink_set_active_query_state;
    pctx->render_condition = zink_render_condition;

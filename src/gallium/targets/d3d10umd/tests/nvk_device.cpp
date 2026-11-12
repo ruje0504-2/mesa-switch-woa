@@ -40,6 +40,18 @@ static unsigned runtime_contexts, fence_refs, fence_waits, fence_token;
 static bool fail_context, fail_wait;
 static HANDLE runtime_device = reinterpret_cast<HANDLE>(0x123);
 static HANDLE runtime_context = reinterpret_cast<HANDLE>(0x456);
+static unsigned query_token, queries, query_polls, no_flush_query_polls;
+static bool query_ready, remove_during_query;
+
+static bool query_result(pipe_context *, pipe_query *query, bool wait, pipe_query_result *result)
+{
+   CHECK(query == reinterpret_cast<pipe_query *>(&query_token) && queries == 1);
+   CHECK(!wait); /* GetData is a poll, never an infinite GPU wait. */
+   ++query_polls;
+   if (remove_during_query) device_removed = true;
+   result->b = query_ready;
+   return query_ready;
+}
 
 static HRESULT APIENTRY create_runtime_context(HANDLE device, D3DDDICB_CREATECONTEXTVIRTUAL *args)
 {
@@ -134,6 +146,23 @@ d3d10_create_screen(HANDLE, const D3DDDI_ADAPTERCALLBACKS *, pipe_screen **resul
       };
       context.flush = [](pipe_context *, pipe_fence_handle **fence, unsigned) {
          if (fence) { *fence = reinterpret_cast<pipe_fence_handle *>(&fence_token); ++fence_refs; }
+      };
+      context.create_query = [](pipe_context *, unsigned type, unsigned) -> pipe_query * {
+         CHECK(type == PIPE_QUERY_GPU_FINISHED && !queries++);
+         return reinterpret_cast<pipe_query *>(&query_token);
+      };
+      context.destroy_query = [](pipe_context *, pipe_query *query) {
+         CHECK(query == reinterpret_cast<pipe_query *>(&query_token) && queries == 1);
+         --queries;
+      };
+      context.end_query = [](pipe_context *, pipe_query *query) {
+         CHECK(query == reinterpret_cast<pipe_query *>(&query_token));
+         return true;
+      };
+      context.get_query_result = query_result;
+      context.get_query_result_no_flush = [](pipe_context *pipe, pipe_query *query, pipe_query_result *result) {
+         ++no_flush_query_polls;
+         return query_result(pipe, query, false, result);
       };
       context.set_stencil_ref = [](pipe_context *, pipe_stencil_ref) {};
       context.set_constant_buffer = [](pipe_context *, mesa_shader_stage, unsigned, const pipe_constant_buffer *) {};
@@ -247,6 +276,35 @@ int main(int argc, char **argv)
    functions.pfnFlush(create.hDrvDevice);
    CHECK(fence_waits == 2 && !fence_refs && resource_error == D3DDDIERR_DEVICEREMOVED);
    fail_wait = false; resource_error = S_OK;
+   D3D10DDIARG_CREATEQUERY query_desc = {};
+   query_desc.Query = D3D10DDI_QUERY_EVENT;
+   D3D10DDI_HQUERY query = {};
+   query.pDrvPrivate = calloc(1, functions.pfnCalcPrivateQuerySize(create.hDrvDevice, &query_desc));
+   CHECK(query.pDrvPrivate);
+   functions.pfnCreateQuery(create.hDrvDevice, &query_desc, query, {});
+   functions.pfnQueryEnd(create.hDrvDevice, query);
+   BOOL query_data = 0x12345678;
+   functions.pfnQueryGetData(create.hDrvDevice, query, &query_data, sizeof(query_data), D3D10_DDI_GET_DATA_DO_NOT_FLUSH);
+   CHECK(resource_error == DXGI_DDI_ERR_WASSTILLDRAWING && query_data == 0x12345678);
+   CHECK(query_polls == 1 && no_flush_query_polls == 1 && fence_waits == 2);
+   resource_error = S_OK;
+   functions.pfnQueryGetData(create.hDrvDevice, query, &query_data, sizeof(query_data), 0);
+   CHECK(resource_error == DXGI_DDI_ERR_WASSTILLDRAWING && query_data == 0x12345678);
+   CHECK(query_polls == 2 && no_flush_query_polls == 1 && fence_waits == 2);
+   query_ready = true; resource_error = S_OK;
+   functions.pfnQueryGetData(create.hDrvDevice, query, NULL, 0, D3D10_DDI_GET_DATA_DO_NOT_FLUSH);
+   CHECK(resource_error == S_OK && query_polls == 3 && no_flush_query_polls == 2);
+   functions.pfnQueryGetData(create.hDrvDevice, query, &query_data, sizeof(query_data), D3D10_DDI_GET_DATA_DO_NOT_FLUSH);
+   CHECK(resource_error == S_OK && query_data == TRUE && query_polls == 4 && fence_waits == 2);
+   device_removed = true; resource_error = S_OK; query_data = 0x12345678;
+   functions.pfnQueryGetData(create.hDrvDevice, query, &query_data, sizeof(query_data), 0);
+   CHECK(resource_error == D3DDDIERR_DEVICEREMOVED && query_polls == 4 && query_data == 0x12345678);
+   device_removed = false; remove_during_query = true; resource_error = S_OK;
+   functions.pfnQueryGetData(create.hDrvDevice, query, &query_data, sizeof(query_data), D3D10_DDI_GET_DATA_DO_NOT_FLUSH);
+   CHECK(resource_error == D3DDDIERR_DEVICEREMOVED && query_polls == 5 && query_data == 0x12345678);
+   functions.pfnDestroyQuery(create.hDrvDevice, query); free(query.pDrvPrivate);
+   CHECK(!queries);
+   device_removed = remove_during_query = false; resource_error = S_OK;
    D3D10DDI_MIPINFO mip = {};
    mip.TexelWidth = 16;
    mip.TexelHeight = mip.TexelDepth = 1;
