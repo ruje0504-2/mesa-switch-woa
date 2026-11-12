@@ -83,6 +83,16 @@ cause of the `.158` corruption. The next shared-image probe must first run
 without producer/import CPU readback checkpoints.
 [View contract, fix and validation](PORTING.md#imported-windows-image-views)
 
+The next source audit also fixes missing content validity on Windows image
+import. Previously the first render pass could discard pixels already drawn
+by another device. The actual import/attachment control fails before the
+fix and passes afterward on Windows ARM64 with Vulkan substitutes. The
+new `--shared-layout-load` scene passes 3,686,400 pixel comparisons under
+Microsoft WARP, verifying the probe and its expected values. These results
+do not establish native rendering or repair of the failed onscreen trial;
+the updated UMD is a built candidate, while the device remains `.59` / Code 0.
+[Import-content contract and exact evidence](PORTING.md#imported-windows-image-contents)
+
 The following matched components were tested in a separate device directory.
 **The run failed onscreen acceptance and is restored to `.59`:**
 

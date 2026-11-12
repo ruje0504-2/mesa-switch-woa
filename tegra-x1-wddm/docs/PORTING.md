@@ -1107,6 +1107,49 @@ desktop composition remain required. Run `--shared-layout` before optional
 `--shared-layout-checkpoints`: the latter adds producer/import CPU readback
 and completion waits that can mask the GPU timeline behavior under test.
 
+## Imported Windows image contents
+
+The subsequent audit finds a separate import-state defect. The WDDM branch
+of `zink_resource_from_handle` made its allocation immutable but left
+`res->valid` false. The dma-buf and memory-object import paths already mark
+imported image contents valid. Zink's first rendering attachment setup uses
+that flag to select `LOAD` or `DONT_CARE`; the latter allows prior pixels in
+the render area to become undefined. This is incorrect for a shared image
+which another Direct3D device has already populated.
+[Vulkan attachment load operations](https://docs.vulkan.org/refpages/latest/refpages/source/VkAttachmentLoadOp.html)
+[Direct3D shared-resource access](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-opensharedresource)
+
+Successful WDDM imports now mark their image contents valid. Explicit
+invalidation still permits discard. This does not change the allocation,
+format/view rules or synchronization protocol.
+
+`test-zink-win32-import.exe` uses the real resource-import, allocation and
+render-attachment classification functions, with Vulkan calls substituted.
+On Windows ARM64 with `.59` / Code 0 unchanged, the old production path fails
+at 17:00:32 UTC: `existing_contents_discardable=1`, exit 1. The corrected
+path passes at 17:01:50, exit 0, for BGRA/RGBA imports, explicit invalidation,
+invalid stride and balanced image/memory release. The failing and passing
+executable hashes are `4d30c47b014517e709262f4d8e589a56164f33b9a7d321d4feaac6ca8afa16d2`
+and `09e6e8c458c2d1ad6beaa014074422db3e28fb6af8c89d04931f399fc1e13cf9`.
+An earlier fixture lacked a Vulkan format-query substitute and timed out;
+that result is preserved separately and is not counted as defect reproduction.
+
+The explicit runtime probe adds `--shared-layout-load`. After a producer
+draws the padded shared pattern, the consumer's first render pass performs
+an additive red draw inside a scissor rectangle. Green/blue/alpha and pixels
+outside the rectangle must survive. The result is then sampled into the
+desktop-size target and checked against integer expectations. There is no
+producer/import CPU readback checkpoint before the partial draw.
+
+At 17:05:10 UTC, `--warp --shared-layout-load` passes all four BGRA/RGBA
+viewport cases: **3,686,400 pixels, zero mismatches**, exit 0 in 270 ms.
+Probe SHA256: `5747dff91b8049f1d9476f731f779ae3c2dd0832c41c0952542f8e84b0a0a57f`.
+WARP validates the application and expected pixels; it does not execute
+Zink/NVK or establish a GM20B fix. The new UMD compiles and links, but native
+shared-image rendering and onscreen acceptance remain unverified. The prior
+failed `.158` retest remains failed. Evidence is retained in the local build
+workspace under `runs/wddm-import-validity-20261112/`.
+
 ## Windows shader cache
 
 The Windows UMD and NVK ICD builds enable Mesa's persistent blob cache.

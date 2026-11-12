@@ -570,7 +570,8 @@ static void shared_pattern_checkpoint(ID3D11Device *device, ID3D11DeviceContext 
  * the consumer uses translated/scaled viewports and clipped, rebound uniforms.
  * CPU expectations are integer coordinates, independent of the shader. */
 static void shared_layout(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVEL level,
-                          ID3D11Device *consumer, DXGI_FORMAT format, bool checkpoints, bool variants)
+                          ID3D11Device *consumer, DXGI_FORMAT format, bool checkpoints, bool variants,
+                          bool preserve_import)
 {
    ComPtr<ID3D11Device> producer;
    ComPtr<ID3D11DeviceContext> pc, cc;
@@ -640,6 +641,34 @@ static void shared_layout(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVE
    HANDLE handle=NULL; check(share->GetSharedHandle(&handle),"Get pattern legacy handle");
    check(consumer->OpenSharedResource(handle,IID_PPV_ARGS(&opened)),"Open pattern shared image");
    if (checkpoints) shared_pattern_checkpoint(consumer, cc.Get(), opened.Get(), "consumer-import");
+   const D3D11_RECT preserve_rect={93,137,304,526};
+   if (preserve_import) {
+      /* The first consumer render pass must LOAD the producer's pixels.
+       * Add red only inside a scissor rectangle; preserve green/blue/alpha
+       * there and the entire pattern outside. Do not insert a CPU readback
+       * or completion wait between the producer and this partial draw. */
+      auto red = compile("float4 main():SV_Target { return float4(1,0,0,0); }");
+      configure(consumer,cc.Get(),red.Get(),true);
+      ComPtr<ID3D11RenderTargetView> imported_view;
+      check(consumer->CreateRenderTargetView(opened.Get(),NULL,&imported_view),"Create imported load RTV");
+      D3D11_BLEND_DESC blend={};
+      auto &rt=blend.RenderTarget[0];
+      rt.BlendEnable=TRUE;
+      rt.SrcBlend=rt.DestBlend=rt.SrcBlendAlpha=rt.DestBlendAlpha=D3D11_BLEND_ONE;
+      rt.BlendOp=rt.BlendOpAlpha=D3D11_BLEND_OP_ADD;
+      rt.RenderTargetWriteMask=D3D11_COLOR_WRITE_ENABLE_ALL;
+      ComPtr<ID3D11BlendState> additive;
+      check(consumer->CreateBlendState(&blend,&additive),"Create imported load blend");
+      ID3D11RenderTargetView *iv=imported_view.Get();
+      cc->OMSetRenderTargets(1,&iv,NULL);
+      cc->OMSetBlendState(additive.Get(),NULL,~0u);
+      cc->RSSetViewports(1,&source_vp); cc->RSSetScissorRects(1,&preserve_rect);
+      cc->Draw(3,0);
+      cc->OMSetRenderTargets(0,NULL,NULL);
+      cc->OMSetBlendState(NULL,NULL,~0u);
+      cc->PSSetShader(sample_shader.Get(),NULL,0);
+      marker("Shared imported attachment partial blend queued; no intermediate CPU readback");
+   }
    ComPtr<ID3D11ShaderResourceView> texture; check(consumer->CreateShaderResourceView(opened.Get(),NULL,&texture),"Create pattern SRV");
    ComPtr<ID3D11Texture2D> private_copy;
    ComPtr<ID3D11ShaderResourceView> copied_texture;
@@ -708,6 +737,9 @@ static void shared_layout(IDXGIAdapter *adapter, bool hardware, D3D_FEATURE_LEVE
             unsigned sx=((2*(x-(unsigned)vp.TopLeftX)+1)*577)/(2*(unsigned)vp.Width);
             unsigned sy=((2*(y-(unsigned)vp.TopLeftY)+1)*961)/(2*(unsigned)vp.Height);
             red=(sx/32)&1; green=(sy/24)&1; blue=red^green;
+            if (preserve_import && sx >= (unsigned)preserve_rect.left && sx < (unsigned)preserve_rect.right &&
+                sy >= (unsigned)preserve_rect.top && sy < (unsigned)preserve_rect.bottom)
+               red=1;
          }
          unsigned char expected[]={static_cast<unsigned char>((format==DXGI_FORMAT_B8G8R8A8_UNORM?blue:red)*255),
             static_cast<unsigned char>(green*255),static_cast<unsigned char>((format==DXGI_FORMAT_B8G8R8A8_UNORM?red:blue)*255),255};
@@ -732,15 +764,16 @@ int main(int argc, char **argv)
    const bool shared = argc > 2 && !strcmp(argv[argc - 1], "--shared-contract");
    const bool features = argc > 2 && !strcmp(argv[argc - 1], "--feature-levels");
    const bool variants = argc > 2 && !strcmp(argv[argc - 1], "--shared-layout-variants");
+   const bool preserve_import = argc > 2 && !strcmp(argv[argc - 1], "--shared-layout-load");
    const bool checkpoints = variants || (argc > 2 && !strcmp(argv[argc - 1], "--shared-layout-checkpoints"));
-   const bool layout = checkpoints || (argc > 2 && !strcmp(argv[argc - 1], "--shared-layout"));
+   const bool layout = preserve_import || checkpoints || (argc > 2 && !strcmp(argv[argc - 1], "--shared-layout"));
    const bool sample = argc > 2 && !strcmp(argv[argc - 1], "--sample");
    const bool load = argc > 2 && !strcmp(argv[argc - 1], "--load");
    const bool hardware = (argc == 3 || implicit || (argc == 4 && (shared || features || sample || load || layout))) && !strcmp(argv[1], "--luid");
    const bool software = (argc == 3 || (argc == 4 && (features || sample || load))) && !strcmp(argv[1], "--software");
    const bool warp = (argc == 2 || (argc == 3 && (shared || features || sample || load || layout))) && !strcmp(argv[1], "--warp");
    if (!hardware && !software && !warp) {
-      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract|--shared-layout|--shared-layout-checkpoints|--shared-layout-variants|--feature-levels|--sample|--load] | --software dll [--feature-levels|--sample|--load] | --warp [--shared-contract|--shared-layout|--shared-layout-checkpoints|--shared-layout-variants|--feature-levels|--sample|--load]\n", argv[0]);
+      fprintf(stderr, "usage: %s --luid 16-hex-digits [--implicit-release|--shared-contract|--shared-layout|--shared-layout-load|--shared-layout-checkpoints|--shared-layout-variants|--feature-levels|--sample|--load] | --software dll [--feature-levels|--sample|--load] | --warp [--shared-contract|--shared-layout|--shared-layout-load|--shared-layout-checkpoints|--shared-layout-variants|--feature-levels|--sample|--load]\n", argv[0]);
       return 2;
    }
    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -821,8 +854,8 @@ int main(int argc, char **argv)
          shared_contract(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, true);
          check(device->GetDeviceRemovedReason(), "Consumer status after sharing");
       } else if (layout) {
-         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_B8G8R8A8_UNORM, checkpoints, variants);
-         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, checkpoints, variants);
+         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_B8G8R8A8_UNORM, checkpoints, variants, preserve_import);
+         shared_layout(adapter.Get(), hardware, requested, device.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, checkpoints, variants, preserve_import);
       } else if (sample || load) {
          sampled_images(device.Get(), context.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, load);
          sampled_images(device.Get(), context.Get(), DXGI_FORMAT_B8G8R8A8_UNORM, load);

@@ -2428,8 +2428,13 @@ zink_resource_from_handle(struct pipe_screen *pscreen,
       linear.bind |= PIPE_BIND_LINEAR;
       struct pipe_resource *resource = resource_create(pscreen, &linear, whandle,
          usage, NULL, 0, NULL, NULL);
-      if (resource)
+      if (resource) {
+         /* Another device may already have rendered into this allocation.
+          * As with dma-buf imports, its contents must survive the first
+          * render pass unless the application explicitly invalidates them. */
+         zink_resource(resource)->valid = true;
          zink_resource(resource)->obj->immutable_handle = true;
+      }
       return resource;
    }
 #ifdef ZINK_USE_DMABUF
