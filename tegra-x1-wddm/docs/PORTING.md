@@ -1145,8 +1145,8 @@ At 17:05:10 UTC, `--warp --shared-layout-load` passes all four BGRA/RGBA
 viewport cases: **3,686,400 pixels, zero mismatches**, exit 0 in 270 ms.
 Probe SHA256: `5747dff91b8049f1d9476f731f779ae3c2dd0832c41c0952542f8e84b0a0a57f`.
 WARP validates the application and expected pixels; it does not execute
-Zink/NVK or establish a GM20B fix. The new UMD compiles and links, but native
-shared-image rendering and onscreen acceptance remain unverified. The prior
+Zink/NVK or establish a GM20B fix. At that control boundary, native
+shared-image rendering and onscreen acceptance were unverified. The prior
 failed `.158` retest remains failed. Evidence is retained in the local build
 workspace under `runs/wddm-import-validity-20261112/`.
 
@@ -1155,9 +1155,12 @@ The separately packaged candidate is built from
 `0e840c55f61cc58cee11c00b36c1bce2586d577de5f8e385a09f8ea4bb6a0f02`.
 Its import-control and runtime-probe binaries exactly match the verified
 hashes above. The package is retained as
-`desktop158-import-content-20261112-umd`. It is now registered for the
-[separate import-content desktop trial](NATIVE_DESKTOP_158.md#import-content-desktop-trial),
-whose native results remain pending. The previously tested `.158`/`.160`
+`desktop158-import-content-20261112-umd`. The
+[separate import-content desktop trial](NATIVE_DESKTOP_158.md#import-content-desktop-trial)
+now supplies native GM20B shared-load readback: **3,686,400 pixels match**
+without intermediate CPU readbacks. Physical desktop acceptance remains
+pending; the trial's later `.59` state is recovery, not native execution.
+The previously tested `.158`/`.160`
 artifact sets remain separate from this candidate.
 
 The mainline `Stage-Desktop158Retest.ps1` now pins this UMD and requires
@@ -1230,7 +1233,8 @@ while keeping GM20B resource metadata and submission on the Tegra ABI.
   [native Vulkan timeline handoffs](VULKAN_WIN32_MEMORY.md#native-gpu-timeline-result)
   verified between two Vulkan devices. The
   [runtime/NVK per-submission bridge](D3D_RUNTIME_SYNC.md) now uses incoming
-  and outgoing GPU timelines; its native GPU validation remains pending. Use
+  and outgoing GPU timelines; the native shared-load pixel check now passes,
+  while sustained desktop and performance validation remain pending. Use
   [D3DKMTShareObjects](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtshareobjects)
   and [D3DKMTOpenSyncObjectFromNtHandle2](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtopensyncobjectfromnthandle2)
   with WDK types. Size the runtime, resource

@@ -73,9 +73,8 @@ and the Zink batch control takes 83 ms (SHA256
 `59fab065eaa04ccbef08df8fa2905032f9c9f71b4dd4262facdfd43740ec5024`).
 They still substitute the KMT/Vulkan calls and execute no GPU commands.
 CPU readback remains 1,996,800 kHz and fan driver version 12.
-The new bridge still requires Windows ARM64 runtime callbacks on the device,
-native shared-image readback, sustained composition and measured CPU/GPU
-timings. The subsequent [.160 trial](NATIVE_DESKTOP_160.md) was interrupted
+These controls alone do not establish native shared-image readback, sustained
+composition or measured CPU/GPU timings. The subsequent [.160 trial](NATIVE_DESKTOP_160.md) was interrupted
 without usable native results and restored to `.59`. No performance
 improvement or visual fix is claimed yet.
 
@@ -92,12 +91,23 @@ now passes OPAQUE_WIN32 and D3D12_FENCE handoffs between two Vulkan devices,
 with no intermediate host wait. This validates the underlying KMT/NVK path;
 it does not exercise runtime-owned D3D contexts or Zink's imported WDDM images.
 
-The next native shared-image check uses `--shared-layout-load` first. The
+The subsequent [import-content trial](NATIVE_DESKTOP_158.md#import-content-desktop-trial)
+passes `--shared-layout-load` on native GM20B: all **3,686,400** BGRA/RGBA
+pixels match across producer sharing, imported partial blend and consumer
+sampling/placement, without intermediate CPU readbacks. Its ordinary draw and
+sampling cases add 40,960 matching pixels. This supplies native D3D resource
+and GPU-handoff evidence. It does not establish performance or five-minute
+physical desktop acceptance; ShellExperienceHost submission failures in the
+same trial still need attribution. DWM signal/wait callbacks and interval-one
+Presents occur, but the ETL's reported event loss prevents complete-history
+claims.
+
+The native shared-image check uses `--shared-layout-load` first. The
 separate `--shared-layout-checkpoints` diagnostic performs producer and consumer-import CPU
 readbacks before sampling, inserting completion waits that can hide missing
 GPU ordering. A checkpoint pass alone cannot validate the bridge. The
 [imported-view audit](PORTING.md#imported-windows-image-views) also corrects
-an attachment-usage mismatch before the next onscreen trial.
+an attachment-usage mismatch in that tested UMD.
 The [import-content fix](PORTING.md#imported-windows-image-contents) additionally
 preserves existing pixels on the imported image's first render pass; the
 load-preservation scene checks this while retaining GPU-only handoffs.

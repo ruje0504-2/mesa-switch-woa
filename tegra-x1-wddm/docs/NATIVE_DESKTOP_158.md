@@ -312,7 +312,65 @@ previously exercised shortcut capture helper, SHA256
 The existing recovery removes the native task and this trial's temporary
 ICD registration, including interruption before normal collection.
 
-At the current observation boundary, SSH has returned no record after the
-setup reboot request. Native startup, pixels, captures, sustained presentation
-and this trial's recovery are **unconfirmed**. The earlier Vulkan-only
-timeline pass does not establish any of those desktop results.
+Records recovered after SSH reconnect establish the following, separately
+from the device's later `.59` recovery state. All times below are UTC.
+
+- At 18:53:38, the active display path and native KMT adapter both have LUID
+  `000000000008239d`, `.158` / Code 0. DWM PID 776's loader record at
+  18:53:33.865 identifies this trial's NVK DLL and GM20B device.
+- The ordinary draw, sampling and shared-load probes use that native LUID
+  and the identified UMD/ICD. They match **16,384**, **24,576** and
+  **3,686,400** pixels respectively, with zero mismatches. The shared-load
+  case preserves the producer's contents across an imported partial blend,
+  with no intermediate producer/import CPU readback. These are **offscreen
+  GPU results**, not a physical presentation acceptance.
+- The capture worker runs from 18:53:43.193 to 18:58:55.725. Its 300-second
+  observation begins at 18:53:51.068 and retains 15 images, including the
+  initial pre-probe image. Their metadata records `.158` / Code 0. DWM PID
+  776 remains the same in the first and last process snapshots. The owner
+  identifies the partially opened Quick Settings images as transition
+  animation; they must not be called texture corruption from those stills.
+- The retained UMD trace has 157 successful DWM Flip/interval-one callbacks,
+  spanning 18:54:22.006–18:58:43.910 (261.904 seconds), with matching kernel
+  MMIO flip records. The 17,413 retained hardware VSync events have a median
+  interval of 16.6666 ms. This supports native presentation activity and
+  approximately 60 Hz VBlank timing, not 60 rendered frames per second.
+
+**Five-minute physical desktop acceptance is still unverified.** The worker
+explicitly records `PhysicalPixelsUnverified=true`; screenshot collection
+completion is not that acceptance. The ETL reports **121,523 lost events**,
+so neither missing records nor the retained flip span prove an uninterrupted
+five-minute history. The old ShellExperienceHost PID 4636 also records 35
+failed Present calls (`88760870`), 74 teardown device-removed reports and
+one resource-create `8007000e`; a later PID 5848 has 13 successful Presents.
+The submit-side error needs attribution before declaring the desktop stable.
+No restart cause is inferred from these records.
+
+The controller records collection complete at 18:59:17.210, later takes its
+existing-attempt recovery branch at 19:02:20.801 and stages `.59` at
+19:02:39.567. The recovery boot is 19:03:14.227. At 21:13:25, the original
+SYS/ACPI, temporary registration/loader/environment cleanup, removed tasks
+and unchanged power settings verify. The 21:22:25 check additionally verifies
+CPU 1996.8 MHz, fan version 12, Wi-Fi 0.5.7 / Code 0, removed trial loader
+registry value and the saved portrait preference. **`.59` / Code 0 is the
+post-trial BasicDisplay configuration, not the native test configuration.**
+
+All **244 files / 137,721,253 bytes** match device-side hashes and lengths
+under `runs/desktop158-import-content-20261112/evidence/` in the external build
+workspace. SHA256 identities:
+
+| Record | SHA256 |
+| --- | --- |
+| Retained archive | `b20f70adb297ca4cb385784e396f7f0886c935fd38383d0261bb28d298d58fff` |
+| Worker result | `285143c5626201aab65d76aee1ac4c1832f91f72a0ca0f3b2b9d12f30c9d3b51` |
+| Shared-load pixels | `e0dc93d5ff2cf58647205571df1d958888de827cfd1f707f965c8d84000240f6` |
+| Active-path observations | `ce2191026a1898fe43f996c1ba8afa59c5975d1d29478009a900a9a22e2100c8` |
+| Recovery verification | `3f0ccca0f26fc6196dab4f5d857e8c670ae0f872265ea52bbeae164205bc9e4b` |
+
+The next observation is explicitly onscreen-only. Before starting its timer
+and around each capture, `Assert-NativeDesktop.ps1` must retain a fresh active
+source/target LUID matching native GM20B, the expected KMD/Code 0 and the
+current DWM process's loader record for the trial ICD. A BasicDisplay desktop
+cannot satisfy this check. Its records still do not replace physical screen
+observation. Reuse the offscreen result above instead of counting another
+offscreen probe as progress on presentation.

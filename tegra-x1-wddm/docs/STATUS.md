@@ -19,7 +19,7 @@ geometry and legacy/MPO integration exist in source and pass the documented
 models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
 components remain a short-observation baseline, not a stable desktop release.
-The latest matched-component `.158` trial **failed onscreen acceptance**:
+The earlier matched-component `.158` trial **failed onscreen acceptance**:
 the owner reports no successful native output, and the run ends before any
 native pixel or desktop-capture result is retained. A short Code 0 record is
 not a rendering pass. That trial was restored to `.59` / Code 0, with the
@@ -46,20 +46,26 @@ the 512 MiB ceiling unchanged. Six OPAQUE_WIN32/D3D12_FENCE cases match
 16,384 buffer words, 32,768 RGBA/BGRA image pixels and 768 guards. The CPU
 waits only for each final round-trip submission. The `.59` recovery and
 cleanup are verified at 18:27:31. This is native Vulkan memory/synchronization
-evidence; D3D runtime sharing, the updated UMD's pixels and five-minute
-desktop acceptance remain pending.
+evidence; the later native D3D pixel result below is separate, and five-minute
+physical desktop acceptance remains pending.
 [Exact scope, components, counts and recovery](VULKAN_WIN32_MEMORY.md#native-gpu-timeline-result)
 
-**New import-content desktop trial started:** `desktop158-import-content-20261112`
+**Import-content offscreen GPU checks pass; physical desktop acceptance is pending:**
+`desktop158-import-content-20261112`
 uses the frozen `.158` KMD, `ca405387` UMD (`0e840c55…`) and the native-tested
 timeline ICD (`ad686578…`). The actual surface control, registered-loader
-preflight and interactive desktop checks pass on `.59`. The candidate binds
-behind the closed gate at 18:50:41 UTC; new UMD/ICD registration and the
-planned setup reboot are requested at 18:50:49. SSH has not returned a native
-result since that request. Neither this trial's desktop output nor its
-recovery is confirmed yet; the earlier offscreen trial's `.59` recovery does
-not prove the current state.
-[Exact candidate and planned acceptance sequence](NATIVE_DESKTOP_158.md#import-content-desktop-trial)
+preflight and interactive desktop checks pass on `.59`. Recovered records
+confirm the native GM20B active path on LUID `8239d`, **3,727,360 matching
+offscreen D3D pixels**, and 15 desktop captures. The retained 157 DWM flips
+span 261.904 seconds; hardware VBlank intervals have a 16.6666 ms median.
+This does **not** establish five minutes of physically verified, stable
+presentation: ETW reports lost events, the old ShellExperienceHost process
+reports failed submissions, and physical panel observation remains separate.
+The owner identifies the partial-menu stills as animation transitions.
+The recovered `.59` / Code 0 configuration is verified at 21:22:25 UTC,
+including CPU/fan/Wi-Fi and saved display preference. `.59` is the recovery
+configuration, not the driver used for the native pixel checks.
+[Exact components, evidence limits and recovery](NATIVE_DESKTOP_158.md#import-content-desktop-trial)
 
 November 12 inventory at 16:15:57 UTC confirms GPU `0.1.0.59`, Wi-Fi `0.5.7.0`
 and fan `1.0.0.12`. Wi-Fi is owner-confirmed usable, and SSH verifies its exact
