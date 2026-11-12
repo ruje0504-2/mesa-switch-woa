@@ -40,13 +40,12 @@ Work order:
 
 The device remains on recovered `.59` until a bounded trial is explicitly
 staged and started. Source rollback is not an assertion that a driver has
-already been installed. Fable's desktop review stopped at the account limit;
-its completed commits and five unfinished files are retained locally. The next
-remote assignment is game-facing DXVK using Fable 5.2/medium, after the reported
-November 12 07:10 UTC reset. The latest VPS instructions permit read-only
-analysis and textual patch proposals for implementation locally. No remote
-GitHub push or desktop DXVK development is authorized. This does not block
-desktop stabilization.
+already been installed. Fable's completed desktop-review commits and five
+unfinished files are retained locally. Following the user's confirmation of
+restored quota and explicit authorization to modify source, Fable 5.2/medium
+is implementing game-facing DXVK in a separate remote branch. No remote GitHub
+push or desktop DXVK development is authorized. This does not block desktop
+stabilization.
 
 The initial frozen-stack retry reaches Code 0 but is interrupted by another
 boot before its PNG completes; `.59` recovery is verified. The retained MPO
@@ -126,6 +125,24 @@ checks remain applicable. The intended ICD is unchanged `6e2fad99d742`.
 The new candidate uses `.158` to distinguish it from the already signed `.157`
 package. Its host regressions, actual NETB stream checks and full WDK ARM64
 build pass from source `6c854e9f394c3d761fab85885bead4bbd4588581` in
-`stabilize158-20261112`. This package is unsigned and not installed; native
-taskbar completeness, continuous presentation and hardware stability remain
-pending. No new Switch trial or reboot was started for this build.
+`stabilize158-20261112`. The Windows ARM64 context model exits 0 at 03:33:15
+UTC. Signed SYS `46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088`
+and all 13 catalog members verify successfully.
+
+## Native .158 observation
+
+`stabilize158-native-20261112` completes the 90-second screenshot sequence.
+All four images show the complete bottom taskbar and right-side tray, and the
+user reports normal, comparatively stable physical output. Each image retains
+`.158` Code 0, Explorer PID 4472 and the composition content bridge. DWM selects
+Tegra LUID `bc22f` at FL10_0. The finalized ETL contains 79 successful DWM flip
+Presents across 100.5441046 seconds; every native scanout address matches a
+subsequent VSync. No native-era device error, UMD failure or KMD recovery is
+retained, and the exporter reports no lost events or buffers.
+
+All 184 returned files (100,622,505 bytes) match device hashes. The scheduled
+recovery returns to `.59` Code 0 with cleanup and unchanged power verified at
+03:48:56 UTC; portrait verification at 03:49:33 is a no-op. The recovery PNG
+at 03:51:05 shows a complete taskbar. Keep this exact component set for an
+extended desktop/menu interaction trial. This short observation does not prove
+long-duration stability, Start-menu popup behavior or hardware landscape.
