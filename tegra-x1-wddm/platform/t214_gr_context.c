@@ -259,7 +259,8 @@ static bool bundles(const struct tg_gpu_power_io *io, const struct tg_gpu_gr_net
  * invocations: Linux nouveau 1cb9e2ef66d5, gk110_grctx_generate_r419f78,
  * which also serves GM107. Upstream NVK clears it from user mode through
  * NVK_MME_SET_PRIV_REG; the Windows ICD omits that macro and the command
- * validator rejects it, so no context ever enabled those loads. NVK reads
+ * validator rejects it. The supplied NETB context stream sets bit 3 in
+ * 0x10beb, so the KMD must establish the enabled policy. NVK reads
  * D3D constant buffers with global loads on this GPU. A helper lane that
  * skips them computes wrong derivatives and can iterate a data-dependent
  * loop forever, which retires no fence and raises no fault.
@@ -275,8 +276,12 @@ static bool helper_loads(const struct tg_gpu_power_io *io, struct tg_gpu_gr_cont
     s->last_register=GR_GPCS_TPCS_SM_DISP_CTRL;s->last_value=value;
     /* 0xbad..... is the PRI ring's failed-access pattern on this family. */
     if(value==UINT32_MAX || (value>>20)==0xbad) {s->result=TG_GPU_GR_CTX_REGISTER;return false;}
-    if(value&GR_SM_DISP_CTRL_NO_HELPER_LOADS)
-        wr(io,GR_GPCS_TPCS_SM_DISP_CTRL,value&~GR_SM_DISP_CTRL_NO_HELPER_LOADS);
+    if(value&GR_SM_DISP_CTRL_NO_HELPER_LOADS) {
+        const uint32_t enabled=value&~GR_SM_DISP_CTRL_NO_HELPER_LOADS;
+        io->write32(io->context,GPU+GR_GPCS_TPCS_SM_DISP_CTRL,enabled);
+        s->last_value=rd(io,GR_GPCS_TPCS_SM_DISP_CTRL);
+        if(s->last_value!=enabled) {s->result=TG_GPU_GR_CTX_REGISTER;return false;}
+    }
     return true;
 }
 enum tg_gpu_gr_context_result tg_gpu_gr_context_init(

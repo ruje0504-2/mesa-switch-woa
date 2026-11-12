@@ -15,10 +15,12 @@ struct model {
     uint32_t busy_reg;
     unsigned helper_writes;
     uint32_t saved_sm_disp_ctrl;
+    bool ignore_helper_write;
 };
 /* gr_pri_gpcs_tpcs_sm_disp_ctrl; bit 3 disables helper-invocation loads. */
 #define SM_DISP_CTRL 0x419f78u
-#define SM_DISP_CTRL_DEFAULT 0x0000001bu
+/* The supplied 32.7.6 NETB context entry, independently checked by hash. */
+#define SM_DISP_CTRL_DEFAULT 0x00010bebu
 static uint32_t read32(void *context,uint32_t address)
 {
     struct model *m=context;uint32_t r=address-GPU;
@@ -49,13 +51,14 @@ static void write32(void *context,uint32_t address,uint32_t value)
     if(r==0x409614) {
         assert(value==(m->reset?0x770u:0x70u));++m->reset;
     }
-    if(r==SM_DISP_CTRL) {
+    if(r==SM_DISP_CTRL && !(value&8)) {
         /* Once, on the bound context after its bundle and method streams and
          * before the golden save. Only the helper-load disable may change. */
         assert(m->binds==1 && !m->saves && !m->helper_writes);
         assert(!m->regs[0x400208/4] && m->regs[0x404154/4]==0x800);
         assert((m->regs[r/4]&8) && value==(m->regs[r/4]&~8u));
         ++m->helper_writes;
+        if(m->ignore_helper_write)return;
     }
     if(r==0x409840) {m->regs[0x409800/4]&=~value;return;}
     if(r==0x409504) {
@@ -196,6 +199,10 @@ int main(int argc,char **argv)
         reset(&m);m.regs[SM_DISP_CTRL/4]=SM_DISP_CTRL_DEFAULT&~8u;
         assert(run(&m,&net,&s)==TG_GPU_GR_CTX_OK && s.stage==9 && !m.helper_writes);
         assert(m.regs[SM_DISP_CTRL/4]==(SM_DISP_CTRL_DEFAULT&~8u) && m.saves==1);
+        reset(&m);m.ignore_helper_write=true;
+        assert(run(&m,&net,&s)==TG_GPU_GR_CTX_REGISTER && s.stage==5);
+        assert(m.helper_writes==1 && !m.saves && s.last_register==SM_DISP_CTRL &&
+               s.last_value==SM_DISP_CTRL_DEFAULT);
         const uint32_t unreadable[]={UINT32_MAX,0xbadf1100,0xbadf5040,0xbad00100};
         for(unsigned i=0;i<sizeof(unreadable)/sizeof(unreadable[0]);++i) {
             reset(&m);m.regs[SM_DISP_CTRL/4]=unreadable[i];

@@ -74,3 +74,32 @@ the new UMD has not been installed or tested with native GPU execution.
 Evidence directories: `stabilize153-sampler-view-20261112-umd`,
 `stabilize153-sampler-view-control-20261112` and
 `stabilize153-sampler-view-debug-20261112` in the external build root.
+
+## GR helper-load correction
+
+Fable's independent local commit `52e35569` is fetched over SSH (no remote
+GitHub push or credential transfer) and ported as `d2edb249`. It establishes
+NVK's fragment helper-invocation memory-load policy in the golden GR context.
+The main agent independently checks nouveau `gk110_grctx_generate_r419f78`
+and NVK's skipped `_WIN32` private-register update. Static parsing of the
+actual NETB (SHA256 `5b285e5de99b935c2619e54b1656b8a2f271ba845e80952faadfd09960d6eea3`)
+finds region 5, byte offset 5,196 (file offset 46,506), writing `0x10beb` to
+`0x419f78`. Bit 3 disables the helper loads; the corrected policy is `0x10be3`.
+This proves the initialization input, not a live register observation or the
+cause of the captured native hang.
+
+The port also checks the written value before saving the golden image and
+fails initialization if the write did not take effect. Its regression uses
+the actual NETB value, accepts the vendor stream's initial write, and checks
+the final policy before FECS save. An ignored policy write fails instead of
+saving an unusable image. Independent negative controls stop at that save
+assertion with both original `.153` source and the remote source before the
+readback correction; corrected host models, the real external NETB stream
+and the full WDK ARM64 build pass.
+
+This KMD candidate is numbered `.157`, based on `.153` without importing
+`.154–.156` queue/diagnostic changes. It is not signed/installed yet. Evidence
+is in `helper-load-independent-20261112` and `helper-load157-20261112`.
+Taskbar content, continuous rendering and the `.155` stalled instruction
+remain unproven until native validation. Fable's broader review continues
+independently; only this completed commit has been ported so far.
