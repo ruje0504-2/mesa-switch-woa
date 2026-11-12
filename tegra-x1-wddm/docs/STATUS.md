@@ -20,17 +20,23 @@ models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
 components remain a short-observation baseline, not a stable desktop release.
 
-**New query-polling fix; native acceptance pending:** `760db8b2` makes D3D
+**Query-polling fix passes controls, but the native trial fails physically:** `760db8b2` makes D3D
 query retrieval nonblocking, gives Zink an explicit no-submit polling path,
 and releases event-query fence references at destruction. The old DDI
 blocking behavior and Zink reference leak both fail controlled regressions;
 the fixes pass, including recycled/detached batch states. The frozen ARM64
 UMD is `02248b25…`. Its new shared-image reuse probe has a validated WARP
 oracle and explicit producer completion; it is not a DWM ordering test.
-The device remains on `.59` / Code 0; this candidate is not yet deployed.
+The owner reports direct black output followed by a freeze within a few
+seconds in `desktop158-query-poll-20261112`. Startup records Code 0, but no
+native identity assertion, timed desktop observation or pixel result is
+retained. At **23:27:29 UTC**, full recovery to `.59` / Code 0 is verified;
+all 129 returned files match device hashes and lengths. These query fixes
+have not resolved physical desktop acceptance. Do not repeat this candidate.
+[Failed trial and recovery](NATIVE_DESKTOP_158.md#query-polling-umd-trial-physical-failure)
 [Contracts, controls and exact candidate](D3D_RUNTIME_SYNC.md#nonblocking-query-polling-and-event-ownership)
 
-**Latest corrected-harness recheck fails physical acceptance:**
+**Preceding corrected-harness recheck fails physical acceptance:**
 `desktop158-identity-guard-20261112` uses the same `.158` KMD, `7f8f821d…`
 UMD and `ad686578…` ICD. Only the query invocation and capture schedule
 change. The owner reports immediate frozen output and an automatic restart,

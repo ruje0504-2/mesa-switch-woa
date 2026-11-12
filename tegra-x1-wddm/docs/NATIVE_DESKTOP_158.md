@@ -588,3 +588,65 @@ not establish another GPU defect or a fix for the physical failure. Retain
 that limit rather than changing stride, barriers or timing speculatively.
 Do not repeat this candidate; a demonstrated rendering fix is needed before
 another native desktop trial. Hardware rotation and cube remain pending.
+
+## Query-polling UMD trial: physical failure
+
+`desktop158-query-poll-20261112` tests source
+`760db8b2e75364a9373ce82ca99cf980fb24aa02`, UMD SHA256
+`02248b25419fb5560d0ffb17b3eb7d2b699ca4769a9ae08e0bfe8e6f0083cb13`,
+with the unchanged `.158` KMD (`46d17576…`) and ICD (`ad686578…`).
+The query-polling and event-fence ownership controls pass separately, as
+documented in [D3D runtime synchronization](D3D_RUNTIME_SYNC.md#nonblocking-query-polling-and-event-ownership).
+The planned native sequence remains desktop identity, 300 seconds of
+physical observation, then ordinary/sample/shared-image pixel checks.
+
+**Physical acceptance fails.** The owner's report is “直接黑屏了，然后几秒以后死机”
+(direct black output, then frozen/hung after a few seconds). No exact event
+timestamp is supplied. The separately observed additional boot is recorded
+below; its timestamp is not used to infer a physical failure duration or cause.
+
+| Retained event | UTC |
+| --- | --- |
+| Setup boot | 23:19:01.619 |
+| One-shot controller starts | 23:21:01.799 |
+| Startup completes, Hardware 0 / Permit 0 / Code 0 | 23:21:15.443 |
+| Additional boot observed by the SSH watcher | 23:21:55.956 |
+| Existing-attempt marker selects recovery | 23:24:02.030 |
+| Original `.59` driver/ACPI staged, Code 10 | 23:24:26.342 |
+| Recovery boot | 23:24:55.881 |
+| Full `.59` / Code 0 recovery verified | 23:27:29.116 |
+
+No `native-observer-ready.json`, initial native identity assertion, worker
+result, timed observation marker, desktop PNG or native pixel result is
+retained. The surviving interactive path observation belongs to the later
+closed-gate `.158` / Code 43 boot, not an accepted native display path.
+Missing records do not establish which calls executed before interruption.
+The new shared-image reuse probe therefore retains only its separately
+recorded WARP control; it has no native result in this trial.
+
+The interrupted first ETL exports 22,889 valid UMD events, including seven
+successful DWM Flip/interval-one callbacks and ten windowed Blt callbacks.
+It has `end_time=0` and `buffers_written=0`; zero reported lost events does
+not establish a complete tail. Callback success does not establish correct
+physical pixels. The second, closed-gate ETL has no UMD events. No black-screen,
+hang or restart cause is investigated or assigned.
+
+Recovery verifies the original SYS/ACPI, removed temporary UMD/ICD/loader,
+permits and trial tasks, restored environment, unchanged sleep/power settings
+and saved portrait preference. CPU remains 1996.8 MHz, fan version 12 and
+Wi-Fi 0.5.7 / Code 0. Two earlier attempts to request recovery over SSH did
+not deliver the command; the existing one-shot controller performed recovery.
+
+All **129 files / 123,234,298 bytes** match the device's stream measurements
+and SHA256 values. Evidence is retained in the external build workspace under
+`runs/desktop158-query-poll-20261112/`.
+
+| Record | SHA256 |
+| --- | --- |
+| Retained archive | `bda6713e109f937b066465f0eaad0ede2641f8a0cf5c7ae63398d5075abf23ad` |
+| Owner's physical observation | `6a4fb724628b9d571111248c874f1aeda9dff2be571027201fc2de451ad8cd0e` |
+| Recovery verification | `d134544939b4de3a56363e41a0f02e8d97c8baf70edd0357cf61a5ebefdab2bb` |
+
+The query fixes do not resolve this failed physical result. Do not redeploy
+this candidate unchanged; continue the normal rendering/contract audit.
+Five-minute desktop acceptance, hardware rotation and Win32 cube remain pending.

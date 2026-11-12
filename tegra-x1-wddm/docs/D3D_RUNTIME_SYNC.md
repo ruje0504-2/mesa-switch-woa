@@ -238,8 +238,13 @@ These are software rendering controls on the physical ARM64 machine.
 Candidate `desktop158-query-poll-20261112-umd` is built from `760db8b2`,
 UMD SHA256
 `02248b25419fb5560d0ffb17b3eb7d2b699ca4769a9ae08e0bfe8e6f0083cb13`.
-It is not deployed. Use the unchanged `.158` KMD and `ad686578…` ICD for its
-separate native desktop/pixel acceptance; no rotation or cube pass is claimed.
+Its subsequent native trial uses the unchanged `.158` KMD and `ad686578…`
+ICD and **fails physical acceptance**: the owner reports direct black output,
+then a freeze after a few seconds. No completed native identity assertion,
+observation timer or pixel test is retained. Full `.59` / Code 0 recovery is
+verified at 23:27:29 UTC. The controlled query regressions remain valid,
+but they do not establish a fix for physical output; no rotation or cube
+pass is claimed. [Exact trial evidence](NATIVE_DESKTOP_158.md#query-polling-umd-trial-physical-failure)
 
 ## Contracts and source
 
