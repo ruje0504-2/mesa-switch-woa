@@ -40,4 +40,42 @@ struct wsi_win32_memory {
    void (*unmap_cpu)(void *context);
 };
 
+/* A runtime allocation has one stored format. The only other way to view it
+ * is the sRGB encoding of the same bytes, which Direct3D applications use
+ * routinely for render-target and shader views of UNORM swap-chain buffers.
+ */
+static inline VkFormat
+wsi_win32_srgb_twin(VkFormat format)
+{
+   switch (format) {
+   case VK_FORMAT_B8G8R8A8_UNORM: return VK_FORMAT_B8G8R8A8_SRGB;
+   case VK_FORMAT_R8G8B8A8_UNORM: return VK_FORMAT_R8G8B8A8_SRGB;
+   default: return VK_FORMAT_UNDEFINED;
+   }
+}
+
+/* Create flags a driver accepts for an image over a runtime allocation:
+ * none, or MUTABLE_FORMAT with a view-format list naming only the stored
+ * format and its sRGB twin. The importer asks for the latter so that such a
+ * view never forces it to replace the image, which would silently detach
+ * the resource from the allocation other owners read.
+ */
+static inline bool
+wsi_win32_image_flags_supported(VkImageCreateFlags flags, VkFormat format,
+                                const VkImageFormatListCreateInfo *views)
+{
+   if (!flags)
+      return true;
+   const VkFormat twin = wsi_win32_srgb_twin(format);
+   if (flags != VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT || twin == VK_FORMAT_UNDEFINED ||
+       !views || !views->viewFormatCount || views->viewFormatCount > 2 ||
+       !views->pViewFormats)
+      return false;
+   for (uint32_t i = 0; i < views->viewFormatCount; i++) {
+      if (views->pViewFormats[i] != format && views->pViewFormats[i] != twin)
+         return false;
+   }
+   return true;
+}
+
 #endif

@@ -17,6 +17,7 @@
 #include "nil.h"
 #include "vk_enum_defines.h"
 #include "vk_internal_exts.h"
+#include "vk_wsi_win32_memory.h"
 
 #include "clb097.h"
 #include "clb197.h"
@@ -374,7 +375,11 @@ nvk_GetPhysicalDeviceImageFormatProperties2(
           pImageFormatInfo->tiling != VK_IMAGE_TILING_LINEAR ||
           (pImageFormatInfo->format != VK_FORMAT_B8G8R8A8_UNORM &&
            pImageFormatInfo->format != VK_FORMAT_R8G8B8A8_UNORM) ||
-          pImageFormatInfo->flags || (wsi->win32_row_pitch & 31))
+          !wsi_win32_image_flags_supported(
+             pImageFormatInfo->flags, pImageFormatInfo->format,
+             vk_find_struct_const(pImageFormatInfo->pNext,
+                                  IMAGE_FORMAT_LIST_CREATE_INFO)) ||
+          (wsi->win32_row_pitch & 31))
          return VK_ERROR_FORMAT_NOT_SUPPORTED;
       win32_scanout = true;
    }
@@ -977,7 +982,11 @@ nvk_image_init(struct nvk_device *dev,
           (image->vk.format != VK_FORMAT_B8G8R8A8_UNORM &&
            image->vk.format != VK_FORMAT_R8G8B8A8_UNORM) ||
           image->vk.array_layers != 1 || image->vk.mip_levels != 1 ||
-          image->vk.samples != VK_SAMPLE_COUNT_1_BIT || pCreateInfo->flags ||
+          image->vk.samples != VK_SAMPLE_COUNT_1_BIT ||
+          !wsi_win32_image_flags_supported(
+             pCreateInfo->flags, image->vk.format,
+             vk_find_struct_const(pCreateInfo->pNext,
+                                  IMAGE_FORMAT_LIST_CREATE_INFO)) ||
           (wsi->win32_row_pitch & 31) ||
           wsi->win32_row_pitch < (uint64_t)image->vk.extent.width * 4)
          return vk_error(dev, VK_ERROR_FORMAT_NOT_SUPPORTED);

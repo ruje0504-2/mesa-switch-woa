@@ -39,6 +39,7 @@
 
 #include "vk_format.h"
 #include "vk_internal_exts.h"
+#include "vk_wsi_win32_memory.h"
 #include "util/u_blitter.h"
 #include "util/u_debug.h"
 #include "util/format/u_format.h"
@@ -1662,8 +1663,19 @@ create_image(struct zink_screen *screen, struct zink_resource_object *obj,
    uint64_t mod = DRM_FORMAT_MOD_INVALID;
 #ifdef _WIN32
    if (is_wddm_allocation(alloc_info->whandle)) {
-      ici.flags = 0;
-      ici.pNext = NULL;
+      /* A runtime allocation cannot be replaced later to add a view format,
+       * so its one legitimate reinterpretation, the sRGB twin, is declared
+       * now. Direct3D sRGB views of UNORM back buffers then use this image.
+       */
+      formats[0] = ici.format;
+      formats[1] = wsi_win32_srgb_twin(ici.format);
+      format_list = (VkImageFormatListCreateInfo) {
+         .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO,
+         .viewFormatCount = 2,
+         .pViewFormats = formats,
+      };
+      ici.flags = formats[1] ? VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT : 0;
+      ici.pNext = formats[1] ? &format_list : NULL;
       /* init_ici leaves usage for format negotiation, which this internal
        * import path bypasses. Views inherit these bits: a zero usage leaves
        * NVK without a sampled-image descriptor for shared textures. */
@@ -1674,6 +1686,7 @@ create_image(struct zink_screen *screen, struct zink_resource_object *obj,
          ici.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
       struct wsi_image_create_info wsi = {
          .sType = VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA,
+         .pNext = ici.pNext,
          .scanout = !(templ->bind & PIPE_BIND_SHARED),
          .win32_row_pitch = alloc_info->whandle->stride,
       };
@@ -1684,6 +1697,7 @@ create_image(struct zink_screen *screen, struct zink_resource_object *obj,
          .type = ici.imageType,
          .tiling = ici.tiling,
          .usage = ici.usage,
+         .flags = ici.flags,
       };
       VkImageFormatProperties2 properties = {
          .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2,
@@ -3550,6 +3564,15 @@ resource_object_add_bind(struct zink_context *ctx, struct zink_resource *res, un
       return true;
    }
    assert(!res->obj->dt);
+#ifdef _WIN32
+   /* Adding a bind allocates new storage and copies into it. For a runtime
+    * allocation that would leave this resource rendering to private memory
+    * while every other owner keeps reading the original. */
+   if (res->obj->immutable_handle) {
+      mesa_loge("ZINK: cannot add bind 0x%x to an imported runtime allocation", bind);
+      return false;
+   }
+#endif
    zink_fb_clears_apply(ctx, &res->base.b, 0, INT32_MAX);
    bool ret = add_resource_bind(ctx, res, bind);
    if (ret)
