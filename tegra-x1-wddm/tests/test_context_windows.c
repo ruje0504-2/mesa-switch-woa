@@ -8,6 +8,9 @@
 #include "../windows/submit_ddi.h"
 #include "../windows/present.h"
 #include "../platform/t214_resources.h"
+#include "../core/nvk_mme_programs.h"
+#include "nouveau/headers/nvidia/classes/clb197.h"
+#include "nouveau/vulkan/nvk_mme_slots.h"
 #include <ntimage.h>
 static NTSTATUS SubmitModel(TG_GPU_CONTEXT_ENGINE *,const DXGKARG_SUBMITCOMMANDVIRTUAL *);
 
@@ -1713,6 +1716,96 @@ static __declspec(noinline) VOID TestPreemption(const DXGKRNL_INTERFACE *dxgk)
     for(UINT i=0;i<4;++i)CHECK(!graphics_used[i]);
 }
 
+static __declspec(noinline) VOID TestQueuedProgramState(const DXGKRNL_INTERFACE *dxgk)
+{
+    static TG_GPU_CONTEXT_ENGINE e;static TG_GPU_WORK_QUEUE q;static TG_GPU_HARDWARE owner;
+    static _Alignas(PAGE_SIZE) UCHAR mapping[2*TG_GPU_TABLE_BYTES];
+    static TG_GPU_TABLE_SEGMENT tables={.Memory={(HANDLE)99,mapping,{.QuadPart=0x94000000},sizeof(mapping)},.SegmentId=1};
+    DXGKARG_CREATEPROCESS process={.hDxgkProcess=(HANDLE)100};
+    DXGKARG_CREATEDEVICE device={0};
+    DXGKARG_CREATECONTEXT create={.EngineAffinity=1,.Flags.VirtualAddressing=1};
+    DXGKARG_SETROOTPAGETABLE root={.Address={1,0,0},.NumEntries=TG_GPU_TABLE_ENTRIES};
+    struct tg_gpu_power power={.owned=true,.ready=true,.stage=TG_GPU_STAGE_READY};
+    struct tg_gpu_power_io io={&hw,Read,Write,ReadPmic,WritePmic,Delay};
+    enum { MME_WORDS=sizeof(tg_gpu_nvk_mme_init)/sizeof(UINT) };
+    static struct {
+        struct tg_gpu_submit_request Header;
+        UINT Words[MME_WORDS+19];
+    } bind;
+    const UINT setup[]={
+         0x20020000|(TG_GPU_NVK_MME_CB0_ADDR_HI>>2),0,0x18000,
+         0xa0010000|(NVB197_CALL_MME_MACRO(NVK_MME_SELECT_CB0)>>2),0,
+         0x2003055d,0,0x7fe0,1, /* Texture headers, spanning two mapped pages. */
+         0x20030000|(NVB197_SET_TEX_SAMPLER_POOL_A>>2),0,0x9000,0,
+         0x20020582,1,0,        /* Program region at 4 GiB. */
+         0x80110810,0x20010811,0x7fb0 /* Vertex program header/instructions. */
+    };
+    struct {struct tg_gpu_submit_request Header;UINT Words[6];} draw={
+        {TG_GPU_SUBMIT_ABI,sizeof(draw),sizeof(draw.Words),0},
+        {0xa0050000|(NVB197_CALL_MME_MACRO(NVK_MME_DRAW)>>2),3,3,1,0,0}
+    };
+    DXGKARG_SUBMITCOMMANDVIRTUAL submit={.DmaBufferVirtualAddress=0x10000,
+        .DmaBufferSize=sizeof(bind.Words),.pDmaBufferPrivateData=&bind,
+        .DmaBufferPrivateDataSize=sizeof(bind),.DmaBufferUmdPrivateDataSize=sizeof(bind),
+        .SubmissionFenceId=300};
+    UINT64 *directory=(UINT64 *)mapping,*leaf=(UINT64 *)(mapping+TG_GPU_TABLE_BYTES);
+    UINT before=interrupts;
+    CHECK(sizeof(setup)==19*sizeof(UINT));
+    bind.Header=(struct tg_gpu_submit_request){TG_GPU_SUBMIT_ABI,sizeof(bind),sizeof(bind.Words),0};
+    RtlCopyMemory(bind.Words,tg_gpu_nvk_mme_init,sizeof(tg_gpu_nvk_mme_init));
+    RtlCopyMemory(bind.Words+MME_WORDS,setup,sizeof(setup));
+    CHECK(tg_gpu_pde_small(0x94020000,&directory[0]));
+    directory[1u<<(32-TG_GPU_DIRECTORY_SHIFT)]=directory[0];
+    CHECK(tg_gpu_pte_4k(0x80010000,true,true,&leaf[7]));
+    CHECK(tg_gpu_pte_4k(0x80011000,true,true,&leaf[8]));
+    CHECK(tg_gpu_pte_4k(0x80012000,true,true,&leaf[9]));
+    CHECK(tg_gpu_pte_4k(0x80013000,false,true,&leaf[24]));
+    CHECK(TgGpuInitializeContextEngine(&e,dxgk,&tables)==STATUS_SUCCESS);TestGraphicsTemplate(&e);
+    CHECK(TgGpuDdiCreateProcess(&e,&process)==STATUS_SUCCESS);device.hKmdProcess=process.hKmdProcess;
+    CHECK(TgGpuDdiCreateDevice(&e,&device)==STATUS_SUCCESS);
+    CHECK(TgGpuDdiCreateContext(device.hDevice,&create)==STATUS_SUCCESS);
+    TG_GPU_CONTEXT *c=create.hContext;root.hContext=c;
+    TgGpuDdiSetRootPageTable(&e,&root);CHECK(c->Root.Valid);
+    CHECK(TgGpuInitializeWorkQueue(&q,&e)==STATUS_SUCCESS);
+    memset(&hw,0,sizeof(hw));hw.mc=0x100;hw.pb=hw.map=hw.sched=1;hw.expected_root=0x940000;
+    hw.cpu_fence=(UINT32 *)((UCHAR *)e.Commands.CpuAddress+TG_GPU_COMMAND_FENCE);
+    owner.Engine=&e;owner.Ready=TRUE;owner.Power=power;e.HardwareOwner=&owner;
+    e.UserdBar1Ready=TRUE;e.UserdBar1Offset=0x13000;
+    submit.hContext=c;
+    CHECK(TgGpuDdiSubmitCommandVirtual(&e,&submit)==STATUS_SUCCESS);
+    CHECK(!c->Programs.end[TG_GPU_PROGRAM_3D] && c->References==1);
+    /* Queue the dependent draw before the binding packet executes. It is
+     * well-formed; validating against retired state here falsely removes
+     * the device. Both packets must retain their place and context owner. */
+    submit.DmaBufferSize=sizeof(draw.Words);submit.pDmaBufferPrivateData=&draw;
+    submit.DmaBufferPrivateDataSize=submit.DmaBufferUmdPrivateDataSize=sizeof(draw);
+    submit.SubmissionFenceId=301;
+    struct tg_gpu_command_va va;TG_GPU_COMMAND_SNAPSHOT *snapshot=NULL;
+    CHECK(TgGpuGetCommandVa(&e,c,&va)==STATUS_SUCCESS);
+    CHECK(TgGpuCaptureCommandSnapshot(&submit,&va,&snapshot)==STATUS_SUCCESS);
+    CHECK(snapshot->Info.requires_mme && snapshot->Info.requires_cb0 &&
+          snapshot->Info.requires_program==(1u<<TG_GPU_PROGRAM_3D));
+    TgGpuFreeCommandSnapshot(snapshot);
+    CHECK(TgGpuDdiSubmitCommandVirtual(&e,&submit)==STATUS_SUCCESS);
+    CHECK(c->References==2 && !e.RecoveryPending && !c->Programs.end[TG_GPU_PROGRAM_3D]);
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_PENDING);
+    hw.gpu_fence=q.Current.Expected;expected_fence=expected_driver_fence=300;
+    notify_engine=&e;notify_context=c;notify_references=1;
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_SUCCESS);
+    CHECK(e.LastCompletedFence==300 && c->Programs.end[TG_GPU_PROGRAM_3D]==0x200000000);
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_PENDING);
+    hw.gpu_fence=q.Current.Expected;expected_fence=expected_driver_fence=301;notify_references=0;
+    CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_SUCCESS);
+    CHECK(e.LastCompletedFence==301 && interrupts==before+2 && !c->References);
+    CHECK(IsListEmpty(&q.Pending) && !q.Current.Engine && !e.Active && !e.Notification);
+    notify_engine=NULL;notify_context=NULL;
+    CHECK(TgGpuStopWorkQueue(&q)==STATUS_SUCCESS);e.HardwareOwner=NULL;
+    CHECK(TgGpuDdiDestroyContext(c)==STATUS_SUCCESS && TgGpuDdiDestroyDevice(device.hDevice)==STATUS_SUCCESS);
+    CHECK(TgGpuDdiDestroyProcess(&e,process.hKmdProcess)==STATUS_SUCCESS && TgGpuStopContextEngine(&e)==STATUS_SUCCESS);
+    for(UINT i=0;i<64;++i)CHECK(!pool_used[i] && !memory_used[i]);
+    for(UINT i=0;i<4;++i)CHECK(!graphics_used[i]);
+}
+
 static VOID TestCommandSnapshots(void)
 {
     static struct {struct tg_gpu_submit_request Header;UINT Words[TG_GPU_SUBMIT_MAX_BYTES/4];} payload;
@@ -1865,7 +1958,10 @@ void start(void)
     access.va_end=command_va.limit;
     CHECK(TgGpuCaptureContextWork(&e,&submit,&access,&blocked)==STATUS_SUCCESS);
     CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
-    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_INVALID_PARAMETER && !blocked.Context);
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_SUCCESS);
+    before=hw.reads+hw.writes;
+    CHECK(TgGpuActivateContextWork(&e,&blocked,&call)==STATUS_INVALID_PARAMETER && !blocked.Expected && !e.Active);
+    CHECK(hw.reads+hw.writes==before && TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
     CHECK(TgGpuCaptureContextWork(&e,&submit,&upload,&blocked)==STATUS_SUCCESS && blocked.UploadsMme);
     CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS &&
           !c->MmeInitialized && !c->Cb0End && !c->Programs.end[TG_GPU_PROGRAM_3D] &&
@@ -1951,9 +2047,13 @@ void start(void)
     ddi.DxgkDdiSetRootPageTable(&e,&root);CHECK(c->Root.Valid && instance[130]==0x0bfff000);
     const UINT64 saved_limit=c->Root.VaLimit;
     c->Root.VaLimit=upload.cb0_end-1;
-    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_SUCCESS);
+    CHECK(TgGpuActivateContextWork(&e,&blocked,&call)==STATUS_DEVICE_NOT_READY && !blocked.Expected);
+    CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
     c->Root.VaLimit=upload.programs.end[TG_GPU_PROGRAM_3D]-1;
-    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_DEVICE_NOT_READY && !blocked.Context);
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_SUCCESS);
+    CHECK(TgGpuActivateContextWork(&e,&blocked,&call)==STATUS_DEVICE_NOT_READY && !blocked.Expected);
+    CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
     c->Root.VaLimit=upload.compute_slm.va_end-1;
     CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_SUCCESS);
     CHECK(TgGpuActivateContextWork(&e,&blocked,&call)==STATUS_INVALID_PARAMETER && !blocked.Expected);
@@ -1993,7 +2093,9 @@ void start(void)
     CHECK(c->GraphicsGeneration!=e.GraphicsGeneration);
     CHECK(TgGpuAcquireContextWork(&e,&submit,&work)==STATUS_DEVICE_NOT_READY);
     c=RecreateContext(&ddi,device.hDevice,&e,c,&root);submit.hContext=c;instance=c->Instance.CpuAddress;
-    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_INVALID_PARAMETER && !blocked.Context);
+    CHECK(TgGpuCaptureContextWork(&e,&submit,&call,&blocked)==STATUS_SUCCESS);
+    CHECK(TgGpuActivateContextWork(&e,&blocked,&call)==STATUS_INVALID_PARAMETER && !blocked.Expected);
+    CHECK(TgGpuCancelCapturedWork(&e,&blocked)==STATUS_SUCCESS && !c->References);
     /* Cancellation before any hardware attempt performs no MMIO and does not
      * manufacture a completed submission fence either.
      */
@@ -2102,5 +2204,6 @@ void start(void)
     TestAdapterLifecycle(&dxgk);
     TestPagingDispatch(&dxgk);
     TestPreemption(&dxgk);
+    TestQueuedProgramState(&dxgk);
     WriteFile(GetStdHandle((ULONG)-11),pass,sizeof(pass)-1,&written,NULL);ExitProcess(0);
 }
