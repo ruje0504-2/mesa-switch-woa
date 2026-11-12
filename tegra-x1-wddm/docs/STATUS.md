@@ -20,6 +20,16 @@ models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
 components remain a short-observation baseline, not a stable desktop release.
 
+**New mapping audit fixes, not deployed:** `ba8ed4cc` preserves D3D's
+nonblocking map flag, returns retryable contention, prevents CPU writes over
+pending GPU buffer readers, releases failed transfer references and ignores
+completed/recycled batch uses when polling. Four controlled regressions fail
+before the fix and pass afterward on ARM64. The UMD builds as `5c9454f2…`.
+The real Zink texture-mapping path still needs nonblocking readback work;
+these controls do not establish native pixels or desktop acceptance. The
+device remains `.59` / Code 0, with no new native deployment or restart.
+[Mapping contracts, exact controls and remaining gap](D3D_RUNTIME_SYNC.md#nonblocking-mapping-audit)
+
 **Query-polling fix passes controls, but the native trial fails physically:** `760db8b2` makes D3D
 query retrieval nonblocking, gives Zink an explicit no-submit polling path,
 and releases event-query fence references at destruction. The old DDI

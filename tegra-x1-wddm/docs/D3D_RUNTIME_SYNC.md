@@ -246,6 +246,66 @@ verified at 23:27:29 UTC. The controlled query regressions remain valid,
 but they do not establish a fix for physical output; no rotation or cube
 pass is claimed. [Exact trial evidence](NATIVE_DESKTOP_158.md#query-polling-umd-trial-physical-failure)
 
+## Nonblocking mapping audit
+
+`ba8ed4cc` fixes four demonstrated DDI/Zink buffer-path defects:
+
+- `ResourceMap` discarded `D3D10_DDI_MAP_FLAG_DONOTWAIT`. It now forwards
+  `PIPE_MAP_DONTBLOCK` and reports `DXGI_DDI_ERR_WASSTILLDRAWING` for an
+  unavailable mapping, preserving the existing device-loss checks before
+  and after the backend call. Failed maps expose no CPU pointer or pitches.
+  This follows Microsoft's [ResourceMap contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_resourcemap)
+  and [DDI error rules](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/handling-errors).
+- Zink's nonblocking buffer map checked only GPU writers, even for a CPU
+  write/read-write request. It now checks GPU readers as well. CPU read-only
+  access can still overlap other readers; pending access uses zero-timeout
+  polling rather than a completion wait.
+- The busy-buffer path returned a null pointer with a live transfer, and
+  general failed maps freed the transfer without releasing its resource
+  references. Transfer destruction now releases both source and temporary
+  staging references on failure as well as normal unmap. A failed poll
+  does not leave a transfer for the caller to unmap.
+- BO completion checks ignored the generation recorded with the resource
+  use. A batch reused for unrelated work could make a completed old access
+  appear pending again. Both ordinary and fast polling now use the same
+  generation test as the existing usage/wait paths. Current unsubmitted
+  writes still report pending without submitting or waiting.
+
+At **23:38:55–23:38:59 UTC**, real DDI/Zink functions execute on Windows
+ARM64 with controlled Gallium memory/timeline operations. No native GPU
+commands, driver installation, restart or WARP rendering occurs.
+
+| Control | Original code | Corrected code |
+| --- | --- | --- |
+| DDI nonblocking read/write/read-write, buffer and texture dispatch | Exit 1: missing `PIPE_MAP_DONTBLOCK` | Exit 0; repeated pending polls then ready/unmap, no CPU fence wait |
+| Host-visible buffer with a pending GPU reader | Exit 1: CPU write incorrectly returns a pointer | Exit 0; write/read-write pending, read allowed, write succeeds after completion |
+| Pending buffer and failed Vulkan memory map | Exit 1: live transfer returned with a null mapping | Exit 0; eight pending polls, eventual success and injected map failure retain no resource references |
+| Completed batch reused for new work | Exit 1: old write falsely reports pending | Exit 0; old generation completes, current unsubmitted write remains pending |
+
+The injected `VK_ERROR_MEMORY_MAP_FAILED` message in the successful cleanup
+control is intentional; it is not a hardware failure. All cases terminate
+without a timeout. `.59` / Code 0, CPU 1996.8 MHz and fan version 12 remain
+unchanged. All **19 records / 9,339 bytes** match device-side hashes and
+lengths. Result SHA256:
+`6156762f7e58d183a164fafd447dc538f372b69e9ce79ab4f46fe3a67bf80d4d`.
+Evidence and the undeployed build are retained under `runs/map-poll-20261112/`.
+
+| Artifact | SHA256 |
+| --- | --- |
+| Corrected DDI control | `19158317a1a47ddfbabfa6bcbc56891b9fade644eabcd6f793c47c4823ebc7f1` |
+| Corrected Zink control | `6a4064639259f0c06b3bcfe349131b3324c9b0960ae2f59558bd7d8ea948d69b` |
+| ARM64 UMD | `5c9454f25b535f4912977094fafdf6a4ab2c7a87ada76d0a482b46856794dae3` |
+
+**Remaining texture gap:** the DDI texture-dispatch control substitutes the
+backend mapper; it does not test real `zink_image_map`. That path still
+ignores `PIPE_MAP_DONTBLOCK` and can wait for a staging image-to-buffer copy.
+D3D staging images are not currently requested as linear images. Forwarding
+the flag alone therefore does not make texture readback nonblocking. A
+complete implementation must allow later polls to finish; simply returning
+pending forever for a tiled image is not sufficient. The new UMD is not
+deployed or promoted as a desktop candidate. The preceding physical failure
+remains unresolved, and five-minute physical acceptance is still required.
+
 ## Contracts and source
 
 - [Create synchronization object callback](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/ns-d3dumddi-_d3dddicb_createsynchronizationobject2)
