@@ -87,12 +87,20 @@ signal/wait callback returns. Callback acceptance does not establish GPU
 completion, cross-context ordering or a rendered frame. The device is restored
 to `.59` with the trial tasks removed.
 
-The next native shared-image check uses `--shared-layout` first. Its optional
-`--shared-layout-checkpoints` mode performs producer and consumer-import CPU
+The separate [native Vulkan timeline test](VULKAN_WIN32_MEMORY.md#native-gpu-timeline-result)
+now passes OPAQUE_WIN32 and D3D12_FENCE handoffs between two Vulkan devices,
+with no intermediate host wait. This validates the underlying KMT/NVK path;
+it does not exercise runtime-owned D3D contexts or Zink's imported WDDM images.
+
+The next native shared-image check uses `--shared-layout-load` first. The
+separate `--shared-layout-checkpoints` diagnostic performs producer and consumer-import CPU
 readbacks before sampling, inserting completion waits that can hide missing
 GPU ordering. A checkpoint pass alone cannot validate the bridge. The
 [imported-view audit](PORTING.md#imported-windows-image-views) also corrects
 an attachment-usage mismatch before the next onscreen trial.
+The [import-content fix](PORTING.md#imported-windows-image-contents) additionally
+preserves existing pixels on the imported image's first render pass; the
+load-preservation scene checks this while retaining GPU-only handoffs.
 
 ## Contracts and source
 

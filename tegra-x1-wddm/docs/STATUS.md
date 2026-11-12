@@ -35,10 +35,20 @@ loader ignores for elevated processes. Controls reproduce that failure;
 even the requested limited-user task receives an administrator token on
 this device. The corrected registered-ICD entry creates an instance under
 SYSTEM on `.59`, and its temporary registration is removed afterward.
-That is loader evidence only; GPU commands remain untested. SSH returns after the trial, and the
+That check supplies loader evidence only. SSH returns after the trial, and the
 17:52:02 UTC verification confirms this trial's own `.59` / Code 0 recovery,
 cleanup, unchanged power/CPU/fan settings and Wi-Fi 0.5.7 / Code 0.
 [Probe scope, exact build, entry failure and recovery evidence](VULKAN_WIN32_MEMORY.md#gpu-timeline-handoffs)
+
+**Native Vulkan timeline handoffs now pass:** the corrected registered-ICD
+trial executes on GM20B at 18:23:23–18:23:37 UTC, with `.158` / Code 0 and
+the 512 MiB ceiling unchanged. Six OPAQUE_WIN32/D3D12_FENCE cases match
+16,384 buffer words, 32,768 RGBA/BGRA image pixels and 768 guards. The CPU
+waits only for each final round-trip submission. The `.59` recovery and
+cleanup are verified at 18:27:31. This is native Vulkan memory/synchronization
+evidence; D3D runtime sharing, the updated UMD's pixels and five-minute
+desktop acceptance remain pending.
+[Exact scope, components, counts and recovery](VULKAN_WIN32_MEMORY.md#native-gpu-timeline-result)
 
 November 12 inventory at 16:15:57 UTC confirms GPU `0.1.0.59`, Wi-Fi `0.5.7.0`
 and fan `1.0.0.12`. Wi-Fi is owner-confirmed usable, and SSH verifies its exact
@@ -206,8 +216,9 @@ The Win32 image-flags and pacing controls also exit 0; sixty paced calls take
 1.003993 seconds, with thread CPU below the timer's measurement resolution.
 Results are retained in `build/win32-sync-controls-20261112/`.
 Those controls preceded the per-submission runtime/NVK bridge described
-above. The matched ICD/UMD retest now includes that bridge; native shared-fence
-behavior, desktop correctness and a measured rendering speedup remain unverified.
+above. The later native Vulkan-to-Vulkan timeline check passes, as recorded
+above. The D3D runtime/NVK bridge, desktop correctness and a measured rendering
+speedup still require separate native evidence.
 
 **Five-minute observation completed; visual acceptance failed:** the frozen
 `.158` set remains Code 0 during a 311.057-second observation, but the user's

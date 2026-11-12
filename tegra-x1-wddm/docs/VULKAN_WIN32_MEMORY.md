@@ -68,11 +68,12 @@ The subsequent native D3D11 runtime regression at feature level 10_0 runs
 timeout. The KMD core is unchanged from .143. Both the ICD and UMD contain
 the Mesa barrier lifetime fix, and the UMD also contains the Zink changes.
 
-These checks use multiple devices in one process and host fence waits
-between submissions. Cross-process operation, external semaphore/fence
-sharing, overlapping execution, D3D runtime sharing and Vulkan CTS coverage
-remain pending. The D3D regression does not exercise Zink's Win32 import
-branch or establish DWM composition.
+These `.144` checks use multiple devices in one process and host fence waits
+between submissions. They do not cover external semaphore/fence sharing or
+overlapping execution; the later timeline test below adds GPU handoffs.
+Cross-process operation, D3D runtime sharing and Vulkan CTS coverage remain
+pending. The D3D regression does not exercise Zink's Win32 import branch or
+establish DWM composition.
 
 ### GPU timeline handoffs
 
@@ -95,9 +96,9 @@ Timeline imports are permanent, following the
 
 Six cases cover buffers and optimal RGBA/BGRA images with OPAQUE_WIN32 and
 D3D12_FENCE timelines. A complete pass checks 49,152 payload words and 768
-guards. The probe compiles for Windows ARM64 with warnings treated as errors;
-native results remain pending. Even a native pass establishes only these
-GPU memory and semaphore handoffs: runtime-owned D3D contexts, Zink imports,
+guards. The probe compiles for Windows ARM64 with warnings treated as errors.
+The [registered-ICD trial](#native-gpu-timeline-result) below passes these GPU
+memory and semaphore handoffs. Runtime-owned D3D contexts, Zink imports,
 DWM composition and physical screen output require their own evidence.
 
 The isolated November 12 trial `desktop158-gpu-timeline-20261112` uses the
@@ -135,7 +136,7 @@ and Wi-Fi 0.5.7 / Code 0 with its recorded SYS hash. No desktop UMD was
 registered by this trial. Its 54 returned records total **27,401,736 bytes**;
 all lengths and SHA-256 values match. Archive SHA-256:
 `3a0a523d420bd572eb332850a6171b63f93ff6f7fd58de4b08f23c722854eb0a`.
-GPU memory/timeline execution and onscreen acceptance remain unvalidated.
+This first attempt supplies no GPU execution or onscreen evidence.
 
 ### Loader preflight before native activation
 
@@ -166,7 +167,50 @@ task and `.59` / Code 0. Evidence is retained in
 `runs/loader-discovery-control-20261112/` and
 `runs/loader-discovery-registered-20261112/`.
 
-## Evidence
+### Native GPU timeline result
+
+`desktop158-gpu-timeline-registered-20261112` passes all six cases on GM20B
+at **18:23:23–18:23:37 UTC** on November 12. It uses the same frozen `.158`
+KMD, timeline ICD and probe identified above, with the corrected runner from
+`aac79d88`. A fresh loader preflight passes in this trial's directory before
+installing the KMD. D3D slots retain the default `tegragpuno3d.dll`; the new
+Zink UMD is not registered or exercised.
+
+The probe matches native KMT LUID **`a17fe`** and reports the unchanged
+**536,870,912-byte** budget ceiling. It exits **0**, without timeout, and
+records `.158` / Code 0 before and after. OPAQUE_WIN32 and D3D12_FENCE
+timelines each pass a buffer case plus optimal RGBA and BGRA image cases.
+Each case queues the consumer before the producer signal, performs the
+two-way GPU handoff and waits on the host only for the final submission.
+
+All twelve readbacks match: **16,384 buffer words, 32,768 image pixels and
+768 guard words**, zero mismatches. There are no producer/import CPU
+readback checkpoints. This validates the tested Vulkan-to-Vulkan storage
+and timeline path in one process. It does not establish D3D runtime-context
+ordering, imported linear WDDM image rendering, cross-process sharing,
+desktop presentation, rendering performance or Vulkan conformance.
+
+The wrapper removes the temporary ICD registration. Recovery is staged at
+18:23:59, followed by the planned recovery boot at 18:24:54. Verification at
+**18:27:31 UTC** confirms `.59` / Code 0, original SYS/ACPI hashes, no start
+permit/grant or trial tasks, no trial ICD registration, unchanged power
+settings, CPU 1996.8 MHz, fan version 12 and Wi-Fi 0.5.7 / Code 0.
+
+All **61 returned files / 38,174,298 bytes** match device lengths and hashes.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Native result | `f1fd7e5e6ee5df62a8ed1ecec09c63e7c25d22c8f739b1cd60b514f7cdce19d1` |
+| Native stdout | `cb73485d9a462acc05c2269c572e9c29af1be72526c0b61db942127f7757a1f3` |
+| Recovery verification | `56ac2324b7c18962e57bbe1bec6510e2aa73e975d49ee1d84137c9a356e40f15` |
+| Retained archive | `43c24331f81226ed5dccb2e1ffb15f7a380c4275e4e26845760e41c35aa37408` |
+
+The next validation is the separately identified import-content UMD's D3D
+shared-image readback and five-minute desktop observation, including the
+known Quick Settings corruption trigger. This offscreen result does not
+change the earlier failed physical desktop acceptance.
+
+## Original .144 evidence
 
 The downloaded 32 records total 15,317,375 bytes; every length and SHA-256
 matches the device-side manifest. The exported ETL contains 137,531 records
