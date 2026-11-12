@@ -59,6 +59,35 @@ static VOID trace_stage(TG_GPU_WORK_QUEUE *q,enum tg_gpu_execution_stage stage)
     KIRQL irql;KeAcquireSpinLock(&q->Lock,&irql);q->TraceStage=stage;KeReleaseSpinLock(&q->Lock,irql);
 }
 
+VOID TgGpuTraceResetWork(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power)
+{
+    PAGED_CODE();
+    if(!q || !q->Engine || !q->Paused || q->Servicing || !TgGpuTraceResetPacketEnabled())return;
+    const TG_GPU_CONTEXT_WORK *w=&q->Current;
+    TG_GPU_CONTEXT_ENGINE *e=q->Engine;
+    if(w->Engine!=e || !w->Context || w->Paging || w->Software || w->Preemption || w->HardwareBusy)return;
+    TG_GPU_RESET_PACKET_EVENT record={.Version=1,.AdapterLuid=e->AdapterLuid,
+        .Context=(ULONGLONG)(ULONG_PTR)w->Context,.DmaAddress=w->DmaAddress,
+        .SubmissionFence=w->SubmissionFence,.GraphicsGeneration=e->GraphicsGeneration,
+        .Expected=w->Expected,.DmaBytes=w->DmaBytes};
+    const TG_GPU_COMMAND_SNAPSHOT *snapshot=q->CurrentOwned?q->CurrentOwned->Snapshot:NULL;
+    if(snapshot && snapshot->Bytes==w->DmaBytes && snapshot->Bytes &&
+       !(snapshot->Bytes&3) && snapshot->Bytes<=TG_GPU_COMMAND_CAPTURE_BYTES)
+        record.CommandBytes=snapshot->Bytes;
+    tg_gpu_channel_snapshot(io,power,w,&e->Channel,&record.Hardware);
+    /* Only the KMD-owned immutable snapshot is read, never the application's
+     * VA, borrowed UMD/private bytes, shader memory or mutable GPU mirror.
+     * This remains bounded to one 64-KiB packet without allocating memory. */
+    do {
+        record.ChunkBytes=record.CommandBytes-record.Offset;
+        if(record.ChunkBytes>TG_GPU_TRACE_COMMAND_CHUNK_BYTES)
+            record.ChunkBytes=TG_GPU_TRACE_COMMAND_CHUNK_BYTES;
+        TgGpuTraceResetPacket(&record,record.ChunkBytes?(const UCHAR *)snapshot->Words+record.Offset:NULL);
+        record.Offset+=record.ChunkBytes;
+    }while(record.Offset<record.CommandBytes);
+}
+
 static VOID free_entry(TG_GPU_QUEUE_ENTRY *entry)
 {
     TgGpuFreeCommandSnapshot(entry->Snapshot);

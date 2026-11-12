@@ -25,6 +25,33 @@ def export(payload=PAYLOAD, version=1, count=1, event_id=1):
 
 
 class RecoveryDecode(unittest.TestCase):
+    def test_reset_packet_chunks_and_missing_data(self):
+        # 144-byte header, little-endian identities, then actual command words.
+        header = bytes.fromhex('''
+            01000000 08000000 88776655 44332211
+            8070605040302010 0040000400000000
+            ed020000 01000000 50000000 10000000 10000000 00000000
+        ''') + struct.pack('<22I', 15, *range(1, 22))
+        records, summary = decoder.decode(export(header + b'abcdefgh', event_id=3))
+        self.assertEqual(summary['reset_packet_chunks'], 1)
+        r = records[0]
+        self.assertEqual(r['context'], '0x1020304050607080')
+        self.assertEqual(r['dma_address'], '0x0000000004004000')
+        self.assertEqual((r['submission_fence'], r['expected'], r['command_bytes']), (749, 80, 16))
+        self.assertEqual(r['hardware']['pb_get_lo'], 11)
+        self.assertFalse(decoder.reconstruct_reset_packets(records)[0]['complete'])
+        last = dict(r, offset=8, commands_hex=b'ijklmnop'.hex())
+        complete = decoder.reconstruct_reset_packets([r, last])[0]
+        self.assertEqual(complete['data'], b'abcdefghijklmnop')
+        self.assertTrue(complete['complete'])
+        self.assertFalse(decoder.reconstruct_reset_packets([last])[0]['complete'])
+        self.assertFalse(decoder.reconstruct_reset_packets([r, last, last])[0]['complete'])
+        changed = dict(last, hardware=dict(last['hardware'], gp_get=42))
+        self.assertFalse(decoder.reconstruct_reset_packets([r, changed])[0]['complete'])
+        for bad in (header + b'abcd', b'\x02' + header[1:] + b'abcdefgh'):
+            with self.assertRaises(ValueError):
+                decoder.decode(export(bad, event_id=3))
+
     def test_execution_wire_identity(self):
         payload = bytes.fromhex('''
             01000000 01000000 88776655 44332211 170000c0 3e000000 09000000 07000000

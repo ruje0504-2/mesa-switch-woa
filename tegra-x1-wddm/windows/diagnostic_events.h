@@ -2,6 +2,7 @@
 #ifndef TG_GPU_DIAGNOSTIC_EVENTS_H
 #define TG_GPU_DIAGNOSTIC_EVENTS_H
 #include <ntddk.h>
+#include "../core/channel.h"
 
 /* Provider c27c1f9b-62e8-4e21-b29b-6bb2d585c6d0, event 1/version 1.
  * Fixed-width payload; no referenced command data or pointer dereferences. */
@@ -50,6 +51,18 @@ typedef struct _TG_GPU_EXECUTION_EVENT {
 } TG_GPU_EXECUTION_EVENT;
 C_ASSERT(sizeof(TG_GPU_EXECUTION_EVENT)==152);
 
+/* Event 3/version 1: immutable owned command bytes before destructive reset.
+ * One 144-byte header plus at most 1024 command bytes per event. */
+#define TG_GPU_TRACE_COMMAND_CHUNK_BYTES 1024u
+typedef struct _TG_GPU_RESET_PACKET_EVENT {
+    ULONG Version,ChunkBytes;
+    LUID AdapterLuid;
+    ULONGLONG Context,DmaAddress;
+    ULONG SubmissionFence,GraphicsGeneration,Expected,DmaBytes,CommandBytes,Offset;
+    struct tg_gpu_channel_snapshot Hardware;
+} TG_GPU_RESET_PACKET_EVENT;
+C_ASSERT(sizeof(TG_GPU_RESET_PACKET_EVENT)==144);
+
 _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS TgGpuTraceInitialize(VOID);
 _IRQL_requires_(PASSIVE_LEVEL)
@@ -59,4 +72,8 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 VOID TgGpuTraceRecovery(const TG_GPU_RECOVERY_EVENT *);
 _IRQL_requires_max_(DISPATCH_LEVEL)
 VOID TgGpuTraceExecution(const TG_GPU_EXECUTION_EVENT *);
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN TgGpuTraceResetPacketEnabled(VOID);
+_IRQL_requires_(PASSIVE_LEVEL)
+VOID TgGpuTraceResetPacket(const TG_GPU_RESET_PACKET_EVENT *,const VOID *Commands);
 #endif

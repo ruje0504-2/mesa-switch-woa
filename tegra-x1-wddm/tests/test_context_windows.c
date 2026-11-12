@@ -57,6 +57,21 @@ static TG_GPU_EXECUTION_EVENT execution_record;
 static UINT execution_records;
 static KIRQL execution_trace_level;
 static BOOLEAN execution_gate_held;
+static BOOLEAN packet_trace_enabled=TRUE;
+static UINT packet_trace_chunks,packet_trace_bytes;
+static UCHAR packet_trace_data[TG_GPU_COMMAND_CAPTURE_BYTES];
+static TG_GPU_RESET_PACKET_EVENT packet_trace_record;
+BOOLEAN TgGpuTraceResetPacketEnabled(VOID){return packet_trace_enabled;}
+VOID TgGpuTraceResetPacket(const TG_GPU_RESET_PACKET_EVENT *record,const VOID *commands)
+{
+    TG_GPU_WORK_QUEUE *q=trace_engine?trace_engine->QueueOwner:NULL;
+    CHECK(record && record->Version==1 && level==PASSIVE_LEVEL && q && !q->Lock &&
+        !trace_engine->Lock && q->Paused && !q->Servicing && q->DispatchGate.Header.SignalState<=0);
+    CHECK(record->ChunkBytes<=1024 && record->Offset==packet_trace_bytes &&
+        record->Offset+record->ChunkBytes<=sizeof(packet_trace_data));
+    if(record->ChunkBytes){CHECK(commands);memcpy(packet_trace_data+record->Offset,commands,record->ChunkBytes);}
+    packet_trace_record=*record;packet_trace_bytes+=record->ChunkBytes;++packet_trace_chunks;
+}
 VOID TgGpuTraceExecution(const TG_GPU_EXECUTION_EVENT *record)
 {
     CHECK(record && record->Version==1 && level<=DISPATCH_LEVEL && !in_sync);
@@ -1693,6 +1708,30 @@ static __declspec(noinline) VOID TestPreemption(const DXGKRNL_INTERFACE *dxgk)
         !execution_record.ChannelStage && !execution_record.ChannelRegister &&
         !execution_record.ChannelValue && hw.reads+hw.writes==accesses);
     q.Current.HardwareBusy=FALSE;
+    /* Retain only the owned snapshot, after admission is paused and the
+     * worker is out. Inspect chunk boundaries and exact copied bytes without
+     * issuing GPU I/O or changing completion/ownership state. */
+    CHECK(KeWaitForSingleObject(&q.DispatchGate,Executive,KernelMode,FALSE,NULL)==STATUS_SUCCESS);
+    q.Paused=TRUE;accesses=hw.reads+hw.writes;
+    UINT trace_pools=PoolsInUse(),trace_refs=c->References;
+    packet_trace_enabled=FALSE;TgGpuTraceResetWork(&q,&io,&power);
+    CHECK(!packet_trace_chunks && hw.reads+hw.writes==accesses);
+    packet_trace_enabled=TRUE;TgGpuTraceResetWork(&q,NULL,NULL);
+    CHECK(packet_trace_chunks==1 && packet_trace_bytes==40 && packet_trace_record.SubmissionFence==202 &&
+        packet_trace_record.Expected==q.Current.Expected && !packet_trace_record.Hardware.flags);
+    for(UINT i=0;i<40;++i)CHECK(packet_trace_data[i]==((UCHAR *)q.CurrentOwned->Snapshot->Words)[i]);
+    static _Alignas(8) UCHAR large_capture[sizeof(TG_GPU_COMMAND_SNAPSHOT)+2052];
+    TG_GPU_COMMAND_SNAPSHOT *original=q.CurrentOwned->Snapshot,*large=(void *)large_capture;
+    large->Bytes=2052;for(UINT i=0;i<2052;++i)((UCHAR *)large->Words)[i]=(UCHAR)(i*37+11);
+    q.CurrentOwned->Snapshot=large;q.Current.DmaBytes=2052;packet_trace_bytes=packet_trace_chunks=0;
+    TgGpuTraceResetWork(&q,NULL,NULL);
+    CHECK(packet_trace_chunks==3 && packet_trace_bytes==2052 && packet_trace_record.Offset==2048 &&
+        packet_trace_record.ChunkBytes==4 && packet_trace_record.CommandBytes==2052);
+    for(UINT i=0;i<2052;++i)CHECK(packet_trace_data[i]==(UCHAR)(i*37+11));
+    q.CurrentOwned->Snapshot=original;q.Current.DmaBytes=40;q.Paused=FALSE;
+    (VOID)KeReleaseMutex(&q.DispatchGate,FALSE);
+    CHECK(hw.reads+hw.writes==accesses && PoolsInUse()==trace_pools && c->References==trace_refs &&
+        !q.Current.GpuCompleted && !q.Current.Retired && e.LastCompletedFence==201);
     submit.Flags.NullRendering=1;submit.SubmissionFenceId=204;submit.pDmaBufferPrivateData=&entries[2];
     CHECK(SubmitModel(&e,&submit)==STATUS_SUCCESS);
     CHECK(TgGpuServiceWorkQueue(&q,&io,&power)==STATUS_PENDING && c->References==2);

@@ -9,7 +9,8 @@ struct model {
     uint32_t sched,instance,control,runlist,runbase,pbdma,preempt,root;
     uint32_t bar1,userd_base,put,fifo,gr_current;
     unsigned reads,writes,doorbells,tlbs,flushes;
-    bool bad_post,fail_tlb,fail_preempt,hold_gr,fault_on_put;
+    bool bad_post,fail_tlb,fail_preempt,hold_gr,fault_on_put,change_slot;
+    unsigned slot_reads,context_reads;
 };
 static uint32_t read32(void *context,uint32_t address)
 {
@@ -24,12 +25,19 @@ static uint32_t read32(void *context,uint32_t address)
     case 0x57002274:return m->runlist;
     case 0x57002284:case 0x57070000:return 0;
     case 0x57002634:return m->preempt;
-    case 0x57003080:return m->pbdma;
+    case 0x57003080:return m->change_slot && m->slot_reads++ ? 0x3001 : m->pbdma;
     case 0x57409b00:return m->gr_current;
     case 0x57100c80:return m->fail_tlb?0x10000:0x18000;
     case 0x57001704:return m->bar1;
     case 0x57002254:return m->userd_base;
     case 0x5801308c:return m->bad_post?UINT32_MAX:m->put;
+    case 0x58013088:return 1;
+    case 0x58013048:return 0;
+    case 0x57002640:case 0x57002648:case 0x57400100:return 0;
+    case 0x57040014:case 0x57040000:case 0x57040050:
+    case 0x57040018:case 0x5704001c:case 0x57040054:case 0x57040058:
+    case 0x57040084:case 0x570400c0:case 0x570400c4:
+        ++m->context_reads;return address;
     case 0x57002100:return m->fifo;
     case 0x5700259c:case 0x57040108:case 0x57040148:
     case 0x57001100:case 0x57120058:case 0x5712005c:return 0;
@@ -117,6 +125,22 @@ int main(void)
     assert(tg_gpu_channel_publish(&io,&power,0x13000,1,&owner,&c)==TG_GPU_CHANNEL_OK);
     assert(c.submitted && c.last_put==1 && m.doorbells==1 && m.put==1);
     assert(tg_gpu_channel_publish(&io,&power,0x13000,2,&owner,&c)==TG_GPU_CHANNEL_OK);
+    struct tg_gpu_channel_snapshot snapshot;
+    unsigned writes=m.writes;
+    tg_gpu_channel_snapshot(&io,&power,&owner,&c,&snapshot);
+    assert(snapshot.flags==15 && snapshot.userd_get==1 && snapshot.userd_put==2 &&
+           snapshot.pb_get_lo==0x57040018 && snapshot.pb_fetch_lo==0x57040054 &&
+           snapshot.method0==0x570400c0 && m.context_reads==10 && m.writes==writes);
+    m.change_slot=true;m.slot_reads=0;
+    tg_gpu_channel_snapshot(&io,&power,&owner,&c,&snapshot);
+    assert(!(snapshot.flags&2) && snapshot.pbdma_before==0x3000 && snapshot.pbdma_after==0x3001);
+    m.change_slot=false;m.pbdma=0x3001;
+    unsigned context_reads=m.context_reads;
+    tg_gpu_channel_snapshot(&io,&power,&owner,&c,&snapshot);
+    assert(!(snapshot.flags&2) && !snapshot.pb_get_lo && m.context_reads==context_reads);
+    m.pbdma=0x3000;before=m.reads;
+    tg_gpu_channel_snapshot(&io,&power,&wrong,&c,&snapshot);
+    assert(!snapshot.flags && m.reads==before && m.writes==writes);
     before=m.reads+m.writes;
     assert(tg_gpu_channel_publish(&io,&power,0x13000,2,&owner,&c)==TG_GPU_CHANNEL_ARGUMENT);
     assert(tg_gpu_channel_publish(&io,&power,0x14000,3,&owner,&c)==TG_GPU_CHANNEL_ARGUMENT);

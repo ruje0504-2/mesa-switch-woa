@@ -44,6 +44,45 @@ static enum tg_gpu_channel_result fault(const struct tg_gpu_power_io *io,struct 
 }
 static bool userd_page(uint32_t offset)
 { return offset<0x01000000u && !(offset&0xfff); }
+void tg_gpu_channel_snapshot(const struct tg_gpu_power_io *io,
+    const struct tg_gpu_power *power,const void *owner,const struct tg_gpu_channel *c,
+    struct tg_gpu_channel_snapshot *s)
+{
+    *s=(struct tg_gpu_channel_snapshot){0};
+    if(!io || !io->read32 || !power || !power->owned || !power->ready ||
+       !owner || !c || !c->referenced || !c->bound || c->owner!=owner || c->power!=power)return;
+    s->mc_enable=get(io,0x200);
+    if(s->mc_enable==UINT32_MAX || !(s->mc_enable&0x100))return;
+    s->flags|=1;
+    s->engine0=get(io,0x2640);s->engine1=get(io,0x2648);
+    s->pbdma_enable=get(io,0x204);
+    if(s->pbdma_enable!=UINT32_MAX && (s->pbdma_enable&1)) {
+        s->pbdma_before=get(io,0x3080);
+        if(tg_gpu_pbdma_owns_slot(s->pbdma_before)) {
+            /* NVIDIA GM20B hw_pbdma_gm20b.h, pinned Switchroot 1ae0167d.
+             * PB GET and PB FETCH are distinct; retain raw high/low words. */
+            s->gp_get=get(io,0x40014);s->gp_put=get(io,0x40000);s->gp_fetch=get(io,0x40050);
+            s->pb_get_lo=get(io,0x40018);s->pb_get_hi=get(io,0x4001c);
+            s->pb_fetch_lo=get(io,0x40054);s->pb_fetch_hi=get(io,0x40058);
+            s->pb_header=get(io,0x40084);s->method0=get(io,0x400c0);s->data0=get(io,0x400c4);
+        }
+        s->pbdma_after=get(io,0x3080);
+        if(s->pbdma_before==s->pbdma_after && tg_gpu_pbdma_owns_slot(s->pbdma_after))s->flags|=2;
+    }
+    if(c->submitted && userd_page(c->userd_offset)) {
+        uint32_t bar1=get(io,0x1704),base=get(io,0x2254);
+        if(bar1!=UINT32_MAX && (bar1&0x80000000) && base!=UINT32_MAX &&
+           (base&0x10000000) && (base&0xfffff)==(c->userd_offset>>12)) {
+            const uint32_t alias=0x58000000u+c->userd_offset;
+            s->userd_get=io->read32(io->context,alias+34*4);
+            s->userd_put=io->read32(io->context,alias+35*4);
+            s->userd_reference=io->read32(io->context,alias+0x48);s->flags|=4;
+        }
+    }
+    if(s->mc_enable&0x1000) {
+        s->gr_interrupt=get(io,0x400100);s->gr_current=get(io,0x409b00);s->flags|=8;
+    }
+}
 enum tg_gpu_channel_result tg_gpu_channel_bind(const struct tg_gpu_power_io *io,
     const struct tg_gpu_power *power,uint64_t root,uint64_t instance,uint64_t runlist,
     const void *owner,struct tg_gpu_channel *c)

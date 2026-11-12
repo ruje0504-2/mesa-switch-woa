@@ -35,6 +35,15 @@ static UINT gate_depth;
 static UINT reset_trace_records;
 static BOOLEAN reset_trace_open;
 static NTSTATUS reset_trace_status;
+static UINT packet_trace_calls;
+VOID TgGpuTraceResetWork(TG_GPU_WORK_QUEUE *q,const struct tg_gpu_power_io *i,
+    const struct tg_gpu_power *p)
+{
+    CHECK(q==&queue && i==&hardware.Io && p==&hardware.Power && level==PASSIVE_LEVEL &&
+        gate_depth && !worker.Thread && q->Paused && engine.Resetting &&
+        !q->Lock && !engine.Lock && reset_trace_open);
+    ++packet_trace_calls;
+}
 VOID TgGpuTraceExecutionState(TG_GPU_CONTEXT_ENGINE *e,enum tg_gpu_execution_source source,
     NTSTATUS status,UINT fence,const DXGKARG_SUBMITCOMMANDVIRTUAL *submit)
 {
@@ -199,9 +208,10 @@ static void TestReset(void)
         if(failure==1)fail_join=TRUE;
         if(failure==2)fail_queue=TRUE;
         if(failure==3)model.fail_drain=TRUE;
-        UINT trace_before=reset_trace_records;
+        UINT trace_before=reset_trace_records,packets_before=packet_trace_calls;
         NTSTATUS status=TgGpuResetBackend(&engine,&queue,&hardware,&worker);
         CHECK(reset_trace_records==trace_before+2 && !reset_trace_open && reset_trace_status==status);
+        CHECK(packet_trace_calls==packets_before+(failure==1?0:1));
         if(failure>=1 && failure<=3) {
             CHECK(!NT_SUCCESS(status) && !model.frees && engine.Resetting && engine.RecoveryPending);
             fail_join=fail_queue=FALSE;model.fail_drain=FALSE;

@@ -91,4 +91,9 @@ NTSTATUS TgGpuStopWorkQueue(TG_GPU_WORK_QUEUE *);
 _IRQL_requires_max_(DISPATCH_LEVEL)
 VOID TgGpuTraceExecutionState(TG_GPU_CONTEXT_ENGINE *,enum tg_gpu_execution_source,
     NTSTATUS,UINT,const DXGKARG_SUBMITCOMMANDVIRTUAL *);
+/* Reset only: caller has paused admission, joined the worker and acquired
+ * DispatchGate, before ResetWorkQueue releases CurrentOwned. No spinlocks. */
+_IRQL_requires_(PASSIVE_LEVEL)
+VOID TgGpuTraceResetWork(TG_GPU_WORK_QUEUE *,const struct tg_gpu_power_io *,
+    const struct tg_gpu_power *);
 #endif

@@ -24,6 +24,7 @@ static NTSTATUS isolate_backend(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_WORK_QUEUE *q,
     if(q->Engine) {
         status=KeWaitForSingleObject(&q->DispatchGate,Executive,KernelMode,FALSE,NULL);
         if(status!=STATUS_SUCCESS)return status;
+        if(reset)TgGpuTraceResetWork(q,&h->Io,&h->Power);
         status=TgGpuResetWorkQueue(q,&h->Io,&h->Power,&h->Clock);
         if(NT_SUCCESS(status))status=TgGpuStopWorkQueue(q);
         (VOID)KeReleaseMutex(&q->DispatchGate,FALSE);

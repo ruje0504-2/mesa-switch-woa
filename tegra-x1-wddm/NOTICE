@@ -64,6 +64,10 @@ Copyright (c) 2014-2018 NVIDIA CORPORATION. All rights reserved.
 The MIT license text above applies. The Windows probe links this code with
 the GPL-2.0-only power sequence and is distributed under GPL-2.0-only.
 
+core/channel.c's read-only reset-time PBDMA snapshot uses the same pinned
+Switchroot/NVIDIA GM20B hw_pbdma_gm20b.h register definitions, including
+distinct PB GET and PB FETCH addresses. The MIT license text above applies.
+
 platform/t214_mmu.c follows the TLB invalidate sequence in the same
 Switchroot nvgpu common/fb/fb_gm20b.c (Copyright 2014-2018 NVIDIA).
 The MIT license text above applies.

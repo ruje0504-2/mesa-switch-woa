@@ -18,6 +18,11 @@ HEADER = struct.Struct('<8sQQII')
 EVENT = struct.Struct('<Q16sIIHHHHBBB5x')
 PAYLOAD = struct.Struct('<6IQ10I')
 EXECUTION_PAYLOAD = struct.Struct('<8I3Q24I')
+RESET_PACKET_HEADER = struct.Struct('<4I2Q28I')
+RESET_HARDWARE_FIELDS = ('flags', 'mc_enable', 'pbdma_enable', 'pbdma_before', 'pbdma_after',
+    'userd_get', 'userd_put', 'userd_reference', 'gp_get', 'gp_put', 'gp_fetch',
+    'pb_get_lo', 'pb_get_hi', 'pb_fetch_lo', 'pb_fetch_hi', 'pb_header', 'method0',
+    'data0', 'engine0', 'engine1', 'gr_interrupt', 'gr_current')
 SOURCES = ('unspecified', 'submit_gate', 'submit', 'reject_drain', 'preempt',
            'worker', 'legacy_submit')
 EXECUTION_SOURCES = ('unknown', 'preempt', 'worker_failure', 'submit_failure',
@@ -55,6 +60,25 @@ def decode(data):
         offset += size
         total += 1
         if provider != PROVIDER:
+            continue
+        if event_id == 3:
+            if version != 1 or size < RESET_PACKET_HEADER.size:
+                raise ValueError('unsupported reset packet schema')
+            v = RESET_PACKET_HEADER.unpack_from(payload)
+            chunk_bytes, dma_bytes, command_bytes, chunk_offset = v[1], v[9], v[10], v[11]
+            if (v[0] != 1 or chunk_bytes != size - RESET_PACKET_HEADER.size or
+                    chunk_bytes > 1024 or command_bytes > 65536 or
+                    (chunk_bytes | command_bytes | chunk_offset) & 3 or
+                    chunk_offset + chunk_bytes > command_bytes or
+                    (command_bytes and (not chunk_bytes or command_bytes != dma_bytes))):
+                raise ValueError('invalid reset packet chunk')
+            records.append({'event': 'ResetPacket', 'time': time, 'pid': pid, 'tid': tid, 'cpu': cpu,
+                'adapter_luid': f'{v[3]:08x}{v[2]:08x}', 'context': f'0x{v[4]:016x}',
+                'dma_address': f'0x{v[5]:016x}', 'submission_fence': v[6],
+                'graphics_generation': v[7], 'expected': v[8], 'dma_bytes': dma_bytes,
+                'command_bytes': command_bytes, 'offset': chunk_offset, 'chunk_bytes': chunk_bytes,
+                'hardware': dict(zip(RESET_HARDWARE_FIELDS, v[12:])),
+                'commands_hex': payload[RESET_PACKET_HEADER.size:].hex()})
             continue
         if (event_id, version, size) == (2, 1, EXECUTION_PAYLOAD.size):
             values = EXECUTION_PAYLOAD.unpack(payload)
@@ -103,15 +127,59 @@ def decode(data):
     return records, {'export_records': total,
                      'recovery_records': sum(r['event'] == 'FirstRecoveryRequest' for r in records),
                      'execution_records': sum(r['event'] == 'ExecutionState' for r in records),
+                     'reset_packet_chunks': sum(r['event'] == 'ResetPacket' for r in records),
                      'last_timestamp': last, 'requested_seconds': seconds,
                      'sha256': hashlib.sha256(data).hexdigest()}
+
+
+def reconstruct_reset_packets(records):
+    """Keep incomplete/ambiguous captures explicit; never fill missing words."""
+    groups, current = [], {}
+    identity = ('adapter_luid', 'context', 'dma_address', 'submission_fence',
+                'graphics_generation', 'expected', 'dma_bytes', 'command_bytes')
+    for r in records:
+        if r['event'] != 'ResetPacket':
+            continue
+        key = tuple(r[k] for k in identity)
+        if r['offset'] == 0 or key not in current:
+            g = {k: r[k] for k in identity}
+            g.update(time=r['time'], hardware=r['hardware'], chunks={}, consistent=True)
+            groups.append(g)
+            current[key] = g
+        g = current[key]
+        if r['offset'] in g['chunks'] or r['hardware'] != g['hardware']:
+            g['consistent'] = False
+        g['chunks'][r['offset']] = bytes.fromhex(r['commands_hex'])
+    for g in groups:
+        data, end, contiguous = [], 0, True
+        for offset, chunk in sorted(g['chunks'].items()):
+            contiguous &= offset == end
+            data.append(chunk)
+            end = offset + len(chunk)
+        g['chunk_count'] = len(g.pop('chunks'))
+        g['complete'] = g['consistent'] and contiguous and end == g['command_bytes'] and end > 0
+        g['data'] = b''.join(data) if g['complete'] else None
+        g['sha256'] = hashlib.sha256(g['data']).hexdigest() if g['complete'] else None
+    return groups
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binary', type=Path)
+    parser.add_argument('--packet-dir', type=Path, help='write only complete reset command captures')
     args = parser.parse_args()
     records, summary = decode(args.binary.read_bytes())
+    if args.packet_dir:
+        args.packet_dir.mkdir(parents=True, exist_ok=True)
+        for i, packet in enumerate(reconstruct_reset_packets(records)):
+            name = f"packet-{packet['adapter_luid']}-{packet['graphics_generation']}-{packet['submission_fence']}-{i}"
+            data = packet.pop('data')
+            if data is not None:
+                with (args.packet_dir / (name + '.bin')).open('xb') as out:
+                    out.write(data)
+            with (args.packet_dir / (name + '.json')).open('x') as out:
+                json.dump(packet, out, indent=2)
+                out.write('\n')
     for record in records:
         print(json.dumps(record, separators=(',', ':')))
     print(json.dumps(summary), file=sys.stderr)

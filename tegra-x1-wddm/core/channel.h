@@ -20,6 +20,18 @@ struct tg_gpu_channel {
     uint32_t fifo_interrupt, mmu_fault, pbdma_interrupt, pbdma_interrupt_1;
     struct tg_gpu_frontend_status frontend;
 };
+/* Sequential read-only reset-time samples, not an atomic GPU snapshot.
+ * flags: 1=enabled FIFO, 2=matching PBDMA slot before/after, 4=USERD alias,
+ * 8=GR enabled. PBDMA words are attributable only with flag 2. */
+struct tg_gpu_channel_snapshot {
+    uint32_t flags,mc_enable,pbdma_enable,pbdma_before,pbdma_after;
+    uint32_t userd_get,userd_put,userd_reference;
+    uint32_t gp_get,gp_put,gp_fetch,pb_get_lo,pb_get_hi,pb_fetch_lo,pb_fetch_hi;
+    uint32_t pb_header,method0,data0,engine0,engine1,gr_interrupt,gr_current;
+};
+void tg_gpu_channel_snapshot(const struct tg_gpu_power_io *,
+    const struct tg_gpu_power *,const void *owner,const struct tg_gpu_channel *,
+    struct tg_gpu_channel_snapshot *);
 /* Hot channel path after exclusive cold GPU/FIFO/LTC/MMU initialization and
  * clock setup. One bare channel/runlist/PBDMA (zero). Command and RAMIN bytes
  * must already be published; caller owns CPU/MMIO ordering and residency.

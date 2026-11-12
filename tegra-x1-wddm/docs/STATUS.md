@@ -3,6 +3,15 @@
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
+**`.156` local WIP, not installed:** retain the stalled application's owned
+command snapshot and read-only PBDMA/USERD fetch state after joining the worker,
+before destructive reset. Host checks, decoder checks and the WDK build pass;
+Windows ARM64 context/reset models exit 0 at 02:13:09/02:13:18 UTC on November
+12, with `.59` Code 0 unchanged. Native collection remains pending. The user
+requests a separate remote Claude review/fix of taskbar composition and code
+correctness before the next native trial.
+[Packet capture contract](RECOVERY_TRACE.md#reset-packet-capture-in-156)
+
 **Latest `.155` result: failed native desktop, first stalled work retained.**
 `execution155-native-20261112` uses UMD `77dea046dde0`/ICD `6e2fad99d742`.
 On native LUID `ba67c`, reset entry captures a 64,864-byte render packet at

@@ -218,3 +218,49 @@ DPI 96, with `.59` before/after. SHA256:
 `f5c7360c560cabfa8b879ff73504e28577c9459cf29d4d43676fbf434e0d308b`.
 No shell repair is needed this time. This is recovery software-display evidence,
 not native GPU acceleration, physical landscape or sustained stability.
+
+## Reset packet capture in .156
+
+Event **3**, version **1**, level **4**, keyword **1** retains an active
+application packet before reset frees its immutable KMD command snapshot.
+The call runs at PASSIVE_LEVEL only after admission is paused, the worker is
+joined and `DispatchGate` is held. It holds no spinlock. When this event is
+disabled, the path performs no extra GPU reads. It does not read an application
+VA, borrowed private-buffer pointer, shader buffer or GPU-writable command
+mirror. Paging and software work are excluded. Reset return values, fence
+completion and memory policy are unchanged.
+
+Each event contains a 144-byte little-endian header (`<4I2Q28I`) followed by
+at most 1,024 command bytes. At most one 64-KiB packet is captured per reset
+attempt, without memory allocation or disk I/O. The fields are:
+
+| Offsets | Values |
+| --- | --- |
+| 0–12, u32 | Version, chunk bytes, adapter LUID low/high |
+| 16, 24, u64 | KMD context identity, private command VA |
+| 32–52, u32 | Submission fence, graphics generation, expected marker, DMA bytes, captured command bytes, chunk offset |
+| 56–140, u32 | Hardware flags, MC_ENABLE, PBDMA_ENABLE, PBDMA status before/after, USERD GET/PUT/reference, GP GET/PUT/FETCH, PB GET low/high, PB FETCH low/high, PB header, method0, data0, engine0/1 status, GR interrupt/current context |
+
+The read-only register sample precedes chunk emission and is repeated in each
+header. Hardware flag bits are `1=enabled FIFO`, `2=matching PBDMA slot before
+and after sampling`, `4=validated USERD BAR1 alias`, `8=enabled GR`.
+Unflagged fields are not valid observations. Even a flagged snapshot is
+sequential, not atomic: high/low pointer words and method/data can advance
+while the GPU runs. Do not infer a stable instruction from one register alone.
+PB GET and PB FETCH use the distinct registers in the pinned NVIDIA/Switchroot
+[GM20B header](https://github.com/CTCaer/switch-l4t-kernel-nvgpu/blob/1ae0167d360287ca78f5a2572f0de42594140312/drivers/gpu/nvgpu/include/nvgpu/hw/gm20b/hw_pbdma_gm20b.h).
+
+Use `decode_recovery.py EXPORT --packet-dir DIR` to retain raw chunks and
+reconstruct complete command captures. It emits `.bin` only for a contiguous,
+consistent capture; missing/overlapping chunks or differing headers remain
+explicitly incomplete in metadata. A metadata-only record with captured size
+zero is not an empty successful GPU packet. Existing ETW loss/tail limits apply.
+
+Host tests cover matching/changing/foreign PBDMA ownership, read-only access
+and exact register identity; decoder checks cover missing and duplicate chunks.
+The WDK build passes. Real-WDK ARM64 models on `.59` pass at 02:13:09 and
+02:13:18 UTC on November 12, checking owned bytes, 1,024-byte boundaries, no
+extra I/O when disabled, retained completion/lifetime state and capture only
+after successful worker join. These are controlled substitutes, not native
+delivery. Artifacts/results are in `reset-packet156-20261112`; the candidate
+is not installed and its native capture remains unverified.
