@@ -186,13 +186,13 @@ static VOID SwFanSetDuty(PSWFAN_DEVICE Dev, ULONG Duty)
 
 static ULONG SwFanDutyForTemp(ULONG Temp, ULONG Previous)
 {
-    if (Temp >= 68) return 236;
-    if (Temp >= 60) return 153;
-    if (Temp >= 52) return 102;
-    if (Temp >= 47) return 76;
-    if (Temp >= 42) return 51;
-    if (Temp <= 39) return 0;
-    return (Previous > 51) ? 51 : Previous;    /* 40-41 C: hold (at most the 42 C step) */
+    if (Temp >= 45) return 236;
+    if (Temp >= 43) return 212;
+    if (Temp >= 40) return 177;
+    if (Temp >= 38) return 118;
+    if (Temp >= 35) return 76;
+    if (Temp <= 32) return 0;
+    return (Previous > 76) ? 76 : Previous;    /* 33-34 C: hold (at most the 35 C step) */
 }
 
 VOID SwFanEvtTimer(WDFTIMER Timer)
@@ -650,7 +650,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         RtlCopyMemory(&SwFanParamsPath[RegistryPath->Length / sizeof(WCHAR)], L"\\Parameters", sizeof(L"\\Parameters"));
         (VOID)RtlCreateRegistryKey(RTL_REGISTRY_ABSOLUTE, SwFanParamsPath);
     }
-    SwFanTrace(L"DriverVersion", 11);
+    SwFanTrace(L"DriverVersion", 12);
     WDF_DRIVER_CONFIG_INIT(&Config, SwFanEvtDeviceAdd);
     return WdfDriverCreate(DriverObject, RegistryPath, WDF_NO_OBJECT_ATTRIBUTES, &Config, WDF_NO_HANDLE);
 }
