@@ -20,8 +20,9 @@ models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
 components remain a short-observation baseline, not a stable desktop release.
 The latest native trial has ended; the device is restored to `.59`.
-November 12 inventory confirms GPU `0.1.0.59`, Wi-Fi `0.5.6.0` and fan
-`1.0.0.12`. At the owner's request the CPU returned to 1996.8 MHz, verified by
+November 12 inventory at 16:15:57 UTC confirms GPU `0.1.0.59`, Wi-Fi `0.5.7.0`
+and fan `1.0.0.12`. Wi-Fi is owner-confirmed usable, and SSH verifies its exact
+installed SYS hash and Code 0. At the owner's request the CPU returned to 1996.8 MHz, verified by
 the fan driver's clock readback; thermal and screen-off policy remain enabled.
 Windows CPU/API controls run on that recovery configuration before native
 trials. The later `.160` trial was interrupted before usable native results
@@ -77,7 +78,8 @@ cause of the `.158` corruption. The next shared-image probe must first run
 without producer/import CPU readback checkpoints.
 [View contract, fix and validation](PORTING.md#imported-windows-image-views)
 
-The next onscreen trial is prepared locally, **not deployed or accepted**:
+The next onscreen trial's files are staged in a separate device directory;
+the GPU remains on `.59` after preflight. **Native rendering is not accepted**:
 
 | Component | Source | Artifact SHA256 |
 | --- | --- | --- |
@@ -88,7 +90,16 @@ The next onscreen trial is prepared locally, **not deployed or accepted**:
 This is a new component combination, not the original `.158` package's result.
 The new ARM64 surface control has SHA256
 `79e02b03d0ae5ccf621fcf159233e40df55895e507b6e0d79d0b30f0cb7e014c`;
-its physical Windows execution and the trial's Windows preflight remain pending.
+it passes all 16 cases on physical Windows ARM64 at 16:18:09 UTC, exit 0 in
+1300 ms, with `.59`/Code 0 unchanged. Vulkan calls remain substituted.
+All 33 trial scripts parse in Windows PowerShell; the missing-registration
+control rejects arming without changing boot state, and the interactive
+desktop/preference check exits 0. The staging audit removed the historical
+script that required an old ICD hash and reused old UMD control results.
+[The current staging entry point](../tools/Stage-Desktop158Retest.ps1) checks
+the identified KMD/UMD/ICD/helper inputs and runs the current ARM64 surface
+control before the existing native trial sequence. These preflight results
+do not establish GM20B pixels or a five-minute visual pass.
 The original `.160` UMD package files remain byte-for-byte unchanged.
 
 Mesa's Windows blob-cache backend is implemented and enabled by the UMD/ICD
@@ -156,10 +167,9 @@ the SDK control is
 The Win32 image-flags and pacing controls also exit 0; sixty paced calls take
 1.003993 seconds, with thread CPU below the timer's measurement resolution.
 Results are retained in `build/win32-sync-controls-20261112/`.
-The updated ICD links, but is not installed. The runtime/NVK per-submission
-queue bridge remains to be connected: `RuntimeDeviceFinish` still performs
-its CPU fence wait. These controls do not establish desktop correctness,
-native shared-fence behavior, or a measured rendering speedup.
+Those controls preceded the per-submission runtime/NVK bridge described
+above. The matched ICD/UMD retest now includes that bridge; native shared-fence
+behavior, desktop correctness and a measured rendering speedup remain unverified.
 
 **Five-minute observation completed; visual acceptance failed:** the frozen
 `.158` set remains Code 0 during a 311.057-second observation, but the user's
