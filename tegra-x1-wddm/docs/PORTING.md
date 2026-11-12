@@ -1155,9 +1155,10 @@ The separately packaged candidate is built from
 `0e840c55f61cc58cee11c00b36c1bce2586d577de5f8e385a09f8ea4bb6a0f02`.
 Its import-control and runtime-probe binaries exactly match the verified
 hashes above. The package is retained as
-`desktop158-import-content-20261112-umd`; it has not been registered for
-native desktop use. The previously tested `.158`/`.160` artifact sets remain
-separate from this candidate.
+`desktop158-import-content-20261112-umd`. It is now registered for the
+[separate import-content desktop trial](NATIVE_DESKTOP_158.md#import-content-desktop-trial),
+whose native results remain pending. The previously tested `.158`/`.160`
+artifact sets remain separate from this candidate.
 
 The mainline `Stage-Desktop158Retest.ps1` now pins this UMD and requires
 `--shared-layout-load` in the trial manifest. It rejects the preceding

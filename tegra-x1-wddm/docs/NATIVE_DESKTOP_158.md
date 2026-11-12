@@ -283,3 +283,36 @@ as immediate physical panel flips. These counts do not establish actual
 scanout frequency, GPU completion, correct pixels or sustained presentation;
 the failed trial remains failed. They do not justify adding a CPU timer to
 every DWM Present in place of verifying the existing synchronization path.
+
+## Import-content desktop trial
+
+`desktop158-import-content-20261112` is a new candidate combination. It keeps
+the frozen `.158` KMD (`46d17576…`) and timeline ICD (`ad686578…`) identified
+above. Its UMD comes from `ca4053872319e81f71207c1021fbc4f6133f6b4f`,
+SHA256 `0e840c55f61cc58cee11c00b36c1bce2586d577de5f8e385a09f8ea4bb6a0f02`.
+The runtime pixel probe has SHA256
+`5747dff91b8049f1d9476f731f779ae3c2dd0832c41c0952542f8e84b0a0a57f`.
+This adds preservation of imported image contents; the preceding failed
+retest used a different UMD and remains a failed onscreen result.
+
+The surface control and registered-loader preflight pass on `.59`, with
+all 28 trial scripts parsed by Windows PowerShell. At 18:49:12 UTC, the
+interactive preflight verifies the saved 720x1280 portrait preference
+unchanged and a visible taskbar window at the expected bounds. These are recovery-configuration
+checks, not native desktop acceptance. The candidate binds as `.158` /
+Code 43 behind the closed startup gate at **18:50:41**. UMD/ICD registration
+and the planned setup reboot request follow at **18:50:49**.
+
+The worker first requests a native desktop capture, then ordinary and
+sampled D3D pixel checks and `--shared-layout-load`, without producer/import
+CPU readback checkpoints. A subsequent 300-second observation requests
+desktop/Start captures and five Quick Settings open/dismiss cycles. It uses the
+previously exercised shortcut capture helper, SHA256
+`ff22b95bba31e37c74e82e967e651ed14cfc8dcc4a368cbdc10c51b89fd15351`.
+The existing recovery removes the native task and this trial's temporary
+ICD registration, including interruption before normal collection.
+
+At the current observation boundary, SSH has returned no record after the
+setup reboot request. Native startup, pixels, captures, sustained presentation
+and this trial's recovery are **unconfirmed**. The earlier Vulkan-only
+timeline pass does not establish any of those desktop results.

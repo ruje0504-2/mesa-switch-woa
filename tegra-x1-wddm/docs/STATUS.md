@@ -50,6 +50,17 @@ evidence; D3D runtime sharing, the updated UMD's pixels and five-minute
 desktop acceptance remain pending.
 [Exact scope, components, counts and recovery](VULKAN_WIN32_MEMORY.md#native-gpu-timeline-result)
 
+**New import-content desktop trial started:** `desktop158-import-content-20261112`
+uses the frozen `.158` KMD, `ca405387` UMD (`0e840c55…`) and the native-tested
+timeline ICD (`ad686578…`). The actual surface control, registered-loader
+preflight and interactive desktop checks pass on `.59`. The candidate binds
+behind the closed gate at 18:50:41 UTC; new UMD/ICD registration and the
+planned setup reboot are requested at 18:50:49. SSH has not returned a native
+result since that request. Neither this trial's desktop output nor its
+recovery is confirmed yet; the earlier offscreen trial's `.59` recovery does
+not prove the current state.
+[Exact candidate and planned acceptance sequence](NATIVE_DESKTOP_158.md#import-content-desktop-trial)
+
 November 12 inventory at 16:15:57 UTC confirms GPU `0.1.0.59`, Wi-Fi `0.5.7.0`
 and fan `1.0.0.12`. Wi-Fi is owner-confirmed usable, and SSH verifies its exact
 installed SYS hash and Code 0. At the owner's request the CPU returned to 1996.8 MHz, verified by
