@@ -12,10 +12,17 @@ stability and interaction coverage remain incomplete.
 
 | Component | Source or SHA256 |
 | --- | --- |
-| KMD source | `6c854e9f394c3d761fab85885bead4bbd4588581`, `stabilize/native-desktop-153` |
+| KMD source | `6c854e9f394c3d761fab85885bead4bbd4588581`, retained under [baseline/native-desktop-158](https://github.com/ruje0504-2/mesa-switch-woa/tree/baseline/native-desktop-158) |
 | Signed KMD `.158` | `46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088` |
 | D3D UMD | `77dea046dde0777d6c67e62769c983c5249595a9cc9e3dd7f8323805854f9cdf` |
 | NVK ICD | `6e2fad99d742a69033cc59925093fb4a7c8489728a3f7e5e9ebb523c017e0323` |
+
+The former `stabilize/native-desktop-153` development branch is retired.
+The archival tag `baseline/native-desktop-158` retains its final source and
+observation record at `6cff3356d465bc87e9bbd7fb73ea05b4e7503617`, including
+the exact KMD commit above. This tag preserves the historical short trial;
+later interaction showed visual corruption, so it is not a stable release.
+See [current status](STATUS.md) for subsequent work and results.
 
 The candidate starts from the selected `.153` rendering baseline. It includes
 the sampler-view operand correction, SAMPLE_I lowering, execution-ordered
