@@ -20,6 +20,17 @@ models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
 components remain a short-observation baseline, not a stable desktop release.
 
+**Physical failure investigation is now in scope:** the owner explicitly
+requests investigation of black output, corruption, hangs and automatic
+restarts. The previous exclusion is superseded. Recent system records show
+unexpected restarts with zero bugcheck fields **and repeated volmgr 46 dump
+initialization failures**. No matching recent crash dump exists; neither
+zero bugcheck fields nor missing dumps rule out a kernel crash. The actual
+SD driver is `0.4.0.1`, which must be distinguished from newer source trees.
+New native deployment is deferred while existing failure evidence and the
+SD dump path are examined. No cause or physical fix is established yet.
+[Failure evidence and collection](NATIVE_DESKTOP_158.md#failure-investigation-and-missing-crash-dumps)
+
 **New mapping audit fixes, not deployed:** `ba8ed4cc` preserves D3D's
 nonblocking map flag, returns retryable contention, prevents CPU writes over
 pending GPU buffer readers, releases failed transfer references and ignores

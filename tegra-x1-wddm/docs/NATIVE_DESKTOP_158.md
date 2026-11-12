@@ -650,3 +650,58 @@ and SHA256 values. Evidence is retained in the external build workspace under
 The query fixes do not resolve this failed physical result. Do not redeploy
 this candidate unchanged; continue the normal rendering/contract audit.
 Five-minute desktop acceptance, hardware rotation and Win32 cube remain pending.
+
+## Failure investigation and missing crash dumps
+
+The owner's subsequent instruction explicitly includes investigation of the
+reported black output, corruption, hangs and automatic restarts. Earlier
+statements that no cause investigation was performed describe those historical
+trials; they are no longer an exclusion on current work.
+
+Read-only collection at **23:56:31–23:57:09 UTC** establishes:
+
+- The recovered display driver is `.59` / Code 0, SYS SHA256 `de5e9cd4…`.
+  No new native candidate has been loaded since the failed query-poll trial.
+- The four recent Kernel-Power 41 events have `BugcheckCode=0` and zero
+  bugcheck parameters. The system also repeatedly logs **volmgr 46: crash
+  dump initialization failed**. Current settings request small dumps
+  (`CrashDumpEnabled=3`), with a real 512 MiB pagefile and a 512–2048 MiB
+  paging-file configuration. TDR override values are absent.
+- No matching recent minidump or full crash dump is present. Retained
+  WATCHDOG dumps are older and are not attributed to the current candidates.
+- The installed SD host is `nvtsdhc`, version **0.4.0.1**, Code 0,
+  44,432-byte SYS SHA256
+  `5ce2520d09ce67cc5b008da099d04cb821e9d314f1264c7ac8fb7ccb1447bd1b`.
+  Newer local Lite SD source explicitly disables crashdump support and
+  rejects dump-mode initialization. Its source/version must be reconciled
+  with the installed image before assigning a specific implementation cause.
+
+Microsoft documents that [zero bugcheck fields together with volmgr 46](https://learn.microsoft.com/en-us/troubleshoot/windows-client/performance/event-id-41-restart)
+can accompany an unrecorded bugcheck. These observations do **not** establish
+power loss, exclude TDR, or identify the GPU fault. Dump capture failure is
+an evidence gap, separate from the physical display failure.
+
+The two interrupted native traces from the query-poll and identity-guard
+trials decode 126,205 and 133,934 DxgKrnl records respectively, with no
+schema/length failures against the retained OS provider metadata. Neither
+prefix contains a retained KMD first-recovery event or explicit TDR/reset
+sequence. Each contains 13 `STATUS_NOT_SUPPORTED` IOCTL returns after the
+first UMD event; their captured stack locations do not identify the request
+payload, so these returns are not assigned as the cause. `ResetBackingStore`
+records describe allocation backing and must not be confused with GPU reset.
+Both ETLs remain unfinalized; their missing tails limit all absence claims.
+
+[Collect-GpuFailure.ps1](../tools/Collect-GpuFailure.ps1) records existing
+events, current display/SD binary identities, dump metadata and dump/pagefile/
+TDR configuration. It does not install drivers, submit GPU work, change
+settings, reboot or copy dump contents. Its Windows PowerShell parse and real
+read-only execution succeed. The returned **41,404-byte** record matches
+device SHA256
+`6db67d6300eece0c1650df40311bfd56fef9867b4dab9ef5777bced38f96eabc`.
+Records and trace analysis are retained under
+`runs/desktop158-fault-audit-20261112/` in the external build workspace.
+
+The owner has requested adding SD crashdump support. Work on that storage
+path belongs in the drivers repository; GPU source remains in this project.
+Dump-file creation and contents will need their own validation and cannot be
+claimed from a build or CPU control. The GPU root cause remains undetermined.
