@@ -3746,7 +3746,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
       screen->base.get_dmabuf_modifier_planes = zink_get_dmabuf_modifier_planes;
    }
 #if defined(_WIN32)
-   if (screen->info.have_KHR_external_memory_win32)
+   if (screen->info.have_KHR_external_semaphore_win32)
       screen->base.create_fence_win32 = zink_create_fence_win32;
 #endif
    screen->base.context_create = zink_context_create;

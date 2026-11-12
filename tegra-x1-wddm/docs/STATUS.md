@@ -35,9 +35,13 @@ source snapshot. The additional completed work implements `BltDXGI` and
 imported-image sRGB views; its controls do not establish native desktop or
 DXVK acceptance. The new Claude architecture review completed, and the user
 then explicitly delegated implementation as well. That same Fable 5.2/max
-session now implements a separate native DDI/Vulkan backend in an isolated
-checkout based on main `8fcf9e07`. Local integration and hardware tests remain
-the main agent's responsibility.
+session began a separate native DDI/Vulkan backend in an isolated checkout
+based on main `8fcf9e07`. It stopped on account quota at 09:37:04 UTC;
+the reported reset is 13:30 UTC on November 12. No associated remote process
+remains. All 30 collected files / 518,466 bytes match their recorded hashes.
+The partial backend has build errors and no new commits; it is not integrated
+or accepted on hardware. Local integration and hardware tests remain the
+main agent's responsibility.
 
 **Zink texture/cache work:** runtime-owned BGRA/RGBA imports now declare their
 UNORM/sRGB views at image creation and retain the original allocation when a
@@ -57,6 +61,22 @@ shader-compilation speedup. The record is retained in
 `build/zink-sync-texture-cache-20261112/cache-control-concurrent.json`.
 Cross-queue synchronization and native visual/performance acceptance remain
 in progress. [Windows cache configuration](PORTING.md#windows-shader-cache)
+
+**Zink synchronization source repair:** Win32 fence import is now gated by
+the semaphore extension, creates the correct binary or timeline semaphore,
+and releases the prior fence reference. Repeated timeline waits retain the
+largest value in each batch, including when a previous asynchronous batch
+still owns the deferred-context marker. A signal keeps its semaphore alive
+until batch completion instead of relying on the caller's lifetime.
+The ARM64 UMD and `test-zink-win32-sync.exe` compile and link successfully.
+The fixture invokes actual Zink entry points with Vulkan dispatch substitutes;
+it is not a GPU test. Its SHA256 is
+`7eb6289113528ffd93038ab4942291f69a7f913f3f64d040a58bac26850ca03f`.
+Execution remains pending: the device SSH connection closes during upload
+and on a subsequent read-only connection attempt. No GPU driver is installed
+by this attempt. The NVK monitored-fence Win32 sharing provider and the
+runtime/NVK queue bridge still need implementation; these Zink repairs alone
+do not provide cross-device desktop synchronization or establish a visual fix.
 
 **Five-minute observation completed; visual acceptance failed:** the frozen
 `.158` set remains Code 0 during a 311.057-second observation, but the user's

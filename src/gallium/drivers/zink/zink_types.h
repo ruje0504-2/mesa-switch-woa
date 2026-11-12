@@ -293,6 +293,7 @@ struct zink_tc_fence {
    struct zink_fence *fence;
    /* for use with semaphore/imported fences */
    VkSemaphore sem;
+   bool is_timeline;
 };
 
 /* a fence is actually a zink_batch_state, but these are split out for logical consistency */
