@@ -40,10 +40,13 @@ Work order:
 
 The device remains on recovered `.59` until a bounded trial is explicitly
 staged and started. Source rollback is not an assertion that a driver has
-already been installed. Fable 5.2/max independently reviews current main on
-the VPS; its branch must not push to GitHub. The main agent will retrieve and
-review its commits and port only applicable fixes. That review does not block
-this stabilization work.
+already been installed. Fable's desktop review stopped at the account limit;
+its completed commits and five unfinished files are retained locally. The next
+remote assignment is game-facing DXVK using Fable 5.2/medium, after the reported
+November 12 07:10 UTC reset. The latest VPS instructions permit read-only
+analysis and textual patch proposals for implementation locally. No remote
+GitHub push or desktop DXVK development is authorized. This does not block
+desktop stabilization.
 
 The initial frozen-stack retry reaches Code 0 but is interrupted by another
 boot before its PNG completes; `.59` recovery is verified. The retained MPO
@@ -98,8 +101,31 @@ readback correction; corrected host models, the real external NETB stream
 and the full WDK ARM64 build pass.
 
 This KMD candidate is numbered `.157`, based on `.153` without importing
-`.154–.156` queue/diagnostic changes. It is not signed/installed yet. Evidence
+`.154–.156` queue/diagnostic changes. Signing and package verification pass at
+03:12:34 UTC on November 12; it is not installed. Evidence
 is in `helper-load-independent-20261112` and `helper-load157-20261112`.
 Taskbar content, continuous rendering and the `.155` stalled instruction
-remain unproven until native validation. Fable's broader review continues
-independently; only this completed commit has been ported so far.
+remain unproven until native validation. Only this completed remote correction
+has been ported; the separate SM exception policy and unfinished worker edits
+remain unadopted.
+
+## Integrated stabilization candidate .158
+
+`71d67992` restores SAMPLE_I lowering and its translator/pixel probes from
+`3531f0ee`; the original frozen UMD has a captured Explorer abort on that
+instruction. `6c854e9f` restores execution-ordered inherited-state validation
+from `760d8405`; its prior Windows regression demonstrates the old rejection of
+a valid queued MME packet. These address demonstrated defects without importing
+the extra `.155–.156` diagnostic machinery.
+
+The production/test changes are based on the frozen source plus the sampler-view
+and GR helper-load corrections above. All Mesa `src/` files match `ee7b0d50`, so
+the existing UMD `77dea046dde0` and its twelve assertion-enabled translator
+checks remain applicable. The intended ICD is unchanged `6e2fad99d742`.
+
+The new candidate uses `.158` to distinguish it from the already signed `.157`
+package. Its host regressions, actual NETB stream checks and full WDK ARM64
+build pass from source `6c854e9f394c3d761fab85885bead4bbd4588581` in
+`stabilize158-20261112`. This package is unsigned and not installed; native
+taskbar completeness, continuous presentation and hardware stability remain
+pending. No new Switch trial or reboot was started for this build.
