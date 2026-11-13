@@ -147,7 +147,7 @@ option(
 option(
   'tgd3d',
   type : 'feature',
-  value : 'disabled',
+  value : 'auto',
   description : 'build tgd3d, the Direct3D 10 WDDM user-mode driver that renders ' +
                 'with Vulkan (NVK on Tegra GM20B). Windows only.',
 )
