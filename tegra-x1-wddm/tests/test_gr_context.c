@@ -16,11 +16,18 @@ struct model {
     unsigned helper_writes;
     uint32_t saved_sm_disp_ctrl;
     bool ignore_helper_write;
+    unsigned output_exception_writes;
+    uint32_t saved_warp_report_mask;
+    bool ignore_output_exception_write;
 };
 /* gr_pri_gpcs_tpcs_sm_disp_ctrl; bit 3 disables helper-invocation loads. */
 #define SM_DISP_CTRL 0x419f78u
 /* The supplied 32.7.6 NETB context entry, independently checked by hash. */
 #define SM_DISP_CTRL_DEFAULT 0x00010bebu
+/* The same NETB enables OUT_OF_RANGE_ADDR; NVK shader objects require it off. */
+#define SM_WARP_REPORT_MASK 0x419e44u
+#define SM_WARP_REPORT_DEFAULT 0x00d3eff2u
+#define SM_OUT_OF_RANGE_ADDR (1u<<14)
 static uint32_t read32(void *context,uint32_t address)
 {
     struct model *m=context;uint32_t r=address-GPU;
@@ -60,6 +67,14 @@ static void write32(void *context,uint32_t address,uint32_t value)
         ++m->helper_writes;
         if(m->ignore_helper_write)return;
     }
+    if(r==SM_WARP_REPORT_MASK && !(value&SM_OUT_OF_RANGE_ADDR)) {
+        assert(m->binds==1 && !m->saves && !m->output_exception_writes);
+        assert(!m->regs[0x400208/4] && m->regs[0x404154/4]==0x800);
+        assert((m->regs[r/4]&SM_OUT_OF_RANGE_ADDR) &&
+               value==(m->regs[r/4]&~SM_OUT_OF_RANGE_ADDR));
+        ++m->output_exception_writes;
+        if(m->ignore_output_exception_write)return;
+    }
     if(r==0x409840) {m->regs[0x409800/4]&=~value;return;}
     if(r==0x409504) {
         assert(m->regs[0x409500/4]==0x80080040);
@@ -78,6 +93,8 @@ static void write32(void *context,uint32_t address,uint32_t value)
             /* The image FECS saves must already allow helper-lane loads. */
             assert(!(m->regs[SM_DISP_CTRL/4]&8));
             m->saved_sm_disp_ctrl=m->regs[SM_DISP_CTRL/4];
+            assert(!(m->regs[SM_WARP_REPORT_MASK/4]&SM_OUT_OF_RANGE_ADDR));
+            m->saved_warp_report_mask=m->regs[SM_WARP_REPORT_MASK/4];
             ++m->saves;
             if(!m->no_save) m->regs[0x409800/4]|=m->save_fail?3:1;
             if(m->pri) m->regs[0x120058/4]=0x100;
@@ -96,6 +113,7 @@ static void reset(struct model *m)
     regs[0x502608/4]=0x40002;regs[0x500c30/4]=3;
     regs[0x409800/4]=0x31; /* An old success/failure reply must be cleared. */
     regs[SM_DISP_CTRL/4]=SM_DISP_CTRL_DEFAULT;
+    regs[SM_WARP_REPORT_MASK/4]=SM_WARP_REPORT_DEFAULT;
     for(unsigned i=0;i<TG_GPU_GR_CTX_CAPACITY/4;++i)
         work[TG_GPU_GR_GOLD_OFFSET/4+i]=TG_GPU_GR_GOLD_SENTINEL;
 }
@@ -135,6 +153,8 @@ int main(int argc,char **argv)
     /* Every other bit of the vendor default survives in the saved state. */
     assert(m.helper_writes==1 && m.regs[SM_DISP_CTRL/4]==(SM_DISP_CTRL_DEFAULT&~8u));
     assert(m.saved_sm_disp_ctrl==(SM_DISP_CTRL_DEFAULT&~8u));
+    assert(m.output_exception_writes==1 &&
+           m.saved_warp_report_mask==(SM_WARP_REPORT_DEFAULT&~SM_OUT_OF_RANGE_ADDR));
     {
         struct tg_gpu_power_io io={&m,read32,write32,NULL,NULL,delay};
         struct tg_gpu_power power={.owned=true,.ready=true};
@@ -213,6 +233,20 @@ int main(int argc,char **argv)
         }
     }
     {
+        reset(&m);m.regs[SM_WARP_REPORT_MASK/4]=SM_WARP_REPORT_DEFAULT&~SM_OUT_OF_RANGE_ADDR;
+        assert(run(&m,&net,&s)==TG_GPU_GR_CTX_OK && !m.output_exception_writes && m.saves==1);
+        reset(&m);m.ignore_output_exception_write=true;
+        assert(run(&m,&net,&s)==TG_GPU_GR_CTX_REGISTER && s.stage==5);
+        assert(m.output_exception_writes==1 && !m.saves && s.last_register==SM_WARP_REPORT_MASK);
+        const uint32_t unreadable[]={UINT32_MAX,0xbadf1100,0xbadf5040,0xbad00100};
+        for(unsigned i=0;i<sizeof(unreadable)/sizeof(unreadable[0]);++i) {
+            reset(&m);m.regs[SM_WARP_REPORT_MASK/4]=unreadable[i];
+            assert(run(&m,&net,&s)==TG_GPU_GR_CTX_REGISTER && s.stage==5);
+            assert(s.last_register==SM_WARP_REPORT_MASK && s.last_value==unreadable[i]);
+            assert(!m.output_exception_writes && !m.saves);
+        }
+    }
+    {
         const uint32_t unsupported[]={0x20001,0x20002,0x40001,2,0x30002,0x50002,UINT32_MAX};
         for(unsigned i=0;i<sizeof(unsupported)/sizeof(unsupported[0]);++i) {
             reset(&m);m.regs[0x502608/4]=unsupported[i];
@@ -258,6 +292,6 @@ int main(int argc,char **argv)
         puts("External NETB graphics initialization streams: PASS (model only)");
     }
     free(m.regs);free(m.inst);free(m.work);
-    puts("PASS: GR binding/golden-save order, helper-load enable, owned mappings, cache visibility and failure rejection (model only)");
+    puts("PASS: GR golden-save order, helper loads, shader-output exception policy, mappings and failure rejection (model only)");
     return 0;
 }

@@ -284,6 +284,29 @@ static bool helper_loads(const struct tg_gpu_power_io *io, struct tg_gpu_gr_cont
     }
     return true;
 }
+/* Match NVK's MAXWELL_B shader-object context policy (nvk_cmd_draw.c).
+ * Independently compiled stages can write attributes the next stage does
+ * not consume, including a null fragment stage. NVK disables this warp
+ * exception; its private-register MME is unavailable on Windows. The NETB
+ * context stream enables bit 14 in 0x00d3eff2, so apply the same policy to
+ * the golden context after those streams. All other exception bits remain.
+ */
+#define GR_GPCS_TPCS_SM_WARP_ESR_REPORT_MASK 0x00419e44u
+#define GR_SM_WARP_OUT_OF_RANGE_ADDR (1u<<14)
+static bool shader_output_exceptions(const struct tg_gpu_power_io *io,
+    struct tg_gpu_gr_context_status *s)
+{
+    const uint32_t value=rd(io,GR_GPCS_TPCS_SM_WARP_ESR_REPORT_MASK);
+    s->last_register=GR_GPCS_TPCS_SM_WARP_ESR_REPORT_MASK;s->last_value=value;
+    if(value==UINT32_MAX || (value>>20)==0xbad) {s->result=TG_GPU_GR_CTX_REGISTER;return false;}
+    if(value&GR_SM_WARP_OUT_OF_RANGE_ADDR) {
+        const uint32_t enabled=value&~GR_SM_WARP_OUT_OF_RANGE_ADDR;
+        io->write32(io->context,GPU+GR_GPCS_TPCS_SM_WARP_ESR_REPORT_MASK,enabled);
+        s->last_value=rd(io,GR_GPCS_TPCS_SM_WARP_ESR_REPORT_MASK);
+        if(s->last_value!=enabled) {s->result=TG_GPU_GR_CTX_REGISTER;return false;}
+    }
+    return true;
+}
 enum tg_gpu_gr_context_result tg_gpu_gr_context_init(
     const struct tg_gpu_power_io *io, const struct tg_gpu_power *power,
     struct tg_gpu_frontend_status *fe, const struct tg_gpu_gr_netlist *n,
@@ -362,6 +385,7 @@ enum tg_gpu_gr_context_result tg_gpu_gr_context_init(
     method_stream(io,n);
     if(!idle(io,s)) goto done;
     if(!helper_loads(io,s)) goto done;
+    if(!shader_output_exceptions(io,s)) goto done;
     s->stage=6;
     if(tg_gpu_frontend_sync_memory(io,power,fe)!=TG_GPU_FE_OK) {
         s->result=TG_GPU_GR_CTX_VISIBILITY;goto done;

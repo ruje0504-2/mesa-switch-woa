@@ -55,3 +55,45 @@ the archived upstream files, and `helper-load157-20261112` build, negative
 controls, source/signing/catalog records. Fable's broader review continues.
 Its second local commit `9092e512` changes shader-exception reporting policy;
 that separate change is fetched for review but is not part of this candidate.
+
+## November 13: shader-object output exception policy
+
+The frozen `.158` KMD (`6c854e9f394c3d761fab85885bead4bbd4588581`)
+already contains the helper-load correction above. Carbon High's revised
+Antigravity audit identified a separate omitted policy: NVK also clears bit 14
+of `gr_gpcs_tpcs_sms_hww_warp_esr_report_mask`, at `0x419e44` on GM20B.
+The reference is the MIT-licensed
+[fixed mesa-switch NVK draw-state initialization](https://github.com/danfromtico/mesa-switch/blob/0ff52079ca9e9e837ed27eb95a8d239f439a1864/src/nouveau/vulkan/nvk_cmd_draw.c),
+also present in the Windows ICD source `7c677212`. It applies to MAXWELL_B
+and later, with different register addresses from Volta onward. This KMD
+implementation is specific to its GM20B context generator.
+
+NVK documents the policy for independently compiled shader stages with unused
+outputs, including shader objects. Its explanation of the hardware behavior is
+explicitly conjectural, informed by SPH documentation and an OpenGL CTS case.
+It is not proof that the owner's weather/browser failures hit this exception.
+The Windows ICD excludes the privileged macro; the frozen KMD does not provide
+the corresponding context initialization.
+
+Independent parsing of the exact NETB with SHA256 shown above finds region 5,
+address `0x419e44`, index 0, value `0x00d3eff2`: bit 14 is set. The new KMD
+source clears only that bit after the vendor streams and helper-load setup,
+before FECS saves the golden context. The resulting mask is `0x00d3aff2`.
+Unrelated exception bits are preserved; unreadable registers or a failed
+write/readback prevent saving an invalid context. This differs from the
+earlier Fable proposal `9092e5126cb87389cf195e2e1ba890e8eab49170`, which
+zeroed both warp and global masks; that broader change was not imported.
+
+The model with the real NETB input fails at the golden-save assertion against
+the preceding source and passes with this correction. It checks save ordering,
+preservation of other bits, the already-cleared case, unreadable registers and
+ignored writes. The changed ARM64 kernel translation unit compiles with WDK
+10.0.26100.0 and the production kernel flags. Outputs are retained under
+`shader-output-context-controls/`; these checks do not execute GPU work.
+
+No new signed KMD has been built or deployed for this change. The current
+physical test still uses the original `.158` SYS with SHA256
+`46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088`.
+Its five-minute desktop result belongs to that unchanged KMD, not this patch.
+Any subsequent KMD trial must preserve the frozen baseline outside this
+specific policy change and record the new source and binary hashes.
