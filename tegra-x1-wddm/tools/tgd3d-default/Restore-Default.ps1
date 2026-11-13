@@ -11,6 +11,10 @@ if($manifest.kmd_variant){
     if(Get-ScheduledTask Tgd3dDefaultEnable -ErrorAction SilentlyContinue){Disable-ScheduledTask Tgd3dDefaultEnable|Out-Null}
     $grant='HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\AllowDesktopStart'
     if(Test-Path $grant){Remove-Item $grant -Force}
+    $native='HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\AllowNativeBoot'
+    if(Test-Path $native){Remove-Item $native -Force}
+    $svc=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\CurrentControlSet\Services\tegragpurender',$true)
+    try{$svc.Flush()}finally{$svc.Dispose()}
     $permit=Join-Path $env:windir 'System32\drivers\TgGpuBootTest158.bin'
     if(Test-Path $permit){Remove-Item $permit -Force}
     if((Device-Property 'ProblemCode') -ne 43){

@@ -42,13 +42,19 @@ $settings='HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\Tgd3dDefault'
 New-Item $settings -Force|Out-Null
 New-ItemProperty $settings Directory -PropertyType String -Value $PSScriptRoot -Force|Out-Null
 $native=$m.startup_mode -eq 'native-boot'
-$entry=if($native){'Native-Boot.ps1'}else{'Default-Start.ps1'}
-$action=New-ScheduledTaskAction -Execute "$env:windir\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$PSScriptRoot+'\'+$entry+'"')
-if($native){$trigger=New-ScheduledTaskTrigger -AtStartup}
-else{$trigger=New-ScheduledTaskTrigger -AtLogOn -User $backup.User;$trigger.Delay='PT5S'}
-$taskSettings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 3)
-Register-ScheduledTask -TaskName Tgd3dDefaultEnable -Action $action -Trigger $trigger -Settings $taskSettings -User SYSTEM -RunLevel Highest -Force|Out-Null
-if($native){& (Join-Path $PSScriptRoot 'Native-Boot.ps1') -Mode Configure}
+if($native){
+    $task=Get-ScheduledTask Tgd3dDefaultEnable -ErrorAction SilentlyContinue
+    if($task){
+        if($task.State -eq 'Running'){throw 'Previous startup task is still running'}
+        Unregister-ScheduledTask Tgd3dDefaultEnable -Confirm:$false
+    }
+    & (Join-Path $PSScriptRoot 'Native-Boot.ps1')
+}else{
+    $action=New-ScheduledTaskAction -Execute "$env:windir\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$PSScriptRoot+'\Default-Start.ps1"')
+    $trigger=New-ScheduledTaskTrigger -AtLogOn -User $backup.User;$trigger.Delay='PT5S'
+    $taskSettings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 3)
+    Register-ScheduledTask -TaskName Tgd3dDefaultEnable -Action $action -Trigger $trigger -Settings $taskSettings -User SYSTEM -RunLevel Highest -Force|Out-Null
+}
 $result=@{Utc=[DateTime]::UtcNow.ToString('o');Directory=$PSScriptRoot;Version=(Device-Property 'DriverVersion');SyncMode=$m.sync_mode;User=$backup.User;StartupMode=$m.startup_mode;EnabledAfterNextLogon=(!$native);GpuStartRequested=$false;OsRebootRequested=$false}
 Save-Json (Join-Path $PSScriptRoot 'default-installed.json') $result
 $result|ConvertTo-Json

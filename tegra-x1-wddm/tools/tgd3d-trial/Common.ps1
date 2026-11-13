@@ -48,7 +48,7 @@ function Check-File([string]$Path,$Expected) {
 function Check-Package {
     $m=Read-Json (Join-Path $script:TrialRoot 'trial-components.json')
     if($m.kmd_version -ne '0.1.0.158' -or $m.umd_name -ne 'TegraGpuD3DVk.dll') { throw 'Unexpected trial component identity' }
-    if($m.kmd_variant -and ($m.kmd_variant -ne 'shader-output-bit14' -or
+    if($m.kmd_variant -and ($m.kmd_variant -notin @('shader-output-bit14','shader-output-bit14-native-boot') -or
        $m.baseline_kmd.'tegragpurender.sys'.Sha256 -ne '46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088')) { throw 'Unexpected kernel variant or recovery baseline' }
     foreach($entry in $m.files.PSObject.Properties) { Check-File (Package-Path $entry.Name) $entry.Value }
     foreach($file in Get-ChildItem -LiteralPath $script:TrialRoot -Filter '*.ps1') {
@@ -65,8 +65,9 @@ function Check-Baseline {
         # retained .158 miniport is installed but native GPU work is disabled.
         $hashes=@('46D1757674FF156028CE5B729BA53671981FFAB09948FCAF125751C46BB10088')
         $manifest=Read-Json (Join-Path $script:TrialRoot 'trial-components.json')
-        if($manifest.kmd_variant -eq 'shader-output-bit14' -and $manifest.baseline_kmd.'tegragpurender.sys'.Sha256 -eq $hashes[0]) {
+        if($manifest.kmd_variant -in @('shader-output-bit14','shader-output-bit14-native-boot') -and $manifest.baseline_kmd.'tegragpurender.sys'.Sha256 -eq $hashes[0]) {
             $hashes+=([string]$manifest.kmd.'tegragpurender.sys'.Sha256)
+            if($manifest.kmd_variant -eq 'shader-output-bit14-native-boot'){$hashes+='2e4ae8081687537f777d72636ff1fab0640559215a703f6ccfab2127f95f0572'}
         }
         if((Device-Property 'Service') -ne 'tegragpurender' -or
            (File-Hash "$env:windir\System32\drivers\tegragpurender.sys") -notin $hashes -or

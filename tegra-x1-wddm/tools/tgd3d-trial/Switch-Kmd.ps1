@@ -4,7 +4,7 @@ param([ValidateSet('Candidate','Baseline')][string]$Direction='Candidate')
 . (Join-Path $PSScriptRoot 'Common.ps1')
 Require-Administrator
 $m=Read-Json (Join-Path $PSScriptRoot 'trial-components.json')
-if($m.kmd_variant -ne 'shader-output-bit14' -or
+if($m.kmd_variant -notin @('shader-output-bit14','shader-output-bit14-native-boot') -or
    $m.baseline_kmd.'tegragpurender.sys'.Sha256 -ne '46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088') {
     throw 'Expected the reviewed .158 bit14 package and frozen recovery image'
 }
@@ -14,8 +14,10 @@ foreach($entry in $records.PSObject.Properties){Check-File (Join-Path $PSScriptR
 $systemFile=Join-Path $env:windir 'System32\drivers\tegragpurender.sys'
 $current=File-Hash $systemFile;$expected=$records.'tegragpurender.sys'.Sha256
 if($current -eq $expected){return}
+$allowed=@($m.kmd.'tegragpurender.sys'.Sha256,$m.baseline_kmd.'tegragpurender.sys'.Sha256)
+if($m.kmd_variant -eq 'shader-output-bit14-native-boot'){$allowed+='2e4ae8081687537f777d72636ff1fab0640559215a703f6ccfab2127f95f0572'}
 if((Device-Property 'DriverVersion') -ne '0.1.0.158' -or (Device-Property 'Service') -ne 'tegragpurender' -or
-   $current -notin @($m.kmd.'tegragpurender.sys'.Sha256,$m.baseline_kmd.'tegragpurender.sys'.Sha256)) {
+   $current -notin $allowed) {
     throw 'Installed kernel differs from both reviewed .158 images'
 }
 $params=Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\Parameters'
@@ -24,6 +26,7 @@ if((Device-Property 'ProblemCode') -ne 43 -or [uint64]$params.StartGateStatus -n
     throw 'Kernel selection requires the closed .158 startup gate; do not hot-switch an active GPU'
 }
 if(Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\AllowDesktopStart'){throw 'A GPU startup grant is armed'}
+if(Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\AllowNativeBoot'){throw 'Persistent native startup is armed'}
 $permit=Join-Path $env:windir 'System32\drivers\TgGpuBootTest158.bin'
 if(Test-Path $permit){
     $bytes=[IO.File]::ReadAllBytes($permit)

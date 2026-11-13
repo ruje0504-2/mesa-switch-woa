@@ -58,22 +58,30 @@ def main():
     kernel = args.kmd
     if args.candidate_kmd:
         candidate = json.loads((args.candidate_kmd / "manifest.json").read_text())
+        changed = {"tegra-x1-wddm/platform/t214_gr_context.c",
+                   "tegra-x1-wddm/tests/test_gr_context.c"}
+        native = candidate["variant"] == "shader-output-bit14-native-boot"
+        if native:
+            changed |= {"tegra-x1-wddm/windows/native_start_test.c",
+                        "tegra-x1-wddm/tests/test_native_start_windows.c"}
         if (candidate["base"] != frozen["kmd_source"] or
-            candidate["variant"] != "shader-output-bit14" or
+            candidate["variant"] not in ("shader-output-bit14", "shader-output-bit14-native-boot") or
             not candidate.get("windows_signature_verified") or
-            set(candidate["changed_files"]) != {
-                "tegra-x1-wddm/platform/t214_gr_context.c",
-                "tegra-x1-wddm/tests/test_gr_context.c"}):
+            set(candidate["changed_files"]) != changed):
             raise ValueError("Unreviewed kernel variant or unsigned artifact")
         manifest["baseline_kmd"] = frozen["kmd"]
         manifest["kmd_variant"] = candidate["variant"]
         manifest["kmd_patch_commit"] = candidate["patch_commit"]
+        if native:
+            manifest["kmd_startup_patch_commit"] = candidate["startup_patch_commit"]
         manifest["kmd"] = candidate["signed_files"]
         manifest["scope"] = ".158 bit14 fix with automatic tgd3d enablement after logon; manual testing"
         kernel = args.candidate_kmd / "signed-package"
         for name, record in frozen["kmd"].items():
             checked_copy(args.kmd / name, args.out / "baseline-kmd" / name, record)
     if args.native_boot:
+        if manifest.get("kmd_variant") != "shader-output-bit14-native-boot":
+            raise ValueError("Direct boot requires persistent native-start kernel support")
         manifest["startup_mode"] = "native-boot"
         manifest["scope"] = ".158 direct native startup before logon; owner-operated restart and application tests"
     for name, record in manifest["kmd"].items():
