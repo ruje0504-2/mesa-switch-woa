@@ -1019,3 +1019,21 @@ A8R8G8B8，导致合法 B8G8R8X8_UNORM 主表面在创建时被拒绝。本次�
 最初测试夹具的 SetDisplayMode 回调 const 签名不符已修正，这属于工具编译错误。
 结果在 `primary-create-controls/`。下一实机候选以 `9de42c82` 为底，仅加入本项
 主表面创建修正；完整开发分支中的缓存和 Flush 修正另行验收。
+
+该单项候选已写入重新接回的 SD。源码组成为 `9de42c82` 基线加 `7f5f416b` 的
+`tgd3d_runtime.cpp`，不是整个新分支快照。重新链接旧构建与冻结 DLL 的差异仅为 PE
+时间戳字段；补丁使用冻结头文件及其他对象，并通过该组合自己的 x64 CPU 合约。
+ARM64 UMD SHA256 为 `cfeab491db032ed6903a2d5f5bdb0c50dde89e9f7d17241564e52b908b52a6bc`，
+组件清单 SHA256 为 `feafda8dec0fe2ac9493dacaef73b129db4acd08e89a16cdb07e0fd66d0fe78c`。
+测试包 `tgd3d-primary-xrgb-7f5f416b.zip` SHA256 为
+`dd0878ec036edbc73165521a6702b1fbf54061054715c8e76e1cb33bff31c8d5`。
+
+本次再次因 Windows 缓存元数据未清理而被 Mac ntfscp 拒写，没有修改任何目标文件；
+随后复用已通过的 x64 WinPE，在新的写时复制副本内执行 CHKDSK、复制及核对，返回0。
+100段、13631488字节改动先保存还原备份，再写回实卡并逐段读回。实卡 UMD/清单及
+保持原值的 KMD/ICD 哈希均正确。文件系统恢复将旧 SYSTEM.LOG1 截为0，但 SYSTEM
+和有效 SYSTEM.LOG2 与这次更新前一致；使用13条校验过的事务在本地副本重放到182059，
+确认当前 ControlSet001 的 AllowNativeBoot 存在。没有把重放副本写回实卡，不能把这次
+记录误写为“所有注册表日志逐字节不变”。备份 zip SHA256 为
+`b8b54b45fdf731ad2cc710c1f65b73057fcf5041ed48185e24803438d84a6ad6`，Mac/SD FAT 各一份。
+完整交付记录位于 `primary-surface-deploy/deployment-final.json`；新组合实机启动仍待验证。
