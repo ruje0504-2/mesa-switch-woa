@@ -7,6 +7,7 @@ Use LLVM, the Mesa Switch source tree and official WDK/SDK Include roots.
 """
 import argparse
 import datetime
+import hashlib
 from pathlib import Path
 import re
 import shutil
@@ -337,6 +338,13 @@ if build_miniport:
             version=f"{datetime.datetime.now(datetime.timezone.utc):%m/%d/%Y},0.1.0.{args.native_test_version}"
             display_inf=re.sub(r"^DriverVer=.*$",f"DriverVer={version}",display_inf,flags=re.MULTILINE)
         display_inf = display_inf.replace("Switch Lite GM20B Render Adapter (experimental)", "Tegra X1 (GM20B)")
+        if args.native_test_version is not None:
+            # Driver Store can reuse an identical INF despite changed payloads.
+            # Same-version test kernels therefore need distinct package identity.
+            build_id = hashlib.sha256((dest / "tegragpurender.sys").read_bytes()).hexdigest()[:12]
+            display_inf = re.sub(r"^Device=.*$",
+                f'Device="Tegra X1 (GM20B) .{args.native_test_version} {build_id}"',
+                display_inf, flags=re.MULTILINE)
         (dest / inf.name).write_text(display_inf)
     else:
         shutil.copyfile(inf, dest / inf.name)

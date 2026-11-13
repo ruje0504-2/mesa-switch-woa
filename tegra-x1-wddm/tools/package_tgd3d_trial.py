@@ -74,6 +74,8 @@ def main():
         manifest["kmd_patch_commit"] = candidate["patch_commit"]
         if native:
             manifest["kmd_startup_patch_commit"] = candidate["startup_patch_commit"]
+        if candidate.get("inf_identity"):
+            manifest["kmd_package_identity"] = candidate["inf_identity"]
         manifest["kmd"] = candidate["signed_files"]
         manifest["scope"] = ".158 bit14 fix with automatic tgd3d enablement after logon; manual testing"
         kernel = args.candidate_kmd / "signed-package"
