@@ -1,5 +1,14 @@
 # GPU status
 
+**November 13, 15:08 UTC DDI fix:** device-loss notifications now use
+`D3DDDIERR_DEVICEREMOVED` at SetErrorCb instead of DXGI API error codes.
+Shader creation preserves Vulkan host/device OOM and device-loss status; a lost
+device cannot compile another variant or reuse a cached one. The new callback
+assertion fails with the old source and passes with the fix. ARM64 CPU controls
+and ARM64/x64 cross-builds pass. This corrects failure propagation, not the cause
+of the weather/page-close freeze. The running `.158` CPU-sync UMD is unchanged;
+the unbounded teardown wait is still unresolved.
+
 **November 13 shader audit:** the owner also reports freezing when closing a
 web page, with large-area changes appearing easier to trigger. Shader execution
 and shared-surface retirement remain hypotheses, not established causes.

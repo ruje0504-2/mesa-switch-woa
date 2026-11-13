@@ -289,15 +289,19 @@ VkShaderEXT compile(Shader *shader, uint32_t key)
    VkShaderEXT handle = VK_NULL_HANDLE;
    trace(TGD3D_TRACE_SHADER_PHASE, E_PENDING, backend, identity);
    const VkResult result = dev->vk.CreateShadersEXT(dev->vkdev, 1, &info, nullptr, &handle);
-   trace(TGD3D_TRACE_SHADER_PHASE, result == VK_SUCCESS ? S_OK : E_FAIL, backend, identity);
+   const HRESULT hr = result == VK_SUCCESS ? S_OK :
+      result == VK_ERROR_DEVICE_LOST ? D3DDDIERR_DEVICEREMOVED :
+      result == VK_ERROR_OUT_OF_HOST_MEMORY || result == VK_ERROR_OUT_OF_DEVICE_MEMORY ?
+         E_OUTOFMEMORY : E_FAIL;
+   trace(TGD3D_TRACE_SHADER_PHASE, hr, backend, identity);
    const uint64_t end = qpc_now();
    LARGE_INTEGER frequency;
    QueryPerformanceFrequency(&frequency);
-   trace(TGD3D_TRACE_SHADER, result == VK_SUCCESS ? S_OK : E_FAIL,
+   trace(TGD3D_TRACE_SHADER, hr,
          (uint64_t)shader->stage << 32 | (uint32_t)shader->tokens.size(),
          (end - begin) * 1000000 / (uint64_t)frequency.QuadPart);
    if (result != VK_SUCCESS) {
-      shader->error = result == VK_ERROR_OUT_OF_HOST_MEMORY ? E_OUTOFMEMORY : E_FAIL;
+      shader->error = hr;
       return VK_NULL_HANDLE;
    }
    return handle;
@@ -322,6 +326,10 @@ void create_shader(D3D10DDI_HDEVICE hDevice, const UINT *code, D3D10DDI_HSHADER 
                    const D3D10DDIARG_STAGE_IO_SIGNATURES *signatures)
 {
    Device *dev = D(hDevice);
+   if (FAILED(dev->lost)) {
+      TG_ERROR(dev, dev->lost);
+      return;
+   }
    Shader *shader = new (handle.pDrvPrivate) Shader();
    shader->dev = dev;
    shader->stage = stage;
@@ -421,7 +429,7 @@ void APIENTRY PsSetShader(D3D10DDI_HDEVICE h, D3D10DDI_HSHADER s) { set_shader(h
 
 VkShaderEXT shader_variant(Shader *shader, uint32_t key)
 {
-   if (!shader || FAILED(shader->error))
+   if (!shader || FAILED(shader->dev->lost) || FAILED(shader->error))
       return VK_NULL_HANDLE;
    for (const auto &variant : shader->variants)
       if (variant.key == key)
@@ -429,7 +437,8 @@ VkShaderEXT shader_variant(Shader *shader, uint32_t key)
    VkShaderEXT handle = compile(shader, key);
    if (!handle) {
       TG_ERROR(shader->dev, FAILED(shader->error) ? shader->error : E_FAIL);
-      shader->error = S_OK;       /* the base variant stays usable */
+      if (SUCCEEDED(shader->dev->lost))
+         shader->error = S_OK;    /* a transient failure leaves the base usable */
       return VK_NULL_HANDLE;
    }
    shader->variants.push_back({key, handle});

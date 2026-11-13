@@ -28,6 +28,8 @@ static const char *shaderOutput;
 static Shader *failedShader;
 static void *shaderAllocations[3];
 static unsigned shaderAllocationFrees;
+static VkResult shaderFailure;
+static unsigned shaderBackendCalls;
 
 /* Observe the real vector deallocations of a failed CreateShader. Do not
  * inspect its private storage after its C++ lifetime has ended. */
@@ -215,6 +217,7 @@ static void incomplete_fence_keeps_resources()
             ++cpuWaits; return VK_ERROR_DEVICE_LOST;
          };
       CHECK(wait_sequence(&dev, 1, TGD3D_WAIT_DESTROY) == DXGI_ERROR_DEVICE_REMOVED);
+      CHECK(lastError == D3DDDIERR_DEVICEREMOVED);
       CHECK(cpuWaits == (result == VK_TIMEOUT ? 30u : 1u));
       CHECK(!completedValue && !cpuSignals && !viewsDestroyed);
       CHECK(dev.submittedCommands.size() == 1 && dev.deferred.size() == 1);
@@ -222,6 +225,22 @@ static void incomplete_fence_keeps_resources()
       CHECK(FAILED(wait_sequence(&dev, 1, TGD3D_WAIT_READBACK)) && cpuWaits == previous);
    }
    std::puts("PASS: timeout and device loss never complete or retire in-flight resources");
+}
+
+static void device_error_contract()
+{
+   Adapter adapter;
+   for (HRESULT error : {DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET,
+                         D3DDDIERR_DEVICEREMOVED}) {
+      reset(); Device dev = make_device(&adapter);
+      TG_ERROR(&dev, error);
+      CHECK(dev.lost == error && lastError == D3DDDIERR_DEVICEREMOVED);
+      CHECK(!cmd_begin(&dev) && FAILED(flush(&dev, true)) && !submissions);
+   }
+   reset(); Device dev = make_device(&adapter);
+   TG_ERROR(&dev, E_INVALIDARG);
+   CHECK(lastError == E_INVALIDARG && SUCCEEDED(dev.lost));
+   std::puts("PASS: device loss uses the D3D DDI callback code and blocks new submissions");
 }
 
 static void rotated_views()
@@ -383,13 +402,26 @@ static void shader_contract(const BYTE *dxbc, bool vertex, const char *outputPat
       const Shader *shader = reinterpret_cast<Shader *>(storage);
       CHECK(shader->cbMask == (1u << 13) && shader->srvMask[0] == 1 && shader->samplerMask == 1);
    }
+   /* A lazily compiled variant can discover removal after base creation.
+    * The base handle must not make the device look usable again. */
+   shaderBackendCalls = 0;
+   dev.vk.CreateShadersEXT = [](VkDevice, uint32_t, const VkShaderCreateInfoEXT *,
+                               const VkAllocationCallbacks *, VkShaderEXT *out) {
+      ++shaderBackendCalls; *out = VK_NULL_HANDLE; return VK_ERROR_DEVICE_LOST;
+   };
+   Shader *created = reinterpret_cast<Shader *>(storage);
+   CHECK(!shader_variant(created, 1u << 16));
+   CHECK(lastError == D3DDDIERR_DEVICEREMOVED && FAILED(dev.lost));
+   CHECK(created->error == D3DDDIERR_DEVICEREMOVED && shaderBackendCalls == 1);
+   CHECK(!shader_variant(created, 0) && !shader_variant(created, 1u << 17));
+   CHECK(shaderBackendCalls == 1);
    table.pfnDestroyShader({&dev}, {storage}); retire(&dev, true);
+   dev.lost = S_OK;
    std::puts(vertex ? "PASS: real SM4 VS DDI-to-SPIR-V conversion" : "PASS: real SM4 PS DDI-to-SPIR-V conversion");
 
    /* The runtime does not call DestroyShader after a creation error. Test
     * that the production callback frees its arrays before reporting it. */
    failedShader = reinterpret_cast<Shader *>(storage);
-   shaderAllocationFrees = 0;
    dev.vk.CreateShadersEXT = [](VkDevice, uint32_t, const VkShaderCreateInfoEXT *,
                                const VkAllocationCallbacks *, VkShaderEXT *out) {
       shaderAllocations[0] = failedShader->tokens.data();
@@ -397,16 +429,35 @@ static void shader_contract(const BYTE *dxbc, bool vertex, const char *outputPat
       shaderAllocations[2] = failedShader->outputs.data();
       CHECK(shaderAllocations[0] && shaderAllocations[1] && shaderAllocations[2]);
       *out = VK_NULL_HANDLE;
-      return VK_ERROR_OUT_OF_HOST_MEMORY;
+      return shaderFailure;
    };
    dev.um.pfnSetErrorCb = [](D3D10DDI_HRTCORELAYER, HRESULT hr) {
       CHECK(shaderAllocationFrees == 3);
       lastError = hr;
    };
-   create({&dev}, tokens.data(), {storage}, {}, &sig);
-   CHECK(lastError == E_OUTOFMEMORY && shaderAllocationFrees == 3 && dev.deferred.empty());
+   for (VkResult failure : {VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                            VK_ERROR_UNKNOWN, VK_ERROR_DEVICE_LOST}) {
+      shaderFailure = failure;
+      shaderAllocationFrees = 0;
+      lastError = S_OK;
+      create({&dev}, tokens.data(), {storage}, {}, &sig);
+      const HRESULT expected = failure == VK_ERROR_DEVICE_LOST ? D3DDDIERR_DEVICEREMOVED :
+         failure == VK_ERROR_UNKNOWN ? E_FAIL : E_OUTOFMEMORY;
+      CHECK(lastError == expected && shaderAllocationFrees == 3 && dev.deferred.empty());
+      CHECK(FAILED(dev.lost) == (failure == VK_ERROR_DEVICE_LOST));
+   }
    failedShader = nullptr;
-   std::puts("PASS: failed shader creation releases token/signature allocations before SetErrorCb");
+   /* Even an existing cached variant cannot be reused after device loss. */
+   Shader cached; cached.dev = &dev; cached.variants.push_back({0, handle<VkShaderEXT>(1)});
+   CHECK(shader_variant(&cached, 0) == VK_NULL_HANDLE);
+   CHECK(!cmd_begin(&dev) && FAILED(flush(&dev, true)) && !submissions);
+   dev.vk.CreateShadersEXT = [](VkDevice, uint32_t, const VkShaderCreateInfoEXT *,
+                               const VkAllocationCallbacks *, VkShaderEXT *) -> VkResult {
+      CHECK(false); return VK_ERROR_UNKNOWN;
+   };
+   create({&dev}, tokens.data(), {storage}, {}, &sig);
+   CHECK(lastError == D3DDDIERR_DEVICEREMOVED);
+   std::puts("PASS: shader failure preserves OOM/device-loss status and cleans before SetErrorCb");
 }
 
 static void sampled_shader_contract(const char *source, const char *outputPath)
@@ -429,6 +480,7 @@ void runtime_contracts();
 int main()
 {
    submission_contract(); nonblocking_map(); incomplete_fence_keeps_resources();
+   device_error_contract();
    rotated_views(); descriptor_contract();
    query_contract();
    shader_contract(g_VS, true, "tgd3d-vs.spv"); shader_contract(g_PS, false, "tgd3d-ps.spv");

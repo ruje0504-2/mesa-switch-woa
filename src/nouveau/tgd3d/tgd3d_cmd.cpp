@@ -22,8 +22,13 @@ void Device::setError(HRESULT hr, const char *file, int line)
 {
    trace_error(hr, file, (unsigned)line);
    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == D3DDDIERR_DEVICEREMOVED ||
-       hr == DXGI_ERROR_DEVICE_RESET)
+       hr == DXGI_ERROR_DEVICE_RESET) {
       lost = hr;
+      /* SetErrorCb consumes D3D DDI errors, not DXGI API return values.
+       * The runtime treats DXGI_ERROR_DEVICE_REMOVED/RESET as critical
+       * driver errors here instead of the documented removal notification. */
+      hr = D3DDDIERR_DEVICEREMOVED;
+   }
    if (um.pfnSetErrorCb)
       um.pfnSetErrorCb(hRTCoreLayer, hr);
 }

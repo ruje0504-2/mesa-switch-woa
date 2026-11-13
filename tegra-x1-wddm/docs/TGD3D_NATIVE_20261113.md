@@ -616,3 +616,31 @@ callback 表指针；冻结 KMD `6c854e9f` 已在 golden context 保存前清除
 实际桌面 shader、描述符地址、GPU 执行和关闭窗口资源退休仍未验收。`68c1bb7e`
 失败创建清理修复已经推送；本轮没有将它部署到用户当前手动测试的 UMD，也没有
 修改双向 Fence、重启 Windows 或回退 `.59`。
+
+### 设备丢失的 DDI 错误传播修复
+
+WDK 10.0.26100.0 中 `D3DDDIERR_DEVICEREMOVED` 为 `0x88760870`，与
+`DXGI_ERROR_DEVICE_REMOVED` (`0x887a0005`) 不同。原 `Device::setError` 把后者
+直接交给 SetErrorCb；shader backend 的 `VK_ERROR_DEVICE_LOST` 则被转换为
+`E_FAIL`，未锁存设备丢失。微软
+[Handling Errors](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/handling-errors)
+（2021-12-15）、
+[Draw](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_draw)
+（2024-02-22）与
+[CreatePixelShader](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createpixelshader)
+（2021-04-01）规定当前 DDI 允许的错误码，其他错误会被 runtime 作为严重错误处理。
+
+修复在 callback 边界转换 removed/reset，保留内部状态和原始错误记录；shader
+创建将 Vulkan 的两类 OOM 映射为 E_OUTOFMEMORY，将 device lost 映射为 DDI
+device removed。未知错误仍上报，不伪装成功。设备丢失后拒绝后续创建/变体编译和
+缓存变体使用，没有改同步拓扑或伪造 Fence 完成。
+
+同一新增控制链接旧源码 `6decd617` 时在 timeout callback 断言退出1，修复后退出0。
+15:08:59 UTC 的最终 ARM64 CPU 控制覆盖 removed/reset/DDI 原值、两类 shader OOM、
+未知错误、shader 延迟变体触发 device lost、失败清理以及丢失后停止编译/提交；
+ARM64 和 x64 构建通过。产物与原始输出在 `ddi-device-loss-controls/`。
+这些是模拟 Vulkan 故障的生产 DDI 控制，不是实际发生 GPU 丢失或桌面稳定性通过。
+当前运行 UMD 未替换，天气/网页关闭冻结根因和 teardown 无限等待仍未解决。
+
+并行审计状态：Antigravity Carbon High 原会话没有完整报告，CLI 仍存活但最后一个
+源码读取工具未结束；VPS Claude 的只读请求返回未登录，未产生审计结论，未更改其配置。
