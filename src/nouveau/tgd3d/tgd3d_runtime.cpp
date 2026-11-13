@@ -555,7 +555,8 @@ HRESULT runtime_primary_create(Device *dev, const D3D10DDIARG_CREATERESOURCE *de
    /* The fixed panel: 720x1280 identity storage, 1280x720 for quarter turns. */
    const UINT width = quarter ? 1280 : 720, height = quarter ? 720 : 1280;
    if (desc->ResourceDimension != D3D10DDIRESOURCE_TEXTURE2D ||
-       desc->Format != DXGI_FORMAT_B8G8R8A8_UNORM || desc->MipLevels != 1 ||
+       (desc->Format != DXGI_FORMAT_B8G8R8A8_UNORM &&
+        desc->Format != DXGI_FORMAT_B8G8R8X8_UNORM) || desc->MipLevels != 1 ||
        desc->ArraySize != 1 || desc->SampleDesc.Count != 1 || desc->SampleDesc.Quality ||
        primary.VidPnSourceId != 0 || mode_rotation > DXGI_DDI_MODE_ROTATION_ROTATE270 ||
        (primary.Flags & ~(DXGI_DDI_PRIMARY_OPTIONAL | DXGI_DDI_PRIMARY_NONPREROTATED)) ||
@@ -575,7 +576,8 @@ HRESULT runtime_primary_create(Device *dev, const D3D10DDIARG_CREATERESOURCE *de
    const UINT pitch = width * 4;
    tg_gpu_primary_allocation_request request = {
       {TG_GPU_ALLOCATION_ABI, TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_DISPLAY_PRIMARY,
-       (uint64_t)pitch * height}, D3DDDIFMT_A8R8G8B8,
+       (uint64_t)pitch * height},
+      desc->Format == DXGI_FORMAT_B8G8R8X8_UNORM ? D3DDDIFMT_X8R8G8B8 : D3DDDIFMT_A8R8G8B8,
       {primary.ModeDesc.RefreshRate.Numerator, primary.ModeDesc.RefreshRate.Denominator},
       rotation, width, height, pitch, 0};
    D3DDDI_ALLOCATIONINFO2 info = {};

@@ -997,3 +997,25 @@ UMD、组件清单、KMD、ICD 和上述注册表文件。备份在 Mac 及 SD F
 
 本轮仅完成离线部署与读回，仍为 CPU 同步控制组合；尚未验证登录前原生启动、
 DWM 实际加载或物理画面稳定性。缓存、生产双向 Fence 和实际60Hz时序仍须分轮验收。
+
+### 9de42c82 实机启动失败；补齐 XRGB 主表面创建
+
+用户随后明确报告“登录前又自动重启”，本轮原生启动判失败。两次 SSH 连接超时，
+未取得这次实际加载模块，不重复安装或追加重启。标准 OpenResource 修正没有解决
+当前可见故障；不能把文件校验或 CPU 控制通过写成登录前启动成功。
+
+继续静态对比发现：冻结 `.158` 标准主表面/分配路径和 tgd3d 格式表都支持
+X8R8G8B8，但 `runtime_primary_create` 仅接受 B8G8R8A8_UNORM，并固定向 KMD 请求
+A8R8G8B8，导致合法 B8G8R8X8_UNORM 主表面在创建时被拒绝。本次仅补齐该格式，
+按原始格式请求 X8 或 A8；沿用原有2880字节 pitch、3686400字节 backing 和线性导入，
+没有改变同步或显示方向。依据微软
+[CreateResource](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createresource)
+（2021-07-16）及 [primary 描述](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgi_ddi_primary_desc)
+（2024-02-22），核查日期2026-11-13。是否实际走到此请求尚无实机证据，未认定为重启根因。
+
+新控制从真实 CreateResource DDI 进入，验证 XRGB/ARGB 的 KMD 格式、Vulkan scanout
+布局、900页 GPU VA、SetDisplayMode allocation 和释放；相同新断言配旧 runtime
+源码退出1，修正后 CPU-sync/生产默认双向桥接控制均退出0，ARM64/x64 构建通过。
+最初测试夹具的 SetDisplayMode 回调 const 签名不符已修正，这属于工具编译错误。
+结果在 `primary-create-controls/`。下一实机候选以 `9de42c82` 为底，仅加入本项
+主表面创建修正；完整开发分支中的缓存和 Flush 修正另行验收。
