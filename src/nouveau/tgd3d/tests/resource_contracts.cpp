@@ -1,0 +1,106 @@
+/* SPDX-License-Identifier: MIT
+ * Resource creation failures through the real DDI, without GPU submission.
+ */
+#include "tgd3d.h"
+#include <cstdio>
+#include <cstdlib>
+using namespace tgd3d;
+#define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "%s:%u: %s\n", __FILE__, __LINE__, #x); std::exit(1); } } while (0)
+
+static unsigned failureStep, calls, liveImages, liveBuffers, liveMemory, notifications;
+static VkDeviceSize bufferSize;
+static VkResult failureResult;
+static HRESULT reported;
+
+static void init(Device *dev, Adapter *adapter)
+{
+   calls = liveImages = liveBuffers = liveMemory = notifications = 0;
+   reported = S_OK;
+   dev->adapter = adapter; dev->caps = &adapter->vk.caps;
+   dev->vkdev = (VkDevice)(uintptr_t)1;
+   adapter->vk.caps.memory.memoryTypeCount = 1;
+   adapter->vk.caps.memory.memoryTypes[0].propertyFlags =
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+   dev->um.pfnSetErrorCb = [](D3D10DDI_HRTCORELAYER, HRESULT hr) {
+      CHECK(!liveImages && !liveBuffers && !liveMemory);
+      reported = hr; ++notifications;
+   };
+   dev->vk.CreateImage = [](VkDevice, const VkImageCreateInfo *, const VkAllocationCallbacks *, VkImage *out) {
+      ++calls; if (failureStep == 1) return failureResult;
+      *out = (VkImage)(uintptr_t)2; ++liveImages; return VK_SUCCESS;
+   };
+   dev->vk.CreateBuffer = [](VkDevice, const VkBufferCreateInfo *info, const VkAllocationCallbacks *, VkBuffer *out) {
+      ++calls; if (failureStep == 1) return failureResult;
+      bufferSize = info->size; *out = (VkBuffer)(uintptr_t)3; ++liveBuffers; return VK_SUCCESS;
+   };
+   dev->vk.GetImageMemoryRequirements = [](VkDevice, VkImage, VkMemoryRequirements *out) { *out = {16384, 4096, 1}; };
+   dev->vk.GetBufferMemoryRequirements = [](VkDevice, VkBuffer, VkMemoryRequirements *out) { *out = {bufferSize, 4096, 1}; };
+   dev->vk.AllocateMemory = [](VkDevice, const VkMemoryAllocateInfo *, const VkAllocationCallbacks *, VkDeviceMemory *out) {
+      ++calls; if (failureStep == 2) return failureResult;
+      *out = (VkDeviceMemory)(uintptr_t)4; ++liveMemory; return VK_SUCCESS;
+   };
+   dev->vk.BindImageMemory = [](VkDevice, VkImage, VkDeviceMemory, VkDeviceSize) {
+      ++calls; return failureStep == 3 ? failureResult : VK_SUCCESS;
+   };
+   dev->vk.BindBufferMemory = [](VkDevice, VkBuffer, VkDeviceMemory, VkDeviceSize) {
+      ++calls; return failureStep == 3 ? failureResult : VK_SUCCESS;
+   };
+   dev->vk.MapMemory = [](VkDevice, VkDeviceMemory, VkDeviceSize, VkDeviceSize, VkMemoryMapFlags, void **) {
+      ++calls; CHECK(failureStep == 4); return failureResult;
+   };
+   dev->vk.DestroyImage = [](VkDevice, VkImage, const VkAllocationCallbacks *) { CHECK(liveImages == 1); --liveImages; };
+   dev->vk.DestroyBuffer = [](VkDevice, VkBuffer, const VkAllocationCallbacks *) { CHECK(liveBuffers == 1); --liveBuffers; };
+   dev->vk.FreeMemory = [](VkDevice, VkDeviceMemory, const VkAllocationCallbacks *) { CHECK(liveMemory == 1); --liveMemory; };
+}
+
+void resource_creation_contracts()
+{
+   /* Private image, pooled buffer, dedicated buffer and staging texture. */
+   for (unsigned kind = 0; kind < 4; ++kind) {
+      const bool buffer = kind == 1 || kind == 2;
+      for (unsigned step = 1; step <= (kind ? 4u : 3u); ++step) {
+         for (VkResult error : {VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_OUT_OF_DEVICE_MEMORY, VK_ERROR_MEMORY_MAP_FAILED}) {
+            if (error == VK_ERROR_MEMORY_MAP_FAILED && step != 4) continue;
+            Adapter adapter; Device dev; init(&dev, &adapter);
+            failureStep = step; failureResult = error;
+            D3D10DDI_MIPINFO mip = {};
+            mip.TexelWidth = kind == 2 ? 300000 : 64; mip.TexelHeight = buffer ? 1 : 64; mip.TexelDepth = 1;
+            D3D10DDIARG_CREATERESOURCE desc = {};
+            desc.pMipInfoList = &mip; desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+            desc.ResourceDimension = buffer ? D3D10DDIRESOURCE_BUFFER : D3D10DDIRESOURCE_TEXTURE2D;
+            desc.Format = buffer ? DXGI_FORMAT_UNKNOWN : DXGI_FORMAT_R8G8B8A8_UNORM;
+            desc.Usage = kind == 3 ? D3D10_DDI_USAGE_STAGING : D3D10_DDI_USAGE_DEFAULT;
+            desc.BindFlags = buffer ? D3D10_DDI_BIND_VERTEX_BUFFER : kind == 3 ? 0 : D3D10_DDI_BIND_RENDER_TARGET;
+            alignas(Resource) unsigned char storage[sizeof(Resource)];
+            D3D10DDI_DEVICEFUNCS table = {}; resource_fill_table(&table);
+            table.pfnCreateResource({&dev}, &desc, {storage}, {});
+            CHECK(reported == E_OUTOFMEMORY && notifications == 1 && SUCCEEDED(dev.lost));
+            CHECK(!liveImages && !liveBuffers && !liveMemory && dev.chunks.empty() && !dev.currentChunk);
+            /* A removed device rejects another create before allocation. */
+            const unsigned previous = calls;
+            dev.lost = D3DDDIERR_DEVICEREMOVED;
+            table.pfnCreateResource({&dev}, &desc, {storage}, {});
+            CHECK(reported == D3DDDIERR_DEVICEREMOVED && notifications == 2 && calls == previous);
+         }
+      }
+   }
+   /* Lazy view creation also preserves internal failures instead of
+    * labeling every result as memory exhaustion. */
+   for (VkResult error : {VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_OUT_OF_DEVICE_MEMORY, VK_ERROR_UNKNOWN}) {
+      Adapter adapter; Device dev; init(&dev, &adapter); failureResult = error;
+      dev.vk.CreateImageView = [](VkDevice, const VkImageViewCreateInfo *, const VkAllocationCallbacks *, VkImageView *) { return failureResult; };
+      dev.vk.CreateBufferView = [](VkDevice, const VkBufferViewCreateInfo *, const VkAllocationCallbacks *, VkBufferView *) { return failureResult; };
+      Resource res; res.dev = &dev; res.storage.image = (VkImage)(uintptr_t)2;
+      View view; view.dev = &dev; view.res = &res; view.type = ViewType::SRV;
+      view.info = {VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+      view.info.viewType = VK_IMAGE_VIEW_TYPE_2D; view.info.format = VK_FORMAT_R8G8B8A8_UNORM;
+      view.info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+      CHECK(view_get(&view) == VK_NULL_HANDLE);
+      CHECK(reported == (error == VK_ERROR_UNKNOWN ? E_FAIL : E_OUTOFMEMORY));
+      Chunk chunk; chunk.buffer = (VkBuffer)(uintptr_t)3; res.slice.chunk = &chunk;
+      view.bufferFormat = VK_FORMAT_R32_UINT; view.bufferRange = 64;
+      CHECK(view_get_buffer(&view) == VK_NULL_HANDLE && notifications == 2);
+      CHECK(reported == (error == VK_ERROR_UNKNOWN ? E_FAIL : E_OUTOFMEMORY));
+   }
+   std::puts("PASS: image/buffer/staging allocation and map failures report OOM after cleanup; removed devices allocate nothing; view errors retain their class (CPU control)");
+}

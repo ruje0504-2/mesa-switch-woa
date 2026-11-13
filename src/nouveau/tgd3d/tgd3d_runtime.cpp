@@ -689,14 +689,16 @@ HRESULT runtime_bind_image(Device *dev, RuntimeResource *p, VkImage image, VkDev
       return DXGI_ERROR_UNSUPPORTED;
    VkResult result = dev->vk.AllocateMemory(dev->vkdev, &alloc, nullptr, memory);
    if (result != VK_SUCCESS)
-      return FAILED(p->error) ? p->error : E_OUTOFMEMORY;
+      return result == VK_ERROR_DEVICE_LOST ? D3DDDIERR_DEVICEREMOVED :
+         FAILED(p->error) ? p->error : resource_result(result);
    /* An ICD that ignored the owner structure would have allocated unrelated
     * memory: the image would render, and nobody else would ever see it. */
-   if (!imported ||
-       dev->vk.BindImageMemory(dev->vkdev, image, *memory, 0) != VK_SUCCESS) {
+   HRESULT hr = imported ?
+      resource_result(dev->vk.BindImageMemory(dev->vkdev, image, *memory, 0)) : DXGI_ERROR_UNSUPPORTED;
+   if (FAILED(hr)) {
       dev->vk.FreeMemory(dev->vkdev, *memory, nullptr);
       *memory = VK_NULL_HANDLE;
-      return DXGI_ERROR_UNSUPPORTED;
+      return hr;
    }
    return S_OK;
 }

@@ -20,6 +20,9 @@ static HRESULT presentStatus;
 static HRESULT primaryError;
 static D3DDDIFORMAT primaryFormat;
 static unsigned primaryImages, primaryModes;
+static unsigned primaryFailureStep, primaryAllocations, primaryResidents, expectedPrimaryDeallocations;
+static VkResult primaryFailure;
+static HRESULT primaryRuntimeFailure;
 static bool ignoreImport;
 static HANDLE rt_device(unsigned i) { return (HANDLE)(uintptr_t)(0x100 + i); }
 static HANDLE rt_resource(unsigned i) { return (HANDLE)(uintptr_t)(0x200 + i); }
@@ -120,14 +123,40 @@ static void init(Device *dev, Adapter *adapter, unsigned i)
 
 static void primary_creation_contract()
 {
-   for (bool alpha : {false, true}) {
+   const struct {
+      unsigned step;
+      VkResult vulkan;
+      HRESULT runtime, expected;
+   } cases[] = {
+      {0, VK_SUCCESS, S_OK, S_OK},
+      {1, VK_ERROR_OUT_OF_HOST_MEMORY, S_OK, E_OUTOFMEMORY},
+      {1, VK_ERROR_OUT_OF_DEVICE_MEMORY, S_OK, E_OUTOFMEMORY},
+      {2, VK_ERROR_OUT_OF_HOST_MEMORY, S_OK, E_OUTOFMEMORY},
+      {2, VK_ERROR_OUT_OF_DEVICE_MEMORY, S_OK, E_OUTOFMEMORY},
+      {3, VK_ERROR_OUT_OF_HOST_MEMORY, S_OK, E_OUTOFMEMORY},
+      {3, VK_ERROR_OUT_OF_DEVICE_MEMORY, S_OK, E_OUTOFMEMORY},
+      {4, VK_SUCCESS, D3DDDIERR_OUTOFVIDEOMEMORY, E_OUTOFMEMORY},
+      {4, VK_SUCCESS, D3DDDIERR_DEVICEREMOVED, D3DDDIERR_DEVICEREMOVED},
+      {5, VK_SUCCESS, D3DDDIERR_OUTOFVIDEOMEMORY, E_OUTOFMEMORY},
+      {5, VK_SUCCESS, D3DDDIERR_DEVICEREMOVED, D3DDDIERR_DEVICEREMOVED},
+   };
+   for (bool alpha : {false, true}) for (bool opened : {false, true}) for (const auto &failure : cases) {
+      if (opened && failure.step == 4)
+         continue; /* Opening receives its allocation from the runtime. */
       Adapter adapter; Device dev;
       pagingValues[0] = 0;
       init(&dev, &adapter, 0);
       primaryError = S_OK;
       primaryFormat = alpha ? D3DDDIFMT_A8R8G8B8 : D3DDDIFMT_X8R8G8B8;
       primaryImages = primaryModes = 0;
-      dev.um.pfnSetErrorCb = [](D3D10DDI_HRTCORELAYER, HRESULT hr) { primaryError = hr; };
+      primaryAllocations = primaryResidents = 0;
+      primaryFailureStep = failure.step; primaryFailure = failure.vulkan;
+      primaryRuntimeFailure = failure.runtime;
+      expectedPrimaryDeallocations = deallocations + (failure.step != 4);
+      dev.um.pfnSetErrorCb = [](D3D10DDI_HRTCORELAYER, HRESULT hr) {
+         CHECK(!primaryImages && !owners[0] && deallocations == expectedPrimaryDeallocations);
+         primaryError = hr;
+      };
       dev.kt.pfnAllocateCb = [](HANDLE h, D3DDDICB_ALLOCATE *a) -> HRESULT {
          CHECK(h == rt_device(0) && a->hResource == rt_resource(0) && a->NumAllocations == 1);
          CHECK(!a->PrivateDriverDataSize && a->pAllocationInfo2->Flags.Primary);
@@ -136,7 +165,17 @@ static void primary_creation_contract()
          CHECK(r.Buffer.flags == (TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_DISPLAY_PRIMARY));
          CHECK(r.Format == primaryFormat && r.Width == 720 && r.Height == 1280);
          CHECK(r.Pitch == 2880 && r.Buffer.bytes == 3686400 && r.Rotation == D3DDDI_ROTATION_IDENTITY);
+         ++primaryAllocations;
+         if (primaryFailureStep == 4)
+            return primaryRuntimeFailure;
          a->pAllocationInfo2->hAllocation = 0x60; return S_OK;
+      };
+      dev.kt.pfnMakeResidentCb = [](HANDLE h, D3DDDI_MAKERESIDENT *a) -> HRESULT {
+         CHECK(h == rt_device(0) && a->hPagingQueue == 0x40 && *a->AllocationList == 0x60);
+         ++primaryResidents;
+         if (primaryFailureStep == 5)
+            return primaryRuntimeFailure;
+         a->PagingFenceValue = 7; return E_PENDING;
       };
       dev.kt.pfnSetDisplayModeCb = [](HANDLE h, D3DDDICB_SETDISPLAYMODE *a) -> HRESULT {
          CHECK(h == rt_device(0) && a->hPrimaryAllocation == 0x60); ++primaryModes; return S_OK;
@@ -154,6 +193,8 @@ static void primary_creation_contract()
          CHECK(a->extent.width == 720 && a->extent.height == 1280 && a->initialLayout == VK_IMAGE_LAYOUT_PREINITIALIZED);
          const auto *wsi = static_cast<const wsi_image_create_info *>(a->pNext);
          CHECK(wsi->sType == VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA && wsi->scanout && wsi->win32_row_pitch == 2880);
+         if (primaryFailureStep == 1)
+            return primaryFailure;
          *image = (VkImage)0x22; ++primaryImages; return VK_SUCCESS;
       };
       dev.vk.GetImageSubresourceLayout = [](VkDevice, VkImage, const VkImageSubresource *, VkSubresourceLayout *out) {
@@ -162,12 +203,17 @@ static void primary_creation_contract()
       dev.vk.GetImageMemoryRequirements = [](VkDevice, VkImage, VkMemoryRequirements *out) { *out = {3686400, 4096, 1}; };
       dev.vk.AllocateMemory = [](VkDevice, const VkMemoryAllocateInfo *a, const VkAllocationCallbacks *, VkDeviceMemory *out) {
          CHECK(a->allocationSize == 3686400 && a->memoryTypeIndex == 0);
+         if (primaryFailureStep == 2)
+            return primaryFailure;
          const auto *wsi = static_cast<const wsi_memory_allocate_info *>(a->pNext);
          const auto *owner = wsi->win32_memory;
          CHECK(owner->allocation == 0x60 && owner->size == 3686400);
          CHECK(owner->map_gpu(owner->context, 0x100000, 0, 3686400, 0, false, 0x100000, 3686400) == VK_SUCCESS);
          owner->retain(owner->context); owners[0] = owner;
          *wsi->win32_imported = true; *out = (VkDeviceMemory)1; return VK_SUCCESS;
+      };
+      dev.vk.BindImageMemory = [](VkDevice, VkImage, VkDeviceMemory, VkDeviceSize offset) {
+         CHECK(!offset); return primaryFailureStep == 3 ? primaryFailure : VK_SUCCESS;
       };
       dev.vk.FreeMemory = [](VkDevice, VkDeviceMemory, const VkAllocationCallbacks *) {
          const auto *owner = owners[0];
@@ -188,7 +234,29 @@ static void primary_creation_contract()
       desc.BindFlags = D3D10_DDI_BIND_RENDER_TARGET | D3D10_DDI_BIND_PRESENT;
       alignas(Resource) unsigned char storage[sizeof(Resource)];
       D3D10DDI_DEVICEFUNCS table = {}; resource_fill_table(&table);
-      table.pfnCreateResource({&dev}, &desc, {storage}, {rt_resource(0)});
+      tg_gpu_primary_allocation_request standard = {
+         {TG_GPU_ALLOCATION_ABI, TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_DISPLAY_PRIMARY, 3686400},
+         primaryFormat, {60, 1}, D3DDDI_ROTATION_IDENTITY, 720, 1280, 2880, 0};
+      D3DDDI_OPENALLOCATIONINFO allocation = {};
+      allocation.hAllocation = 0x60; allocation.pPrivateDriverData = &standard;
+      allocation.PrivateDriverDataSize = sizeof(standard);
+      D3D10DDIARG_OPENRESOURCE open = {}; open.NumAllocations = 1; open.pOpenAllocationInfo = &allocation;
+      auto create_or_open = [&] {
+         if (opened) table.pfnOpenResource({&dev}, &open, {storage}, {rt_resource(0)});
+         else table.pfnCreateResource({&dev}, &desc, {storage}, {rt_resource(0)});
+      };
+      create_or_open();
+      if (failure.step) {
+         CHECK(primaryError == failure.expected && !primaryImages && !owners[0]);
+         CHECK(FAILED(dev.lost) == (failure.expected == D3DDDIERR_DEVICEREMOVED));
+         if (FAILED(dev.lost)) {
+            const unsigned a = primaryAllocations, r = primaryResidents;
+            create_or_open();
+            CHECK(primaryError == D3DDDIERR_DEVICEREMOVED && primaryAllocations == a && primaryResidents == r);
+         }
+         runtime_device_destroy(&dev);
+         continue;
+      }
       CHECK(primaryError == S_OK && primaryImages == 1);
       auto *res = reinterpret_cast<Resource *>(storage);
       CHECK(res->format == desc.Format && res->primary && res->pitch == 2880);
@@ -198,6 +266,7 @@ static void primary_creation_contract()
       runtime_device_destroy(&dev);
    }
    std::puts("PASS: ARGB/XRGB primary CreateResource DDI, native pitch/format, imported GPU VA, display-mode allocation and teardown (CPU control)");
+   std::puts("PASS: primary Create/OpenResource propagate image/import/bind OOM and runtime removal after releasing partial ownership (CPU control)");
 }
 
 void runtime_contracts()

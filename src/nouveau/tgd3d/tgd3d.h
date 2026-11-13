@@ -445,11 +445,12 @@ void barrier_for_read(Device *dev, uint64_t writeSerial);
 void flush_pending_clears(Device *dev, const View *except_bound);
 
 /* tgd3d_upload.cpp */
-Slice slice_alloc(Device *dev, VkDeviceSize size, VkDeviceSize alignment);
+HRESULT slice_alloc(Device *dev, VkDeviceSize size, VkDeviceSize alignment, Slice *slice);
 void slice_release(Device *dev, Slice slice, uint64_t lastUse);
 void upload_destroy(Device *dev);
 
 /* tgd3d_resource.cpp */
+HRESULT resource_result(VkResult result);
 void resource_fill_table(D3D10DDI_DEVICEFUNCS *table);
 VkImageView view_get(View *view, bool arrayed = false);
 VkBufferView view_get_buffer(View *view);

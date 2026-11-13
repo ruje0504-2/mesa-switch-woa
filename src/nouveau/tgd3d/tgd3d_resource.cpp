@@ -9,6 +9,19 @@
 
 namespace tgd3d {
 
+HRESULT resource_result(VkResult result)
+{
+   switch (result) {
+   case VK_SUCCESS: return S_OK;
+   case VK_ERROR_OUT_OF_HOST_MEMORY:
+   case VK_ERROR_OUT_OF_DEVICE_MEMORY:
+   case VK_ERROR_MEMORY_MAP_FAILED: return E_OUTOFMEMORY;
+   case VK_ERROR_DEVICE_LOST: return D3DDDIERR_DEVICEREMOVED;
+   case VK_ERROR_FORMAT_NOT_SUPPORTED: return DXGI_ERROR_UNSUPPORTED;
+   default: return E_FAIL;
+   }
+}
+
 static inline View *V(void *p) { return static_cast<View *>(p); }
 
 static uint32_t block_dim(const FormatInfo *info) { return (info->flags & FMT_BC) ? 4 : 1; }
@@ -125,8 +138,7 @@ HRESULT image_create(Device *dev, Resource *res)
       }
    }
    trace(TGD3D_TRACE_RESOURCE_PHASE, E_PENDING, 1, (uintptr_t)res);
-   HRESULT hr = dev->vk.CreateImage(dev->vkdev, &ici, nullptr, &res->storage.image) == VK_SUCCESS ?
-      S_OK : runtime ? DXGI_ERROR_UNSUPPORTED : E_OUTOFMEMORY;
+   HRESULT hr = resource_result(dev->vk.CreateImage(dev->vkdev, &ici, nullptr, &res->storage.image));
    trace(TGD3D_TRACE_RESOURCE_PHASE, hr, 1, (uintptr_t)res);
    if (FAILED(hr))
       return hr;
@@ -159,14 +171,12 @@ HRESULT image_create(Device *dev, Resource *res)
       if (alloc.memoryTypeIndex == UINT32_MAX)
          alloc.memoryTypeIndex = dev->adapter->vk.findMemoryType(req.memoryTypeBits, 0);
       trace(TGD3D_TRACE_RESOURCE_PHASE, E_PENDING, 2, (uintptr_t)res);
-      if (alloc.memoryTypeIndex == UINT32_MAX ||
-          dev->vk.AllocateMemory(dev->vkdev, &alloc, nullptr, &res->storage.memory) != VK_SUCCESS)
-         hr = D3DDDIERR_OUTOFVIDEOMEMORY;
+      hr = alloc.memoryTypeIndex == UINT32_MAX ? DXGI_ERROR_UNSUPPORTED :
+         resource_result(dev->vk.AllocateMemory(dev->vkdev, &alloc, nullptr, &res->storage.memory));
       trace(TGD3D_TRACE_RESOURCE_PHASE, hr, 2, (uintptr_t)res);
       if (SUCCEEDED(hr)) {
          trace(TGD3D_TRACE_RESOURCE_PHASE, E_PENDING, 3, (uintptr_t)res);
-         if (dev->vk.BindImageMemory(dev->vkdev, res->storage.image, res->storage.memory, 0) != VK_SUCCESS)
-            hr = E_FAIL;
+         hr = resource_result(dev->vk.BindImageMemory(dev->vkdev, res->storage.image, res->storage.memory, 0));
          trace(TGD3D_TRACE_RESOURCE_PHASE, hr, 3, (uintptr_t)res);
       }
    }
@@ -274,9 +284,10 @@ static HRESULT upload_texels(Device *dev, Resource *res, UINT sub, const D3D10_D
       return S_OK;
    const uint32_t bytes = row_bytes(info, width), rows = row_count(info, height);
    const VkDeviceSize total = (VkDeviceSize)bytes * rows * depth;
-   Slice slice = slice_alloc(dev, total, 16);
-   if (!slice)
-      return E_OUTOFMEMORY;
+   Slice slice;
+   HRESULT allocation = slice_alloc(dev, total, 16, &slice);
+   if (FAILED(allocation))
+      return allocation;
    for (uint32_t z = 0; z < depth; z++)
       copy_rows(slice.cpu() + (size_t)z * bytes * rows, bytes,
                 static_cast<const uint8_t *>(data) + (size_t)z * depth_pitch, row_pitch, bytes, rows);
@@ -364,12 +375,20 @@ static void resource_fail(Device *dev, Resource *res, HRESULT hr)
    if (res->storage.image || res->storage.runtime)
       storage_destroy(dev, res->storage, true);
    res->~Resource();
+   /* Create/OpenResource accept E_OUTOFMEMORY, not the legacy video-memory
+    * error. Preserve removal discovered while unwinding initial uploads. */
+   if (FAILED(dev->lost))
+      hr = dev->lost;
+   else if (hr == D3DDDIERR_OUTOFVIDEOMEMORY)
+      hr = E_OUTOFMEMORY;
    TG_ERROR(dev, hr);
 }
 
 static HRESULT create_resource(Device *dev, const D3D10DDIARG_CREATERESOURCE *desc,
                                 Resource *res)
 {
+   if (FAILED(dev->lost))
+      return dev->lost;
    res->dim = desc->ResourceDimension;
    res->usage = desc->Usage;
    res->bind = desc->BindFlags;
@@ -391,10 +410,8 @@ static HRESULT create_resource(Device *dev, const D3D10DDIARG_CREATERESOURCE *de
    if (res->dim == D3D10DDIRESOURCE_BUFFER) {
       res->kind = ResKind::Buffer;
       res->size = res->width;
-      res->slice = slice_alloc(dev, res->size, 256);
-      if (!res->slice)
-         hr = D3DDDIERR_OUTOFVIDEOMEMORY;
-      else if (desc->pInitialDataUP && desc->pInitialDataUP[0].pSysMem)
+      hr = slice_alloc(dev, res->size, 256, &res->slice);
+      if (SUCCEEDED(hr) && desc->pInitialDataUP && desc->pInitialDataUP[0].pSysMem)
          memcpy(res->slice.cpu(), desc->pInitialDataUP[0].pSysMem, res->size);
       return hr;
    }
@@ -411,9 +428,9 @@ static HRESULT create_resource(Device *dev, const D3D10DDIARG_CREATERESOURCE *de
        !(res->misc & D3D10_DDI_RESOURCE_MISC_SHARED)) {
       res->kind = ResKind::Staging;
       staging_layout(res, info);
-      res->slice = slice_alloc(dev, res->size, 256);
-      if (!res->slice)
-         return D3DDDIERR_OUTOFVIDEOMEMORY;
+      hr = slice_alloc(dev, res->size, 256, &res->slice);
+      if (FAILED(hr))
+         return hr;
       for (UINT sub = 0; desc->pInitialDataUP && sub < res->subresources(); sub++) {
          const auto &up = desc->pInitialDataUP[sub];
          const SubLayout &l = res->layout[sub];
@@ -474,8 +491,9 @@ static void APIENTRY OpenResource(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_OP
    res->dev = dev;
    res->hRT = hRT;
    res->opened = true;
-   RuntimeSharedDescription d;
-   HRESULT hr = runtime_shared_open(dev, args, hRT, &res->storage.runtime, &d);
+   RuntimeSharedDescription d = {};
+   HRESULT hr = FAILED(dev->lost) ? dev->lost :
+      runtime_shared_open(dev, args, hRT, &res->storage.runtime, &d);
    trace(TGD3D_TRACE_OPEN_RESOURCE, hr, (uint64_t)d.width << 32 | d.height, d.pitch);
    if (SUCCEEDED(hr)) {
       res->primary = runtime_is_primary(res->storage.runtime);
@@ -596,8 +614,9 @@ VkImageView view_get(View *view, bool arrayed)
          info.subresourceRange.layerCount = 1;
    }
    VkImageView handle = VK_NULL_HANDLE;
-   if (dev->vk.CreateImageView(dev->vkdev, &info, nullptr, &handle) != VK_SUCCESS) {
-      TG_ERROR(dev, E_OUTOFMEMORY);
+   const VkResult result = dev->vk.CreateImageView(dev->vkdev, &info, nullptr, &handle);
+   if (result != VK_SUCCESS) {
+      TG_ERROR(dev, resource_result(result));
       return VK_NULL_HANDLE;
    }
    *slot = {image, handle, key};
@@ -619,8 +638,9 @@ VkBufferView view_get_buffer(View *view)
    info.format = view->bufferFormat;
    info.offset = offset;
    info.range = view->bufferRange;
-   if (dev->vk.CreateBufferView(dev->vkdev, &info, nullptr, &view->bufferView) != VK_SUCCESS) {
-      TG_ERROR(dev, E_OUTOFMEMORY);
+   const VkResult result = dev->vk.CreateBufferView(dev->vkdev, &info, nullptr, &view->bufferView);
+   if (result != VK_SUCCESS) {
+      TG_ERROR(dev, resource_result(result));
       return VK_NULL_HANDLE;
    }
    view->bufferViewBuffer = buffer;
@@ -885,20 +905,21 @@ static void buffer_renamed(Device *dev, Resource *res)
 }
 
 /* Gives the buffer storage that no recorded or queued command references. */
-static bool buffer_discard(Device *dev, Resource *res)
+static HRESULT buffer_discard(Device *dev, Resource *res)
 {
    const uint64_t last = res->sliceLastUse > res->sliceLastWrite ? res->sliceLastUse :
                                                                    res->sliceLastWrite;
    if (!last || sequence_done(dev, last))
-      return true;
-   Slice fresh = slice_alloc(dev, res->size, 256);
-   if (!fresh)
-      return false;
+      return S_OK;
+   Slice fresh;
+   HRESULT hr = slice_alloc(dev, res->size, 256, &fresh);
+   if (FAILED(hr))
+      return hr;
    slice_release(dev, res->slice, last);
    res->slice = fresh;
    res->sliceLastUse = res->sliceLastWrite = 0;
    buffer_renamed(dev, res);
-   return true;
+   return S_OK;
 }
 
 static HRESULT wait_for_cpu(Device *dev, uint64_t seq, UINT flags)
@@ -930,8 +951,7 @@ static void APIENTRY ResourceMap(D3D10DDI_HDEVICE hDevice, D3D10DDI_HRESOURCE hR
 
    if (res->kind == ResKind::Buffer) {
       if (type == D3D10_DDI_MAP_WRITE_DISCARD) {
-         if (!buffer_discard(dev, res))
-            hr = E_OUTOFMEMORY;
+         hr = buffer_discard(dev, res);
       } else if (type != D3D10_DDI_MAP_WRITE_NOOVERWRITE) {
          hr = wait_for_cpu(dev, reads ? res->sliceLastWrite : 0, flags);
          if (SUCCEEDED(hr) && writes)
@@ -984,9 +1004,9 @@ static void APIENTRY ResourceMap(D3D10DDI_HDEVICE hDevice, D3D10DDI_HRESOURCE hR
    const UINT mip = sub % res->mips;
    const uint32_t pitch = (row_bytes(info, res->mipWidth(mip)) + 3) & ~3u;
    const uint32_t slice_pitch = pitch * row_count(info, res->mipHeight(mip));
-   map.upload = slice_alloc(dev, (VkDeviceSize)slice_pitch * res->mipDepth(mip), 16);
-   if (!map.upload) {
-      TG_ERROR(dev, E_OUTOFMEMORY);
+   hr = slice_alloc(dev, (VkDeviceSize)slice_pitch * res->mipDepth(mip), 16, &map.upload);
+   if (FAILED(hr)) {
+      TG_ERROR(dev, hr);
       return;
    }
    map.mapped = true;
@@ -1056,9 +1076,10 @@ static void APIENTRY ResourceUpdateSubresourceUP(D3D10DDI_HDEVICE hDevice, D3D10
          /* Recorded draws still read the old contents. Take new storage and
           * carry over the bytes this update does not replace. */
          Slice old = res->slice;
-         Slice fresh = slice_alloc(dev, res->size, 256);
-         if (!fresh) {
-            TG_ERROR(dev, E_OUTOFMEMORY);
+         Slice fresh;
+         hr = slice_alloc(dev, res->size, 256, &fresh);
+         if (FAILED(hr)) {
+            TG_ERROR(dev, hr);
             return;
          }
          if (!whole) {

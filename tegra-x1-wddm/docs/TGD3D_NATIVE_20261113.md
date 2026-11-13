@@ -1037,3 +1037,29 @@ ARM64 UMD SHA256 为 `cfeab491db032ed6903a2d5f5bdb0c50dde89e9f7d17241564e52b908b
 记录误写为“所有注册表日志逐字节不变”。备份 zip SHA256 为
 `b8b54b45fdf731ad2cc710c1f65b73057fcf5041ed48185e24803438d84a6ad6`，Mac/SD FAT 各一份。
 完整交付记录位于 `primary-surface-deploy/deployment-final.json`；新组合实机启动仍待验证。
+
+### XRGB 候选仍在登录前重启；修正资源失败状态传播
+
+用户对已写入 `7f5f416b` 的 SD 明确反馈“登录前仍自动重启”。这次组合记为失败，
+不能把前文的待验证状态理解为通过。一次 SSH 查询超时，未追加启动或重启；未取得
+该次 DWM 的实际模块加载证据。XRGB 修正没有解决当前可见故障。
+
+继续审查发现资源创建错误处理违反 DDI 契约：共享图像的 Vulkan 创建/绑定错误被
+统一改为“不支持”，私有图像和缓冲的内存不足被报为旧版视频内存错误，上传分配器
+还会丢失底层失败类型。本次让图像、共享导入、上传缓冲和视图保留失败类别；
+Create/OpenResource 将内存不足报告为 `E_OUTOFMEMORY`，保留 runtime 回调的设备
+移除状态，失败前清理半成品，已移除的设备不再分配。没有改变成功提交的 Fence 链。
+
+依据微软 [CreateResource](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createresource)
+（2021-07-16）与 [OpenResource](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_openresource)
+（2024-02-22），2026-11-13 核查：非约定错误会被 runtime 视为严重错误，且失败句柄
+不会收到 DestroyResource。测试从真实 DDI 进入，注入 Vulkan 允许的内存分配/映射
+错误，以及 runtime Allocate/MakeResident 的失败；没有将 Vulkan 创建 API 未声明的
+设备丢失返回值冒充规范测试。
+
+相同新增断言配旧 resource/runtime/upload 源码退出1，新版 CPU 同步和默认双向桥接
+控制均退出0；ARM64 与 x64 构建通过。覆盖 A8/X8 主表面创建/打开、私有图像、池化和
+独立缓冲、staging、视图以及失败后资源释放。证据位于 `resource-status-controls/`。
+这些控制没有执行 GPU，尚无证据证明冷启动确实触发了此错误路径，故不认定为重启根因。
+超时后无界 DeviceWaitIdle 仍是独立未解决问题。下一候选继续冻结 `.158`/bit14/ICD，
+在原 XRGB 组合上只加入本项状态传播修正；缓存及 Flush 修正不混入该候选。
