@@ -1,13 +1,23 @@
 # GPU status
 
+**Current handoff, November 13, 16:10 UTC:** SSH and the owner's physical
+confirmation show an operable desktop after a real Windows restart. Frozen
+`.158` remains installed with the native gate closed (Code 43); automatic
+enablement is disabled and the one-shot update task is removed. CPU1497600
+kHz, fan13 and display/sleep settings are unchanged. The candidate package
+hashes pass, but four newly copied recovery files were corrupted by the
+interruption. They have been rewritten with WriteThrough/Flush(true) from
+the independently verified prior snapshot; Check-Recovery now passes.
+No second activation, Windows reboot command or `.59` installation was issued.
+
 **November 13, meta-state candidate failed during activation/observation:**
 `d3423d26` restores the common runtime's pipeline-binding mask around NVK
 meta operations. ARM64 CPU controls reproduce VS loss with the old helpers
 (exit 1) and retain the VS with the fix (exit 0). Only the ICD changes in the
 new package; KMD, UMD and helpers are byte-identical to the prior round.
-After one requested PnP device restart, the owner reported an automatic
-Windows restart. SSH has not yet returned and the new ICD's loaded-module
-proof was not obtained. This attempt is failed; do not repeat activation or
+After one requested PnP device restart, Windows automatically restarted.
+The new ICD's loaded-module proof was not obtained. This attempt is failed;
+the returned state is recorded above. Do not repeat activation or
 claim a Home-page regression pass. The separate bit-14 KMD patch remains
 undeployed. No Windows reboot or `.59` rollback was requested by this chat.
 
