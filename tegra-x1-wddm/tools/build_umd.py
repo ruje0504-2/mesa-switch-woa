@@ -46,6 +46,7 @@ def main():
     subprocess.run([
         "meson", "setup", *reconfigure, str(build), str(source), "--cross-file", str(args.cross_file.resolve()),
         "-Dplatforms=windows", "-Dvulkan-drivers=[]", "-Dgallium-drivers=zink",
+        "-Dtgd3d=disabled",
         "-Dgallium-d3d10umd=true", "-Dgallium-d3d10-backend=nvk",
         "-Dgallium-d3d10-dll-name=TegraGpuD3D", "-Dglx=disabled", "-Degl=disabled",
         "-Dgbm=disabled", "-Dllvm=disabled", "-Dbuild-tests=true", "-Dvideo-codecs=[]",

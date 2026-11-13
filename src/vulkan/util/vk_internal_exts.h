@@ -106,8 +106,8 @@ struct wsi_surface_supported_counters {
 /* Chained to VkInstanceCreateInfo by an in-tree Windows user-mode driver that
  * loads the NVK ICD by path, without a Vulkan loader. It replaces the
  * NVK_I_WANT_A_BROKEN_VULKAN_DRIVER environment opt-in for that one matched
- * consumer; it does not make the device conformant. A Vulkan loader never
- * forwards this structure, so applications cannot supply it.
+ * consumer on GM20B; it does not make the device conformant. This is a
+ * private in-tree opt-in, not a public extension or an authorization check.
  */
 struct nvk_embedded_instance_info {
     VkStructureType sType;

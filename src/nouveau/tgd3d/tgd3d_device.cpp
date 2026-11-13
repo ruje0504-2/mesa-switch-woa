@@ -64,10 +64,12 @@ static void device_teardown(Device *dev)
    if (dev->vkdev) {
       if (dev->fence && dev->cmdPool) {
          flush(dev, false);
-         if (SUCCEEDED(dev->lost) && dev->submitted)
-            wait_sequence(dev, dev->submitted);
-         else
+         if (SUCCEEDED(dev->lost) && dev->submitted) {
+            if (FAILED(wait_sequence(dev, dev->submitted)))
+               dev->vk.DeviceWaitIdle(dev->vkdev);
+         } else {
             dev->vk.DeviceWaitIdle(dev->vkdev);
+         }
          retire(dev);
       }
       /* The device is idle: release everything still deferred. */
@@ -144,10 +146,9 @@ HRESULT APIENTRY CreateDevice(D3D10DDI_HADAPTER hAdapter, D3D10DDIARG_CREATEDEVI
       dev->~Device();
       return hr;
    }
-   VkFormatProperties a8 = {};
-   adapter->vk.vk.GetPhysicalDeviceFormatProperties(adapter->vk.pdev, VK_FORMAT_A8_UNORM, &a8);
-   dev->hasA8 = adapter->vk.caps.apiVersion >= VK_API_VERSION_1_4 &&
-                (a8.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+   /* This consumer requests Vulkan 1.3 and does not enable maintenance5.
+    * A 1.4-capable physical device alone does not enable native A8 usage. */
+   dev->hasA8 = false;
 
    D3D10DDI_DEVICEFUNCS *table = args->pDeviceFuncs;
    resource_fill_table(table);

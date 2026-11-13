@@ -78,7 +78,7 @@ def main():
     digest.update(subprocess.check_output(["git", "-C", str(src), "diff", "--binary", "HEAD"]))
     digest.update(a.cross_file.read_bytes())
     run("meson", "setup", build, src, "--cross-file", a.cross_file.resolve(),
-        "-Dplatforms=windows", "-Dvulkan-drivers=nouveau", "-Dgallium-drivers=[]",
+        "-Dplatforms=windows", "-Dvulkan-drivers=nouveau", "-Dgallium-drivers=[]", "-Dtgd3d=disabled",
         "-Dglx=disabled", "-Degl=disabled", "-Dgbm=disabled", "-Dllvm=disabled",
         "-Dbuild-tests=true", "-Dvideo-codecs=[]", "-Dvalgrind=disabled",
         "-Dlibunwind=disabled", "-Dgles1=disabled", "-Dgles2=disabled", "-Dopengl=false",

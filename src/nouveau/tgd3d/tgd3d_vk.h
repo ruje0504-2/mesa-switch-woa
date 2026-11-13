@@ -98,7 +98,6 @@ namespace tgd3d {
    X(CmdDrawIndexed) \
    X(CmdBindVertexBuffers2) \
    X(CmdBindIndexBuffer) \
-   X(CmdPushDescriptorSetKHR) \
    X(CmdBindDescriptorSets) \
    X(CmdBeginQuery) \
    X(CmdEndQuery) \
@@ -164,7 +163,7 @@ enum : uint32_t {
    D3D_CB_SLOTS = 14,       /* D3D10_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT */
    D3D_SAMPLER_SLOTS = 16,
    D3D_SRV_SLOTS = 128,
-   /* Set 0: push descriptors, uniform buffers, binding = stage * cbSlots + slot.
+   /* Set 0: uniform buffers, binding = stage * cbSlots + slot.
     * Set 1: stage * SET1_STRIDE + [0,16) samplers, + 16 + [0,128) sampled images.
     * Set 2: stage * 128 + slot, uniform texel buffers (Buffer<> SRVs). */
    SET_CB = 0,
@@ -177,8 +176,7 @@ enum : uint32_t {
 struct VulkanCaps {
    uint32_t apiVersion = 0;
    uint32_t queueFamily = 0;
-   uint32_t maxPushDescriptors = 0;
-   uint32_t cbSlots = 0;            /* constant-buffer slots per stage that fit the push set */
+   uint32_t cbSlots = 0;            /* full D3D10 constant-buffer slots per stage */
    uint32_t maxImageDimension2D = 0;
    uint32_t maxImageDimension3D = 0;
    uint32_t maxImageArrayLayers = 0;

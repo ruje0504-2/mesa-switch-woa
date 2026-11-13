@@ -50,8 +50,19 @@ static bool pool_create(Device *dev, Query *q)
 void query_pass_begin(Device *dev, VkCommandBuffer cmd)
 {
    for (Query *q : dev->activeQueries) {
-      if (q->used >= QUERY_SLOTS)
-         continue;      /* more passes than slots: the excess is not counted */
+      if (FAILED(q->error))
+         continue;
+      if (q->used == QUERY_SLOTS) {
+         VkQueryPool previous = q->pool;
+         if (!pool_create(dev, q)) {
+            q->pool = previous;
+            q->error = E_OUTOFMEMORY;
+            TG_ERROR(dev, q->error);
+            continue;
+         }
+         q->fullPools.push_back(previous);
+         q->used = 0;
+      }
       const VkQueryControlFlags flags = q->type == D3D10DDI_QUERY_OCCLUSION &&
          dev->caps->occlusionQueryPrecise ? VK_QUERY_CONTROL_PRECISE_BIT : 0;
       dev->vk.CmdBeginQuery(cmd, q->pool, q->used, flags);
@@ -114,8 +125,10 @@ static void APIENTRY CreateQuery(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_CRE
       hr = E_NOTIMPL;
       break;
    }
-   if (FAILED(hr))
+   if (FAILED(hr)) {
+      q->error = hr;
       TG_ERROR(dev, hr);
+   }
 }
 
 static void query_deactivate(Device *dev, Query *q)
@@ -134,7 +147,10 @@ static void APIENTRY DestroyQuery(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY hand
    Device *dev = D(hDevice);
    Query *q = Q(handle);
    query_deactivate(dev, q);
-   defer(dev, DeferredType::QueryPool, (uint64_t)q->pool, dev->recordingSeq());
+   defer(dev, DeferredType::QueryPool, (uint64_t)q->pool, dev->lastSeq());
+   for (VkQueryPool pool : q->fullPools)
+      defer(dev, DeferredType::QueryPool, (uint64_t)pool, dev->lastSeq());
+   q->~Query();
 }
 
 static void APIENTRY QueryBegin(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY handle)
@@ -146,11 +162,16 @@ static void APIENTRY QueryBegin(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY handle
       return;
    }
    query_deactivate(dev, q);
+   for (VkQueryPool pool : q->fullPools)
+      defer(dev, DeferredType::QueryPool, (uint64_t)pool, dev->lastSeq());
+   q->fullPools.clear();
+   q->error = S_OK;
    if (q->used) {
       /* Earlier slots may still be written by queued commands. */
-      defer(dev, DeferredType::QueryPool, (uint64_t)q->pool, dev->recordingSeq());
+      defer(dev, DeferredType::QueryPool, (uint64_t)q->pool, dev->lastSeq());
       q->pool = VK_NULL_HANDLE;
       if (!pool_create(dev, q)) {
+         q->error = E_OUTOFMEMORY;
          TG_ERROR(dev, E_OUTOFMEMORY);
          return;
       }
@@ -165,18 +186,23 @@ static void APIENTRY QueryEnd(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY handle)
 {
    Device *dev = D(hDevice);
    Query *q = Q(handle);
+   /* Deferred clears precede this event/timestamp in the D3D command stream. */
+   flush_pending_clears(dev, nullptr);
    if (pass_query(q)) {
       query_deactivate(dev, q);
    } else if (q->type == D3D10DDI_QUERY_TIMESTAMP && q->pool) {
       if (q->seq) {
-         defer(dev, DeferredType::QueryPool, (uint64_t)q->pool, dev->recordingSeq());
+         defer(dev, DeferredType::QueryPool, (uint64_t)q->pool, dev->lastSeq());
          q->pool = VK_NULL_HANDLE;
          if (!pool_create(dev, q)) {
+            q->error = E_OUTOFMEMORY;
             TG_ERROR(dev, E_OUTOFMEMORY);
             return;
          }
       }
       VkCommandBuffer cmd = cmd_begin(dev);
+      if (!cmd)
+         return;
       dev->vk.CmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, q->pool, 0);
    }
    /* Ready once everything recorded so far has executed. */
@@ -189,14 +215,14 @@ static void APIENTRY QueryGetData(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY hand
 {
    Device *dev = D(hDevice);
    Query *q = Q(handle);
-   if (q->type == D3D10DDI_QUERY_TIMESTAMPDISJOINT) {
-      D3D10_DDI_QUERY_DATA_TIMESTAMP_DISJOINT disjoint = {UINT64_C(1000000000), FALSE};
-      if (data && size >= sizeof(disjoint))
-         memcpy(data, &disjoint, sizeof(disjoint));
+   if (FAILED(dev->lost) || FAILED(q->error)) {
+      TG_ERROR(dev, FAILED(dev->lost) ? dev->lost : q->error);
       return;
    }
-   if (q->seq > dev->submitted && !(flags & D3D10_DDI_GET_DATA_DO_NOT_FLUSH))
-      flush(dev, false);
+   if (q->seq > dev->submitted && !(flags & D3D10_DDI_GET_DATA_DO_NOT_FLUSH)) {
+      HRESULT hr = flush(dev, false);
+      if (FAILED(hr)) { TG_ERROR(dev, hr); return; }
+   }
    if (q->state != QueryState::Ended || !sequence_done(dev, q->seq)) {
       /* Not an error: the runtime turns this into S_FALSE for the caller. */
       if (dev->um.pfnSetErrorCb)
@@ -206,14 +232,24 @@ static void APIENTRY QueryGetData(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY hand
    if (!data)
       return;
    switch (q->type) {
+   case D3D10DDI_QUERY_TIMESTAMPDISJOINT: {
+      D3D10_DDI_QUERY_DATA_TIMESTAMP_DISJOINT disjoint = {UINT64_C(1000000000), FALSE};
+      if (size >= sizeof(disjoint))
+         memcpy(data, &disjoint, sizeof(disjoint));
+      break;
+   }
    case D3D10DDI_QUERY_EVENT:
       if (size >= sizeof(BOOL))
          *static_cast<BOOL *>(data) = TRUE;
       break;
    case D3D10DDI_QUERY_TIMESTAMP: {
       uint64_t ticks = 0;
-      dev->vk.GetQueryPoolResults(dev->vkdev, q->pool, 0, 1, sizeof(ticks), &ticks, sizeof(ticks),
-                                  VK_QUERY_RESULT_64_BIT);
+      VkResult result = dev->vk.GetQueryPoolResults(dev->vkdev, q->pool, 0, 1, sizeof(ticks),
+                                                    &ticks, sizeof(ticks), VK_QUERY_RESULT_64_BIT);
+      if (result != VK_SUCCESS) {
+         TG_ERROR(dev, result == VK_NOT_READY ? DXGI_DDI_ERR_WASSTILLDRAWING : DXGI_ERROR_DEVICE_REMOVED);
+         return;
+      }
       const uint64_t ns = (uint64_t)((double)ticks * dev->caps->timestampPeriod);
       if (size >= sizeof(ns))
          memcpy(data, &ns, sizeof(ns));
@@ -222,12 +258,18 @@ static void APIENTRY QueryGetData(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY hand
    case D3D10DDI_QUERY_OCCLUSION:
    case D3D10DDI_QUERY_OCCLUSIONPREDICATE: {
       uint64_t total = 0;
-      std::vector<uint64_t> slots(q->used);
-      if (q->used &&
-          dev->vk.GetQueryPoolResults(dev->vkdev, q->pool, 0, q->used, slots.size() * 8, slots.data(),
-                                      8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
-         for (uint64_t v : slots)
-            total += v;
+      for (size_t p = 0; p <= q->fullPools.size(); p++) {
+         const bool full = p < q->fullPools.size();
+         std::vector<uint64_t> slots(full ? QUERY_SLOTS : q->used);
+         if (slots.empty()) continue;
+         VkResult result = dev->vk.GetQueryPoolResults(dev->vkdev, full ? q->fullPools[p] : q->pool,
+            0, (uint32_t)slots.size(), slots.size() * 8, slots.data(), 8, VK_QUERY_RESULT_64_BIT);
+         if (result != VK_SUCCESS) {
+            TG_ERROR(dev, result == VK_NOT_READY ? DXGI_DDI_ERR_WASSTILLDRAWING : DXGI_ERROR_DEVICE_REMOVED);
+            return;
+         }
+         for (uint64_t v : slots) total += v;
+      }
       if (q->type == D3D10DDI_QUERY_OCCLUSION) {
          if (size >= sizeof(total))
             memcpy(data, &total, sizeof(total));
@@ -238,11 +280,18 @@ static void APIENTRY QueryGetData(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY hand
    }
    case D3D10DDI_QUERY_PIPELINESTATS: {
       D3D10_DDI_QUERY_DATA_PIPELINE_STATISTICS out = {};
-      std::vector<uint64_t> slots((size_t)q->used * 8);
-      if (q->used &&
-          dev->vk.GetQueryPoolResults(dev->vkdev, q->pool, 0, q->used, slots.size() * 8, slots.data(),
-                                      64, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
-         for (uint32_t i = 0; i < q->used; i++) {
+      for (size_t p = 0; p <= q->fullPools.size(); p++) {
+         const bool full = p < q->fullPools.size();
+         const uint32_t count = full ? QUERY_SLOTS : q->used;
+         if (!count) continue;
+         std::vector<uint64_t> slots((size_t)count * 8);
+         VkResult result = dev->vk.GetQueryPoolResults(dev->vkdev, full ? q->fullPools[p] : q->pool,
+            0, count, slots.size() * 8, slots.data(), 64, VK_QUERY_RESULT_64_BIT);
+         if (result != VK_SUCCESS) {
+            TG_ERROR(dev, result == VK_NOT_READY ? DXGI_DDI_ERR_WASSTILLDRAWING : DXGI_ERROR_DEVICE_REMOVED);
+            return;
+         }
+         for (uint32_t i = 0; i < count; i++) {
             /* Vulkan returns the enabled statistics in bit order. */
             const uint64_t *v = &slots[(size_t)i * 8];
             out.IAVertices += v[0];

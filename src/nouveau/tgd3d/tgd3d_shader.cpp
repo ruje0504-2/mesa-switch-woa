@@ -383,7 +383,7 @@ void APIENTRY DestroyShader(D3D10DDI_HDEVICE hDevice, D3D10DDI_HSHADER handle)
       }
    }
    for (const auto &variant : shader->variants)
-      defer(dev, DeferredType::Shader, (uint64_t)variant.shader, dev->recordingSeq());
+      defer(dev, DeferredType::Shader, (uint64_t)variant.shader, dev->lastSeq());
    shader->~Shader();
 }
 

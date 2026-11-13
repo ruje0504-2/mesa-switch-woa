@@ -5,6 +5,7 @@
  * as unsupported; nothing is silently substituted.
  */
 #include "tgd3d.h"
+#include <array>
 
 namespace tgd3d {
 
@@ -107,13 +108,12 @@ static const struct { DXGI_FORMAT dxgi; FormatInfo info; } table[] = {
 
 const FormatInfo *format_info(DXGI_FORMAT format)
 {
-   static const FormatInfo *lookup[128];
-   static bool built;
-   if (!built) {
+   static const auto lookup = [] {
+      std::array<const FormatInfo *, 128> result = {};
       for (const auto &entry : table)
-         lookup[entry.dxgi] = &entry.info;
-      built = true;
-   }
+         result[entry.dxgi] = &entry.info;
+      return result;
+   }();
    return (unsigned)format < 128 ? lookup[format] : nullptr;
 }
 

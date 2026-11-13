@@ -10,7 +10,7 @@ Windows desktop GPU acceleration is the current development milestone.
 The existing D3D UMD → Zink → NVK desktop path is being repaired in parallel
 with **tgd3d**, an experimental native D3D DDI → Vulkan backend preserved on
 the [claude-vulkan branch](https://github.com/ruje0504-2/mesa-switch-woa/tree/claude-vulkan)
-for Claude to continue. The DX9/10/11 application path uses DXVK over the same
+for continued development. The DX9/10/11 application path uses DXVK over the same
 NVK/KMD foundation; it has its own compatibility work and validation.
 Zink also remains the OpenGL compatibility route.
 
@@ -20,7 +20,7 @@ Zink also remains the OpenGL compatibility route.
 | Display adapter | **0.1.0.130** reached **Code 0**, completed GDI copies and displayed verified RGB bars on the internal panel through the GM20B VidPN and native scanout. |
 | Shared storage | **0.1.0.144** passes Vulkan Win32 buffer/image sharing, GPU read/write after producer-device release, and re-export: 32,768 payload words plus 512 guards match. [Scope and evidence](tegra-x1-wddm/docs/VULKAN_WIN32_MEMORY.md). |
 | Windows desktop (Zink/NVK) | **Experimental .158 baseline.** A 90-second observation showed a complete taskbar and native FL10_0 composition, but later menu interaction showed severe visual corruption. Visual correctness, extended stability and hardware landscape remain unresolved. [Exact components and evidence](tegra-x1-wddm/docs/NATIVE_DESKTOP_158.md) · [Current status](tegra-x1-wddm/docs/STATUS.md). |
-| Native Vulkan desktop backend (`tgd3d`) | **In development; build failing; no hardware validation.** A separate D3D10 WDDM UMD maps DDI calls directly to Vulkan/NVK, bypassing Gallium/Zink. Its source covers resources/views, DXBC → SPIR-V shaders, drawing, synchronization and DXGI callbacks. The recovered implementation and unfinished tests are preserved for Claude to complete; this is not the application-side DXVK path. [Branch and handoff](https://github.com/ruje0504-2/mesa-switch-woa/blob/claude-vulkan/src/nouveau/tgd3d/README.md). |
+| Native Vulkan desktop backend (`tgd3d`) | **ARM64 build candidate; CPU controls pass; native display unverified.** A separate D3D10 WDDM UMD maps DDI calls directly to Vulkan/NVK, bypassing Gallium/Zink. Its source covers resources/views, DXBC → SPIR-V shaders, drawing, synchronization and DXGI callbacks. The audited implementation, controlled tests and matched ICD are developed separately from the Zink desktop path; this is not the application-side DXVK path. [Branch and handoff](https://github.com/ruje0504-2/mesa-switch-woa/blob/claude-vulkan/src/nouveau/tgd3d/README.md). |
 
 Package versions above identify KMD test packages. The latest trial pairs
 signed **.158** with UMD **77dea046dde0** and NVK ICD **6e2fad99d742**.

@@ -61,6 +61,11 @@ uint64_t qpc_now()
    return (uint64_t)now.QuadPart;
 }
 
+uint64_t qpc_nanoseconds(uint64_t ticks)
+{
+   return (uint64_t)((double)ticks * 1000000000.0 / provider().frequency);
+}
+
 void trace(tgd3d_trace_event event, HRESULT result, uint64_t arg0, uint64_t arg1)
 {
    auto &p = provider();

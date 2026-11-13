@@ -7,6 +7,7 @@
 #ifndef TGD3D_H
 #define TGD3D_H
 
+#include <windows.h>
 #include <winddk_compat.h>
 #define D3D10DDI_MINOR_HEADER_VERSION 2
 /* d3d10umddi.h defines D3D10.x constants as globals; d3d10_1.h avoids the
@@ -232,6 +233,8 @@ struct Query {
    uint64_t seq;          /* submit sequence that must complete before data is ready */
    uint32_t used;         /* slots written since Begin */
    bool inPass;
+   std::vector<VkQueryPool> fullPools;
+   HRESULT error = S_OK;
 };
 
 /* ------------------------------------------------------------------ */
@@ -310,6 +313,7 @@ struct Deferred {
    DeferredType type;
    uint64_t seq;
    uint64_t handle;
+   VkImage image = VK_NULL_HANDLE; /* parent of a deferred ImageView */
 };
 
 struct SubmittedCommands {
@@ -355,6 +359,8 @@ struct Device {
    /* Queue fence. `submitted` is the value the last vkQueueSubmit2 signals;
     * `gated` is the last value queued as a GPU wait on the runtime context. */
    VkSemaphore fence = VK_NULL_HANDLE;
+   VkSemaphore ingress = VK_NULL_HANDLE;
+   D3DKMT_HANDLE runtimeIngress = 0;
    uint64_t submitted = 0;
    uint64_t gated = 0;
    D3DKMT_HANDLE runtimeFence = 0;
@@ -367,6 +373,7 @@ struct Device {
    Chunk *currentChunk = nullptr;
    std::deque<DeferredSlice> deferredSlices;
    std::deque<Deferred> deferred;
+   std::vector<View *> views; /* includes views caching rotated swapchain images */
 
    /* Bound state */
    StageBindings stage[STAGE_COUNT];
@@ -402,6 +409,7 @@ struct Device {
 
    /* Sequence the command buffer being recorded will signal. */
    uint64_t recordingSeq() const { return submitted + 1; }
+   uint64_t lastSeq() const { return cmdHasWork ? recordingSeq() : submitted; }
    uint64_t completed();
    void setError(HRESULT hr, const char *file, int line);
 };
@@ -419,7 +427,8 @@ HRESULT APIENTRY CreateDevice(D3D10DDI_HADAPTER, D3D10DDIARG_CREATEDEVICE *);
 VkCommandBuffer cmd_begin(Device *dev);       /* command buffer for non-draw commands; ends rendering */
 VkCommandBuffer cmd_draw(Device *dev);        /* command buffer inside the current render pass */
 void end_rendering(Device *dev);
-HRESULT flush(Device *dev, bool gate);
+HRESULT flush(Device *dev, bool waitForSpace);
+void command_barrier(Device *dev);
 HRESULT wait_sequence(Device *dev, uint64_t seq);
 bool sequence_done(Device *dev, uint64_t seq);
 void retire(Device *dev, bool force = false);
@@ -427,7 +436,8 @@ HRESULT sync_create(Device *dev);
 void sync_destroy(Device *dev);
 HRESULT cmd_create(Device *dev);
 void cmd_destroy(Device *dev);
-void defer(Device *dev, DeferredType type, uint64_t handle, uint64_t seq);
+void defer(Device *dev, DeferredType type, uint64_t handle, uint64_t seq,
+           VkImage image = VK_NULL_HANDLE);
 void image_use(Device *dev, ImageStorage &storage, bool write);
 void buffer_written(Device *dev);
 void barrier_for_read(Device *dev, uint64_t writeSerial);

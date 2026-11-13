@@ -19,6 +19,10 @@
 
 using Microsoft::WRL::ComPtr;
 
+#ifndef D3D_UMD_NAME
+#define D3D_UMD_NAME "TegraGpuD3D.dll"
+#endif
+
 static void exception_address(const char *name, const void *address)
 {
    /* Do not walk the loader's module list from a teardown exception. */
@@ -27,7 +31,7 @@ static void exception_address(const char *name, const void *address)
 
 static void report_runtime_modules()
 {
-   const char *names[] = {"TegraGpuD3D.dll", "libvulkan_nouveau.dll", "vulkan-1.dll",
+   const char *names[] = {D3D_UMD_NAME, "libvulkan_nouveau.dll", "vulkan-1.dll",
                          "ntdll.dll", "d3d11.dll", "d3d10core.dll", "dxgi.dll",
                          "kernelbase.dll", "ucrtbase.dll"};
    for (const char *name : names) {
@@ -131,7 +135,7 @@ static void feature_levels(IDXGIAdapter *adapter, D3D_DRIVER_TYPE type,
       if (selected && luid != selected)
          throw std::runtime_error("feature probe changed the requested hardware adapter");
       if (selected) {
-         HMODULE umd = GetModuleHandleA("TegraGpuD3D.dll");
+         HMODULE umd = GetModuleHandleA(D3D_UMD_NAME);
          char path[MAX_PATH];
          if (!umd || !GetModuleFileNameA(umd, path, sizeof(path)))
             throw std::runtime_error("feature probe did not load the native UMD");
@@ -807,7 +811,7 @@ int main(int argc, char **argv)
          check(actual_adapter->GetDesc(&desc), "Get runtime identity");
          if (luid_value(desc.AdapterLuid) != selected)
             throw std::runtime_error("runtime changed adapter");
-         HMODULE umd = GetModuleHandleA("TegraGpuD3D.dll");
+         HMODULE umd = GetModuleHandleA(D3D_UMD_NAME);
          char path[MAX_PATH];
          if (!umd || !GetModuleFileNameA(umd, path, sizeof(path)))
             throw std::runtime_error("NVK D3D UMD was not loaded");

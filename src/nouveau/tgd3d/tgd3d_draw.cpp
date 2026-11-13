@@ -38,10 +38,8 @@ HRESULT device_layouts_create(Device *dev)
    }
    for (uint32_t set = 0; set < SET_COUNT; set++) {
       VkDescriptorSetLayoutCreateInfo info = {VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-      /* Constant buffers are pushed: on pre-Turing NVIDIA hardware NVK can
-       * bind a uniform buffer as a hardware constant buffer only when its
-       * address is known while recording, which is what a push set gives. */
-      info.flags = set == SET_CB ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR : 0;
+      /* An immutable set snapshot fits all 3 x 14 D3D10 constant buffers.
+       * NVK's push descriptor limit is 32, below that DDI requirement. */
       info.bindingCount = (uint32_t)bindings[set].size();
       info.pBindings = bindings[set].data();
       if (dev->vk.CreateDescriptorSetLayout(dev->vkdev, &info, nullptr, &dev->setLayouts[set]) !=
@@ -103,10 +101,11 @@ static VkDescriptorSet alloc_set(Device *dev, uint32_t set)
             {VK_DESCRIPTOR_TYPE_SAMPLER, SETS * STAGE_COUNT * D3D_SAMPLER_SLOTS},
             {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, SETS * STAGE_COUNT * D3D_SRV_SLOTS},
             {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 8 * STAGE_COUNT * D3D_SRV_SLOTS},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SETS * STAGE_COUNT * D3D_CB_SLOTS},
          };
          VkDescriptorPoolCreateInfo info = {VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-         info.maxSets = SETS + 8;
-         info.poolSizeCount = 3;
+         info.maxSets = 2 * SETS + 8;
+         info.poolSizeCount = 4;
          info.pPoolSizes = sizes;
          if (dev->vk.CreateDescriptorPool(dev->vkdev, &info, nullptr, &pool) != VK_SUCCESS)
             break;
@@ -263,8 +262,23 @@ static void bind_textures(Device *dev, VkCommandBuffer cmd)
    }
 }
 
-static void push_constant_buffers(Device *dev, VkCommandBuffer cmd)
+static bool bind_constant_buffers(Device *dev, VkCommandBuffer cmd)
 {
+   bool dirty = false;
+   for (auto &stage : dev->stage) {
+      if (!stage.shader)
+         continue;
+      dirty |= (stage.cbDirty & stage.shader->cbMask) != 0;
+      /* Every draw extends lifetime, even when its descriptor is reused. */
+      for (uint32_t mask = stage.shader->cbMask; mask; mask &= mask - 1)
+         if (Resource *res = stage.cb[__builtin_ctz(mask)])
+            res->sliceLastUse = dev->recordingSeq();
+   }
+   if (!dirty)
+      return true;
+   VkDescriptorSet set = alloc_set(dev, SET_CB);
+   if (!set)
+      return false;
    VkWriteDescriptorSet writes[STAGE_COUNT * D3D_CB_SLOTS];
    VkDescriptorBufferInfo infos[STAGE_COUNT * D3D_CB_SLOTS];
    uint32_t count = 0;
@@ -274,7 +288,7 @@ static void push_constant_buffers(Device *dev, VkCommandBuffer cmd)
       const Shader *shader = stage.shader;
       if (!shader)
          continue;
-      for (uint32_t mask = shader->cbMask & stage.cbDirty; mask; mask &= mask - 1) {
+      for (uint32_t mask = shader->cbMask; mask; mask &= mask - 1) {
          const uint32_t slot = __builtin_ctz(mask);
          if (slot >= slots)
             continue;
@@ -288,6 +302,7 @@ static void push_constant_buffers(Device *dev, VkCommandBuffer cmd)
          }
          VkWriteDescriptorSet &write = writes[count++];
          write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+         write.dstSet = set;
          write.dstBinding = s * slots + slot;
          write.descriptorCount = 1;
          write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -295,9 +310,10 @@ static void push_constant_buffers(Device *dev, VkCommandBuffer cmd)
       }
       stage.cbDirty &= ~shader->cbMask;
    }
-   if (count)
-      dev->vk.CmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dev->pipelineLayout,
-                                      SET_CB, count, writes);
+   dev->vk.UpdateDescriptorSets(dev->vkdev, count, writes, 0, nullptr);
+   dev->vk.CmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, dev->pipelineLayout,
+                                 SET_CB, 1, &set, 0, nullptr);
+   return true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -322,6 +338,7 @@ static bool begin_rendering(Device *dev)
       return false;       /* nothing to render into */
 
    flush_pending_clears(dev, dev->dsv ? dev->dsv : dev->rtv[0]);
+   command_barrier(dev);
    for (uint32_t i = 0; i < colors; i++)
       if (dev->rtv[i])
          image_use(dev, dev->rtv[i]->res->storage, true);
@@ -371,6 +388,8 @@ static bool begin_rendering(Device *dev)
       }
    }
    VkCommandBuffer cmd = cmd_draw(dev);
+   if (!cmd)
+      return false;
    dev->vk.CmdBeginRendering(cmd, &info);
    dev->rendering = true;
    dev->stats.renderPasses++;
@@ -404,6 +423,8 @@ static void emit_state(Device *dev, VkCommandBuffer cmd)
       vk.CmdSetRasterizationSamplesEXT(cmd, VK_SAMPLE_COUNT_1_BIT);
       vk.CmdSetLineWidth(cmd, 1.0f);
       vk.CmdSetDepthBoundsTestEnable(cmd, VK_FALSE);
+      vk.CmdSetAlphaToOneEnableEXT(cmd, VK_FALSE);
+      vk.CmdSetLogicOpEnableEXT(cmd, VK_FALSE);
    }
 
    if (dirty & DIRTY_TOPOLOGY) {
@@ -445,8 +466,7 @@ static void emit_state(Device *dev, VkCommandBuffer cmd)
       const bool bias = d.DepthBias != 0 || d.SlopeScaledDepthBias != 0.0f;
       vk.CmdSetDepthBiasEnable(cmd, bias);
       vk.CmdSetDepthBias(cmd, (float)d.DepthBias, d.DepthBiasClamp, d.SlopeScaledDepthBias);
-      if (caps.depthClamp)
-         vk.CmdSetDepthClampEnableEXT(cmd, !d.DepthClipEnable);
+      vk.CmdSetDepthClampEnableEXT(cmd, caps.depthClamp && !d.DepthClipEnable);
       vk.CmdSetDepthClipEnableEXT(cmd, d.DepthClipEnable != 0);
    }
 
@@ -672,7 +692,8 @@ static VkCommandBuffer prepare_draw(Device *dev, bool indexed)
    if (!bind_shaders(dev, cmd))
       return VK_NULL_HANDLE;
    emit_state(dev, cmd);
-   push_constant_buffers(dev, cmd);
+   if (!bind_constant_buffers(dev, cmd))
+      return VK_NULL_HANDLE;
    bind_textures(dev, cmd);
    if (indexed && (dev->dirty & DIRTY_INDEX_BUFFER)) {
       Resource *res = dev->indexBuffer;
@@ -765,7 +786,7 @@ static void clear_view(Device *dev, View *view, VkImageAspectFlags aspects, cons
 }
 
 static void APIENTRY ClearRenderTargetView(D3D10DDI_HDEVICE hDevice, D3D10DDI_HRENDERTARGETVIEW hView,
-                                           const FLOAT color[4])
+                                           FLOAT color[4])
 {
    Device *dev = D(hDevice);
    View *view = static_cast<View *>(hView.pDrvPrivate);

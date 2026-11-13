@@ -267,7 +267,7 @@ static void APIENTRY DestroySampler(D3D10DDI_HDEVICE hDevice, D3D10DDI_HSAMPLER 
             bound = nullptr;
             dev->dirty |= DIRTY_TEXTURES;
          }
-   defer(dev, DeferredType::Sampler, (uint64_t)sampler->sampler, dev->recordingSeq());
+   defer(dev, DeferredType::Sampler, (uint64_t)sampler->sampler, dev->lastSeq());
 }
 
 /* ------------------------------------------------------------------ */

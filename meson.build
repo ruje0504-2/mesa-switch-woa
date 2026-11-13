@@ -829,10 +829,9 @@ if d3d_drivers_path == ''
   d3d_drivers_path = join_paths(get_option('prefix'), get_option('libdir'), 'd3d')
 endif
 
-with_tgd3d = get_option('tgd3d')
-if with_tgd3d and host_machine.system() != 'windows'
-  error('tgd3d is a Windows user-mode driver.')
-endif
+with_tgd3d = get_option('tgd3d') \
+  .require(host_machine.system() == 'windows', error_message : 'tgd3d is a Windows user-mode driver.') \
+  .allowed()
 
 with_gallium_st_d3d10umd =  get_option('gallium-d3d10umd')
 d3d10_backend = get_option('gallium-d3d10-backend')

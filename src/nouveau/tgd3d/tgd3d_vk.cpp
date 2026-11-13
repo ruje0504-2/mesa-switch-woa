@@ -168,8 +168,6 @@ HRESULT VulkanAdapter::open(uint64_t luid)
    if (count)
       vk.EnumeratePhysicalDevices(instance, &count, devices.data());
    VkPhysicalDeviceProperties2 props = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
-   VkPhysicalDevicePushDescriptorPropertiesKHR push = {
-      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR};
    VkPhysicalDeviceExternalMemoryHostPropertiesEXT host = {
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
    for (uint32_t i = 0; i < count && !pdev; i++) {
@@ -195,7 +193,7 @@ HRESULT VulkanAdapter::open(uint64_t luid)
    if (count)
       vk.EnumerateDeviceExtensionProperties(pdev, nullptr, &count, ext.props.data());
    static const char *const required[] = {
-      VK_EXT_SHADER_OBJECT_EXTENSION_NAME, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+      VK_EXT_SHADER_OBJECT_EXTENSION_NAME,
       VK_EXT_ROBUSTNESS_2_EXTENSION_NAME, VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME,
       VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME,
    };
@@ -211,24 +209,13 @@ HRESULT VulkanAdapter::open(uint64_t luid)
    const bool has_divisor = ext.has(VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME);
    const bool has_4444 = ext.has(VK_EXT_4444_FORMATS_EXTENSION_NAME);
 
-   props.pNext = &push;
-   push.pNext = caps.externalMemoryHost ? &host : nullptr;
+   props.pNext = caps.externalMemoryHost ? &host : nullptr;
    vk.GetPhysicalDeviceProperties2(pdev, &props);
    const VkPhysicalDeviceLimits &limits = props.properties.limits;
    caps.apiVersion = props.properties.apiVersion;
    if (caps.apiVersion < VK_API_VERSION_1_3)
       FAIL(DXGI_ERROR_UNSUPPORTED, "Vulkan 1.3 required");
-   caps.maxPushDescriptors = push.maxPushDescriptors;
-   caps.cbSlots = push.maxPushDescriptors / STAGE_COUNT;
-   if (caps.cbSlots > D3D_CB_SLOTS)
-      caps.cbSlots = D3D_CB_SLOTS;
-   /* The shipped NVK is matched to this UMD and must take every D3D10
-    * constant-buffer slot; only the test driver may run with fewer. */
-   if (nvk && caps.cbSlots < D3D_CB_SLOTS)
-      FAIL(DXGI_ERROR_UNSUPPORTED, "push descriptor limit %u below %u",
-           push.maxPushDescriptors, D3D_CB_SLOTS * STAGE_COUNT);
-   if (caps.cbSlots < 8)
-      FAIL(DXGI_ERROR_UNSUPPORTED, "push descriptor limit %u too small", push.maxPushDescriptors);
+   caps.cbSlots = D3D_CB_SLOTS;
    caps.maxImageDimension2D = limits.maxImageDimension2D;
    caps.maxImageDimension3D = limits.maxImageDimension3D;
    caps.maxImageArrayLayers = limits.maxImageArrayLayers;
@@ -353,7 +340,7 @@ VkResult VulkanAdapter::createDevice(VkDevice *device, VkDeviceApi *api, VkQueue
    want.fmt4444.formatA4B4G4R4 = caps.formatA4B4G4R4;
 
    std::vector<const char *> extensions = {
-      VK_EXT_SHADER_OBJECT_EXTENSION_NAME, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+      VK_EXT_SHADER_OBJECT_EXTENSION_NAME,
       VK_EXT_ROBUSTNESS_2_EXTENSION_NAME, VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME,
       VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME,
    };

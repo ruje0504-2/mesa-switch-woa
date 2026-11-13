@@ -65,6 +65,9 @@ static HRESULT APIENTRY Present(DXGI_DDI_ARG_PRESENT *args)
          DXGI_DDI_FLIP_INTERVAL_ONE : args->FlipInterval;
       hr = dev->dxgi->pfnPresentCb(dev->hRTDevice.handle, &present);
       qpc[3] = qpc_now();
+      if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == D3DDDIERR_DEVICEREMOVED ||
+          hr == DXGI_ERROR_DEVICE_RESET)
+         dev->lost = hr;
    }
    const uint64_t completed = dev->completed();
    const uint64_t value[6] = {args->Flags.Value, (uint64_t)args->FlipInterval,
@@ -101,15 +104,58 @@ static HRESULT APIENTRY SetDisplayMode(DXGI_DDI_ARG_SETDISPLAYMODE *args)
    return hr;
 }
 
-static HRESULT APIENTRY SetResourcePriority(DXGI_DDI_ARG_SETRESOURCEPRIORITY *)
+static HRESULT APIENTRY SetResourcePriority(DXGI_DDI_ARG_SETRESOURCEPRIORITY *args)
 {
-   return S_OK;      /* every allocation stays resident; there is nothing to reorder */
+   if (!args || !args->hDevice || !args->hResource)
+      return E_INVALIDARG;
+   Device *dev = DD(args->hDevice);
+   Resource *res = DR(args->hResource);
+   if (res->dev != dev)
+      return E_INVALIDARG;
+   const D3DKMT_HANDLE allocation = runtime_allocation(res->storage.runtime);
+   /* Private NVK storage holds a residency reference for its entire life. */
+   if (!res->storage.runtime)
+      return S_OK;
+   if (!allocation)
+      return D3DDDIERR_DEVICEREMOVED;
+   if (!dev->kt.pfnSetPriorityCb)
+      return DXGI_ERROR_UNSUPPORTED;
+   D3DDDICB_SETPRIORITY priority = {};
+   priority.NumAllocations = 1;
+   priority.HandleList = &allocation;
+   priority.pPriorities = &args->Priority;
+   return dev->kt.pfnSetPriorityCb(dev->hRTDevice.handle, &priority);
 }
 
 static HRESULT APIENTRY QueryResourceResidency(DXGI_DDI_ARG_QUERYRESOURCERESIDENCY *args)
 {
-   for (SIZE_T i = 0; i < args->Resources; i++)
+   if (!args || !args->hDevice || (args->Resources && (!args->pResources || !args->pStatus)))
+      return E_INVALIDARG;
+   Device *dev = DD(args->hDevice);
+   for (SIZE_T i = 0; i < args->Resources; i++) {
+      Resource *res = DR(args->pResources[i]);
+      if (!res || res->dev != dev)
+         return E_INVALIDARG;
       args->pStatus[i] = DXGI_DDI_RESIDENCY_FULLY_RESIDENT;
+      if (!res->storage.runtime)
+         continue;
+      const D3DKMT_HANDLE allocation = runtime_allocation(res->storage.runtime);
+      if (!allocation)
+         return D3DDDIERR_DEVICEREMOVED;
+      if (!dev->kt.pfnQueryResidencyCb)
+         return DXGI_ERROR_UNSUPPORTED;
+      D3DDDI_RESIDENCYSTATUS status = D3DDDI_RESIDENCYSTATUS_NOTRESIDENT;
+      D3DDDICB_QUERYRESIDENCY query = {};
+      query.NumAllocations = 1;
+      query.HandleList = &allocation;
+      query.pResidencyStatus = &status;
+      HRESULT hr = dev->kt.pfnQueryResidencyCb(dev->hRTDevice.handle, &query);
+      if (FAILED(hr))
+         return hr;
+      args->pStatus[i] = status == D3DDDI_RESIDENCYSTATUS_NOTRESIDENT ?
+         DXGI_DDI_RESIDENCY_EVICTED_TO_DISK : status == D3DDDI_RESIDENCYSTATUS_RESIDENTINSHAREDMEMORY ?
+         DXGI_DDI_RESIDENCY_RESIDENT_IN_SHARED_MEMORY : DXGI_DDI_RESIDENCY_FULLY_RESIDENT;
+   }
    return S_OK;
 }
 
@@ -166,10 +212,15 @@ static HRESULT APIENTRY Blt(DXGI_DDI_ARG_BLT *args)
    Device *dev = DD(args->hDevice);
    Resource *dst = DR(args->hDstResource), *src = DR(args->hSrcResource);
    HRESULT hr = S_OK;
-   if (dst->kind != ResKind::Image || src->kind != ResKind::Image ||
+   if (dst->dev != dev || src->dev != dev ||
+       dst->kind != ResKind::Image || src->kind != ResKind::Image ||
        args->DstSubresource >= dst->subresources() || args->SrcSubresource >= src->subresources() ||
-       args->DstRight <= args->DstLeft || args->DstBottom <= args->DstTop)
+       args->DstRight <= args->DstLeft || args->DstBottom <= args->DstTop ||
+       args->DstRight > dst->mipWidth(args->DstSubresource % dst->mips) ||
+       args->DstBottom > dst->mipHeight(args->DstSubresource % dst->mips))
       hr = E_INVALIDARG;
+   else if (args->Flags.Resolve || args->Flags.Reserved)
+      hr = DXGI_ERROR_UNSUPPORTED;
    else if (args->Rotate != DXGI_DDI_MODE_ROTATION_IDENTITY &&
             args->Rotate != DXGI_DDI_MODE_ROTATION_UNSPECIFIED)
       hr = DXGI_ERROR_UNSUPPORTED;      /* rotated blits are not implemented */
@@ -182,6 +233,8 @@ static HRESULT APIENTRY Blt(DXGI_DDI_ARG_BLT *args)
       const int32_t dw = (int32_t)(args->DstRight - args->DstLeft);
       const int32_t dh = (int32_t)(args->DstBottom - args->DstTop);
       VkCommandBuffer cmd = cmd_begin(dev);
+      if (!cmd)
+         return FAILED(dev->lost) ? dev->lost : E_OUTOFMEMORY;
       image_use(dev, src->storage, false);
       barrier_for_read(dev, src->storage.writeSerial);
       image_use(dev, dst->storage, true);

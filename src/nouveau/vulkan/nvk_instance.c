@@ -10,6 +10,7 @@
 #include "nvkmd/nvkmd.h"
 
 #include "vk_common_entrypoints.h"
+#include "vk_internal_exts.h"
 #include "vulkan/wsi/wsi_common.h"
 
 #include "util/build_id.h"
@@ -208,6 +209,13 @@ nvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
    nvk_init_debug_flags(instance);
    nvk_init_experimental_flags(instance);
    nvk_init_dri_options(instance);
+
+   instance->allow_embedded_gm20b = false;
+#ifdef _WIN32
+   const struct nvk_embedded_instance_info *embedded =
+      vk_find_struct_const(pCreateInfo->pNext, NVK_EMBEDDED_INSTANCE_INFO_MESA);
+   instance->allow_embedded_gm20b = embedded && embedded->allow_experimental_device;
+#endif
 
 #ifdef __SWITCH__
    instance->vk.physical_devices.enumerate =

@@ -393,7 +393,9 @@ HRESULT runtime_shared_create(Device *dev, const D3D10DDIARG_CREATERESOURCE *des
    *out = nullptr;
    if (!desc->pMipInfoList || desc->pPrimaryDesc ||
        desc->ResourceDimension != D3D10DDIRESOURCE_TEXTURE2D ||
-       desc->MiscFlags != D3D10_DDI_RESOURCE_MISC_SHARED || desc->MapFlags ||
+       !(desc->MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED) ||
+       (desc->MiscFlags & ~(D3D10_DDI_RESOURCE_MISC_SHARED |
+                            D3D10_DDI_RESOURCE_MISC_DISCARD_ON_PRESENT)) || desc->MapFlags ||
        desc->MipLevels != 1 || desc->ArraySize != 1 ||
        desc->SampleDesc.Count != 1 || desc->SampleDesc.Quality ||
        desc->pMipInfoList[0].TexelDepth != 1)

@@ -2,17 +2,15 @@
  *
  * Command recording, submission and the render-queue fence.
  *
- * NVK submits on its own kernel context while the D3D runtime signals its
- * synchronization objects and queues Present on the context registered by
- * this driver. One monitored fence is shared by both kernel devices: every
- * Vulkan submission signals the next value from the GPU, and before anything
- * the runtime can observe (Flush, Present, SetDisplayMode, resolve of a
- * shared surface) the driver queues a GPU wait for that value on the runtime
- * context. The CPU never waits for a frame; it only waits when more than
- * TGD3D_MAX_IN_FLIGHT submissions are unfinished, when the application reads
- * GPU output back, or when storage must be destroyed synchronously.
+ * NVK and the D3D runtime submit through different kernel contexts. Two
+ * imported monitored fences bracket every submission: runtime signal ->
+ * Vulkan wait/render/signal -> runtime wait. A separate wait on the prior
+ * Vulkan completion value supplies memory ordering across submissions.
+ * Polling/DO_NOT_WAIT submissions never apply CPU backpressure; ordinary
+ * Flush/Present may wait once two submissions are outstanding.
  */
 #include "tgd3d.h"
+#include <winternl.h>
 
 namespace tgd3d {
 
@@ -23,7 +21,8 @@ typedef NTSTATUS(APIENTRY *PFN_ShareObjects)(UINT, const D3DKMT_HANDLE *, void *
 void Device::setError(HRESULT hr, const char *file, int line)
 {
    trace_error(hr, file, (unsigned)line);
-   if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == D3DDDIERR_DEVICEREMOVED)
+   if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == D3DDDIERR_DEVICEREMOVED ||
+       hr == DXGI_ERROR_DEVICE_RESET)
       lost = hr;
    if (um.pfnSetErrorCb)
       um.pfnSetErrorCb(hRTCoreLayer, hr);
@@ -31,11 +30,13 @@ void Device::setError(HRESULT hr, const char *file, int line)
 
 uint64_t Device::completed()
 {
-   if (runtimeFenceValue)
-      return *runtimeFenceValue;      /* shared monitored fence: no system call */
    uint64_t value = 0;
-   if (vk.GetSemaphoreCounterValue(vkdev, fence, &value) != VK_SUCCESS)
+   if (!fence || !vk.GetSemaphoreCounterValue)
       return 0;
+   if (vk.GetSemaphoreCounterValue(vkdev, fence, &value) != VK_SUCCESS) {
+      TG_ERROR(this, DXGI_ERROR_DEVICE_REMOVED);
+      return 0;
+   }
    return value;
 }
 
@@ -54,71 +55,76 @@ HRESULT sync_create(Device *dev)
    if (dev->vk.CreateSemaphore(dev->vkdev, &info, nullptr, &dev->fence) != VK_SUCCESS)
       return E_OUTOFMEMORY;
 
-   if (!dev->kt.pfnCreateSynchronizationObject2Cb || !dev->kt.pfnDestroySynchronizationObjectCb ||
-       !dev->kt.pfnWaitForSynchronizationObjectFromGpuCb)
-      return dev->nvk ? DXGI_ERROR_UNSUPPORTED : S_OK;
-
-   /* The fence belongs to the runtime's device so its context can wait for
-    * it; NVK opens the same kernel object through the NT handle. */
-   D3DDDICB_CREATESYNCHRONIZATIONOBJECT2 create = {};
-   create.Info.Type = D3DDDI_MONITORED_FENCE;
-   create.Info.Flags.Shared = dev->nvk;
-   create.Info.Flags.NtSecuritySharing = dev->nvk;
-   create.Info.MonitoredFence.InitialFenceValue = 0;
-   create.Info.MonitoredFence.EngineAffinity = 1;
-   HRESULT hr = dev->kt.pfnCreateSynchronizationObject2Cb(dev->hRTDevice.handle, &create);
-   trace(TGD3D_TRACE_RUNTIME_CONTEXT, hr, 3, create.hSyncObject != 0);
-   if (FAILED(hr))
-      return hr;
-   if (!create.hSyncObject)
-      return E_FAIL;
-   dev->runtimeFence = create.hSyncObject;
+   /* The generic control build has no WDDM queue to synchronize. */
    if (!dev->nvk)
-      return S_OK;     /* test build: the semaphore above is the only timeline */
+      return S_OK;
+   if (!dev->kt.pfnCreateSynchronizationObject2Cb || !dev->kt.pfnDestroySynchronizationObjectCb ||
+       !dev->kt.pfnWaitForSynchronizationObjectFromGpuCb ||
+       !dev->kt.pfnSignalSynchronizationObjectFromGpuCb)
+      return DXGI_ERROR_UNSUPPORTED;
+   if (dev->vk.CreateSemaphore(dev->vkdev, &info, nullptr, &dev->ingress) != VK_SUCCESS)
+      return E_OUTOFMEMORY;
 
-   if (!create.Info.MonitoredFence.FenceValueCPUVirtualAddress)
-      return E_FAIL;
    HMODULE gdi = GetModuleHandleW(L"gdi32.dll");
    auto share = gdi ? reinterpret_cast<PFN_ShareObjects>(
       reinterpret_cast<void *>(GetProcAddress(gdi, "D3DKMTShareObjects"))) : nullptr;
    if (!share)
       return DXGI_ERROR_UNSUPPORTED;
-   OBJECT_ATTRIBUTES attributes = {};
-   attributes.Length = sizeof(attributes);
-   HANDLE handle = nullptr;
-   NTSTATUS status = share(1, &dev->runtimeFence, &attributes, GENERIC_ALL, &handle);
-   trace(TGD3D_TRACE_RUNTIME_CONTEXT, HRESULT_FROM_NT(status), 4, 0);
-   if (status < 0 || !handle)
-      return HRESULT_FROM_NT(status);
-   VkImportSemaphoreWin32HandleInfoKHR import = {
-      VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR};
-   import.semaphore = dev->fence;
-   import.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT;
-   import.handle = handle;
-   VkResult result = dev->vk.ImportSemaphoreWin32HandleKHR(dev->vkdev, &import);
-   CloseHandle(handle);       /* the import keeps its own reference */
-   if (result != VK_SUCCESS) {
-      trace(TGD3D_TRACE_RUNTIME_CONTEXT, E_FAIL, 5, (uint64_t)(int64_t)result);
-      return E_FAIL;
+   for (unsigned i = 0; i < 2; i++) {
+      D3DDDICB_CREATESYNCHRONIZATIONOBJECT2 create = {};
+      create.Info.Type = D3DDDI_MONITORED_FENCE;
+      create.Info.Flags.Shared = 1;
+      create.Info.Flags.NtSecuritySharing = 1;
+      create.Info.MonitoredFence.EngineAffinity = 1;
+      HRESULT hr = dev->kt.pfnCreateSynchronizationObject2Cb(dev->hRTDevice.handle, &create);
+      D3DKMT_HANDLE &object = i ? dev->runtimeIngress : dev->runtimeFence;
+      object = create.hSyncObject;
+      trace(TGD3D_TRACE_RUNTIME_CONTEXT, hr, 3, object != 0);
+      if (FAILED(hr))
+         return hr;
+      if (!object || !create.Info.MonitoredFence.FenceValueCPUVirtualAddress)
+         return E_FAIL;
+      OBJECT_ATTRIBUTES attributes = {};
+      attributes.Length = sizeof(attributes);
+      HANDLE handle = nullptr;
+      NTSTATUS status = share(1, &object, &attributes, D3DDDI_SYNC_OBJECT_ALL_ACCESS, &handle);
+      if (status < 0 || !handle) {
+         if (handle) CloseHandle(handle);
+         return status < 0 ? HRESULT_FROM_NT(status) : E_FAIL;
+      }
+      VkImportSemaphoreWin32HandleInfoKHR import = {
+         VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR};
+      import.semaphore = i ? dev->ingress : dev->fence;
+      import.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT;
+      import.handle = handle;
+      VkResult result = dev->vk.ImportSemaphoreWin32HandleKHR(dev->vkdev, &import);
+      CloseHandle(handle);
+      if (result != VK_SUCCESS)
+         return E_FAIL;
+      if (!i)
+         dev->runtimeFenceValue = static_cast<const volatile UINT64 *>(
+            create.Info.MonitoredFence.FenceValueCPUVirtualAddress);
    }
-   dev->runtimeFenceValue =
-      static_cast<const volatile UINT64 *>(create.Info.MonitoredFence.FenceValueCPUVirtualAddress);
    return S_OK;
 }
 
 void sync_destroy(Device *dev)
 {
-   /* The Vulkan side closes its handle first; the runtime object last. */
+   /* Close Vulkan imports before their runtime objects. */
+   if (dev->ingress)
+      dev->vk.DestroySemaphore(dev->vkdev, dev->ingress, nullptr);
    if (dev->fence)
       dev->vk.DestroySemaphore(dev->vkdev, dev->fence, nullptr);
-   dev->fence = VK_NULL_HANDLE;
+   dev->ingress = dev->fence = VK_NULL_HANDLE;
    dev->runtimeFenceValue = nullptr;
-   if (dev->runtimeFence && dev->kt.pfnDestroySynchronizationObjectCb) {
-      D3DDDICB_DESTROYSYNCHRONIZATIONOBJECT destroy = {};
-      destroy.hSyncObject = dev->runtimeFence;
-      dev->kt.pfnDestroySynchronizationObjectCb(dev->hRTDevice.handle, &destroy);
+   for (D3DKMT_HANDLE object : {dev->runtimeIngress, dev->runtimeFence}) {
+      if (object && dev->kt.pfnDestroySynchronizationObjectCb) {
+         D3DDDICB_DESTROYSYNCHRONIZATIONOBJECT destroy = {};
+         destroy.hSyncObject = object;
+         dev->kt.pfnDestroySynchronizationObjectCb(dev->hRTDevice.handle, &destroy);
+      }
    }
-   dev->runtimeFence = 0;
+   dev->runtimeIngress = dev->runtimeFence = 0;
 }
 
 HRESULT cmd_create(Device *dev)
@@ -152,6 +158,8 @@ void cmd_destroy(Device *dev)
 
 static VkCommandBuffer ensure_cmd(Device *dev)
 {
+   if (FAILED(dev->lost))
+      return VK_NULL_HANDLE;
    if (dev->cmd)
       return dev->cmd;
    VkCommandBuffer cmd = VK_NULL_HANDLE;
@@ -170,7 +178,11 @@ static VkCommandBuffer ensure_cmd(Device *dev)
    }
    VkCommandBufferBeginInfo begin = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-   dev->vk.BeginCommandBuffer(cmd, &begin);
+   if (dev->vk.BeginCommandBuffer(cmd, &begin) != VK_SUCCESS) {
+      dev->freeCommands.push_back(cmd);
+      TG_ERROR(dev, DXGI_ERROR_DEVICE_REMOVED);
+      return VK_NULL_HANDLE;
+   }
    dev->cmd = cmd;
    dev->cmdHasWork = false;
    /* A new command buffer inherits no state. */
@@ -180,7 +192,8 @@ static VkCommandBuffer ensure_cmd(Device *dev)
       stage.bound = VK_NULL_HANDLE;
    }
    dev->textureSet = dev->texelBufferSet = VK_NULL_HANDLE;
-   dev->barrierSerial = dev->writeSerial;   /* earlier submissions are ordered by the queue */
+   /* Each submit waits for the preceding completion timeline value. */
+   dev->barrierSerial = dev->writeSerial;
    dev->firstCommandQpc = trace_timing_enabled() ? qpc_now() : 0;
    return cmd;
 }
@@ -197,7 +210,8 @@ void end_rendering(Device *dev)
 VkCommandBuffer cmd_draw(Device *dev)
 {
    VkCommandBuffer cmd = ensure_cmd(dev);
-   dev->cmdHasWork = true;
+   if (cmd)
+      dev->cmdHasWork = true;
    return cmd;
 }
 
@@ -206,8 +220,31 @@ VkCommandBuffer cmd_begin(Device *dev)
    end_rendering(dev);
    flush_pending_clears(dev, nullptr);
    VkCommandBuffer cmd = ensure_cmd(dev);
+   if (!cmd)
+      return VK_NULL_HANDLE;
    dev->cmdHasWork = true;
+   command_barrier(dev);
    return cmd;
+}
+
+/* D3D's implicit ordering covers RAW, WAR and WAW hazards, including
+ * attachment LOAD across separate dynamic rendering instances. */
+void command_barrier(Device *dev)
+{
+   end_rendering(dev);
+   VkCommandBuffer cmd = ensure_cmd(dev);
+   if (!cmd)
+      return;
+   VkMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+   barrier.srcStageMask = barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+   barrier.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+   barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+   VkDependencyInfo info = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+   info.memoryBarrierCount = 1;
+   info.pMemoryBarriers = &barrier;
+   dev->vk.CmdPipelineBarrier2(cmd, &info);
+   dev->cmdHasWork = true;
+   dev->barrierSerial = dev->writeSerial;
 }
 
 void image_use(Device *dev, ImageStorage &storage, bool write)
@@ -218,6 +255,8 @@ void image_use(Device *dev, ImageStorage &storage, bool write)
        * hold another owner's pixels, which the transition must keep. */
       end_rendering(dev);
       VkCommandBuffer cmd = ensure_cmd(dev);
+      if (!cmd)
+         return;
       dev->cmdHasWork = true;
       VkImageMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
       barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
@@ -249,18 +288,7 @@ void barrier_for_read(Device *dev, uint64_t writeSerial)
 {
    if (writeSerial <= dev->barrierSerial)
       return;
-   end_rendering(dev);
-   VkCommandBuffer cmd = ensure_cmd(dev);
-   dev->cmdHasWork = true;
-   VkMemoryBarrier2 barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
-   barrier.srcStageMask = barrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-   barrier.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
-   barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-   VkDependencyInfo info = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
-   info.memoryBarrierCount = 1;
-   info.pMemoryBarriers = &barrier;
-   dev->vk.CmdPipelineBarrier2(cmd, &info);
-   dev->barrierSerial = dev->writeSerial;
+   command_barrier(dev);
 }
 
 /* Clears recorded before a draw become that render pass's load operation.
@@ -282,9 +310,11 @@ void flush_pending_clears(Device *dev, const View *except_bound)
          }
       }
       View *view = clear.view;
-      end_rendering(dev);
+      command_barrier(dev);
       image_use(dev, view->res->storage, true);
       VkCommandBuffer cmd = ensure_cmd(dev);
+      if (!cmd)
+         return;
       dev->cmdHasWork = true;
       VkRenderingAttachmentInfo attachment = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
       attachment.imageView = view_get(view);
@@ -315,10 +345,10 @@ void flush_pending_clears(Device *dev, const View *except_bound)
 
 /* ------------------------------------------------------------------ */
 
-void defer(Device *dev, DeferredType type, uint64_t handle, uint64_t seq)
+void defer(Device *dev, DeferredType type, uint64_t handle, uint64_t seq, VkImage image)
 {
    if (handle)
-      dev->deferred.push_back({type, seq, handle});
+      dev->deferred.push_back({type, seq, handle, image});
 }
 
 static void destroy_deferred(Device *dev, const Deferred &d)
@@ -391,6 +421,8 @@ void retire(Device *dev, bool force)
 
 static HRESULT wait_cpu(Device *dev, uint64_t seq, tgd3d_wait_reason reason)
 {
+   if (FAILED(dev->lost))
+      return dev->lost;
    if (dev->completed() >= seq)
       return S_OK;
    const uint64_t begin = qpc_now();
@@ -405,7 +437,7 @@ static HRESULT wait_cpu(Device *dev, uint64_t seq, tgd3d_wait_reason reason)
       result = dev->vk.WaitSemaphores(dev->vkdev, &wait, UINT64_C(1000000000));
    const uint64_t end = qpc_now();
    if (reason == TGD3D_WAIT_BACKPRESSURE)
-      dev->stats.backpressureNs += end - begin;
+      dev->stats.backpressureNs += qpc_nanoseconds(end - begin);
    const uint64_t qpc[4] = {begin, end, 0, 0};
    const uint64_t value[6] = {(uint64_t)reason, seq, 0, 0, 0, 0};
    trace_timing(TGD3D_TIMING_CPU_WAIT, result == VK_SUCCESS ? S_OK : E_FAIL, dev->submitted,
@@ -447,16 +479,57 @@ static HRESULT gate_runtime(Device *dev)
    return S_OK;
 }
 
-HRESULT flush(Device *dev, bool gate)
+HRESULT flush(Device *dev, bool waitForSpace)
 {
    if (FAILED(dev->lost))
       return dev->lost;
    flush_pending_clears(dev, nullptr);
    if (dev->cmd && dev->cmdHasWork) {
       end_rendering(dev);
+      /* Coherent upload/readback storage still needs a device-to-host
+       * memory dependency before a CPU fence wait can expose GPU writes. */
+      VkMemoryBarrier2 host = {VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+      host.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+      host.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
+      host.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+      host.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+      VkDependencyInfo dependency = {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+      dependency.memoryBarrierCount = 1;
+      dependency.pMemoryBarriers = &host;
+      dev->vk.CmdPipelineBarrier2(dev->cmd, &dependency);
       const uint64_t submit_begin = trace_timing_enabled() ? qpc_now() : 0;
-      dev->vk.EndCommandBuffer(dev->cmd);
+      if (dev->vk.EndCommandBuffer(dev->cmd) != VK_SUCCESS) {
+         TG_ERROR(dev, DXGI_ERROR_DEVICE_REMOVED);
+         return dev->lost;
+      }
       const uint64_t value = dev->submitted + 1;
+      VkSemaphoreSubmitInfo waits[2] = {};
+      uint32_t waitCount = 0;
+      if (dev->submitted) {
+         auto &wait = waits[waitCount++];
+         wait = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+         wait.semaphore = dev->fence;
+         wait.value = dev->submitted;
+         wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+      }
+      if (dev->runtimeIngress) {
+         D3DDDICB_SIGNALSYNCHRONIZATIONOBJECTFROMGPU prepare = {};
+         prepare.hContext = dev->hContext;
+         prepare.ObjectCount = 1;
+         prepare.ObjectHandleArray = &dev->runtimeIngress;
+         prepare.MonitoredFenceValueArray = &value;
+         HRESULT hr = dev->kt.pfnSignalSynchronizationObjectFromGpuCb(
+            dev->hRTDevice.handle, &prepare);
+         if (FAILED(hr)) {
+            TG_ERROR(dev, DXGI_ERROR_DEVICE_REMOVED);
+            return hr;
+         }
+         auto &wait = waits[waitCount++];
+         wait = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+         wait.semaphore = dev->ingress;
+         wait.value = value;
+         wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+      }
       VkSemaphoreSubmitInfo signal = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
       signal.semaphore = dev->fence;
       signal.value = value;
@@ -464,11 +537,19 @@ HRESULT flush(Device *dev, bool gate)
       VkCommandBufferSubmitInfo buffer = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
       buffer.commandBuffer = dev->cmd;
       VkSubmitInfo2 submit = {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+      submit.waitSemaphoreInfoCount = waitCount;
+      submit.pWaitSemaphoreInfos = waits;
       submit.commandBufferInfoCount = 1;
       submit.pCommandBufferInfos = &buffer;
       submit.signalSemaphoreInfoCount = 1;
       submit.pSignalSemaphoreInfos = &signal;
       VkResult result = dev->vk.QueueSubmit2(dev->queue, 1, &submit, VK_NULL_HANDLE);
+      if (result != VK_SUCCESS) {
+         /* No wait is queued for a failed submission. Never fabricate GPU
+          * completion on the CPU: older submissions can still own memory. */
+         TG_ERROR(dev, DXGI_ERROR_DEVICE_REMOVED);
+         return dev->lost;
+      }
       SubmittedCommands done = {dev->cmd, value, {}};
       done.pools.swap(dev->framePools);
       dev->submittedCommands.push_back(done);
@@ -485,20 +566,17 @@ HRESULT flush(Device *dev, bool gate)
       }
       dev->stats.draws = dev->stats.renderPasses = 0;
       dev->stats.uploadBytes = dev->stats.copyBytes = dev->stats.readbackBytes = 0;
-      if (result != VK_SUCCESS) {
-         /* Nothing will signal this value from the GPU. Release every
-          * waiter, including a runtime context already gated on it. */
-         VkSemaphoreSignalInfo release = {VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO};
-         release.semaphore = dev->fence;
-         release.value = value;
-         dev->vk.SignalSemaphore(dev->vkdev, &release);
-         TG_ERROR(dev, DXGI_ERROR_DEVICE_REMOVED);
-         return DXGI_ERROR_DEVICE_REMOVED;
-      }
+
    }
-   HRESULT hr = gate ? gate_runtime(dev) : S_OK;
+   /* Every submission, including upload/readback-triggered ones, must be
+    * visible to subsequent runtime signals and waits. */
+   HRESULT hr = gate_runtime(dev);
+   if (FAILED(hr)) {
+      TG_ERROR(dev, DXGI_ERROR_DEVICE_REMOVED);
+      return hr;
+   }
    retire(dev);
-   if (SUCCEEDED(hr) && dev->submitted > TGD3D_MAX_IN_FLIGHT &&
+   if (waitForSpace && SUCCEEDED(hr) && dev->submitted > TGD3D_MAX_IN_FLIGHT &&
        dev->completed() < dev->submitted - TGD3D_MAX_IN_FLIGHT) {
       hr = wait_cpu(dev, dev->submitted - TGD3D_MAX_IN_FLIGHT, TGD3D_WAIT_BACKPRESSURE);
       retire(dev);

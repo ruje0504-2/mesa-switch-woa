@@ -38,7 +38,7 @@ enum tgd3d_timing_kind {
    /* qpc: first command, submit enter, submit return.
     * value: draws, render passes, upload bytes, GPU copy bytes, readback bytes. */
    TGD3D_TIMING_SUBMIT = 1,
-   /* qpc: enter, after submit, after fence gate, after PresentCb.
+   /* qpc: enter, after submit and fence gate, after backpressure, after PresentCb.
     * value: DDI flags, interval, in-flight submissions, backpressure ns. */
    TGD3D_TIMING_PRESENT = 2,
    /* qpc: wait begin, wait end. value: reason, target sequence. */
@@ -90,6 +90,7 @@ bool trace_timing_enabled();
 void trace_timing(tgd3d_timing_kind kind, HRESULT result, uint64_t sequence, uint64_t completed,
                   const uint64_t qpc[4], const uint64_t value[6]);
 uint64_t qpc_now();
+uint64_t qpc_nanoseconds(uint64_t ticks);
 }
 #endif
 
