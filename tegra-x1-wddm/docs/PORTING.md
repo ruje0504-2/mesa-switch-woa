@@ -1050,9 +1050,10 @@ Cross-process sharing, D3D runtime image metadata and DWM remain separate work.
 Mesa's `src/gallium/frontends/d3d10umd` supplies D3D10 DDI and shader-token
 translation code. `State.h` currently disables its D3D10.1 and D3D11 branches.
 The default GDI target still creates softpipe or llvmpipe screens. The NVK
-target links Zink, but `Resource.cpp::OpenResource` still reports an error
-and runtime-owned allocation metadata is not connected. Its Present and
-SetDisplayMode callbacks return unsupported until the native bridge exists.
+target links Zink. Its runtime bridge now associates primary/shared allocations,
+imports their storage, opens legacy shared resources and forwards Present and
+SetDisplayMode through the runtime callbacks. The later per-batch timeline
+bridge still requires native validation; see [submission ordering](D3D_RUNTIME_SYNC.md).
 [Existing frontend](../../src/gallium/frontends/d3d10umd/)
 [GDI target](../../src/gallium/targets/d3d10umd/)
 
@@ -1068,6 +1069,106 @@ evidence. Generic compatibility work is in scope; individual-game debugging
 remains outside this goal.
 [DXVK upstream](https://github.com/doitsujin/dxvk)
 [Current runtime resource investigation](D3D_RUNTIME_SHARING.md)
+
+## Imported Windows image views
+
+The November 12 pre-onscreen audit finds that Zink creates runtime-imported
+images with color-attachment usage, but its surface creation subsequently
+consults ordinary linear-tiling format properties. NVK intentionally exposes
+the internal WDDM attachment support through the private WSI image query,
+including tiled-shadow fallback, rather than its public linear-format
+properties. The mismatch makes Zink attach `VkImageViewUsageCreateInfo` with
+usage `0x07` instead of the image's `0x17`, dropping `COLOR_ATTACHMENT`.
+An explicit image-view usage overrides the inherited image usage.
+[Vulkan view-usage contract](https://docs.vulkan.org/refpages/latest/refpages/source/VkImageViewUsageCreateInfo.html)
+
+Resource objects now retain whether they came from the WDDM import path.
+For those objects, view creation intersects the imported image's accepted
+format features with the view format's optimal features. It preserves
+UNORM/sRGB attachment usage without changing the allocation or public
+linear-image capabilities. Ordinary linear/optimal resources and imports
+without attachment usage retain their existing behavior. Direct3D permits
+typed present resources to use compatible typed views; ordinary typed
+resources do not gain unrestricted reinterpretation.
+[Direct3D resource/view typing](https://learn.microsoft.com/en-us/windows/win32/direct3d11/overviews-direct3d-11-resources-intro#strong-vs-weak-typing)
+
+`test-zink-win32-surface.exe` invokes the actual surface/cache functions with
+Vulkan dispatch substitutes. Before the fix, the first BGRA UNORM case fails
+with `actual=0x07`, `expected=0x17`. Afterward all 16 BGRA/RGBA UNORM/sRGB
+cases pass, including original-image identity, cache reuse, ordinary
+linear/optimal paths and non-attachment imports. The existing actual Zink
+submission control also passes. The ARM64 UMD and new control compile/link;
+the executable results above are Wine x64 CPU/API evidence, not GPU drawing.
+Evidence is retained in `build/wddm-surface-audit-20261112/`.
+
+This corrects a view-usage defect; it does not establish the cause or repair
+of the photographed white polygons. Native shared pixels and sustained
+desktop composition remain required. Run `--shared-layout` before optional
+`--shared-layout-checkpoints`: the latter adds producer/import CPU readback
+and completion waits that can mask the GPU timeline behavior under test.
+
+## Imported Windows image contents
+
+The subsequent audit finds a separate import-state defect. The WDDM branch
+of `zink_resource_from_handle` made its allocation immutable but left
+`res->valid` false. The dma-buf and memory-object import paths already mark
+imported image contents valid. Zink's first rendering attachment setup uses
+that flag to select `LOAD` or `DONT_CARE`; the latter allows prior pixels in
+the render area to become undefined. This is incorrect for a shared image
+which another Direct3D device has already populated.
+[Vulkan attachment load operations](https://docs.vulkan.org/refpages/latest/refpages/source/VkAttachmentLoadOp.html)
+[Direct3D shared-resource access](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11device-opensharedresource)
+
+Successful WDDM imports now mark their image contents valid. Explicit
+invalidation still permits discard. This does not change the allocation,
+format/view rules or synchronization protocol.
+
+`test-zink-win32-import.exe` uses the real resource-import, allocation and
+render-attachment classification functions, with Vulkan calls substituted.
+On Windows ARM64 with `.59` / Code 0 unchanged, the old production path fails
+at 17:00:32 UTC: `existing_contents_discardable=1`, exit 1. The corrected
+path passes at 17:01:50, exit 0, for BGRA/RGBA imports, explicit invalidation,
+invalid stride and balanced image/memory release. The failing and passing
+executable hashes are `4d30c47b014517e709262f4d8e589a56164f33b9a7d321d4feaac6ca8afa16d2`
+and `09e6e8c458c2d1ad6beaa014074422db3e28fb6af8c89d04931f399fc1e13cf9`.
+An earlier fixture lacked a Vulkan format-query substitute and timed out;
+that result is preserved separately and is not counted as defect reproduction.
+
+The explicit runtime probe adds `--shared-layout-load`. After a producer
+draws the padded shared pattern, the consumer's first render pass performs
+an additive red draw inside a scissor rectangle. Green/blue/alpha and pixels
+outside the rectangle must survive. The result is then sampled into the
+desktop-size target and checked against integer expectations. There is no
+producer/import CPU readback checkpoint before the partial draw.
+
+At 17:05:10 UTC, `--warp --shared-layout-load` passes all four BGRA/RGBA
+viewport cases: **3,686,400 pixels, zero mismatches**, exit 0 in 270 ms.
+Probe SHA256: `5747dff91b8049f1d9476f731f779ae3c2dd0832c41c0952542f8e84b0a0a57f`.
+WARP validates the application and expected pixels; it does not execute
+Zink/NVK or establish a GM20B fix. At that control boundary, native
+shared-image rendering and onscreen acceptance were unverified. The prior
+failed `.158` retest remains failed. Evidence is retained in the local build
+workspace under `runs/wddm-import-validity-20261112/`.
+
+The separately packaged candidate is built from
+`ca4053872319e81f71207c1021fbc4f6133f6b4f`. `TegraGpuD3D.dll` has SHA256
+`0e840c55f61cc58cee11c00b36c1bce2586d577de5f8e385a09f8ea4bb6a0f02`.
+Its import-control and runtime-probe binaries exactly match the verified
+hashes above. The package is retained as
+`desktop158-import-content-20261112-umd`. The
+[separate import-content desktop trial](NATIVE_DESKTOP_158.md#import-content-desktop-trial)
+now supplies native GM20B shared-load readback: **3,686,400 pixels match**
+without intermediate CPU readbacks. Physical desktop acceptance remains
+pending; the trial's later `.59` state is recovery, not native execution.
+The previously tested `.158`/`.160`
+artifact sets remain separate from this candidate.
+
+The mainline `Stage-Desktop158Retest.ps1` now pins the subsequent
+[runtime-teardown candidate](D3D_RUNTIME_SYNC.md#imported-resource-teardown-ordering)
+and its verified Present/teardown control, retaining this import-content fix.
+It still requires `--shared-layout-load` in the trial manifest and rejects
+older UMD combinations. This updates preparation only; it does not install
+the new candidate or change the retained earlier trial scripts/results.
 
 ## Windows shader cache
 
@@ -1130,8 +1231,12 @@ while keeping GM20B resource metadata and submission on the Tegra ABI.
 - **KMT transport and external objects.** Compare GPU VA mapping, paging
   fences, queue waits and signals, and NT-handle resource import with the
   existing Windows NVK backend. NT-handle monitored-fence import/export now
-  exists, with SDK-backed controls executed on Windows; native GPU validation
-  and the runtime/NVK per-submission bridge remain pending. Use
+  exists, with SDK-backed controls executed on Windows and
+  [native Vulkan timeline handoffs](VULKAN_WIN32_MEMORY.md#native-gpu-timeline-result)
+  verified between two Vulkan devices. The
+  [runtime/NVK per-submission bridge](D3D_RUNTIME_SYNC.md) now uses incoming
+  and outgoing GPU timelines; the native shared-load pixel check now passes,
+  while sustained desktop and performance validation remain pending. Use
   [D3DKMTShareObjects](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtshareobjects)
   and [D3DKMTOpenSyncObjectFromNtHandle2](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtopensyncobjectfromnthandle2)
   with WDK types. Size the runtime, resource

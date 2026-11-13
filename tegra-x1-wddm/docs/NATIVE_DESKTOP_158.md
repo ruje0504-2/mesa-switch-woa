@@ -12,10 +12,18 @@ stability and interaction coverage remain incomplete.
 
 | Component | Source or SHA256 |
 | --- | --- |
-| KMD source | `6c854e9f394c3d761fab85885bead4bbd4588581`, `stabilize/native-desktop-153` |
+| KMD source | `6c854e9f394c3d761fab85885bead4bbd4588581`, retained under [baseline/native-desktop-158](https://github.com/ruje0504-2/mesa-switch-woa/tree/baseline/native-desktop-158) |
 | Signed KMD `.158` | `46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088` |
 | D3D UMD | `77dea046dde0777d6c67e62769c983c5249595a9cc9e3dd7f8323805854f9cdf` |
 | NVK ICD | `6e2fad99d742a69033cc59925093fb4a7c8489728a3f7e5e9ebb523c017e0323` |
+
+The former `stabilize/native-desktop-153` development branch is merged into
+`main` and retired.
+The archival tag `baseline/native-desktop-158` retains its final source and
+observation record at `6cff3356d465bc87e9bbd7fb73ea05b4e7503617`, including
+the exact KMD commit above. This tag preserves the historical short trial;
+later interaction showed visual corruption, so it is not a stable release.
+See [current status](STATUS.md) for subsequent work and results.
 
 The candidate starts from the selected `.153` rendering baseline. It includes
 the sampler-view operand correction, SAMPLE_I lowering, execution-ordered
@@ -183,3 +191,550 @@ mixed idle/interactive Presents is not a throughput benchmark. The decoded
 export and `presentation-pacing-summary.json` remain under the trial directory;
 the known Dwm-Core event-203 payload mismatch excludes 1,803 records
 from decoded analysis.
+
+## Matched-component retest: failed onscreen acceptance
+
+The later November 12 run `desktop158-zink-sync-20261112` is **not an
+onscreen success**. The owner explicitly reports no successful native
+output. No `mode-stage.json`, native pixel result, native desktop PNG or
+`native-result.json` is retained. The five-minute observation never reaches
+a retained result; hardware rotation and `vkcube` are not attempted.
+
+This is a different component combination from the historical short pass:
+
+| Component | Source | SHA256 |
+| --- | --- | --- |
+| Frozen KMD `.158` | `6c854e9f394c3d761fab85885bead4bbd4588581` | `46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088` |
+| Zink UMD, shared-image view usage and submission bridge | `accd9f1e5a9f1c649536e400828b7428e8aca367` | `8a1a765de323906bfef4f2c13c8d7bb60527e89d49667928efc5a94eceee3ffe` |
+| NVK ICD, shared timelines | `7a771aa6602d2c94cb4cd362855777290a2503f2` | `ad6865784890f937a7c29aab0f108841b6d99cbffdca985b7dafbffc1a953625` |
+
+The staging tool is retained in main `befdd503`. It replaces an obsolete
+staging script that expected an old ICD hash and reused old UMD control
+results. At 16:18:09 UTC the current ARM64 surface control passes all 16
+cases, exit 0 in 1300 ms; it uses Vulkan substitutes and performs no GPU
+rendering. All 33 scripts parse in Windows PowerShell, and the closed-gate
+and interactive-desktop preflight checks pass on `.59` / Code 0.
+
+Retained controller sequence (UTC):
+
+- 16:20:56: `.158` is installed as `oem89.inf`, Code 43 behind the closed
+  startup gate. The planned setup boot follows at 16:21:39.
+- 16:23:42: the automatic controller starts. The one-shot native start
+  request is issued at 16:23:54. The retained startup completion at
+  16:23:58 records `Hardware=0`, `Problem=0`, `Permit=0`; this proves neither
+  drawing nor physical output.
+- 16:24:26: a new boot is observed before the native pixel/capture stage
+  has produced records. No completed restoration record precedes this boot;
+  it must not be described as a completed test or the planned final recovery.
+  This record does not determine its cause.
+- 16:26:34: the existing attempt marker selects recovery rather than a
+  second native-start attempt. The restore task is observed running at
+  16:26:49 and writes `restore-staged.json` at 16:26:56.
+- 16:27:29: the planned recovery boot. At 16:28:50 the device is `.59` /
+  Code 0 with no remaining `TgGpuDisplay158*` tasks.
+- 16:31:39: full recovery verification completes. The `.59` SYS and ACPI
+  hashes match the originals. Temporary ICD/UMD registration, system loader,
+  opt-in/debug environment, startup permit, grant and tasks are cleared or
+  restored. Power reports match; saved display preference verifies unchanged
+  on BasicDisplay, 720x1280. CPU remains 1996.8 MHz, fan version 12 and Wi-Fi
+  0.5.7.0 / Code 0.
+
+The owner's earlier report of a normal desktop was not tied to successful
+native presentation and is not used as acceptance. Their subsequent explicit
+report of no native onscreen output establishes the failed physical result.
+
+The retained UMD export contains 28,331 records. Its 28 failure-bit statuses
+are residency `E_PENDING` results; runtime-context signal and wait callbacks
+each return success 18 times. This is evidence that the callbacks were
+accepted, not that GPU dependencies completed or pixels reached the panel.
+The interrupted ETL has no completed end timestamp, so its tail cannot be
+treated as a complete execution history or used to identify a restart cause.
+
+All 134 collected files, totaling **98,331,502 bytes**, match device hashes
+and stream lengths. Directory enumeration reported different lengths for
+`loader-debug.csv` and `trace-flush.bin`; a second device-side measurement
+through open file streams confirms the downloaded lengths and hashes. Both
+the original manifest and correction response are retained under
+`runs/desktop158-zink-sync-20261112/` in the local build workspace.
+
+Before another hardware trial, audit the new submission/shared-image path
+against actual runtime/KMT contracts. A later five-minute visual acceptance
+must exercise the known Quick Settings corruption case as well as desktop
+captures; an idle-desktop sequence alone does not cover that regression.
+
+## Present interval audit
+
+The retained UMD exports distinguish DWM scanout requests from application
+Blt requests:
+
+| Trial | DWM Present calls | Flags | Requested interval | Other Blt calls, interval 0 |
+| --- | --- | --- | --- | --- |
+| Historical short `.158` observation | 79 | Flip (`2`) | One VBlank (`1`) | 20 |
+| Failed matched-component retest | 5 | Flip (`2`) | One VBlank (`1`) | 13 |
+
+All of these retained callbacks return `S_OK`. Microsoft's
+[flip-interval definition](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ne-dxgiddi-dxgi_ddi_flip_interval_type)
+defines interval one as a VSync-paced flip. `RuntimePresent` forwards the
+opaque DXGI context unchanged and leaves the interval-override fields unset,
+following the [runtime callback contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgiddicb_present).
+The records therefore do not demonstrate that DWM requested unbounded
+immediate flips. Interval-zero application Blt callbacks must not be counted
+as immediate physical panel flips. These counts do not establish actual
+scanout frequency, GPU completion, correct pixels or sustained presentation;
+the failed trial remains failed. They do not justify adding a CPU timer to
+every DWM Present in place of verifying the existing synchronization path.
+
+## Import-content desktop trial
+
+`desktop158-import-content-20261112` is a new candidate combination. It keeps
+the frozen `.158` KMD (`46d17576…`) and timeline ICD (`ad686578…`) identified
+above. Its UMD comes from `ca4053872319e81f71207c1021fbc4f6133f6b4f`,
+SHA256 `0e840c55f61cc58cee11c00b36c1bce2586d577de5f8e385a09f8ea4bb6a0f02`.
+The runtime pixel probe has SHA256
+`5747dff91b8049f1d9476f731f779ae3c2dd0832c41c0952542f8e84b0a0a57f`.
+This adds preservation of imported image contents; the preceding failed
+retest used a different UMD and remains a failed onscreen result.
+
+The surface control and registered-loader preflight pass on `.59`, with
+all 28 trial scripts parsed by Windows PowerShell. At 18:49:12 UTC, the
+interactive preflight verifies the saved 720x1280 portrait preference
+unchanged and a visible taskbar window at the expected bounds. These are recovery-configuration
+checks, not native desktop acceptance. The candidate binds as `.158` /
+Code 43 behind the closed startup gate at **18:50:41**. UMD/ICD registration
+and the planned setup reboot request follow at **18:50:49**.
+
+The worker first requests a native desktop capture, then ordinary and
+sampled D3D pixel checks and `--shared-layout-load`, without producer/import
+CPU readback checkpoints. A subsequent 300-second observation requests
+desktop/Start captures and five Quick Settings open/dismiss cycles. It uses the
+previously exercised shortcut capture helper, SHA256
+`ff22b95bba31e37c74e82e967e651ed14cfc8dcc4a368cbdc10c51b89fd15351`.
+The existing recovery removes the native task and this trial's temporary
+ICD registration, including interruption before normal collection.
+
+Records recovered after SSH reconnect establish the following, separately
+from the device's later `.59` recovery state. All times below are UTC.
+
+- At 18:53:38, the active display path and native KMT adapter both have LUID
+  `000000000008239d`, `.158` / Code 0. DWM PID 776's loader record at
+  18:53:33.865 identifies this trial's NVK DLL and GM20B device.
+- The ordinary draw, sampling and shared-load probes use that native LUID
+  and the identified UMD/ICD. They match **16,384**, **24,576** and
+  **3,686,400** pixels respectively, with zero mismatches. The shared-load
+  case preserves the producer's contents across an imported partial blend,
+  with no intermediate producer/import CPU readback. These are **offscreen
+  GPU results**, not a physical presentation acceptance.
+- The capture worker runs from 18:53:43.193 to 18:58:55.725. Its 300-second
+  observation begins at 18:53:51.068 and retains 15 images, including the
+  initial pre-probe image. Their metadata records `.158` / Code 0. DWM PID
+  776 remains the same in the first and last process snapshots. The owner
+  identifies the partially opened Quick Settings images as transition
+  animation; they must not be called texture corruption from those stills.
+- The retained UMD trace has 157 successful DWM Flip/interval-one callbacks,
+  spanning 18:54:22.006–18:58:43.910 (261.904 seconds), with matching kernel
+  MMIO flip records. The 17,413 retained hardware VSync events have a median
+  interval of 16.6666 ms. This supports native presentation activity and
+  approximately 60 Hz VBlank timing, not 60 rendered frames per second.
+
+**Five-minute physical desktop acceptance is still unverified.** The worker
+explicitly records `PhysicalPixelsUnverified=true`; screenshot collection
+completion is not that acceptance. The ETL reports **121,523 lost events**,
+so neither missing records nor the retained flip span prove an uninterrupted
+five-minute history. The old ShellExperienceHost PID 4636 also records 35
+failed Present calls (`88760870`), 74 teardown device-removed reports and
+one resource-create `8007000e`; a later PID 5848 has 13 successful Presents.
+The submit-side error needs attribution before declaring the desktop stable.
+No restart cause is inferred from these records.
+
+The controller records collection complete at 18:59:17.210, later takes its
+existing-attempt recovery branch at 19:02:20.801 and stages `.59` at
+19:02:39.567. The recovery boot is 19:03:14.227. At 21:13:25, the original
+SYS/ACPI, temporary registration/loader/environment cleanup, removed tasks
+and unchanged power settings verify. The 21:22:25 check additionally verifies
+CPU 1996.8 MHz, fan version 12, Wi-Fi 0.5.7 / Code 0, removed trial loader
+registry value and the saved portrait preference. **`.59` / Code 0 is the
+post-trial BasicDisplay configuration, not the native test configuration.**
+
+All **244 files / 137,721,253 bytes** match device-side hashes and lengths
+under `runs/desktop158-import-content-20261112/evidence/` in the external build
+workspace. SHA256 identities:
+
+| Record | SHA256 |
+| --- | --- |
+| Retained archive | `b20f70adb297ca4cb385784e396f7f0886c935fd38383d0261bb28d298d58fff` |
+| Worker result | `285143c5626201aab65d76aee1ac4c1832f91f72a0ca0f3b2b9d12f30c9d3b51` |
+| Shared-load pixels | `e0dc93d5ff2cf58647205571df1d958888de827cfd1f707f965c8d84000240f6` |
+| Active-path observations | `ce2191026a1898fe43f996c1ba8afa59c5975d1d29478009a900a9a22e2100c8` |
+| Recovery verification | `3f0ccca0f26fc6196dab4f5d857e8c670ae0f872265ea52bbeae164205bc9e4b` |
+
+The subsequent observation below is designed to be onscreen-only. Before starting its timer
+and around each capture, `Assert-NativeDesktop.ps1` must retain a fresh active
+source/target LUID matching native GM20B, the expected KMD/Code 0 and the
+current DWM process's loader record for the trial ICD. A BasicDisplay desktop
+cannot satisfy this check. Its records still do not replace physical screen
+observation. Reuse the offscreen result above instead of counting another
+offscreen probe as progress on presentation.
+
+## Onscreen-only trial: physical failure
+
+`desktop158-onscreen-20261112` retains the same `.158` KMD (`46d17576…`),
+`ca405387` UMD (`0e840c55…`) and `7a771aa6` ICD (`ad686578…`). It deliberately
+omits the already-passed offscreen probes. The intended 300-second desktop
+sequence checks the active GM20B source/target LUID and current DWM loader
+record before starting the timer and around each capture. The new identity
+helper is in main `31ab6eb4`; the target parses all staged PowerShell scripts
+successfully before driver installation. `NVK_DEBUG=log` and the existing
+debug receiver's Mesa-message filter are temporary observation settings,
+saved and restored with the previous environment.
+
+**Physical result: failed.** The owner reports the image freezing, followed
+by a system hang and automatic restart. No five-minute acceptance, rotation
+or cube result is claimed. The collected directory contains no initial native
+identity-guard record, observation-timer marker, native worker result or
+desktop PNG. Absence of those records does not establish the exact interrupted
+instruction; it does establish that no completed observation is retained.
+
+Controller/observer records (UTC):
+
+- 21:42:57: after the owner's manual restart to restore SSH, `.59` / Code 0
+  is verified on boot 21:40:46.842. The uploaded input ZIP/bootstrap hashes
+  match. New preparation completes on BasicDisplay with no native drawing.
+- 21:43:52: the candidate installs as `oem89.inf`, `.158` / Code 43 behind
+  the closed gate. Registration and the setup-restart request follow at
+  21:44:00. The setup boot is 21:44:40.438.
+- 21:46:51.750: startup completion records `Hardware=0`, `Problem=0`,
+  `Permit=0`. At 21:46:56.703, the observer records the active source/target
+  and native KMT adapter on LUID `00000000000abc37`, `.158` / Code 0. These
+  identity records do not establish correct physical pixels.
+- The next observed boot is 21:47:31.817, consistent with the owner's
+  reported restart. At 21:49:40.719, the existing-attempt marker selects
+  recovery, not another native start.
+- 21:50:05.469: recovery stages the original driver/ACPI. The planned
+  recovery boot is 21:50:35.210. `.59` / Code 0 and empty trial tasks are
+  observed at 21:52:15.
+- 21:52:49.724: full recovery verifies the original SYS/ACPI, removed
+  temporary UMD/ICD/loader/permits/tasks, restored `NVK_DEBUG`, loader-debug
+  and opt-in values, unchanged power settings and saved portrait preference.
+  CPU is 1996.8 MHz, fan version 12 and Wi-Fi 0.5.7 / Code 0.
+
+The interrupted first ETL retains 23,070 UMD events, including 13 successful
+DWM Flip/interval-one callbacks over an **8.391-second ETW timestamp span**.
+Its `end_time=0` and `buffers_written=0`; reported zero event loss does not
+make its tail complete. Its converted absolute timestamps do not align with
+the controller/loader wall clock, so they are not used to order startup or
+estimate time to failure. The later closed-gate ETL contains no UMD events.
+No retained Mesa error message or UMD `RuntimeError` identifies a submission
+failure in this prefix. This is not evidence that later execution succeeded.
+No restart cause is investigated or assigned.
+
+All **128 files / 125,879,337 bytes** match device-side hashes and stream
+lengths. Directory enumeration again reported stale lengths for
+`loader-debug.csv` (0 versus 37,055 bytes) and `trace-flush.bin` (32 versus
+4,640). The original manifest/archive are preserved; a second device-side
+read confirms both lengths and the unchanged SHA256 values from the same
+open streams. `Collect-DesktopTrial.ps1` now uses that measurement method for
+future collections; its Windows PowerShell parse and the two real-file stream
+measurements pass. This corrects evidence collection, not GPU rendering.
+
+| Record | SHA256 |
+| --- | --- |
+| Retained archive | `55bc781ba31caf127161239bb6b18d63c9e584f3c5ccfacbf256f542d76ad602` |
+| Owner's physical observation | `e1afd3414d4b0612adfec7a62a8b4f7ea9e29a25a0b9a115cc97049e7d645848` |
+| Active-path observations | `e11abcfa6987a25a905bf8d1c01d009ff87379e0144210ae9880306870f337e1` |
+| Recovery verification | `d13498e54e64d362bdcb4e6e3cbad6374a3b57713f716923de7146682e67c534` |
+| Stream-length correction | `b64fa215f5611fc4c67b8c0599acaa29e428303df478a07174b072f86ba57306` |
+
+Evidence is retained under `runs/desktop158-onscreen-20261112/` in the
+external build workspace. Keep the failed physical result distinct from the
+preceding offscreen pixel pass. Do not repeat the same native trial or move
+to landscape/cube without a concrete source or validation change addressing
+the current desktop boundary.
+
+## Teardown-order UMD trial: physical and harness failures
+
+`desktop158-teardown-order-20261112` tests UMD source
+`1e6a3ba4d4cb603612d43e5af93f74fbea845e97`, DLL SHA256
+`7f8f821d7b3ca7f56b37bb47d7367e9a5db356bfcee3a838af8a75d81597e3ce`,
+with the unchanged `.158` KMD (`46d17576…`) and ICD (`ad686578…`). The
+intended sequence is native identity, five minutes of desktop observation,
+then the known-pixel checks. The latter checks are not reached.
+
+Two distinct failures are retained:
+
+- **Physical:** the owner reports more than ten seconds of output, a diagonal
+  corruption streak after opening Device Manager, then a black screen. The
+  TX1 display device had no warning icon when the corruption appeared. This
+  is consistent with the separately recorded native `.158` / Code 0 interval;
+  it is not reclassified as the later `.59` / Code 10 recovery state. The
+  report has no exact physical-event timestamp, and no cause is assigned.
+- **Harness:** `Assert-NativeDesktop.ps1` in `31ab6eb4` omitted the required
+  `tegragpuno3d.dll` argument to `desktop-path.exe`. The native worker exits 1
+  at this check before starting its timer. It retains no desktop PNG and
+  runs no pixel probe. This invocation error is not a GPU failure, and its
+  correction does not override the independent physical failure.
+
+The existing interactive observer already supplied that argument. At
+22:16:22.181 UTC it records source/target and native KMT LUID
+`00000000000a9493`, `.158` / Code 0. Startup completion is 22:16:17.431;
+the native worker runs 22:16:27.056–22:16:29.518. The controller finishes
+collection at 22:16:52.204. The closed ETL exports 24,270 valid UMD events,
+including 279 successful DWM Flip/interval-one callbacks, with no reported
+event or buffer loss. It contains no `RuntimeError` or retained Mesa/NVK
+error message. Successful callbacks do not establish correct physical pixels
+or explain the reported corruption.
+
+The planned recovery stages `.59` / Code 10 at 22:17:16.750. The boot remains
+unchanged while Windows processes shutdown; one follow-up recovery restart
+request at 22:20:05 returns **1115**, shutdown already in progress. No new
+native start is requested. The recovery boot is observed at 22:21:44.712.
+At 22:24:25.448, `.59` / Code 0, original SYS/ACPI, removed temporary
+registration/loader/tasks/permit, restored opt-in/debug environment and
+unchanged power/display preference verify. CPU remains 1996.8 MHz, fan
+version 12 and Wi-Fi 0.5.7 / Code 0. No shutdown or black-screen cause is
+investigated.
+
+All **132 files / 91,689,439 bytes** match the device's stream measurements
+and SHA256 values, without directory-length corrections. The native result,
+physical observation and recovery are separate records:
+
+| Record | SHA256 |
+| --- | --- |
+| Retained archive | `11a7e52f951e96b9dbb0406cdf89082db6c9a76a4a216527b6e3f982e911cd67` |
+| Native worker result | `3c6eec49fc41a2da106591ff336f03ac29d8ee114c24245a7f7b418a3b953aa0` |
+| Owner's physical observation | `f9fde87e6f4a778d9f632357114de30fee913b9e3e5e728cf71d80f59446058b` |
+| Recovery verification | `7a3d6ec73f2910e4d362a6b809ef0ae50fdfc98d235449fbe93e1bc1f1611a42` |
+
+### Display query invocation correction
+
+The assertion now passes and verifies the frozen query bridge DLL, matching
+the existing observer's invocation, and retains the helper exit code and
+output before validating them. The bridge is a query dependency; the renderer
+remains the candidate `app\TegraGpuD3D.dll`.
+
+An interactive Windows control at 22:29:22–22:29:27 reproduces the missing
+argument exit **2**. The corrected invocation returns the two real display/KMT
+records and exit **4** on `.59`/BasicDisplay, with `nvk_ready=0`; the production
+assertion correctly refuses native acceptance. The fixture changes only its
+expected version to `.59` so the assertion reaches this query, not its
+native-ready/LUID requirements. Current DWM start-time access also succeeds
+under the same interactive task principal. No GPU commands are executed.
+
+All seven control records / 6,272 bytes match device hashes and lengths;
+the control task is removed. Result SHA256:
+`4575eb373895d9a0dd96e8a5fdada29131859774e14c16163c212adebe2baeaa`.
+Corrected assertion SHA256:
+`430756d2813db6a215542ea9a78d1a9198de620a4160cb73a0b8d912122a6d90`.
+Evidence is retained under `runs/native-identity-control-20261112/`.
+Positive native identity and five-minute physical acceptance remain pending;
+the `1e6a3ba4` teardown fix has not resolved the observed desktop boundary.
+
+## Corrected-harness recheck: physical failure
+
+`desktop158-identity-guard-20261112` retains the exact `.158` KMD,
+`1e6a3ba4` / `7f8f821d…` UMD and `7a771aa6` / `ad686578…` ICD above.
+It applies the checked helper-argument correction from `feb25fcc` and adds
+early scheduled captures. This is a harness recheck, with **no new GPU
+source fix**. Input archive SHA256:
+`e1c4809bc083db83dc5a56a9d9443238d041425fca9ce159be7f3200c5ec5fec`.
+
+**Physical acceptance fails again.** The owner reports immediate frozen
+output followed by an automatic restart, with a shorter visible interval
+than the preceding trial's more-than-ten-second observation. This is the
+owner's physical report, not a duration derived from callbacks or boot times.
+
+The retained controller records this sequence (UTC):
+
+| Event | Time |
+| --- | --- |
+| Setup restart requested after staging | 22:42:07 |
+| Setup boot | 22:42:44.551 |
+| Native startup completes, Hardware 0 / Permit 0 / Code 0 | 22:44:56.944 |
+| Native interactive task launched | 22:45:05.116 |
+| Additional boot, before the recovery task | 22:45:33.722 |
+| One-shot controller recognizes the previous attempt and enters recovery | 22:47:50.805 |
+| Recovery stages `.59` / Code 10 | 22:48:15.430 |
+| Recovery boot | 22:48:47.565 |
+| Complete `.59` / Code 0 recovery verification | 22:51:12.856 |
+
+No `native-identity-initial.json`, observation-start/completion marker,
+native result, desktop PNG or pixel result is retained. The task launch
+does not establish which later calls executed before the interruption.
+The observer's surviving display-path record belongs to the later closed-gate
+boot and is BasicDisplay; do not reuse it as the native path's identity.
+The corrected guard has therefore still not completed its positive native
+acceptance case. No five-minute desktop pass is claimed.
+
+The interrupted native ETL retains 23,112 valid UMD events, including 14
+successful DWM Flip/interval-one callbacks. Its `end_time=0` and
+`buffers_written=0` indicate an unfinalized trace. Zero reported loss and no
+retained RuntimeError do not establish a complete execution tail or correct
+physical output. No restart or black-screen cause is assigned or investigated.
+
+All **129 files / 125,485,474 bytes** match the device's stream lengths and
+SHA256 values. Recovery verifies original SYS/ACPI, removed temporary
+UMD/ICD/loader/tasks/permit, restored environment, unchanged power and saved
+portrait preference. CPU is 1996.8 MHz, fan version 12 and Wi-Fi 0.5.7 / Code 0.
+
+| Record | SHA256 |
+| --- | --- |
+| Retained archive | `43238678e7eaf5ab24757a658025f6e59bb1a5e34ea48372e4e5b70e60896218` |
+| Owner's physical observation | `afdad97271a00819195074439b22ef64e5ed3ece5e79a606f631f3f32d4883fe` |
+| Recovery verification | `e766f8c7f823aa80a37554a3adefdcb2b629aea1c5380a42dbc2d98ac76b0629` |
+
+The normal-path audit checked resource/view rotation, the runtime/NVK
+submission bridge, separate GDI source/destination pitches, linear-attachment
+shadow copies and the existing completion WFI/cache synchronization. It did
+not establish another GPU defect or a fix for the physical failure. Retain
+that limit rather than changing stride, barriers or timing speculatively.
+Do not repeat this candidate; a demonstrated rendering fix is needed before
+another native desktop trial. Hardware rotation and cube remain pending.
+
+## Query-polling UMD trial: physical failure
+
+`desktop158-query-poll-20261112` tests source
+`760db8b2e75364a9373ce82ca99cf980fb24aa02`, UMD SHA256
+`02248b25419fb5560d0ffb17b3eb7d2b699ca4769a9ae08e0bfe8e6f0083cb13`,
+with the unchanged `.158` KMD (`46d17576…`) and ICD (`ad686578…`).
+The query-polling and event-fence ownership controls pass separately, as
+documented in [D3D runtime synchronization](D3D_RUNTIME_SYNC.md#nonblocking-query-polling-and-event-ownership).
+The planned native sequence remains desktop identity, 300 seconds of
+physical observation, then ordinary/sample/shared-image pixel checks.
+
+**Physical acceptance fails.** The owner's report is “直接黑屏了，然后几秒以后死机”
+(direct black output, then frozen/hung after a few seconds). No exact event
+timestamp is supplied. The separately observed additional boot is recorded
+below; its timestamp is not used to infer a physical failure duration or cause.
+
+| Retained event | UTC |
+| --- | --- |
+| Setup boot | 23:19:01.619 |
+| One-shot controller starts | 23:21:01.799 |
+| Startup completes, Hardware 0 / Permit 0 / Code 0 | 23:21:15.443 |
+| Additional boot observed by the SSH watcher | 23:21:55.956 |
+| Existing-attempt marker selects recovery | 23:24:02.030 |
+| Original `.59` driver/ACPI staged, Code 10 | 23:24:26.342 |
+| Recovery boot | 23:24:55.881 |
+| Full `.59` / Code 0 recovery verified | 23:27:29.116 |
+
+No `native-observer-ready.json`, initial native identity assertion, worker
+result, timed observation marker, desktop PNG or native pixel result is
+retained. The surviving interactive path observation belongs to the later
+closed-gate `.158` / Code 43 boot, not an accepted native display path.
+Missing records do not establish which calls executed before interruption.
+The new shared-image reuse probe therefore retains only its separately
+recorded WARP control; it has no native result in this trial.
+
+The interrupted first ETL exports 22,889 valid UMD events, including seven
+successful DWM Flip/interval-one callbacks and ten windowed Blt callbacks.
+It has `end_time=0` and `buffers_written=0`; zero reported lost events does
+not establish a complete tail. Callback success does not establish correct
+physical pixels. The second, closed-gate ETL has no UMD events. No black-screen,
+hang or restart cause is investigated or assigned.
+
+Recovery verifies the original SYS/ACPI, removed temporary UMD/ICD/loader,
+permits and trial tasks, restored environment, unchanged sleep/power settings
+and saved portrait preference. CPU remains 1996.8 MHz, fan version 12 and
+Wi-Fi 0.5.7 / Code 0. Two earlier attempts to request recovery over SSH did
+not deliver the command; the existing one-shot controller performed recovery.
+
+All **129 files / 123,234,298 bytes** match the device's stream measurements
+and SHA256 values. Evidence is retained in the external build workspace under
+`runs/desktop158-query-poll-20261112/`.
+
+| Record | SHA256 |
+| --- | --- |
+| Retained archive | `bda6713e109f937b066465f0eaad0ede2641f8a0cf5c7ae63398d5075abf23ad` |
+| Owner's physical observation | `6a4fb724628b9d571111248c874f1aeda9dff2be571027201fc2de451ad8cd0e` |
+| Recovery verification | `d134544939b4de3a56363e41a0f02e8d97c8baf70edd0357cf61a5ebefdab2bb` |
+
+The query fixes do not resolve this failed physical result. Do not redeploy
+this candidate unchanged; continue the normal rendering/contract audit.
+Five-minute desktop acceptance, hardware rotation and Win32 cube remain pending.
+
+## Failure investigation and missing crash dumps
+
+The owner's subsequent instruction explicitly includes investigation of the
+reported black output, corruption, hangs and automatic restarts. Earlier
+statements that no cause investigation was performed describe those historical
+trials; they are no longer an exclusion on current work.
+
+Read-only collection at **23:56:31–23:57:09 UTC** establishes:
+
+- The recovered display driver is `.59` / Code 0, SYS SHA256 `de5e9cd4…`.
+  No new native candidate has been loaded since the failed query-poll trial.
+- The four recent Kernel-Power 41 events have `BugcheckCode=0` and zero
+  bugcheck parameters. The system also repeatedly logs **volmgr 46: crash
+  dump initialization failed**. Current settings request small dumps
+  (`CrashDumpEnabled=3`), with a real 512 MiB pagefile and a 512–2048 MiB
+  paging-file configuration. TDR override values are absent.
+- No matching recent minidump or full crash dump is present. Retained
+  WATCHDOG dumps are older and are not attributed to the current candidates.
+- The installed SD host is `nvtsdhc`, version **0.4.0.1**, Code 0,
+  44,432-byte SYS SHA256
+  `5ce2520d09ce67cc5b008da099d04cb821e9d314f1264c7ac8fb7ccb1447bd1b`.
+  Newer local Lite SD source explicitly disables crashdump support and
+  rejects dump-mode initialization. Its source/version must be reconciled
+  with the installed image before assigning a specific implementation cause.
+
+Microsoft documents that [zero bugcheck fields together with volmgr 46](https://learn.microsoft.com/en-us/troubleshoot/windows-client/performance/event-id-41-restart)
+can accompany an unrecorded bugcheck. These observations do **not** establish
+power loss, exclude TDR, or identify the GPU fault. Dump capture failure is
+an evidence gap, separate from the physical display failure.
+
+The two interrupted native traces from the query-poll and identity-guard
+trials decode 126,205 and 133,934 DxgKrnl records respectively, with no
+schema/length failures against the retained OS provider metadata. Neither
+prefix contains a retained KMD first-recovery event or explicit TDR/reset
+sequence. Each contains 13 `STATUS_NOT_SUPPORTED` IOCTL returns after the
+first UMD event; their captured stack locations do not identify the request
+payload, so these returns are not assigned as the cause. `ResetBackingStore`
+records describe allocation backing and must not be confused with GPU reset.
+Both ETLs remain unfinalized; their missing tails limit all absence claims.
+
+[Collect-GpuFailure.ps1](../tools/Collect-GpuFailure.ps1) records existing
+events, current display/SD binary identities, dump metadata and dump/pagefile/
+TDR configuration. It does not install drivers, submit GPU work, change
+settings, reboot or copy dump contents. Its Windows PowerShell parse and real
+read-only execution succeed. The returned **41,404-byte** record matches
+device SHA256
+`6db67d6300eece0c1650df40311bfd56fef9867b4dab9ef5777bced38f96eabc`.
+Records and trace analysis are retained under
+`runs/desktop158-fault-audit-20261112/` in the external build workspace.
+
+The owner has requested adding SD crashdump support. Work on that storage
+path belongs in the drivers repository; GPU source remains in this project.
+Dump-file creation and contents will need their own validation and cannot be
+claimed from a build or CPU control. The GPU root cause remains undetermined.
+
+### SD update enabling further crash investigation
+
+The storage work is maintained in
+[Windows-for-Switch-Drivers](https://github.com/ruje0504-2/Windows-for-Switch-Drivers/blob/hdh001-winarm-bounded-write/drivers/Tegra210Sdhc/README.md#0511-installation-and-runtime-result),
+source **`cca463704d5a78577d86cc1adde1ce83dd547ae2`**, version **0.5.1.1**.
+Before installation, exporting the bound `oem23.inf` produced a 31,632-byte
+SYS different from the 44,432-byte active system file. Both are backed up;
+the old INF label did not identify the separately replaced implementation.
+
+The new package preserves DDR200/SDR104 runtime operation and adds bounded
+PIO dump takeover, card/partition identity checks, polled-event handling and
+diagnostics retained across DDR200 fallback. Official Inf2Cat checks and
+native signature/catalog-membership verification passed. Installation at
+**2026-11-13 00:49:31–00:49:34 UTC** requested one restart; the resulting
+boot is **00:52:13 UTC**. At **00:54 UTC**, **0.5.1.1 / oem89.inf / Code 0**
+and SYS SHA256
+`5286cb72a99a7bdc3e6e9fe4ac8f4e7a50c0d068917cdd217506daf320aeca7b`
+were verified. An 8 MiB file write/flush/readback matched its expected hash.
+The GPU remains on its `.59` recovery package; no native desktop trial ran.
+
+The pagefile remains 512 MiB, CPU readback is 1996.8 MHz, fan version is 12,
+and the complete power-settings output matches before/after. The explicit
+volmgr query succeeded with no events since this boot through **00:55 UTC**.
+This removes the previously recurring initialization-error observation for
+this boot, but **does not establish successful crash capture or a GPU fix**.
+No forced bugcheck was triggered. Retained storage evidence is under
+`switch-maintenance/sd-crashdump/verified-evidence/` outside the GPU repository.
+
+The card advertises DDR200 but produces a one-tap window after all 128 samples,
+then recovers to SDR104. That compatibility investigation is now assigned to
+the owner's separate sidebar chat; it does not block the main GPU source audit
+and must not lower the eight-tap qualification threshold.

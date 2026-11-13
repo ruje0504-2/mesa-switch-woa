@@ -1,20 +1,201 @@
 # GPU status
 
+**Historical stabilization work:** the ten commits from
+`stabilize/native-desktop-153` are merged into `main`. Their five source fixes
+were already present through corresponding mainline commits; this merge keeps
+that history and adds the [original stabilization record](STABILIZATION.md).
+The retired branch is retained as `baseline/native-desktop-158`. Its frozen
+`.153` work order is historical, not an instruction to roll back current source.
+
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 
-**Current priority:** complete the desktop presentation paths and validate
-hardware **1280x720 landscape**. Display-controller rotation, VidPN, allocation
+**Current priority:** audit the implemented but unvalidated desktop path,
+repair demonstrated defects and complete five minutes of visually correct
+native desktop presentation using the `.158` baseline and individually
+identified UMD/ICD changes. Then validate hardware **1280x720 landscape**,
+followed by Win32 `vkcube`. Display-controller rotation, VidPN, allocation
 geometry and legacy/MPO integration exist in source and pass the documented
 models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
 components remain a short-observation baseline, not a stable desktop release.
-The latest native trial has ended; the device is restored to `.59`.
-November 12 inventory confirms GPU `0.1.0.59`, Wi-Fi `0.5.6.0` and fan
-`1.0.0.12`. At the owner's request the CPU returned to 1996.8 MHz, verified by
+
+**Physical failure investigation is now in scope:** the owner explicitly
+requests investigation of black output, corruption, hangs and automatic
+restarts. The previous exclusion is superseded. Recent system records show
+unexpected restarts with zero bugcheck fields **and repeated volmgr 46 dump
+initialization failures**. No matching recent crash dump exists; neither
+zero bugcheck fields nor missing dumps rule out a kernel crash. The actual
+SD INF was labelled `0.4.0.1`, but its active SYS differed from the exported
+DriverStore package. The authorized **SD 0.5.1.1** update now aligns INF/SYS/CAT;
+planned boot, Code 0/hash verification and an 8 MiB file write/flush/readback
+passed. No new volmgr event was found through 00:55 UTC in that boot, but no
+actual crash dump has been captured. GPU root cause and physical acceptance
+remain unresolved; no new native GPU candidate was deployed during the SD work.
+[Failure evidence and collection](NATIVE_DESKTOP_158.md#failure-investigation-and-missing-crash-dumps)
+
+**KMD report candidate, not deployed:** `CollectDbgInfo` now exports a bounded
+256-byte cached recovery/execution report instead of a single fence word.
+The collector avoids locks, waits, allocation and MMIO at undefined/high IRQL;
+interrupted publication is explicitly unavailable. Actual-helper host controls,
+the decoder and ARM64 build pass. At 02:04 UTC on November 13, the WDK
+callback CPU control also passes on Windows ARM64 with controlled kernel
+operations; this does not exercise a live WDDM callback or native GPU.
+The `.161` build includes current mainline changes, not only a
+diagnostic backport onto frozen `.158`. No native result is claimed.
+[Format, tests and limits](TDR_DEBUG_REPORT.md)
+
+**Linear texture audit fixes, not deployed:** array mappings now use array
+pitch rather than the undefined non-3D depth pitch. Non-coherent mappings
+invalidate CPU caches over the actual row/layer interval and reject failed
+invalidation. Range alignment retains the original low-offset prefix.
+The old range helper fails a host regression; the corrected actual C helper
+passes 178,611 ASan/UBSan cases. Six additional controls call the real Zink
+texture mapper, covering arrays, 3D, row padding, compressed blocks, failed
+invalidation and low offsets. After correcting the fixture's positional
+`pipe_box` initializer, all six old-code cases fail as expected and all six
+corrected-code cases pass on Windows ARM64. Three existing buffer controls
+and the WDK context control also pass: 16 expected outcomes, no timeouts.
+The 36 returned records match device hashes and lengths. The test host stays
+on `.59` / Code 0, with its companion-driver CPU setting of 1497.6 MHz and
+fan version 13 unchanged. The ARM64 UMD remains undeployed. These changes
+do not complete tiled-image nonblocking readback or identify the physical
+desktop failure's cause.
+[Contracts and validation boundaries](D3D_RUNTIME_SYNC.md#linear-image-layout-and-cache-audit)
+
+**New mapping audit fixes, not deployed:** `ba8ed4cc` preserves D3D's
+nonblocking map flag, returns retryable contention, prevents CPU writes over
+pending GPU buffer readers, releases failed transfer references and ignores
+completed/recycled batch uses when polling. Four controlled regressions fail
+before the fix and pass afterward on ARM64. The UMD builds as `5c9454f2…`.
+The real Zink texture-mapping path still needs nonblocking readback work;
+these controls do not establish native pixels or desktop acceptance. The
+device still selects the `.59` package after the separate planned SD-update
+restart. No new native GPU candidate has been deployed.
+[Mapping contracts, exact controls and remaining gap](D3D_RUNTIME_SYNC.md#nonblocking-mapping-audit)
+
+**Query-polling fix passes controls, but the native trial fails physically:** `760db8b2` makes D3D
+query retrieval nonblocking, gives Zink an explicit no-submit polling path,
+and releases event-query fence references at destruction. The old DDI
+blocking behavior and Zink reference leak both fail controlled regressions;
+the fixes pass, including recycled/detached batch states. The frozen ARM64
+UMD is `02248b25…`. Its new shared-image reuse probe has a validated WARP
+oracle and explicit producer completion; it is not a DWM ordering test.
+The owner reports direct black output followed by a freeze within a few
+seconds in `desktop158-query-poll-20261112`. Startup records Code 0, but no
+native identity assertion, timed desktop observation or pixel result is
+retained. At **23:27:29 UTC**, full recovery to `.59` / Code 0 is verified;
+all 129 returned files match device hashes and lengths. These query fixes
+have not resolved physical desktop acceptance. Do not repeat this candidate.
+[Failed trial and recovery](NATIVE_DESKTOP_158.md#query-polling-umd-trial-physical-failure)
+[Contracts, controls and exact candidate](D3D_RUNTIME_SYNC.md#nonblocking-query-polling-and-event-ownership)
+
+**Preceding corrected-harness recheck fails physical acceptance:**
+`desktop158-identity-guard-20261112` uses the same `.158` KMD, `7f8f821d…`
+UMD and `ad686578…` ICD. Only the query invocation and capture schedule
+change. The owner reports immediate frozen output and an automatic restart,
+shorter than the preceding observation. Code 0 is recorded, but no completed
+native identity assertion, timed observation, PNG or pixel result survives.
+The new boot precedes the recovery task. At **22:51:12 UTC**, `.59` / Code 0
+and the original configuration are verified restored; all 129 returned
+records match device hashes and lengths. This candidate has no stable
+desktop acceptance. Further native deployment requires a demonstrated
+rendering fix; rotation and cube remain pending.
+[Recheck evidence and limits](NATIVE_DESKTOP_158.md#corrected-harness-recheck-physical-failure)
+
+**Preceding teardown-order UMD trial also fails physical acceptance:** with
+UMD `1e6a3ba4` (`7f8f821d…`), the owner reports more than ten seconds of output,
+a diagonal corruption streak after opening Device Manager, then black output.
+TX1 had no warning icon; the observer separately records `.158` / Code 0 on
+native LUID `a9493`. A missing argument in the new display-query assertion
+also aborts the automated worker before its timer/captures/pixels. That script
+bug is now corrected and checked on the real interactive desktop, where it
+still rejects BasicDisplay. It does not erase the physical failure.
+Recovery to `.59` / Code 0 is fully verified at **22:24:25 UTC**, with the
+original configuration restored. All 132 trial records match device hashes
+and lengths. Five-minute desktop acceptance, rotation and cube remain pending.
+[Physical report, separate harness error and recovery](NATIVE_DESKTOP_158.md#teardown-order-umd-trial-physical-and-harness-failures)
+
+**Preceding onscreen-only trial failed physically:** the owner reports a frozen
+image followed by a hang and automatic restart in
+`desktop158-onscreen-20261112`. The candidate reaches `.158` / Code 0 and
+active native LUID `abc37`, but no five-minute timer/result or desktop PNG is
+retained. Thirteen successful DWM Present callbacks in an interrupted ETL
+do not override the physical failure. This trial runs no offscreen probe.
+Recovery to `.59` / Code 0 is fully verified at **21:52:49 UTC**, including
+original driver/ACPI, cleaned temporary registration/environment/tasks and
+unchanged CPU/fan/power/display preference. All 128 collected records match
+device hashes and stream lengths. No restart-cause investigation is performed.
+[Exact failed trial and recovery](NATIVE_DESKTOP_158.md#onscreen-only-trial-physical-failure)
+
+**Teardown source fix passes its control; desktop remains unaccepted:** `1e6a3ba4` closes the runtime
+mapping owner before releasing the frontend's backend resource reference.
+This prevents a delayed Zink/NVK worker release from entering a D3D runtime
+callback while the owner is still live. The real `DestroyResource` control
+reproduces the old wrong-thread callback and passes after the fix; it uses
+substituted runtime/Gallium calls on `.59`, not native GPU execution.
+The ARM64 UMD candidate `7f8f821d…` builds successfully and is retained as
+`desktop158-teardown-order-20261112-umd`. The subsequent native trial above
+does not pass physical acceptance; the control fix is not claimed as a
+resolution of the reported display failure.
+[Source path, callback contract and before/after evidence](D3D_RUNTIME_SYNC.md#imported-resource-teardown-ordering)
+
+The earlier matched-component `.158` trial **failed onscreen acceptance**:
+the owner reports no successful native output, and the run ends before any
+native pixel or desktop-capture result is retained. A short Code 0 record is
+not a rendering pass. That trial was restored to `.59` / Code 0, with the
+trial tasks, permits and temporary registration removed.
+[Exact retest sequence and recovery](NATIVE_DESKTOP_158.md#matched-component-retest-failed-onscreen-acceptance)
+
+A later **isolated Vulkan timeline trial** retains the default D3D stub
+instead of registering the new desktop UMD. Native KMD startup reaches
+Code 0, but the probe fails immediately at `vkCreateInstance` with
+`VK_ERROR_INCOMPATIBLE_DRIVER`, before GPU commands or pixel checks. The
+SYSTEM controller relied on a driver-path environment override which the
+loader ignores for elevated processes. Controls reproduce that failure;
+even the requested limited-user task receives an administrator token on
+this device. The corrected registered-ICD entry creates an instance under
+SYSTEM on `.59`, and its temporary registration is removed afterward.
+That check supplies loader evidence only. SSH returns after the trial, and the
+17:52:02 UTC verification confirms this trial's own `.59` / Code 0 recovery,
+cleanup, unchanged power/CPU/fan settings and Wi-Fi 0.5.7 / Code 0.
+[Probe scope, exact build, entry failure and recovery evidence](VULKAN_WIN32_MEMORY.md#gpu-timeline-handoffs)
+
+**Native Vulkan timeline handoffs now pass:** the corrected registered-ICD
+trial executes on GM20B at 18:23:23–18:23:37 UTC, with `.158` / Code 0 and
+the 512 MiB ceiling unchanged. Six OPAQUE_WIN32/D3D12_FENCE cases match
+16,384 buffer words, 32,768 RGBA/BGRA image pixels and 768 guards. The CPU
+waits only for each final round-trip submission. The `.59` recovery and
+cleanup are verified at 18:27:31. This is native Vulkan memory/synchronization
+evidence; the later native D3D pixel result below is separate, and five-minute
+physical desktop acceptance remains pending.
+[Exact scope, components, counts and recovery](VULKAN_WIN32_MEMORY.md#native-gpu-timeline-result)
+
+**Import-content offscreen GPU checks pass; physical desktop acceptance is pending:**
+`desktop158-import-content-20261112`
+uses the frozen `.158` KMD, `ca405387` UMD (`0e840c55…`) and the native-tested
+timeline ICD (`ad686578…`). The actual surface control, registered-loader
+preflight and interactive desktop checks pass on `.59`. Recovered records
+confirm the native GM20B active path on LUID `8239d`, **3,727,360 matching
+offscreen D3D pixels**, and 15 desktop captures. The retained 157 DWM flips
+span 261.904 seconds; hardware VBlank intervals have a 16.6666 ms median.
+This does **not** establish five minutes of physically verified, stable
+presentation: ETW reports lost events, the old ShellExperienceHost process
+reports failed submissions, and physical panel observation remains separate.
+The owner identifies the partial-menu stills as animation transitions.
+The recovered `.59` / Code 0 configuration is verified at 21:22:25 UTC,
+including CPU/fan/Wi-Fi and saved display preference. `.59` is the recovery
+configuration, not the driver used for the native pixel checks.
+[Exact components, evidence limits and recovery](NATIVE_DESKTOP_158.md#import-content-desktop-trial)
+
+November 12 inventory at 16:15:57 UTC confirms GPU `0.1.0.59`, Wi-Fi `0.5.7.0`
+and fan `1.0.0.12`. Wi-Fi is owner-confirmed usable, and SSH verifies its exact
+installed SYS hash and Code 0. At the owner's request the CPU returned to 1996.8 MHz, verified by
 the fan driver's clock readback; thermal and screen-off policy remain enabled.
-Windows CPU/API controls run on that recovery configuration before another
-native rendering trial. No `.160` GPU package has been installed.
+Windows CPU/API controls run on that recovery configuration before native
+trials. The later `.160` trial was interrupted before usable native results
+were retained; `.59` / Code 0 and the original configuration are restored.
+[Exact .160 components, sequence and recovery](NATIVE_DESKTOP_160.md)
 
 **Desktop direction updated November 12:** the user authorizes replacing the
 Zink desktop route with a native Vulkan hardware backend and asks Claude to
@@ -40,17 +221,72 @@ imported-image sRGB views; its controls do not establish native desktop or
 DXVK acceptance. The new Claude architecture review completed, and the user
 then explicitly delegated implementation as well. That same Fable 5.2/max
 session began a separate native DDI/Vulkan backend in an isolated checkout
-based on main `8fcf9e07`. It stopped on account quota at 09:37:04 UTC;
-the reported reset is 13:30 UTC on November 12. No associated remote process
-remains. All 30 collected files / 518,466 bytes match their recorded hashes.
-The partial backend has build errors and no new commits; it is not integrated
-or accepted on hardware. Local integration and hardware tests remain the
-main agent's responsibility.
+based on main `8fcf9e07`. The user has ended that task. Its 25 source/build
+files were collected again, checked against the previous snapshot and saved
+on [claude-vulkan](https://github.com/ruje0504-2/mesa-switch-woa/tree/claude-vulkan)
+for Claude to continue later. The partial `tgd3d` backend has build errors
+and an unfinished test harness; it is not installed or accepted on hardware.
+The separate application-side DXVK work is delegated to local Gemini 4 Carbon
+in the isolated `gemini-dxvk` worktree, using the earlier commits and unfinished
+indirect-submission patch. Hardware testing remains with the main agent.
 
 **Zink texture/cache work:** runtime-owned BGRA/RGBA imports now declare their
 UNORM/sRGB views at image creation and retain the original allocation when a
 view is added. The format-rule host control passes; this has not yet passed
 native shared-image rendering. The UMD and ICD must be updated together.
+
+The pre-onscreen audit subsequently reproduces a separate Zink view defect:
+ordinary linear-format filtering strips `COLOR_ATTACHMENT` from imported
+WDDM image views. The fix retains the import's accepted attachment capabilities
+for UNORM/sRGB views of the same allocation. The actual surface control fails
+before the fix (`0x07` instead of `0x17`) and passes all 16 cases afterward
+under Wine x64; the actual submission control also passes. ARM64 compilation
+passes. These are CPU/API controls, not a native visual fix or a demonstrated
+cause of the `.158` corruption. The next shared-image probe must first run
+without producer/import CPU readback checkpoints.
+[View contract, fix and validation](PORTING.md#imported-windows-image-views)
+
+The next source audit also fixes missing content validity on Windows image
+import. Previously the first render pass could discard pixels already drawn
+by another device. The actual import/attachment control fails before the
+fix and passes afterward on Windows ARM64 with Vulkan substitutes. The
+new `--shared-layout-load` scene passes 3,686,400 pixel comparisons under
+Microsoft WARP, verifying the probe and its expected values. These results
+do not establish native rendering or repair of the failed onscreen trial;
+the updated UMD is a built candidate, while the device remains `.59` / Code 0.
+[Import-content contract and exact evidence](PORTING.md#imported-windows-image-contents)
+
+The following matched components were tested in a separate device directory.
+**The run failed onscreen acceptance and is restored to `.59`:**
+
+| Component | Source | Artifact SHA256 |
+| --- | --- | --- |
+| Frozen KMD `0.1.0.158` | `6c854e9f394c3d761fab85885bead4bbd4588581` | `46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088` |
+| Zink D3D UMD with view-usage fix | `accd9f1e5a9f1c649536e400828b7428e8aca367` | `8a1a765de323906bfef4f2c13c8d7bb60527e89d49667928efc5a94eceee3ffe` |
+| NVK ICD with shared timelines | `7a771aa6602d2c94cb4cd362855777290a2503f2` | `ad6865784890f937a7c29aab0f108841b6d99cbffdca985b7dafbffc1a953625` |
+
+This is a new component combination, not the original `.158` package's result.
+The new ARM64 surface control has SHA256
+`79e02b03d0ae5ccf621fcf159233e40df55895e507b6e0d79d0b30f0cb7e014c`;
+it passes all 16 cases on physical Windows ARM64 at 16:18:09 UTC, exit 0 in
+1300 ms, with `.59`/Code 0 unchanged. Vulkan calls remain substituted.
+All 33 trial scripts parse in Windows PowerShell; the missing-registration
+control rejects arming without changing boot state, and the interactive
+desktop/preference check exits 0. The staging audit removed the historical
+script that required an old ICD hash and reused old UMD control results.
+[The current staging entry point](../tools/Stage-Desktop158Retest.ps1) checks
+the identified KMD/UMD/ICD/helper inputs and runs the current ARM64 surface
+control before the existing native trial sequence. These preflight results
+do not establish GM20B pixels or a five-minute visual pass.
+After the native start, the retained record reports Code 0 at 16:23:58 UTC,
+then a new boot is observed at 16:24:26 before the pixel/capture stage.
+Recovery is selected at 16:26:34; the recovery boot is at 16:27:29.
+Final verification at 16:31:39 confirms `.59` / Code 0, original ACPI,
+registration/task cleanup, unchanged power/display settings and CPU 1996.8 MHz.
+The owner explicitly reports no successful native onscreen output. Continue
+source/contract audit before another trial; hardware rotation and `vkcube`
+remain behind the unpassed desktop gate.
+The original `.160` UMD package files remain byte-for-byte unchanged.
 
 Mesa's Windows blob-cache backend is implemented and enabled by the UMD/ICD
 build tools. It uses asynchronous writes, atomic file replacement, a shared
@@ -63,8 +299,25 @@ eviction and disable-option checks pass. Executable SHA256:
 This is Windows CPU/filesystem evidence, not GPU execution or a measured
 shader-compilation speedup. The record is retained in
 `build/zink-sync-texture-cache-20261112/cache-control-concurrent.json`.
-Cross-queue synchronization and native visual/performance acceptance remain
-in progress. [Windows cache configuration](PORTING.md#windows-shader-cache)
+Native visual/performance acceptance remains in progress.
+[Windows cache configuration](PORTING.md#windows-shader-cache)
+
+**Runtime/NVK GPU ordering implemented:** every Zink batch now waits for an
+incoming runtime-context timeline and signals an outgoing timeline before
+the runtime queues dependent work. Ordinary Flush/Present and identity
+rotation no longer use the old CPU completion bridge; resource/device
+destruction still drains GPU use. Callback-thread restrictions, failure
+handling and semaphore lifetimes are covered by actual-function controls.
+Zink's internal completion signal follows user signals so batch cleanup
+cannot release a pending signal object. ARM64 and x64 UMD builds pass;
+the runtime bridge and actual Zink batch controls exit 0 under Wine x64,
+along with the existing Present/primary/shared controls. Vulkan/KMT calls
+are substituted: this is not native GPU acceptance or measured speedup.
+At 14:42:07 UTC all five controls also exit 0 on physical Windows ARM64,
+with `.59`/Code 0 still installed; these remain CPU/API tests with substitutes.
+The `.160` native trial was interrupted and has no completed pixel/desktop
+result; it does not validate this GPU bridge. Recovery to `.59` is verified.
+[Implementation and verification scope](D3D_RUNTIME_SYNC.md)
 
 **Zink synchronization source repair:** Win32 fence import is now gated by
 the semaphore extension, creates the correct binary or timeline semaphore,
@@ -100,10 +353,10 @@ the SDK control is
 The Win32 image-flags and pacing controls also exit 0; sixty paced calls take
 1.003993 seconds, with thread CPU below the timer's measurement resolution.
 Results are retained in `build/win32-sync-controls-20261112/`.
-The updated ICD links, but is not installed. The runtime/NVK per-submission
-queue bridge remains to be connected: `RuntimeDeviceFinish` still performs
-its CPU fence wait. These controls do not establish desktop correctness,
-native shared-fence behavior, or a measured rendering speedup.
+Those controls preceded the per-submission runtime/NVK bridge described
+above. The later native Vulkan-to-Vulkan timeline check passes, as recorded
+above. The D3D runtime/NVK bridge, desktop correctness and a measured rendering
+speedup still require separate native evidence.
 
 **Five-minute observation completed; visual acceptance failed:** the frozen
 `.158` set remains Code 0 during a 311.057-second observation, but the user's

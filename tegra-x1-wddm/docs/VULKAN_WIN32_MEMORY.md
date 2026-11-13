@@ -68,13 +68,149 @@ The subsequent native D3D11 runtime regression at feature level 10_0 runs
 timeout. The KMD core is unchanged from .143. Both the ICD and UMD contain
 the Mesa barrier lifetime fix, and the UMD also contains the Zink changes.
 
-These checks use multiple devices in one process and host fence waits
-between submissions. Cross-process operation, external semaphore/fence
-sharing, overlapping execution, D3D runtime sharing and Vulkan CTS coverage
-remain pending. The D3D regression does not exercise Zink's Win32 import
-branch or establish DWM composition.
+These `.144` checks use multiple devices in one process and host fence waits
+between submissions. They do not cover external semaphore/fence sharing or
+overlapping execution; the later timeline test below adds GPU handoffs.
+Cross-process operation, D3D runtime sharing and Vulkan CTS coverage remain
+pending. The D3D regression does not exercise Zink's Win32 import branch or
+establish DWM composition.
 
-## Evidence
+### GPU timeline handoffs
+
+`nvk-windows-vulkan-shared-check.exe <absolute-vulkan-1.dll> --gpu-timelines`
+adds a separate native test for the Windows timeline implementation. The
+original mode deliberately retains its host fence waits and device-lifetime
+checks; their earlier results cannot validate GPU-to-GPU synchronization.
+
+The new mode creates two Vulkan devices and shares both storage and two
+timeline semaphores. It queues the consumer's wait before submitting the
+producer's signal. The producer writes one pattern; the consumer reads it
+and writes another; a return submission on the producer waits for the
+consumer's signal and reads the second pattern. Only the final submission
+has a host fence wait. There are no intermediate CPU readback checkpoints.
+The test closes application NT handles immediately after import and uses
+per-device Win32 function pointers, as required by
+[`vkGetDeviceProcAddr`](https://docs.vulkan.org/refpages/latest/refpages/source/vkGetDeviceProcAddr.html).
+Timeline imports are permanent, following the
+[Win32 semaphore import contract](https://docs.vulkan.org/refpages/latest/refpages/source/VkImportSemaphoreWin32HandleInfoKHR.html).
+
+Six cases cover buffers and optimal RGBA/BGRA images with OPAQUE_WIN32 and
+D3D12_FENCE timelines. A complete pass checks 49,152 payload words and 768
+guards. The probe compiles for Windows ARM64 with warnings treated as errors.
+The [registered-ICD trial](#native-gpu-timeline-result) below passes these GPU
+memory and semaphore handoffs. Runtime-owned D3D contexts, Zink imports,
+DWM composition and physical screen output require their own evidence.
+
+The isolated November 12 trial `desktop158-gpu-timeline-20261112` uses the
+[frozen `.158` KMD and timeline ICD](NATIVE_DESKTOP_158.md#matched-component-retest-failed-onscreen-acceptance),
+with their previously recorded full hashes unchanged, and the probe from
+`5569ecc3` (SHA256
+`91cb29a6d06b0deba04807a1204a986bb9129e21e6e9fb4ae2e7e3a9c2ec990f`).
+It retains the default `tegragpuno3d.dll` D3D slots and selects the ICD only
+in the probe process. The import-content UMD candidate is not registered
+by this trial. Device preparation verifies the copied artifacts and parses
+all eleven trial scripts before changing the driver.
+
+The package binds behind the closed startup gate at **17:33:19 UTC**, then
+requests the setup reboot at **17:33:26**. The setup boot is **17:34:02**;
+the controller starts at **17:36:03** and native KMD startup completes with
+Code 0, hardware status 0 and a consumed permit at **17:36:12**.
+
+The Vulkan probe starts at **17:36:12.984** and exits **4** at
+**17:36:13.547**, without timing out. It fails at `vkCreateInstance` with
+`VK_ERROR_INCOMPATIBLE_DRIVER` (`-9`), before creating any Vulkan device,
+submitting GPU commands or checking pixels. This is a loader/instance-entry
+failure, not a failed GPU timeline comparison. The controller's transcript
+confirms it ran as SYSTEM. Its process-only `VK_DRIVER_FILES` selection is
+incompatible with the loader's documented behavior: driver-path environment
+overrides are ignored for elevated applications.
+[Khronos loader driver-discovery contract](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderDriverInterface.md#exception-for-elevated-privileges)
+The loader controls below reproduce the discovery failure and establish a
+working registered-ICD entry before another hardware trial.
+
+Recovery is staged at **17:36:31**, followed by the recovery boot at
+**17:37:07**. SSH returns at **17:51:18**. The **17:52:02** verification
+confirms `.59` / Code 0, the original SYS and ACPI hashes, no permit/grant or
+trial tasks, byte-identical power settings, CPU 1996.8 MHz, fan version 12,
+and Wi-Fi 0.5.7 / Code 0 with its recorded SYS hash. No desktop UMD was
+registered by this trial. Its 54 returned records total **27,401,736 bytes**;
+all lengths and SHA-256 values match. Archive SHA-256:
+`3a0a523d420bd572eb332850a6171b63f93ff6f7fd58de4b08f23c722854eb0a`.
+This first attempt supplies no GPU execution or onscreen evidence.
+
+### Loader preflight before native activation
+
+At 18:05 UTC, the same loader/ICD pair fails `vkCreateInstance` under SYSTEM
+and under an interactive task configured with `RunLevel Limited`. Both
+processes actually have enabled administrator membership on this device;
+the loader reports that it found no registered drivers. A task's requested
+run level therefore cannot substitute for checking its effective token or
+for registering the ICD.
+
+`Invoke-NvkCheck.ps1` now uses the documented
+`HKLM\SOFTWARE\Khronos\Vulkan\Drivers` discovery path. It temporarily adds
+only the tested manifest's absolute pathname as a DWORD-zero value,
+preserves existing registrations and removes its value in `finally`.
+It does not change a D3D UMD slot. `Stage-Desktop158Retest.ps1` invokes its
+`-LoaderOnly` mode on `.59` before native driver installation. Native trials
+must also remove that exact manifest value in their existing recovery script
+in case Windows restarts before `finally` can run.
+[Windows driver-discovery contract](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderDriverInterface.md#driver-discovery-on-windows)
+
+The actual SYSTEM check at **18:10:16–18:10:18 UTC** successfully creates
+the Vulkan instance with the identified loader `90371981…` and ICD
+`ad686578…`. The raw identity check exits 10 with zero physical devices and
+enumeration result `-3`, as expected on the gated `.59` baseline; these raw
+values are retained and are not reported as GPU success. The **18:10:24**
+cleanup check confirms unchanged registry values, removal of the control
+task and `.59` / Code 0. Evidence is retained in
+`runs/loader-discovery-control-20261112/` and
+`runs/loader-discovery-registered-20261112/`.
+
+### Native GPU timeline result
+
+`desktop158-gpu-timeline-registered-20261112` passes all six cases on GM20B
+at **18:23:23–18:23:37 UTC** on November 12. It uses the same frozen `.158`
+KMD, timeline ICD and probe identified above, with the corrected runner from
+`aac79d88`. A fresh loader preflight passes in this trial's directory before
+installing the KMD. D3D slots retain the default `tegragpuno3d.dll`; the new
+Zink UMD is not registered or exercised.
+
+The probe matches native KMT LUID **`a17fe`** and reports the unchanged
+**536,870,912-byte** budget ceiling. It exits **0**, without timeout, and
+records `.158` / Code 0 before and after. OPAQUE_WIN32 and D3D12_FENCE
+timelines each pass a buffer case plus optimal RGBA and BGRA image cases.
+Each case queues the consumer before the producer signal, performs the
+two-way GPU handoff and waits on the host only for the final submission.
+
+All twelve readbacks match: **16,384 buffer words, 32,768 image pixels and
+768 guard words**, zero mismatches. There are no producer/import CPU
+readback checkpoints. This validates the tested Vulkan-to-Vulkan storage
+and timeline path in one process. It does not establish D3D runtime-context
+ordering, imported linear WDDM image rendering, cross-process sharing,
+desktop presentation, rendering performance or Vulkan conformance.
+
+The wrapper removes the temporary ICD registration. Recovery is staged at
+18:23:59, followed by the planned recovery boot at 18:24:54. Verification at
+**18:27:31 UTC** confirms `.59` / Code 0, original SYS/ACPI hashes, no start
+permit/grant or trial tasks, no trial ICD registration, unchanged power
+settings, CPU 1996.8 MHz, fan version 12 and Wi-Fi 0.5.7 / Code 0.
+
+All **61 returned files / 38,174,298 bytes** match device lengths and hashes.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Native result | `f1fd7e5e6ee5df62a8ed1ecec09c63e7c25d22c8f739b1cd60b514f7cdce19d1` |
+| Native stdout | `cb73485d9a462acc05c2269c572e9c29af1be72526c0b61db942127f7757a1f3` |
+| Recovery verification | `56ac2324b7c18962e57bbe1bec6510e2aa73e975d49ee1d84137c9a356e40f15` |
+| Retained archive | `43c24331f81226ed5dccb2e1ffb15f7a380c4275e4e26845760e41c35aa37408` |
+
+The next validation is the separately identified import-content UMD's D3D
+shared-image readback and five-minute desktop observation, including the
+known Quick Settings corruption trigger. This offscreen result does not
+change the earlier failed physical desktop acceptance.
+
+## Original .144 evidence
 
 The downloaded 32 records total 15,317,375 bytes; every length and SHA-256
 matches the device-side manifest. The exported ETL contains 137,531 records

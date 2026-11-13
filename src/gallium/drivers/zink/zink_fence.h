@@ -60,6 +60,13 @@ zink_fence_server_signal(struct pipe_context *pctx, struct pipe_fence_handle *pf
 void
 zink_fence_server_sync(struct pipe_context *pctx, struct pipe_fence_handle *pfence, uint64_t value);
 
+bool
+zink_set_submission_sync(struct pipe_context *pctx, const struct pipe_submission_sync *sync);
+bool
+zink_submission_sync_prepare(struct zink_context *ctx);
+bool
+zink_submission_sync_complete(struct zink_context *ctx, bool success);
+
 void
 zink_screen_fence_init(struct pipe_screen *pscreen);
 

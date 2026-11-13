@@ -8,7 +8,7 @@
 #include "../platform/t214_clock.h"
 #include "adapter_abi.h"
 #include "graphics.h"
-#include "diagnostic_events.h"
+#include "debug_report.h"
 
 typedef struct _TG_GPU_CONTEXT_ENGINE TG_GPU_CONTEXT_ENGINE;
 typedef struct _TG_GPU_PROCESS TG_GPU_PROCESS;
@@ -78,6 +78,7 @@ struct _TG_GPU_CONTEXT_ENGINE {
     BOOLEAN AdapterIdentityReady, PagingOnly;
     NTSTATUS RecoveryStatus;
     BOOLEAN RecoveryPending,RecoverySending,RecoveryNotified,Resetting;
+    TG_GPU_DEBUG_CACHE DebugCache;
 };
 /* The single physical execution slot is serialized; the number of software
  * contexts is limited only by allocation failures, not a fixed slot array.

@@ -1266,6 +1266,7 @@ struct zink_resource_object {
    bool coherent;
    bool is_aux;
    bool immutable_handle;
+   bool is_wddm_allocation;
 };
 
 /* "gfx" includes mesh here */
@@ -1748,6 +1749,9 @@ struct zink_context {
    pipe_draw_mesh_tasks_func draw_mesh_tasks[2]; //batch changed
 
    struct pipe_device_reset_callback reset;
+
+   struct pipe_submission_sync submission_sync;
+   uint64_t submission_sync_value;
 
    struct util_queue_fence unsync_fence; //unsigned during unsync recording (blocks flush ops)
    struct util_queue_fence flush_fence; //unsigned during flush (blocks unsync ops)

@@ -8,11 +8,17 @@ callback for the Tegra ABI and opens Zink on that exact Vulkan device LUID.
 The KMD must enable native submissions. This target exports the D3D adapter
 entry points without the software target's KMT emulation.
 
-The frontend currently negotiates D3D10 DDIs. D3D10.1/D3D11 DDIs, runtime
-resource sharing and native presentation still need implementation. The
-hardware target returns an unsupported result from presentation callbacks;
-it does not use the GDI target's frontbuffer path. It is not a working DWM
-driver yet. [Windows build and verification](../../../../tegra-x1-wddm/docs/PORTING.md#direct3d-umd-and-dwm)
+The frontend currently negotiates D3D10 DDIs; D3D10.1/D3D11 DDIs remain
+unimplemented. The hardware target has runtime-owned shared/primary resource
+storage and DXGI presentation callbacks. Its `.158` short native desktop
+observation was followed by visual corruption during interaction, so this
+is still experimental. [Windows build and verification](../../../../tegra-x1-wddm/docs/PORTING.md#direct3d-umd-and-dwm)
+
+The runtime/NVK bridge uses two shared GPU timelines for every Zink batch,
+including internal flushes. Ordinary Flush/Present uses queue ordering;
+resource/device destruction keeps completion waits. Runtime callbacks stay
+on the DDI thread. Pair the UMD with the Win32 timeline-capable NVK ICD.
+[Synchronization and control-test scope](../../../../tegra-x1-wddm/docs/D3D_RUNTIME_SYNC.md)
 
 `nvk_d3d_check.exe` explicitly exercises native DDI clear/copy/readback and
 SM4 vertex/pixel shaders with ordinary and indexed/scissored triangle draws
@@ -74,7 +80,10 @@ flags/budget; `ZinkBegin` logs LUID and opt-in state (0 absent, 1 exactly
 `"1"`, 2 another value); `SupportedVersion` logs index/DDI version;
 `GetCaps` logs type/size; `CreateDeviceBegin` logs interface/flags. A failed
 `CreateDeviceResult` identifies interface rejection (arg1=0), context (1),
-CSO state (2) or empty shaders (3). `Blt` logs flags/rotation; its current
+CSO state (2), empty shaders (3), or runtime context/synchronization setup (4).
+`RuntimeContext` uses arg0 stages 1/2 for context creation/destruction, 3 for
+CPU completion, 4/5 for incoming signal/outgoing GPU wait (arg1 is the
+timeline value), and 6 for bridge initialization. `Blt` logs flags/rotation; its current
 success result still comes from an unimplemented stub, not a copy proof.
 The decoder rejects incompatible payload versions and reports lost events.
 

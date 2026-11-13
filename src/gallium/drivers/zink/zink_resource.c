@@ -1821,6 +1821,7 @@ resource_object_create(struct zink_screen *screen, const struct pipe_resource *t
    obj->unordered_write = true;
    obj->unsync_access = true;
    obj->modifier = DRM_FORMAT_MOD_INVALID;
+   obj->is_wddm_allocation = is_wddm_allocation(whandle);
    obj->last_dt_idx = obj->dt_idx = UINT32_MAX; //TODO: unionize
 
    struct mem_alloc_info alloc_info = {
@@ -2427,8 +2428,13 @@ zink_resource_from_handle(struct pipe_screen *pscreen,
       linear.bind |= PIPE_BIND_LINEAR;
       struct pipe_resource *resource = resource_create(pscreen, &linear, whandle,
          usage, NULL, 0, NULL, NULL);
-      if (resource)
+      if (resource) {
+         /* Another device may already have rendered into this allocation.
+          * As with dma-buf imports, its contents must survive the first
+          * render pass unless the application explicitly invalidates them. */
+         zink_resource(resource)->valid = true;
          zink_resource(resource)->obj->immutable_handle = true;
+      }
       return resource;
    }
 #ifdef ZINK_USE_DMABUF
@@ -2657,11 +2663,9 @@ ALWAYS_INLINE static void
 align_offset_size(const VkDeviceSize alignment, VkDeviceSize *offset, VkDeviceSize *size, VkDeviceSize obj_size)
 {
    VkDeviceSize align = *offset % alignment;
-   if (alignment - 1 > *offset)
-      *offset = 0;
-   else
-      *offset -= align, *size += align;
-   align = alignment - (*size % alignment);
+   *offset -= align;
+   *size += align;
+   align = (alignment - (*size % alignment)) % alignment;
    if (*offset + *size + align > obj_size)
       *size = obj_size - *offset;
    else
@@ -2721,6 +2725,8 @@ create_transfer(struct zink_context *ctx, struct pipe_resource *pres, unsigned u
 static void
 destroy_transfer(struct zink_context *ctx, struct zink_transfer *trans)
 {
+   pipe_resource_reference(&trans->staging_res, NULL);
+   pipe_resource_reference(&trans->base.b.resource, NULL);
    if (trans->base.b.usage & PIPE_MAP_THREAD_SAFE) {
       free(trans);
    } else {
@@ -2837,9 +2843,13 @@ zink_buffer_map(struct pipe_context *pctx,
    } else if (usage & PIPE_MAP_DONTBLOCK) {
       /* sparse/device-local will always need to wait since it has to copy */
       if (!res->obj->host_visible)
-         goto success;
-      if (!zink_resource_usage_check_completion(screen, res, ZINK_RESOURCE_ACCESS_WRITE))
-         goto success;
+         goto fail;
+      /* CPU writes conflict with both GPU reads and writes. CPU reads only
+       * need prior GPU writes to finish. Neither path may wait here. */
+      enum zink_resource_access access = usage & PIPE_MAP_WRITE ?
+         ZINK_RESOURCE_ACCESS_RW : ZINK_RESOURCE_ACCESS_WRITE;
+      if (!zink_resource_usage_check_completion(screen, res, access))
+         goto fail;
       usage |= PIPE_MAP_UNSYNCHRONIZED;
    } else if (((usage & PIPE_MAP_READ) && !(usage & PIPE_MAP_PERSISTENT) &&
                ((screen->info.mem_props.memoryTypes[res->obj->bo->base.placement].propertyFlags & VK_STAGING_RAM) != VK_STAGING_RAM)) ||
@@ -2926,7 +2936,6 @@ overwrite:
          util_range_add(&orig_res->base.b, orig_res->real_buffer_range, box->x, box->x + box->width);
    }
 
-success:
    /* ensure the copy context gets unlocked */
    if (ctx == screen->copy_context)
       zink_screen_unlock_context(screen);
@@ -3037,17 +3046,29 @@ zink_image_map(struct pipe_context *pctx,
       else
          trans->base.b.layer_stride = srl.arrayPitch;
       trans->offset = srl.offset;
-      trans->depthPitch = srl.depthPitch;
+      trans->depthPitch = trans->base.b.layer_stride;
       const struct util_format_description *desc = util_format_description(res->base.b.format);
-      unsigned offset = srl.offset +
-                        box->z * srl.depthPitch +
-                        (box->y / desc->block.height) * srl.rowPitch +
-                        (box->x / desc->block.width) * (desc->block.bits / 8);
+      /* Gallium's z coordinate denotes an array layer for array textures,
+       * but a depth slice for 3D textures. Vulkan only defines depthPitch
+       * for the latter. */
+      bool is_3d = res->base.b.target == PIPE_TEXTURE_3D;
+      unsigned z = is_3d ? box->z / desc->block.depth : box->z;
+      unsigned layers = is_3d ? util_format_get_nblocksz(pres->format, box->depth) : box->depth;
+      VkDeviceSize offset = srl.offset +
+                            z * (VkDeviceSize)trans->base.b.layer_stride +
+                            (box->y / desc->block.height) * srl.rowPitch +
+                            (box->x / desc->block.width) * (desc->block.bits / 8);
       if (!res->obj->coherent) {
-         VkDeviceSize size = (VkDeviceSize)box->width * box->height * desc->block.bits / 8;
+         /* Include padding between rows/layers, stopping at the last mapped
+          * block. The packed texel byte count does not cover this interval. */
+         VkDeviceSize size = (layers - 1) * (VkDeviceSize)trans->base.b.layer_stride +
+                             (util_format_get_nblocksy(pres->format, box->height) - 1) * srl.rowPitch +
+                             util_format_get_stride(pres->format, box->width);
          VkMappedMemoryRange range = zink_resource_init_mem_range(screen, res->obj, res->obj->offset + offset, size);
-         if (VKSCR(FlushMappedMemoryRanges)(screen->dev, 1, &range) != VK_SUCCESS) {
-            mesa_loge("ZINK: vkFlushMappedMemoryRanges failed");
+         if (VKSCR(InvalidateMappedMemoryRanges)(screen->dev, 1, &range) != VK_SUCCESS) {
+            mesa_loge("ZINK: vkInvalidateMappedMemoryRanges failed");
+            zink_bo_unmap(screen, res->obj->bo);
+            goto fail;
          }
       }
       ptr = ((uint8_t *)ptr) + offset;
@@ -3461,10 +3482,6 @@ transfer_unmap(struct pipe_context *pctx, struct pipe_transfer *ptrans)
          trans->base.b.usage &= ~PIPE_MAP_UNSYNCHRONIZED;
       zink_transfer_flush_region(pctx, ptrans, &box);
    }
-
-   if (trans->staging_res)
-      pipe_resource_reference(&trans->staging_res, NULL);
-   pipe_resource_reference(&trans->base.b.resource, NULL);
 
    destroy_transfer(ctx, trans);
 }
