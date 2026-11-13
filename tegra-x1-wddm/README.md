@@ -6,21 +6,30 @@ Windows transport. Hardware verification started with Nintendo Switch Lite. [NVK
 
 The long-term goal is a complete native Vulkan implementation, verified
 with version-appropriate VK-GL-CTS coverage and physical GM20B tests.
-The current milestone is the Direct3D UMD and hardware DWM composition.
-The current desktop work replaces the Zink route with a native Vulkan hardware
-backend. The replacement excludes the existing Gallium `d3d10umd` and software
-rendering; DXVK is a code-reuse candidate and is also planned for DX9/10/11
-applications. Native Windows UMD/DDI and DWM resource/presentation contracts
-still require implementation. Zink remains a later OpenGL compatibility route.
-The existing Zink desktop baseline is being repaired in parallel for shared
-textures, synchronization and persistent shader caching.
+The current milestone is stable native DWM composition through
+**DWM → tgd3d → Vulkan/NVK → KMD → GM20B**. Active development is on the
+default `tgd3d-vulkan` branch; `main` and its Gallium/Zink desktop frontend
+are paused. DXVK is the planned DX9/10/11 application path, while
+Mesa OpenGL/WGL → Zink → NVK remains a separate compatibility path.
+Both share NVK/KMD with tgd3d and require their own hardware validation.
 
 | Area | Status |
 | --- | --- |
 | Native Vulkan | NVK rendered an offscreen triangle on the GM20B and read back the expected pixels and guards with driver **0.1.0.87**. A Win32 preview displayed that readback. |
 | Display adapter | **0.1.0.130** reached **Code 0**, completed GDI copies and displayed verified RGB bars through the GM20B VidPN and native scanout. |
 | Shared storage | **0.1.0.144** passes Vulkan Win32 buffer/image sharing, GPU read/write after producer-device release, and re-export: 32,768 payload words plus 512 guards match. [Scope and evidence](docs/VULKAN_WIN32_MEMORY.md). |
-| Windows desktop | **Incomplete.** .158 displays a complete native taskbar. Its latest 311-second observation finishes, but physical photographs show severe Quick Settings corruption, so visual stability fails. Hardware landscape and Win32 vkcube remain unverified. [Current evidence](docs/NATIVE_DESKTOP_158.md). |
+| Native Windows desktop (`tgd3d`) | **Short native desktop confirmed; stability not passed.** The .158 KMD plus tgd3d UMD `3c5d327d` and ICD `7c677212` records DWM creation and 251 successful Present calls. The user reports an operable desktop followed by an unexpected restart after opening the performance utility. Five-minute interaction and known-pixel acceptance remain pending. [Implementation and limits](../src/nouveau/tgd3d/README.md). |
+| Previous Windows desktop (Zink/NVK) | **Development paused on `main`.** Historical .158 desktop observations do not establish sustained stability for the new tgd3d combination. [Historical evidence](docs/NATIVE_DESKTOP_158.md). |
+| DX9 / DX10 / DX11 games (`DXVK`) | **Planned; not hardware-validated on this port.** D3D → DXVK → NVK/KMD is independent of tgd3d's D3D translation. Vulkan features, Win32 presentation and application/ICD architecture must be validated for the selected DXVK version. |
+| OpenGL (`Zink`) | **Separate compatibility path; hardware acceptance pending.** Mesa OpenGL/WGL → Zink → NVK remains available for future compatibility work. |
+| Hardware landscape / Win32 `vkcube` | **Acceptance pending.** First pass desktop stability and known-pixel/shared-resource tests, then validate actual 1280×720 hardware rotation, then sustained native Win32 `vkcube` presentation. |
+
+At the last verified recovery from the tgd3d trial, the device was restored
+to **.59 / Code 0** with its CPU, fan and power settings unchanged.
+The next trial proceeds through 30-second static, 60-second window and
+five-minute desktop stages before pixels, hardware rotation and `vkcube`.
+Code 0, successful Present calls and screenshots alone are not physical-screen
+acceptance. Direct Flip remains deferred.
 
 The driver uses dynamically allocated shared memory with a **512 MiB**
 adapter ceiling. Windows manages residency and budgets through VidMm.
