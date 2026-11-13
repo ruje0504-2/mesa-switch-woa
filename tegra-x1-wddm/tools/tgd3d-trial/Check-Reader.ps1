@@ -43,4 +43,10 @@ try {
     $r=Rows;$r[2].version=1;Check 'legacy events cannot certify current native process' $r $false
     $r=Rows;$r[4].clock='system';Check 'wrong trace clock rejected' $r $false
     $r=Rows;$r[4].qpc_frequency=$frequency+1;Check 'different QPC frequency rejected' $r $false
+    $readerArgs.NowQpc=$nowQpc+20*$frequency
+    Check 'quiet completed buffer fails ordinary freshness check' (Rows) $false
+    $readerArgs.AllowIdle=$true
+    Check 'CPU sync comparison accepts idle current-process identity' (Rows) $true
+    $r=Rows;$r[3].status='887a0005';Check 'idle comparison still rejects failed Present' $r $false
+    $r=Rows;$r[4].events_lost=1;Check 'idle comparison still rejects event loss' $r $false
 } finally { Remove-Item $dir -Recurse -Force }

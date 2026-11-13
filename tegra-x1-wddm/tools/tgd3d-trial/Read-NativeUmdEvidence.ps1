@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory=$true)][long]$Frequency,
     [Parameter(Mandatory=$true)][string]$TraceName,
     [Parameter(Mandatory=$true)][string]$ExpectedLuid,
+    [switch]$AllowIdle,
     [long]$NowQpc=[Diagnostics.Stopwatch]::GetTimestamp()
 )
 $ErrorActionPreference='Stop'
@@ -35,7 +36,7 @@ if($Frequency -le 0 -or $TrialQpc -le 0 -or $start.clock -ne 'qpc' -or $state.cl
     $start.session -cne $TraceName -or $state.session -cne $TraceName -or $state.pid -ne $start.pid -or
     $start.query_status -ne 0 -or $state.query_status -ne 0 -or $start.invalid -ne 0 -or $state.invalid -ne 0 -or
     $start.qpc_stamp -gt $TrialQpc -or $state.qpc_stamp -lt $TrialQpc -or $state.qpc_stamp -gt $NowQpc -or
-    $NowQpc - $state.qpc_stamp -gt 10*$Frequency){
+    (!$AllowIdle -and $NowQpc - $state.qpc_stamp -gt 10*$Frequency)){
     throw 'UMD consumer identity, coverage or current trace state is invalid'
 }
 foreach($field in 'events_lost','log_buffers_lost','realtime_buffers_lost'){
@@ -65,4 +66,6 @@ if($lifecycle.Count -and $lifecycle[0].qpc_stamp -gt $present[0].qpc_stamp){
 $vulkan=@($events|Where-Object {$_.id -eq 3 -and $_.status -eq '00000000' -and $_.qpc_stamp -le $created[0].qpc_stamp}|Select-Object -Last 1)
 if(!$vulkan.Count -or ('{0:x16}' -f [uint64]$vulkan[0].arg0) -ne $ExpectedLuid -or
     ([uint64]$vulkan[0].arg1 -shr 32) -ne 1) { throw 'No matching NVK LUID from current DWM' }
-[pscustomobject]@{Vulkan=$vulkan[0];CreateDevice=$created[0];Present=$present[0];ConsumerStart=$start;ConsumerState=$state}
+# An idle state proves the same process created/presented on this adapter;
+# it does not prove continued GPU progress. Window execution checks that next.
+[pscustomobject]@{Vulkan=$vulkan[0];CreateDevice=$created[0];Present=$present[0];ConsumerStart=$start;ConsumerState=$state;StateAgeSeconds=($NowQpc-$state.qpc_stamp)/$Frequency;IdleAllowed=[bool]$AllowIdle}

@@ -62,7 +62,9 @@ try {
     if($process.StartTime.ToUniversalTime() -ne [DateTime]::Parse($consumer.StartTime).ToUniversalTime() -or
         $process.ProcessName -ne [IO.Path]::GetFileNameWithoutExtension($consumer.Exe)){throw 'The current trial UMD consumer is no longer running'}
     $request=[IO.File]::ReadAllText((Join-Path $p 'native-request.json'))|ConvertFrom-Json
-    $r.Umd=& (Join-Path $p 'Read-NativeUmdEvidence.ps1') -Path (Join-Path $p 'umd-live.jsonl') -DwmProcessId $r.DwmPid -DwmStart ([DateTime]::Parse($r.DwmStart)) -TrialQpc $request.Qpc -Frequency $request.Frequency -TraceName $consumer.TraceName -ExpectedLuid $r.Luid
+    # The synchronous comparison may become genuinely idle. Do not require
+    # periodic logging as a precondition for attempting its first window.
+    $r.Umd=& (Join-Path $p 'Read-NativeUmdEvidence.ps1') -Path (Join-Path $p 'umd-live.jsonl') -DwmProcessId $r.DwmPid -DwmStart ([DateTime]::Parse($r.DwmStart)) -TrialQpc $request.Qpc -Frequency $request.Frequency -TraceName $consumer.TraceName -ExpectedLuid $r.Luid -AllowIdle:($m.sync_mode -eq 'cpu-control')
     $r.Verified=$true
 } catch {
     $r.Error=$_.Exception.Message
