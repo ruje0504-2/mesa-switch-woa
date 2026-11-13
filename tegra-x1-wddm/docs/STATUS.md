@@ -1,5 +1,45 @@
 # GPU status
 
+**November 13, meta-state candidate failed during activation/observation:**
+`d3423d26` restores the common runtime's pipeline-binding mask around NVK
+meta operations. ARM64 CPU controls reproduce VS loss with the old helpers
+(exit 1) and retain the VS with the fix (exit 0). Only the ICD changes in the
+new package; KMD, UMD and helpers are byte-identical to the prior round.
+After one requested PnP device restart, the owner reported an automatic
+Windows restart. SSH has not yet returned and the new ICD's loaded-module
+proof was not obtained. This attempt is failed; do not repeat activation or
+claim a Home-page regression pass. The separate bit-14 KMD patch remains
+undeployed. No Windows reboot or `.59` rollback was requested by this chat.
+
+**November 13, 15:44 UTC follow-up failure:** after the successful bounded
+interaction stages, the owner reported a frozen folder window, a desktop
+refresh that closed it, and another freeze on opening a folder again.
+Explorer restarted at 15:42:37 UTC while DWM PID504 remained alive. SSH works;
+memory has 1852 MiB available and 40% commit usage. Explorer private bytes
+remain about 93.1 MiB across the short sample. This does not support immediate
+memory exhaustion, and does not rule out a slower leak. The overall candidate
+is not accepted as stable; stop expanding to pixels/rotation/vkcube while
+investigating the application exception. The five-minute result below remains
+valid only for its recorded interval.
+
+**November 13, 15:35 UTC desktop result:** the `fcc53bf1` CPU-sync UMD
+has passed the physical 30-second static, 60-second window and five-minute
+interaction stages on the unchanged frozen `.158` KMD / `7c677212` ICD.
+The owner confirmed the moving/resizing/occluding/minimizing/restoring window,
+Start menu, quick settings and CPU/fan program were all visible and operable.
+They subsequently reported several manual weather/browser attempts were normal.
+This passed the bounded desktop stage, not sustained stability or proof of the
+previous freeze's root cause. The bidirectional GPU bridge remains disabled in this diagnostic
+binary and has not passed; the repository default remains enabled.
+Known-pixel, hardware rotation and vkcube acceptance remain outstanding.
+
+**Separate source candidate:** the GM20B golden context now applies NVK's
+shader-object output-exception policy by clearing only `0x419e44` bit 14.
+The real-NETB model fails before the fix and passes after it; the changed
+ARM64 kernel translation unit compiles. This KMD change is not deployed and
+does not contribute to the desktop result above. See
+[the context-policy review](GR_HELPER_LOADS.md#november-13-shader-object-output-exception-policy).
+
 **November 13, 15:08 UTC DDI fix:** device-loss notifications now use
 `D3DDDIERR_DEVICEREMOVED` at SetErrorCb instead of DXGI API error codes.
 Shader creation preserves Vulkan host/device OOM and device-loss status; a lost
@@ -68,7 +108,8 @@ eight resizes; the owner confirmed the window appeared). This is a comparison,
 not a root-cause fix. The GPU fence bridge remains enabled by default.
 See [the full tgd3d trial record](TGD3D_NATIVE_20261113.md) for frozen hashes,
 the separate `.59` collection-process OOM incident, and current diagnostic work.
-No five-minute desktop, pixel, rotation or vkcube acceptance has been obtained.
+Those earlier rounds obtained no five-minute desktop acceptance. The later
+`fcc53bf1` result is recorded above; pixel, rotation and vkcube remain unaccepted.
 
 ## Historical status before the November 13 tgd3d trials
 

@@ -658,3 +658,111 @@ KMD 的 helper-load 配置，并把 DeviceWaitIdle 返回 DEVICE_LOST 后的合�
 `8b46cd1de2dfb06d7cac0ab9f9df920b57f471b3d561d2c17b0b65324eafcd70`；
 51个文件通过归档逐项校验。继续使用原KMD/ICD及默认登录启动/手动恢复工具，
 未安装或激活这个候选包，不能记为天气冻结已修复。
+
+### fcc53bf1 同步对照：五分钟桌面交互通过
+
+上述包随后于15:20:27–15:20:30 UTC更新当前原生注册并执行一次显卡PnP重启。
+没有重新安装KMD或重启Windows。冻结组件为：
+
+| 组件 | 源码与模式 | SHA256 |
+|---|---|---|
+| KMD `.158` | `6c854e9f394c3d761fab85885bead4bbd4588581` | `46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088` |
+| tgd3d UMD | `fcc53bf14c001881fb8c84ea61e9d4f3ebfc04b7`，CPU-sync | `7c7f88ccf83ad1a89f663c3205e6ba2cb6fec587d946efd3622839c9deb2b089` |
+| NVK ICD | `7c677212e5843725f3dbb12ee0b9dad6b1339a05` | `17dc3110393365eef279a90104850d6f517c74659441916266afeae0ae2c8f73` |
+
+Windows11 ARM64 23H2 22631.2861，启动时间15:12:45.5399650 UTC，原生LUID
+`00000000000d0fa1`。DWM PID504实际加载新目录
+`tgd3d-fcc53bf1-default158-cpu\app\TegraGpuD3DVk.dll`，更新前后的系统启动未变。
+原始SYS、ICD和ACPI均保持，CPU1497600kHz、风扇13及睡眠配置保持。
+
+- 15:22:00–15:22:31静止观察，用户确认“画面正常，能操作”。
+- 15:24:22–15:25:23彩色窗口运行60.221秒，移动11次、缩放11次后正常关闭；
+  用户确认“一直正常，能操作”。
+- 15:27:15–15:32:16五分钟窗口运行300.262秒，移动51次、缩放51次、最小化8次、
+  恢复7次、遮挡7次，正常结束。开始菜单与快捷设置在同一阶段执行。
+- CPU／风扇程序15:29:45启动、存活30.168秒、15:30:16正常关闭，退出0。
+  用户对完整五分钟问题回答“都看到了，全程正常”。
+- 用户随后补充“我刚试了几遍天气与浏览器都正常”。记录为同组合的手动回归反馈；
+  未给每次操作编造精确次数、时间或浏览器负载细节。
+
+因此本轮可标记五分钟原生桌面交互通过。仍是关闭跨队列桥接的CPU同步诊断构建，
+不能把它写成双向Fence已修复，或宣判历史天气／网页关闭故障根因已消除。
+没有已知像素读回、硬件横屏、VBlank时序或vkcube通过结果。
+
+身份辅助工具的首次任务因命令行引用错误退出1，修正调用后读到同一LUID、
+`matching_kmd=1`、`nvk_ready=1`。其退出4表示冻结stub没有可选私有导出，
+不归类为GPU失败。末次状态读取一度使用了错误的PnP筛选ID，得到空对象；
+改用实际`ACPI\SWOA0F01\0`后确认`.158 / Code0`及Hardware/Panel均0。
+天气自动按键任务最初因电池运行条件被排队，尚未执行；修正该任务条件后执行一次。
+这些工具问题不冒充渲染失败或实屏通过。必要结果和用户反馈保存在
+独立产物`hardware/ddi-device-loss/`，没有扩展GPU日志或Dump收集。
+
+### Carbon修订审计与独立KMD候选
+
+同一Antigravity Carbon High会话已返回修订报告，承认此前helper-load、提交失败
+序号复用、每设备VkDevice违约及DEVICE_LOST返回后清理等结论不成立。CLI最终外壳
+返回stream-interrupted/error，但其result.response中有完整修订报告，已保存为
+`delegation-tgd3d-carbon/review-revision.txt`；进程已结束，不再记为后台审计在途。
+等待超时后转入无期限DeviceWaitIdle的问题仍未解决，不能删掉等待后直接释放在途对象。
+
+报告指出NVK shader-object路径所需的`0x419e44` bit14配置在Windows被跳过。
+主代理独立核对固定Mesa源码、冻结KMD与真实NETB：固件初值`0x00d3eff2`确实置位，
+而`.158`只补了helper-load的另一个寄存器。新增最小KMD补丁在golden save前清除
+这一位并读回，保留其他异常位；未照搬旧Fable `9092e512`清零两个完整mask的方案。
+旧源码在新模型断言失败，修复后通过，ARM64内核源文件编译通过。
+详见[来源、适用条件及验证限制](GR_HELPER_LOADS.md#november-13-shader-object-output-exception-policy)。
+此补丁未生成新签名驱动、未部署；本轮实屏成功完全属于原冻结KMD组合。
+
+### 后续“主文件夹”故障：整体稳定性仍未通过
+
+15:39:40 UTC收尾核对仍为同一启动、DWM PID504、新UMD路径及`.158 / Code0`，
+Hardware/Panel均0；CPU1497600kHz、风扇13保持，默认登录启用任务已恢复，临时
+测试任务已清理。随后用户报告文件夹卡住、桌面刷新关闭文件夹，再次尝试仍卡住。
+进一步明确：“此电脑”正常，顶部“主文件夹／Home”卡住后导致Explorer重启。
+此前五分钟实屏通过只保留为该时间段结果，本组合整体稳定性记为失败，停止扩大
+已知像素、旋转或vkcube验收。
+
+按用户最新要求通过SSH查看内存和应用异常。15:43:57可用内存1852MiB、提交量
+1833299968/4508372992字节（40%），非分页池约64MiB。前后约20秒的Explorer私有
+内存均93.1MiB，DWM约96.7MiB；没有快速耗尽证据，短采样不能排除慢性泄漏。
+DWM仍为PID504；Explorer于15:42:37及15:44:38被Winlogon自动重启。
+
+Application Error分别在15:41:47、15:43:50记录两个Explorer实例的同位置崩溃：
+模块为当前包内`libvulkan_nouveau.dll`，异常`0xc0000005`，RVA`0xb542c`。
+匹配SHA256和PE时间戳后，原二进制符号/反汇编定位到
+`nvk_cmd_flush_gfx_shaders+0x358`，指令`ldrh w23,[x22,#0x4f8]`，对应
+`last_vtgm->push_dw_count`。这是CPU侧访问违规，不是本轮新增GPU看门狗转储。
+SSH会话0的窗口枚举为空，不能据此说用户会话没有文件夹窗口。
+
+静态调用链发现独立缺陷：`nvk_meta_end_gfx`恢复NVK shader指针，却未恢复公共
+runtime的`pipeline_shader_stages`。内部图像复制／blit绑定临时pipeline后，
+tgd3d下一次仅换PS时，`vk_common_CmdBindShadersEXT`会按残留标记解绑整个图形
+pipeline，再只绑定新PS，使VS丢失；下一次draw会到达上述空`last_vtgm`路径。
+修复同时保存／恢复graphics与compute meta的公共标记，保留原有pipeline和混合
+绑定，不增加每次draw强制重绑，不改`.158` KMD或双向Fence。
+
+新增ARM64 CPU控制直接调用生产meta保存／恢复和公共shader绑定代码，临时meta
+pipeline的绑定效果由测试提供。旧实现会在PS-only更新后丢失VS，修复后保留VS，
+并保持graphics/compute原有标记。此控制不创建KMT设备或执行GPU工作；Explorer
+真实回归仍须用新ICD验证。初次控制的模拟设备缺少零页VA，测试自身失败；补齐
+模拟状态后才取得上述结果，未把它当成驱动或GPU失败。
+
+### 单独ICD修复候选与启动阶段失败
+
+`d3423d269f9e716eadc1237beadbfb6aa6049dbe`已提交并推送。最终ARM64 CPU控制旧版
+退出1（PS-only后VS丢失），修复版退出0。新的生产ICD复用冻结版KMT目标文件，
+除NVK meta的12行状态保存／恢复及构建身份外，没有带入其他GPU生产源码变化。
+新ICD SHA256：`dee3d5805af80696f87d094ec1c5f557d662f435336207992baf588e2dc1cee0`。
+
+默认启用／手动恢复包`tgd3d-meta-d3423d26-158-cpu.zip`为6909633字节、51个文件，
+SHA256 `184467196cd2fc0705564a59003764c9e20ac16876847c8c53b469f643e9e125`。
+与上一包逐项比较，唯一改变的app文件为`libvulkan_nouveau.dll`；原`.158` KMD、
+`fcc53bf1` CPU同步UMD、ICD辅助工具和ACPI均逐字节相同。bit14的独立KMD源码补丁
+`253bc813`没有进入这个包。16:03:47 UTC远端包校验通过，当时仍为旧目录、Code0。
+
+随后只登记并启动一次`Tgd3dUpdateMetaD3423d26`，复用前轮恢复快照并请求显卡PnP
+重新初始化，没有请求Windows重启。用户接着报告“自动重启了”；读取新ICD加载
+状态的SSH连接超时，尚未取得新ICD实际加载或静止阶段结果。此轮立即记为失败，
+停止后续开窗与Home测试，不重新触发同一候选。需要待连接恢复，只核对update标记、
+启动时间和当前驱动状态，区分切换中复位与新组合运行失败；不能把它写成Home
+补丁已通过实机，也不能凭重启就断言补丁本身是根因。
