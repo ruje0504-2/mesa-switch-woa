@@ -124,13 +124,16 @@ HRESULT image_create(Device *dev, Resource *res)
          ici.pNext = &external;
       }
    }
-   if (dev->vk.CreateImage(dev->vkdev, &ici, nullptr, &res->storage.image) != VK_SUCCESS)
-      return runtime ? DXGI_ERROR_UNSUPPORTED : E_OUTOFMEMORY;
+   trace(TGD3D_TRACE_RESOURCE_PHASE, E_PENDING, 1, (uintptr_t)res);
+   HRESULT hr = dev->vk.CreateImage(dev->vkdev, &ici, nullptr, &res->storage.image) == VK_SUCCESS ?
+      S_OK : runtime ? DXGI_ERROR_UNSUPPORTED : E_OUTOFMEMORY;
+   trace(TGD3D_TRACE_RESOURCE_PHASE, hr, 1, (uintptr_t)res);
+   if (FAILED(hr))
+      return hr;
    res->storage.aspects = res->aspects;
    res->storage.layoutReady = false;
    res->storage.preinitialized = runtime != nullptr;
 
-   HRESULT hr = S_OK;
    if (runtime) {
       {
          /* Verify both the private-pitch ICD and the generic control driver.
@@ -141,8 +144,11 @@ HRESULT image_create(Device *dev, Resource *res)
          if (got.rowPitch != res->pitch || got.offset != 0)
             hr = DXGI_ERROR_UNSUPPORTED;
       }
-      if (SUCCEEDED(hr))
+      if (SUCCEEDED(hr)) {
+         trace(TGD3D_TRACE_RESOURCE_PHASE, E_PENDING, 4, (uintptr_t)res);
          hr = runtime_bind_image(dev, runtime, res->storage.image, &res->storage.memory);
+         trace(TGD3D_TRACE_RESOURCE_PHASE, hr, 4, (uintptr_t)res);
+      }
    } else {
       VkMemoryRequirements req;
       dev->vk.GetImageMemoryRequirements(dev->vkdev, res->storage.image, &req);
@@ -152,12 +158,17 @@ HRESULT image_create(Device *dev, Resource *res)
          req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
       if (alloc.memoryTypeIndex == UINT32_MAX)
          alloc.memoryTypeIndex = dev->adapter->vk.findMemoryType(req.memoryTypeBits, 0);
+      trace(TGD3D_TRACE_RESOURCE_PHASE, E_PENDING, 2, (uintptr_t)res);
       if (alloc.memoryTypeIndex == UINT32_MAX ||
           dev->vk.AllocateMemory(dev->vkdev, &alloc, nullptr, &res->storage.memory) != VK_SUCCESS)
          hr = D3DDDIERR_OUTOFVIDEOMEMORY;
-      else if (dev->vk.BindImageMemory(dev->vkdev, res->storage.image, res->storage.memory, 0) !=
-               VK_SUCCESS)
-         hr = E_FAIL;
+      trace(TGD3D_TRACE_RESOURCE_PHASE, hr, 2, (uintptr_t)res);
+      if (SUCCEEDED(hr)) {
+         trace(TGD3D_TRACE_RESOURCE_PHASE, E_PENDING, 3, (uintptr_t)res);
+         if (dev->vk.BindImageMemory(dev->vkdev, res->storage.image, res->storage.memory, 0) != VK_SUCCESS)
+            hr = E_FAIL;
+         trace(TGD3D_TRACE_RESOURCE_PHASE, hr, 3, (uintptr_t)res);
+      }
    }
    if (FAILED(hr)) {
       dev->vk.DestroyImage(dev->vkdev, res->storage.image, nullptr);
@@ -356,13 +367,9 @@ static void resource_fail(Device *dev, Resource *res, HRESULT hr)
    TG_ERROR(dev, hr);
 }
 
-static void APIENTRY CreateResource(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_CREATERESOURCE *desc,
-                                    D3D10DDI_HRESOURCE hResource, D3D10DDI_HRTRESOURCE hRT)
+static HRESULT create_resource(Device *dev, const D3D10DDIARG_CREATERESOURCE *desc,
+                                Resource *res)
 {
-   Device *dev = D(hDevice);
-   Resource *res = new (hResource.pDrvPrivate) Resource();
-   res->dev = dev;
-   res->hRT = hRT;
    res->dim = desc->ResourceDimension;
    res->usage = desc->Usage;
    res->bind = desc->BindFlags;
@@ -374,13 +381,11 @@ static void APIENTRY CreateResource(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_
    res->width = desc->pMipInfoList[0].TexelWidth;
    res->height = desc->pMipInfoList[0].TexelHeight ? desc->pMipInfoList[0].TexelHeight : 1;
    res->depth = desc->pMipInfoList[0].TexelDepth ? desc->pMipInfoList[0].TexelDepth : 1;
-   trace(TGD3D_TRACE_RESOURCE, S_OK, (uint64_t)res->dim << 32 | res->bind,
+   trace(TGD3D_TRACE_RESOURCE, E_PENDING, (uint64_t)res->dim << 32 | res->bind,
          (uint64_t)res->width << 32 | res->height);
 
-   if (desc->SampleDesc.Count > 1) {
-      resource_fail(dev, res, DXGI_ERROR_UNSUPPORTED);   /* no multisampling is advertised */
-      return;
-   }
+   if (desc->SampleDesc.Count > 1)
+      return DXGI_ERROR_UNSUPPORTED;   /* no multisampling is advertised */
 
    HRESULT hr = S_OK;
    if (res->dim == D3D10DDIRESOURCE_BUFFER) {
@@ -391,16 +396,12 @@ static void APIENTRY CreateResource(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_
          hr = D3DDDIERR_OUTOFVIDEOMEMORY;
       else if (desc->pInitialDataUP && desc->pInitialDataUP[0].pSysMem)
          memcpy(res->slice.cpu(), desc->pInitialDataUP[0].pSysMem, res->size);
-      if (FAILED(hr))
-         resource_fail(dev, res, hr);
-      return;
+      return hr;
    }
 
    const FormatInfo *info = format_info(res->format);
-   if (!info) {
-      resource_fail(dev, res, DXGI_ERROR_UNSUPPORTED);
-      return;
-   }
+   if (!info)
+      return DXGI_ERROR_UNSUPPORTED;
    res->imageType = res->dim == D3D10DDIRESOURCE_TEXTURE1D ? VK_IMAGE_TYPE_1D :
                     res->dim == D3D10DDIRESOURCE_TEXTURE3D ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
    res->cube = res->dim == D3D10DDIRESOURCE_TEXTURECUBE;
@@ -411,10 +412,8 @@ static void APIENTRY CreateResource(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_
       res->kind = ResKind::Staging;
       staging_layout(res, info);
       res->slice = slice_alloc(dev, res->size, 256);
-      if (!res->slice) {
-         resource_fail(dev, res, D3DDDIERR_OUTOFVIDEOMEMORY);
-         return;
-      }
+      if (!res->slice)
+         return D3DDDIERR_OUTOFVIDEOMEMORY;
       for (UINT sub = 0; desc->pInitialDataUP && sub < res->subresources(); sub++) {
          const auto &up = desc->pInitialDataUP[sub];
          const SubLayout &l = res->layout[sub];
@@ -425,18 +424,18 @@ static void APIENTRY CreateResource(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_
                       static_cast<const uint8_t *>(up.pSysMem) + (size_t)z * up.SysMemSlicePitch,
                       up.SysMemPitch, row_bytes(info, l.width), row_count(info, l.height));
       }
-      return;
+      return S_OK;
    }
 
    res->kind = ResKind::Image;
    hr = init_image_fields(dev, res);
    if (SUCCEEDED(hr) && desc->pPrimaryDesc) {
       UINT width = 0, height = 0, pitch = 0;
-      hr = runtime_primary_create(dev, desc, hRT, &res->storage.runtime, &width, &height, &pitch);
+      hr = runtime_primary_create(dev, desc, res->hRT, &res->storage.runtime, &width, &height, &pitch);
       res->primary = true;
       res->pitch = pitch;
    } else if (SUCCEEDED(hr) && (res->misc & D3D10_DDI_RESOURCE_MISC_SHARED)) {
-      hr = runtime_shared_create(dev, desc, hRT, &res->storage.runtime, &res->pitch);
+      hr = runtime_shared_create(dev, desc, res->hRT, &res->storage.runtime, &res->pitch);
    } else if (SUCCEEDED(hr) && (res->misc & ~(D3D10_DDI_RESOURCE_AUTO_GEN_MIP_MAP |
                                             D3D10_DDI_RESOURCE_MISC_DISCARD_ON_PRESENT))) {
       /* Keyed-mutex, GDI-compatible and NT-handle sharing need DDI levels
@@ -450,8 +449,21 @@ static void APIENTRY CreateResource(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_
       if (up.pSysMem)
          hr = upload_texels(dev, res, sub, nullptr, up.pSysMem, up.SysMemPitch, up.SysMemSlicePitch);
    }
+   return hr;
+}
+
+static void APIENTRY CreateResource(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_CREATERESOURCE *desc,
+                                    D3D10DDI_HRESOURCE hResource, D3D10DDI_HRTRESOURCE hRT)
+{
+   Device *dev = D(hDevice);
+   Resource *res = new (hResource.pDrvPrivate) Resource();
+   res->dev = dev;
+   res->hRT = hRT;
+   trace(TGD3D_TRACE_RESOURCE_PHASE, E_PENDING, 0, (uintptr_t)res);
+   HRESULT hr = create_resource(dev, desc, res);
    if (FAILED(hr))
       resource_fail(dev, res, hr);
+   trace(TGD3D_TRACE_RESOURCE_PHASE, hr, 0, (uintptr_t)res);
 }
 
 static void APIENTRY OpenResource(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_OPENRESOURCE *args,

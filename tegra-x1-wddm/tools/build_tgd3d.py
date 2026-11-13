@@ -24,7 +24,7 @@ def main():
     search += [args.sdk_include / sub for sub in ("um", "shared")]
     for name in ("d3d10umddi.h", "d3d11TokenizedProgramFormat.hpp", "d3dkmddi.h",
                  "d3dkmdt.h", "d3dkmthk.h", "d3dukmdt.h", "d3dumddi.h",
-                 "dxgiddi.h", "dxmini.h", "wmidata.h"):
+                 "dxgiddi.h", "dxmini.h", "wmidata.h", "minidumpapiset.h"):
         header = next((d / name for d in search if (d / name).is_file()), None)
         if header is None:
             parser.error(f"SDK/WDK header not found: {name}")
@@ -46,7 +46,8 @@ def main():
     subprocess.run(command, cwd=source, check=True)
     artifacts = {"TegraGpuD3DVk.dll": "src/nouveau/tgd3d/TegraGpuD3DVk.dll",
                  "tgd3d-contracts.exe": "src/nouveau/tgd3d/tests/tgd3d-contracts.exe"}
-    for name in ("tgd3d-runtime-check.exe", "tgd3d-trace-export.exe", "tgd3d-trace-control.exe"):
+    for name in ("tgd3d-runtime-check.exe", "tgd3d-trace-export.exe", "tgd3d-trace-control.exe",
+                 "tgd3d-dump-capture.exe"):
         artifacts[name] = "src/nouveau/tgd3d/tests/" + name
     subprocess.run(["ninja", "-C", str(build), *artifacts.values()],
                    cwd=source, check=True)

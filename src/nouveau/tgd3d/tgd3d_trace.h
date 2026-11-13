@@ -22,7 +22,7 @@ enum tgd3d_trace_event {
    TGD3D_TRACE_DESTROY_DEVICE,
    TGD3D_TRACE_RUNTIME_MEMORY,     /* arg0 stage << 32 | allocation, arg1 value */
    TGD3D_TRACE_RUNTIME_CONTEXT,    /* arg0 stage */
-   TGD3D_TRACE_RESOURCE,           /* arg0 dimension << 32 | bind, arg1 width << 32 | height */
+   TGD3D_TRACE_RESOURCE,           /* Entry only: dimension << 32 | bind, width << 32 | height */
    TGD3D_TRACE_OPEN_RESOURCE,      /* arg0 width << 32 | height, arg1 pitch */
    TGD3D_TRACE_SET_DISPLAY_MODE,   /* arg0 allocation */
    TGD3D_TRACE_ROTATE,             /* arg0 resources */
@@ -33,6 +33,7 @@ enum tgd3d_trace_event {
    TGD3D_TRACE_DEVICE_STAGE,       /* arg0 creation stage 1..5, arg1 Device address */
    TGD3D_TRACE_SHADER_PHASE,       /* arg0 phase << 32 | stage, arg1 Shader address */
    TGD3D_TRACE_SUBMIT_PHASE,       /* arg0 phase (1 runtime signal, 2 Vulkan, 3 runtime wait), arg1 sequence */
+   TGD3D_TRACE_RESOURCE_PHASE,     /* arg0 phase (0 DDI, 1 VkImage, 2 memory, 3 bind, 4 runtime bind), arg1 Resource address */
    TGD3D_TRACE_ERROR = 20,         /* tgd3d_trace_error */
    TGD3D_TRACE_MESSAGE = 21,       /* tgd3d_trace_message */
    TGD3D_TRACE_TIMING = 30,        /* tgd3d_trace_timing */

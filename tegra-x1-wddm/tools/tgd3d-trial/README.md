@@ -43,6 +43,14 @@
 UMD provider现在使用启动门控打开前创建的独立`Tgd3dTrialUmd`会话，输出
 `umd.etl`；内核/DXGI/DWM继续保留在`Tgd3dTrialDxg`。两者分别记录丢失计数，
 不会把内核会话丢失混作UMD会话丢失，也不忽略UMD自身的任何丢失。
+恢复前会先保存`pre-recovery-kmd.txt`和已确认身份的DWM快照；结果见
+`pre-recovery.json`。成功的`.dmp`可用`inspect_kernel_dump.cpp`的
+`--user image-path`模式读取全部线程栈，镜像路径包含匹配的系统目录和本包app目录。
+`.pending`是未完成输出，不可当作有效转储。写入器最多运行25秒、使用256MiB
+自身提交内存、写出32MiB，不抓完整堆；取证失败不会阻止回退。
+`Check-ProcessDump.ps1`提供`.59`上的进程身份、快照和目标继续运行控制。
+事件8仅记录资源创建入口；事件17按资源地址和PID/TID区分DDI、VkImage创建、
+内存分配、绑定及runtime导入，E_PENDING为进入，返回状态才表示该调用结束。
 窗口工具在Shown时显式ShowWindow，并记录Win32可见状态；它仍不替代物理观察。
 已复用的工具来源记录在 tool-provenance.json；打包不会构建主线或合并 main。
 

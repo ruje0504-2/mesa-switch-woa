@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <dbgeng.h>
 #include <stdio.h>
+#include <string.h>
 
 class ConsoleSink final : public IDebugOutputCallbacks {
 public:
@@ -40,8 +41,9 @@ static DWORD WINAPI analysis_deadline(void *)
 
 int main(int argc, char **argv)
 {
-   if (argc != 3) {
-      fprintf(stderr, "usage: inspect-kernel-dump.exe existing.dmp symbol-path\n");
+   const bool user_dump = argc == 5 && !strcmp(argv[3], "--user");
+   if (argc != 3 && !user_dump) {
+      fprintf(stderr, "usage: inspect-kernel-dump.exe existing.dmp symbol-path [--user image-path]\n");
       return 2;
    }
    /* The target has 4 GiB and recently exhausted commit during collection.
@@ -80,15 +82,18 @@ int main(int argc, char **argv)
    if (SUCCEEDED(hr)) hr = symbols->SetSymbolPath(argv[2]);
    /* ARM64 stack unwinding also needs the matching image's unwind tables.
     * DbgEng validates identities; this is an image search, not code loading. */
-   if (SUCCEEDED(hr)) hr = symbols->SetImagePath("C:\\Windows\\System32;C:\\Windows\\System32\\drivers");
+   if (SUCCEEDED(hr)) hr = symbols->SetImagePath(user_dump ? argv[4] :
+      "C:\\Windows\\System32;C:\\Windows\\System32\\drivers");
    if (SUCCEEDED(hr)) hr = client->OpenDumpFile(argv[1]);
    if (SUCCEEDED(hr)) hr = control->WaitForEvent(0, INFINITE);
    int result = FAILED(hr) ? 1 : 0;
    if (FAILED(hr)) fprintf(stderr, "Open dump: 0x%08lx\n", static_cast<ULONG>(hr));
    if (SUCCEEDED(hr)) {
-      const char *commands[] = {"vertarget", ".bugcheck", "lmv m tegragpurender",
-                                "kv", ".enumtag"};
-      for (const char *command : commands) {
+      const char *kernel_commands[] = {"vertarget", ".bugcheck", "lmv m tegragpurender",
+                                       "kv", ".enumtag", nullptr};
+      const char *user_commands[] = {"vertarget", "lm", "~* kv", nullptr};
+      for (const char **cmd = user_dump ? user_commands : kernel_commands; *cmd; ++cmd) {
+         const char *command = *cmd;
          printf("\n=== %s ===\n", command);
          fflush(stdout);
          hr = control->Execute(DEBUG_OUTCTL_THIS_CLIENT, command, DEBUG_EXECUTE_ECHO);

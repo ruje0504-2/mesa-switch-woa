@@ -21,7 +21,7 @@ if($end -lt 0){throw 'No complete UMD trace records'}
 # The fixed exporter puts id first. Call-boundary diagnostics remain in the
 # full JSONL, but are not device/Present identity and need no PS object graph
 # on every observer poll. Other encodings still take the normal JSON path.
-$rows=@($text.Substring(0,$end) -split '[\r\n]+' | Where-Object {$_ -and $_ -notmatch '^\{"id":(14|15|16),'} | ForEach-Object {$_|ConvertFrom-Json})
+$rows=@($text.Substring(0,$end) -split '[\r\n]+' | Where-Object {$_ -and $_ -notmatch '^\{"id":(14|15|16|17),'} | ForEach-Object {$_|ConvertFrom-Json})
 $start=@($rows|Where-Object {$_.event -eq 'TraceStart'})
 $state=@($rows|Where-Object {$_.event -eq 'TraceState'}|Select-Object -Last 1)
 if($start.Count -ne 1 -or $state.Count -ne 1 -or @($rows|Where-Object {$_.event -eq 'TraceEnd'}).Count){

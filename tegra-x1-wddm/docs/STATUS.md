@@ -1,5 +1,19 @@
 # GPU status
 
+**November 13, tgd3d-vulkan update:** native tgd3d has produced a usable portrait
+desktop, but stability has failed. The latest trial froze when the owner opened
+Wi-Fi/Quick Settings; automatic recovery, not a second hard reset, explains its
+restart. `.59 / Code0` and the original display configuration were verified at
+08:48:48 UTC and the owner confirmed usable output. Keep CPU **1497600 kHz**, fan
+driver **13**, the current sleep settings and the dynamic **512 MiB** GPU budget.
+The older CPU/fan values and parallel-chat workflow below are historical, not
+current instructions. This branch owns native tests and recovery; `main` is paused.
+See [the full tgd3d trial record](TGD3D_NATIVE_20261113.md) for frozen hashes,
+the separate `.59` collection-process OOM incident, and current diagnostic work.
+No five-minute desktop, pixel, rotation or vkcube acceptance has been obtained.
+
+## Historical status before the November 13 tgd3d trials
+
 **Latest hardware results** on Nintendo Switch Lite HDH-001, Windows 11 ARM64
 23H2 (22631.2861).
 

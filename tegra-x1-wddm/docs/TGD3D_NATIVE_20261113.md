@@ -310,3 +310,80 @@ identity读取跳过无关的调用阶段JSON对象构造，原始日志全部�
 字节，SHA256`0c8d6289eda282f3a6a9de204edf8a8bac100ae4925bee4b0102105ddc447ef7`，
 位于独立产物目录`hardware/staged-d6470feb/`。其中原工具、修正后`.59`对照、
 两次回退记录分别保留，未覆盖原始失败记录。
+
+## 第四轮：打开快捷设置后冻结，自动回退正常执行
+
+组件仍为`d6470feb38defeb824f34cda39ffbb9e886f611d` UMD、冻结`.158` KMD
+和`7c677212` ICD，三个二进制SHA256与第三轮一致；只更新窗口、独立ETW和
+collector清理工具至`04034cfd7e6f853070f2d91152dab6c4bce9d439`。包6723706字节，
+SHA256 `27ffeb9707a78a248583e4dca702a47c4a2575ea1bd89415b6bd18c7a5b125ed`。
+目录为`tgd3d-d6470feb-20261113-164031`；WMI启动时间
+08:42:51.647048 UTC，08:45:04原生入口确认`.158 / Code0`。
+LUID`00000000000996bd`，DWM PID468/TID1840，创建FILETIME
+`134390330044625805`。
+
+静止阶段08:45:22开始，0/15/30秒身份检查通过，但08:46:00的截图调用在15秒后
+超时，整段48.39秒未通过。用户报告点开右下角Wi-Fi/快捷设置时画面冻结，并指出
+首次原生输出时曾正常打开此面板；具体触摸时刻未单独记录。因此这轮包含交互，
+不能标成纯静止桌面偶发冻结，也不能仅凭一次触发判定稳定复现。没有请求Window
+阶段，没有新的彩色窗口、五分钟交互或性能程序回归通过结果。
+
+冻结时08:46:29 SSH仍能执行hostname，实时UMD日志在恢复前取回。完整独立
+UMD ETL正常结束，无丢事件/缓冲，2193条载荷与实时日志逐条相同。DWM保留15次
+成功提交和Present，最后完成值14；80对设备阶段、336对编译阶段、198对提交
+阶段进入/返回数量相符。26条错误均为DONOTWAIT Map的`0x887b0001`，没有保留
+CPU等待开始/结束记录。DWM不再产生日志后，其他进程仍继续；这些结果不能证明
+最后一帧已扫描完成，也不能证明GPU全局挂起或供电故障。
+
+最后的DWM资源记录为1280×13、bind0x28。审查发现旧事件8在CreateResource
+**入口**便写S_OK，尚未执行分配和绑定；不能把它解释为资源创建已经成功返回。
+内核记录最后的paging fence7313，在另一条System工作线程上有相同对象的
+UnwaitCpuWaiter，间隔0.2005ms，随后paging packet312结束。因此不能把这条
+主线程等待当作已证实的Fence超时。内核/UMD墙钟偏移仍需保留各自时钟，不能
+直接跨ETL按FILETIME减法推断调用顺序。下一步需要DWM用户栈与分阶段创建记录。
+
+08:46:41恢复脚本完成`.59` staging，System1074 **Record40865**确认SYSTEM
+通过shutdown.exe发起计划重启。08:47:11手动恢复SSH请求未连接成功，未送达；
+不能把此次重启记作又一次无预兆硬复位。无新的41/6008。08:48:48恢复校验通过，
+`.59 / Code0`、原ACPI/显示和平台设置保持，用户确认“已回到桌面，能操作”。
+
+证据157文件、108256188字节全部按长度和SHA256取回核验；归档11813391字节，
+SHA256 `1094b801e67e2722f242d3a1c33f4587fada164b732e94b1d9c472d3d675fd66`。
+位于独立产物`hardware/staged-04034cfd/`，物理反馈、后补系统事件和分析分别
+保存。原始内核228480条记录中，按保留的本机模板解码170178条DxgKrnl记录，
+无该provider的未知/损坏载荷。Wi-Fi触发及偶发性目前都是待验证条件，不是根因。
+
+### 冻结调用栈取证
+
+新工具使用PSS快照和系统DbgHelp，只写线程上下文、栈及模块信息，不写完整堆。
+通过PID、创建FILETIME和镜像名核对同一DWM，先保留进程句柄；错身份不抓取。
+写入器自身限制256MiB提交内存、20秒取消/25秒退出和32MiB输出，成功刷新后
+才从`.pending`发布为`.dmp`。捕获失败记录原因并继续恢复，不改变保护策略。
+恢复开始时先保存KMD Parameters原始文本，再抓DWM；卸载后才读注册表会丢失
+本轮状态。每轮已有取证收据则不覆盖或重抓。
+
+09:17:56 UTC在`.59`完成初步控制：错创建时间被拒绝；自建目标成功捕获后正常
+退出0；实际DWM PID560的快照455856字节，捕获468ms，写入器峰值提交1941504
+字节。系统DbgEng可展开19个线程；没有PDB的内部名称仍只能看成导出名加偏移。
+这只验证取证能力，不是冻结时栈，更不是重启修复通过。
+
+实现依据Windows SDK `10.0.26100.0`的minidump头文件及微软
+[MiniDumpWriteDump](https://learn.microsoft.com/en-us/windows/win32/api/minidumpapiset/nf-minidumpapiset-minidumpwritedump)
+（2024-02-21）、[PSS快照导出](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/proc_snap/export-a-process-snapshot-to-a-file)
+（2018-05-31）和[PssCaptureSnapshot](https://learn.microsoft.com/en-us/windows/win32/api/processsnapshot/nf-processsnapshot-psscapturesnapshot)
+（2025-10-31），均于2026-11-13查阅。适用本机Windows 11 ARM64；采用示例的
+snapshot callback契约，但省去handle表和全内存，只保留本次DWM停顿定位所需数据。
+不依赖旧WATCHDOG dump，不保证掉电或完全内核锁死时还能执行用户态取证。
+
+09:24:08 UTC，正式构建产物在`.59 / Code0`通过12项CPU合约、18项读取判定、
+16条真实ETW实时/离线传输和全部脚本语法检查。取证写入器的错身份拒绝、目标
+正常退出、恢复入口抓DWM以及已有收据不覆盖均通过。该入口本次生成465088
+字节DWM快照，312ms，写入器峰值提交1908736字节；`.59`没有原生KMD Parameters，
+注册表读取退出1如实保留。没有安装候选或执行GPU验收。
+
+新UMD SHA256 `58a26cd6c8f2d6d17c13d5e9b90bb13b64759ee34eab59b73de11e8e74ae4af9`，
+写入器 `50be687f0df6a9ba8876974e0ed963ab67d978f39c420faa5b63c5ebef604bb5`。
+本轮只补资源调用进入/返回和失败取证；绘制/同步算法、KMD与ICD未变，冻结根因
+尚未定位。控制证据归档1644793字节，SHA256
+`73a79b1ee360c3fd1ef37736822b4ed7de14d8ee2bce42051dd077bbf689ac7a`，位于
+独立产物`resource-phase-controls/`。后续原生试验仍须物理观察及失败即回退。

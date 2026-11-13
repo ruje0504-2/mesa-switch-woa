@@ -22,8 +22,8 @@ $fixtureResult=Read-Json "$p\fixture.json"
 $live=@(Get-Content "$p\umd-live.jsonl"|ForEach-Object {$_|ConvertFrom-Json})
 $events=@($live|Where-Object {$_.id})
 $states=@($live|Where-Object {$_.event -eq 'TraceState'})
-if($events.Count -ne 14 -or !$states.Count) { throw 'Incomplete real-time records/buffers' }
-foreach($id in 14,15,16) {
+if($events.Count -ne 16 -or !$states.Count) { throw 'Incomplete real-time records/buffers' }
+foreach($id in 14,15,16,17) {
     $pair=@($events|Where-Object {$_.id -eq $id})
     if($pair.Count -ne 2 -or $pair[0].status -ne '8000000a' -or $pair[1].status -ne '00000000') { throw 'Call entry/return pair differs' }
 }
@@ -43,8 +43,8 @@ foreach($s in $states) {
 }
 $offline=Start-Process "$p\app\tgd3d-trace-export.exe" -ArgumentList ('"'+$p+'\umd.etl"') -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$p\offline.jsonl" -RedirectStandardError "$p\offline.log"
 $offlineRows=@(Get-Content "$p\offline.jsonl"|ForEach-Object {$_|ConvertFrom-Json})
-if($offline.ExitCode -ne 0 -or $offlineRows.Count -ne 14) { throw 'Offline v2 export failed' }
-for($i=0;$i -lt 14;$i++) {
+if($offline.ExitCode -ne 0 -or $offlineRows.Count -ne 16) { throw 'Offline v2 export failed' }
+for($i=0;$i -lt 16;$i++) {
     foreach($field in 'id','version','pid','process_start','image','status','kind','sequence','completed','arg0','arg1','message') {
         if($events[$i].$field -ne $offlineRows[$i].$field) { throw ('Live/offline payload mismatch: '+$field) }
     }

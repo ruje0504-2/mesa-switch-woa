@@ -16,7 +16,8 @@ int main()
    tgd3d::trace(TGD3D_TRACE_CREATE_DEVICE, S_OK, 0xa0009, 0);
    for (tgd3d_trace_event event : {TGD3D_TRACE_DEVICE_STAGE,
                                   TGD3D_TRACE_SHADER_PHASE,
-                                  TGD3D_TRACE_SUBMIT_PHASE}) {
+                                  TGD3D_TRACE_SUBMIT_PHASE,
+                                  TGD3D_TRACE_RESOURCE_PHASE}) {
       tgd3d::trace(event, E_PENDING, 1, 0x1234);
       tgd3d::trace(event, S_OK, 1, 0x1234);
    }

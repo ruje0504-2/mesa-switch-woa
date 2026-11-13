@@ -35,3 +35,11 @@ executable(
   dependencies : [cpp.find_library('advapi32')],
   link_args : tgd3d_link_args,
 )
+# Separate, bounded PSS/DbgHelp writer for a stalled DWM before recovery.
+executable(
+  'tgd3d-dump-capture',
+  '../../../../tegra-x1-wddm/tools/capture_process_dump.cpp',
+  cpp_args : ['-DUNICODE', '-D_UNICODE'],
+  dependencies : [cpp.find_library('advapi32'), cpp.find_library('psapi')],
+  link_args : tgd3d_link_args + (cc.get_argument_syntax() == 'gcc' ? ['-municode'] : []),
+)
