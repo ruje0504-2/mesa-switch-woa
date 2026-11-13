@@ -48,6 +48,8 @@ function Check-File([string]$Path,$Expected) {
 function Check-Package {
     $m=Read-Json (Join-Path $script:TrialRoot 'trial-components.json')
     if($m.kmd_version -ne '0.1.0.158' -or $m.umd_name -ne 'TegraGpuD3DVk.dll') { throw 'Unexpected trial component identity' }
+    if($m.kmd_variant -and ($m.kmd_variant -ne 'shader-output-bit14' -or
+       $m.baseline_kmd.'tegragpurender.sys'.Sha256 -ne '46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088')) { throw 'Unexpected kernel variant or recovery baseline' }
     foreach($entry in $m.files.PSObject.Properties) { Check-File (Package-Path $entry.Name) $entry.Value }
     foreach($file in Get-ChildItem -LiteralPath $script:TrialRoot -Filter '*.ps1') {
         $tokens=$null;$errors=$null
@@ -61,8 +63,13 @@ function Check-Baseline {
     if($version -eq '0.1.0.158' -and $problem -eq 43) {
         # Expected closed startup gate: BasicDisplay remains usable while the
         # retained .158 miniport is installed but native GPU work is disabled.
+        $hashes=@('46D1757674FF156028CE5B729BA53671981FFAB09948FCAF125751C46BB10088')
+        $manifest=Read-Json (Join-Path $script:TrialRoot 'trial-components.json')
+        if($manifest.kmd_variant -eq 'shader-output-bit14' -and $manifest.baseline_kmd.'tegragpurender.sys'.Sha256 -eq $hashes[0]) {
+            $hashes+=([string]$manifest.kmd.'tegragpurender.sys'.Sha256)
+        }
         if((Device-Property 'Service') -ne 'tegragpurender' -or
-           (File-Hash "$env:windir\System32\drivers\tegragpurender.sys") -ne '46D1757674FF156028CE5B729BA53671981FFAB09948FCAF125751C46BB10088' -or
+           (File-Hash "$env:windir\System32\drivers\tegragpurender.sys") -notin $hashes -or
            (File-Hash "$env:windir\System32\acpitabl.dat") -ne '515D8D9C1612514CA2F197D6C96774A9265785A7E519921A195F0F8D257AA500') { throw 'Retained .158 baseline differs' }
     } elseif($version -eq '0.1.0.59' -and $problem -eq 0) {
         # One-time migration from the previous baseline; recovery never

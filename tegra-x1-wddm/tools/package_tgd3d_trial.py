@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Package tgd3d with frozen .158 KMD and manual recovery tools."""
+"""Package tgd3d with a reviewed .158 KMD and manual recovery tools."""
 import argparse
 import hashlib
 import json
@@ -28,7 +28,11 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--default-start", action="store_true",
                         help="package automatic enablement after logon, with manual recovery")
+    parser.add_argument("--candidate-kmd", type=Path,
+                        help="reviewed bit14 artifact directory with manifest.json and signed-package")
     args = parser.parse_args()
+    if args.candidate_kmd and not args.default_start:
+        parser.error("--candidate-kmd requires --default-start")
     root = Path(__file__).resolve().parents[2]
     umd = json.loads((args.umd / "manifest.json").read_text())
     icd = json.loads((args.icd / "manifest.json").read_text())
@@ -47,8 +51,26 @@ def main():
     if args.default_start:
         manifest["scope"] = "frozen .158 with automatic tgd3d enablement after logon; manual testing"
         manifest["startup_mode"] = "logon-default"
-    for name, record in frozen["kmd"].items():
-        checked_copy(args.kmd / name, args.out / "package" / name, record)
+    kernel = args.kmd
+    if args.candidate_kmd:
+        candidate = json.loads((args.candidate_kmd / "manifest.json").read_text())
+        if (candidate["base"] != frozen["kmd_source"] or
+            candidate["variant"] != "shader-output-bit14" or
+            not candidate.get("windows_signature_verified") or
+            set(candidate["changed_files"]) != {
+                "tegra-x1-wddm/platform/t214_gr_context.c",
+                "tegra-x1-wddm/tests/test_gr_context.c"}):
+            raise ValueError("Unreviewed kernel variant or unsigned artifact")
+        manifest["baseline_kmd"] = frozen["kmd"]
+        manifest["kmd_variant"] = candidate["variant"]
+        manifest["kmd_patch_commit"] = candidate["patch_commit"]
+        manifest["kmd"] = candidate["signed_files"]
+        manifest["scope"] = ".158 bit14 fix with automatic tgd3d enablement after logon; manual testing"
+        kernel = args.candidate_kmd / "signed-package"
+        for name, record in frozen["kmd"].items():
+            checked_copy(args.kmd / name, args.out / "baseline-kmd" / name, record)
+    for name, record in manifest["kmd"].items():
+        checked_copy(kernel / name, args.out / "package" / name, record)
     for directory, component in ((args.umd, umd), (args.icd, icd)):
         for name, sha in component["files"].items():
             src = directory / name
@@ -64,7 +86,8 @@ def main():
     scripts = root / "tegra-x1-wddm/tools/tgd3d-trial"
     default_shared = {"Common.ps1", "Prepare.ps1", "Enable-RuntimeAppContainerRead.ps1",
                       "Read-PlatformState.ps1", "Restore-AfterBoot.ps1",
-                      "restore-preference.ps1", "Stop-DxgBootTrace.ps1", "tool-provenance.json"}
+                      "restore-preference.ps1", "Stop-DxgBootTrace.ps1", "tool-provenance.json",
+                      "Switch-Kmd.ps1"}
     for file in scripts.iterdir():
         if args.default_start and file.name not in default_shared:
             continue

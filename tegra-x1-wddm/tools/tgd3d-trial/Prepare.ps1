@@ -46,7 +46,7 @@ if($LASTEXITCODE -ne 0) { throw 'Cannot export the current rollback driver' }
 $infs=@(Get-ChildItem $backupDir -Recurse -Filter ($baselineName+'.inf'))
 if($infs.Count -ne 1) { throw 'The starting driver INF was not exported exactly once' }
 $probe=Join-Path $infs[0].DirectoryName ($baselineName+'.sys')
-$expected=if($baselineVersion -eq '0.1.0.158'){'46D1757674FF156028CE5B729BA53671981FFAB09948FCAF125751C46BB10088'}else{'DE5E9CD492D35A73EA3D3F5F1723FD82F88922F6E91EF5966B430360F5EB5646'}
+$expected=if($baselineVersion -eq '0.1.0.158'){File-Hash "$env:windir\System32\drivers\tegragpurender.sys"}else{'DE5E9CD492D35A73EA3D3F5F1723FD82F88922F6E91EF5966B430360F5EB5646'}
 if((File-Hash $probe) -ne $expected) { throw 'Exported starting driver differs' }
 Copy-Item "$env:windir\System32\acpitabl.dat" (Join-Path $backupDir 'acpitabl.dat')
 $user=(Get-CimInstance Win32_ComputerSystem).UserName

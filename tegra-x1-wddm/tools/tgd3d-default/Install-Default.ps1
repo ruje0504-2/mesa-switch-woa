@@ -23,6 +23,7 @@ if(!$Prepared){
 }
 $backup=Check-Recovery
 Check-Baseline
+if($m.kmd_variant){& (Join-Path $PSScriptRoot 'Switch-Kmd.ps1') -Direction Candidate}
 $subkey='SYSTEM\CurrentControlSet\Control\Class\'+(Device-Property 'Driver')
 $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($subkey,$true)
 try{
@@ -32,8 +33,7 @@ try{
     [string[]]$restore=@($old[0],$old[0],$old[0],$old[0])
     $umd=Join-Path $PSScriptRoot 'app\TegraGpuD3DVk.dll'
     $icd=Join-Path $PSScriptRoot 'app\nvk_windows_icd.json'
-    @{Subkey=$subkey;Manifest=$icd;PreviousUmd=$restore;OriginalUmd=$old;TemporaryUmd=$umd;Utc=[DateTime]::UtcNow.ToString('o')}|
-        ConvertTo-Json|Set-Content (Join-Path $PSScriptRoot 'icd-registration.json') -Encoding UTF8
+    Save-Json (Join-Path $PSScriptRoot 'icd-registration.json') @{Subkey=$subkey;Manifest=$icd;PreviousUmd=$restore;OriginalUmd=$old;TemporaryUmd=$umd;Utc=[DateTime]::UtcNow.ToString('o')}
     $old[1]=$old[2]=$umd
     $key.SetValue('UserModeDriverName',$old,[Microsoft.Win32.RegistryValueKind]::MultiString)
     $key.SetValue('VulkanDriverName',$icd,[Microsoft.Win32.RegistryValueKind]::String)
@@ -45,8 +45,8 @@ $action=New-ScheduledTaskAction -Execute "$env:windir\System32\WindowsPowerShell
 $trigger=New-ScheduledTaskTrigger -AtLogOn -User $backup.User
 $trigger.Delay='PT5S'
 $taskSettings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 3)
-Register-ScheduledTask -TaskName Tgd3dDefaultEnable -Action $action -Trigger $trigger -Settings $taskSettings -User SYSTEM -RunLevel Highest|Out-Null
+Register-ScheduledTask -TaskName Tgd3dDefaultEnable -Action $action -Trigger $trigger -Settings $taskSettings -User SYSTEM -RunLevel Highest -Force|Out-Null
 $result=@{Utc=[DateTime]::UtcNow.ToString('o');Directory=$PSScriptRoot;Version=(Device-Property 'DriverVersion');SyncMode=$m.sync_mode;User=$backup.User;EnabledAfterNextLogon=$true;GpuStartRequested=$false;OsRebootRequested=$false}
-$result|ConvertTo-Json|Set-Content (Join-Path $PSScriptRoot 'default-installed.json') -Encoding UTF8
+Save-Json (Join-Path $PSScriptRoot 'default-installed.json') $result
 $result|ConvertTo-Json
 'INSTALLED: restart Windows when ready; tgd3d will enable after logon.'
