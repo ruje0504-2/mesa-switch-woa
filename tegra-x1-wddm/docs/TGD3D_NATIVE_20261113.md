@@ -642,5 +642,19 @@ ARM64 和 x64 构建通过。产物与原始输出在 `ddi-device-loss-controls/
 这些是模拟 Vulkan 故障的生产 DDI 控制，不是实际发生 GPU 丢失或桌面稳定性通过。
 当前运行 UMD 未替换，天气/网页关闭冻结根因和 teardown 无限等待仍未解决。
 
-并行审计状态：Antigravity Carbon High 原会话没有完整报告，CLI 仍存活但最后一个
-源码读取工具未结束；VPS Claude 的只读请求返回未登录，未产生审计结论，未更改其配置。
+并行审计：原 print 客户端未返回完整报告，但随后通过 Antigravity CLI 的
+ACP session/load 读回了会话内已经完成的报告，最后的工具调用也为 completed。
+报告原文保存为 `delegation-tgd3d-carbon/recovered-audit.txt`。验收发现报告遗漏冻结
+KMD 的 helper-load 配置，并把 DeviceWaitIdle 返回 DEVICE_LOST 后的合法清理误判为
+在途释放；把每设备独立 VkDevice 的开销称为契约违例，以及提交失败后必定复用
+序号的说法，也缺乏当前代码支持。未采纳其改动方案。
+
+关闭已完成报告的卡住客户端后，15:13:36 UTC 使用同一原会话和 Carbon High
+继续定向复核上述矛盾；已确认开始执行读取冻结 KMD/最新源码。VPS Claude 的
+只读请求返回未登录，未产生审计结论，未更改其配置。
+
+`fcc53bf1` ARM64 CPU-sync 构建也通过生产 DDI 控制。已打包
+`tgd3d-fcc53bf1-default158-cpu.zip`，6910291字节，SHA256
+`8b46cd1de2dfb06d7cac0ab9f9df920b57f471b3d561d2c17b0b65324eafcd70`；
+51个文件通过归档逐项校验。继续使用原KMD/ICD及默认登录启动/手动恢复工具，
+未安装或激活这个候选包，不能记为天气冻结已修复。
