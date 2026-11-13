@@ -36,8 +36,6 @@ if ((Hash 'C:\Windows\System32\drivers\tegragpurender.sys') -ne '46D1757674FF156
 if ((Hash 'C:\Windows\System32\acpitabl.dat') -ne '515D8D9C1612514CA2F197D6C96774A9265785A7E519921A195F0F8D257AA500') {
     throw 'Expected the test ACPI table'
 }
-$flushExe=Join-Path $dir 'trace-flush.exe'
-if ((Hash $flushExe) -ne '0AD8AF0DFCA072BF3D46251CB9D0205A7638B2C87AC7E2AD78B58A65BC91BA6B') { throw 'Unexpected trace flush helper' }
 if ((Get-ScheduledTask -TaskName $observe).State -ne 'Ready') {
     throw 'Expected the ready desktop probe'
 }
@@ -58,9 +56,6 @@ if ((!$reuseBoot -and $boot -le $prepared) -or ($reuseBoot -and $boot -ne $expec
 $parameters=Get-ItemProperty -LiteralPath ("HKLM:\$svcPath\Parameters")
 if ([uint64]$parameters.StartGateStatus -ne 3221225635 -or $parameters.InitializeStatus -ne 0 -or
     [uint64]$parameters.HardwareStatus -ne 4294967295) { throw 'The hardware startup gate was not closed' }
-if (!(Get-EtwTraceSession -Name 'Tgd3dTrialDxg' -ErrorAction SilentlyContinue)) {
-    throw 'Expected the active scheduler trace'
-}
 if (Test-Path -LiteralPath ("HKLM:\$svcPath\AllowDesktopStart")) { throw 'The desktop grant already exists' }
 
 # Reserve one invocation before making a permit available to the driver.
@@ -71,19 +66,8 @@ foreach ($name in 'observed-interactive.json','desktop-path.log','desktop-exit.j
     Write-StartEvidence (Join-Path $dir ('before-'+$name)) ([IO.File]::ReadAllBytes((Join-Path $evidence $name)))
 }
 
-$flushLog=Join-Path $dir 'trace-flush.bin'
-if (Test-Path -LiteralPath $flushLog) { throw 'Trace flush record already exists' }
-$flusher=Start-Process -FilePath $flushExe -ArgumentList @('Tgd3dTrialDxg', ('"'+$flushLog+'"')) -WindowStyle Hidden -PassThru
-@{Pid=$flusher.Id;StartTime=$flusher.StartTime.ToUniversalTime().ToString('o');Exe=$flushExe}|ConvertTo-Json|Set-Content (Join-Path $dir 'trace-flush-process.json') -Encoding UTF8
-$flushWait=[Diagnostics.Stopwatch]::StartNew()
-do {
-    if ($flusher.HasExited) { throw ('Trace flush helper exited with '+$flusher.ExitCode) }
-    $sample=Get-Item -LiteralPath $flushLog -ErrorAction SilentlyContinue
-    if ($sample -and $sample.Length -ge 32) { break }
-    Start-Sleep -Milliseconds 25
-} while ($flushWait.ElapsedMilliseconds -lt 4000)
-if (!$sample -or $sample.Length -lt 32) { throw 'No successful ETW flush before the startup request' }
-
+# Native identity needs the small UMD session. Kernel trace collection and
+# its boot-only autologger/flush helper are not prerequisites for rendering.
 $umdConsumer=& (Join-Path $dir 'Start-NativeUmdTrace.ps1') -Directory $dir -TraceName 'Tgd3dTrialUmd' -CreateSession
 $svc=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($svcPath,$true)
 if (!$svc) { throw 'Display service key is unavailable' }
@@ -108,7 +92,6 @@ try {
     $request=@{Utc=$restartRequested;Qpc=$requestQpc;Frequency=[Diagnostics.Stopwatch]::Frequency}|ConvertTo-Json -Compress
     Write-StartEvidence (Join-Path $dir 'native-request.json') ([Text.Encoding]::UTF8.GetBytes($request))
     Write-StartEvidence (Join-Path $dir 'restart-requested.txt') ([Text.Encoding]::UTF8.GetBytes($restartRequested))
-    if ($flusher.HasExited) { throw 'Trace flush helper exited before the startup request' }
     $umdProcess=Get-Process -Id $umdConsumer.Pid
     if($umdProcess.StartTime.ToUniversalTime() -ne [DateTime]::Parse($umdConsumer.StartTime).ToUniversalTime()){throw 'UMD trace consumer changed before native startup'}
     & pnputil.exe /restart-device $id | Tee-Object -FilePath (Join-Path $dir 'demand-pnp.log')

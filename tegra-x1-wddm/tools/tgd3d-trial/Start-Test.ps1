@@ -59,7 +59,6 @@ try {
     $trigger=New-ScheduledTaskTrigger -AtLogOn -User $user;$trigger.Delay='PT60S'
     $settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 3)
     Register-ScheduledTask -TaskName 'Tgd3dTrialAutomatic' -Action $action -Trigger $trigger -Settings $settings -User SYSTEM -RunLevel Highest|Out-Null
-    & (Join-Path $PSScriptRoot 'Start-DxgBootTrace.ps1') -TraceName 'Tgd3dTrialDxg' -FileName (Join-Path $PSScriptRoot 'dxg-start.etl')
     $data=[byte[]]::new(4096)
     for($i=4;$i -lt 52;$i++) { $data[$i]=255 }
     $file=[IO.FileStream]::new($permit,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read,4096,[IO.FileOptions]::WriteThrough)
