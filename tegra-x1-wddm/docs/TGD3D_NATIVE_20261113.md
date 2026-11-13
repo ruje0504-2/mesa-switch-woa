@@ -790,3 +790,61 @@ flush全部恢复文件，默认启用在授予许可前再次核对／flush；�
 JSON会先禁用任务再报告错误。16:13:47 UTC在门控`.158`上，三个脚本解析、真实
 15文件恢复集flush和JSON往返控制通过，没有请求GPU启动。没有通过再次强制
 复位来验证持久性，也没有替换当前失败候选包内的脚本或重新开启自动任务。
+
+
+### 修复ICD从门控启动：Home通过，天气仍失败
+
+16:36:23–16:36:57 UTC从原`.158 / Code43`的早期门控状态只启动一次，
+保持Windows启动时间16:05:59不变。DWM PID492实际加载`d3423d26`目录的UMD与ICD，
+Code0、Hardware/Panel为0。用户确认“可以了”和“主文件目录正常”。随后用户报告
+“这次打开天气又重启了”；16:40:22读到Windows启动时间16:38:11、Code43，自动任务禁用。
+这一轮仍是原SYS `46d175…`，未包含bit14，不得把天气失败或Home成功归到新KMD。
+
+### `.158 + bit14 + 修复ICD`安装与直接原生启动配置
+
+用户取消继续扩大测试，指定这个组合为后续测试基线，并要求自行进行重启和应用测试。
+这里的“基线”是固定比较组合，稳定性尚未通过。全部GPU源码仍在`tgd3d-vulkan`，
+没有合并或构建main。
+
+KMD从冻结`6c854e9f394c3d761fab85885bead4bbd4588581`导出，只替换`253bc813e43a878359b9d6227e246cd7d1aa382f`
+中的`platform/t214_gr_context.c`及对应控制文件。逐项比较导出确认只有这两处差异；
+bit14修复清除`0x419e44`的这一位，真实NETB初值`0x00d3eff2`变为`0x00d3aff2`，
+没有清空其他异常位。完整主机构建及ARM64内核构建通过，Windows ARM64 context、hardware、
+worker替身控制退出0；这些不代表GPU执行。使用原开发证书签名，Windows SignTool验证CAT
+及全部12个载荷均退出0。签名私钥未传到设备。
+
+| 组件 | 来源 | 实际文件SHA256 |
+|---|---|---|
+| KMD `.158` bit14变体 | `6c854e9f` + `253bc813` | `2e4ae8081687537f777d72636ff1fab0640559215a703f6ccfab2127f95f0572` |
+| tgd3d UMD，CPU同步 | `fcc53bf14c001881fb8c84ea61e9d4f3ebfc04b7` | `7c7f88ccf83ad1a89f663c3205e6ba2cb6fec587d946efd3622839c9deb2b089` |
+| ARM64 NVK ICD | `d3423d269f9e716eadc1237beadbfb6aa6049dbe` | `dee3d5805af80696f87d094ec1c5f557d662f435336207992baf588e2dc1cee0` |
+
+16:55:55–16:55:59在Code43早期门控状态安装新KMD，OEM从`oem92.inf`变为`oem93.inf`。
+UpdateDriverForPlugAndPlayDevices返回成功、不需要Windows重启，SYS匹配上表；随后只发出
+一次登录后原生启用。默认状态停在16:56:02的`Starting`，没有完整启用结果。SSH短时失联后
+恢复，确认Windows实际重启于16:56:40，回到Code43；用户当时看到正常桌面。不得把该桌面
+误报成新组合的原生稳定性通过，也没有再次执行相同登录后切换。
+
+用户接着要求不再使用登录后从BasicDisplay切换，改为直接原生开机。启动工具提交`19a75fe8`
+利用现有KMD的开机许可，不再改KMD/UMD/ICD：
+
+- 安装入口创建并flush持久`AllowDesktopStart`注册表键，写入并flush4096字节的一次许可。
+- KMD在StartDevice触碰硬件前消费许可，正常开机即可进入原生初始化；不依赖用户登录任务。
+- `Tgd3dDefaultEnable`改为`MSFT_TaskBootTrigger`，运行`Native-Boot.ps1`。
+  该脚本只检查已启动的Code0及Hardware/Panel状态，保持30秒后续写下一次开机许可；
+  没有PnP重启、创建窗口、Windows重启或GPU提交操作。启动失败不续写许可。
+- `RESTORE.cmd`关闭任务、删除持久键与许可。原生运行中先提示手动重启，之后才恢复原签名
+  `.158`，不会热切换活动GPU，不安装`.59`。
+
+直接启动包`tgd3d-158-bit14-d3423d26-native-boot.zip`为7073784字节、66个受清单校验文件，
+SHA256 `a8bd3884f33355bc2265b7d8c7b90240e3332eb54da51e44727a84cd0bddcf22`。
+17:04:23远端所有文件与PowerShell解析通过，15个恢复文件核对并flush。
+17:06:02核对SYS哈希、持久键存在、许可值1、启动任务Ready/Enabled及原生启动脚本路径。
+配置时仍为Code43，`native-boot-state`为`ArmedForNextBoot`，未发出Windows重启命令，
+由用户自行重启测试。CPU1497600kHz、风扇13、交流／直流关闭显示和睡眠索引0保持。
+目前没有直接开机Code0、实际加载模块或新组合五分钟的验收结论。
+
+启动策略参考微软[注册表键持久性说明](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-zwcreatekey)
+及[启动／登录任务触发器](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasktrigger?view=windowsserver2025-ps)，
+核查日期2026-11-13。前者说明非易失键跨重启保留；后者区分AtStartup和AtLogOn。
+实际Windows仍为11 ARM64 23H2，任务只是续写许可，不能用较新文档页面版本宣称该组合已上屏。

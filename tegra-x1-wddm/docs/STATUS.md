@@ -1,6 +1,22 @@
 # GPU status
 
-**Current handoff, November 13, 16:10 UTC:** SSH and the owner's physical
+**Current handoff, November 13, 17:06 UTC:** the owner's new test baseline is
+`.158 + bit14 fix + d3423d26 ICD`, retaining the `fcc53bf1` CPU-sync UMD.
+The signed bit14 kernel is installed as `oem93.inf` (SYS SHA256 `2e4ae808…`).
+Its first post-logon activation did not complete: Windows restarted at
+16:56:40 UTC and returned to Code 43. This combination is not accepted as stable.
+At the owner's request, the package now arms direct native StartDevice on the
+next Windows boot, rather than restarting the GPU after logon. The persistent
+grant, durable one-use permit and enabled startup rearm task were verified.
+The task only rearms after native Code 0 / hardware / panel remain active for
+30 seconds; it never starts or restarts a device. The owner will perform the
+restart and application tests. Current Code 43 is awaiting that restart, not
+proof of a running tgd3d desktop. CPU1497600 kHz, fan13 and sleep settings stay
+unchanged. Source rotation review may proceed; no physical rotation or pixel
+acceptance is implied. See the full component identities and failed activation
+in [the trial record](TGD3D_NATIVE_20261113.md).
+
+**Earlier handoff, November 13, 16:10 UTC:** SSH and the owner's physical
 confirmation show an operable desktop after a real Windows restart. Frozen
 `.158` remains installed with the native gate closed (Code 43); automatic
 enablement is disabled and the one-shot update task is removed. CPU1497600
@@ -43,11 +59,11 @@ previous freeze's root cause. The bidirectional GPU bridge remains disabled in t
 binary and has not passed; the repository default remains enabled.
 Known-pixel, hardware rotation and vkcube acceptance remain outstanding.
 
-**Separate source candidate:** the GM20B golden context now applies NVK's
+**Earlier separate source candidate (subsequently installed at 16:55 UTC):** the GM20B golden context now applies NVK's
 shader-object output-exception policy by clearing only `0x419e44` bit 14.
 The real-NETB model fails before the fix and passes after it; the changed
-ARM64 kernel translation unit compiles. This KMD change is not deployed and
-does not contribute to the desktop result above. See
+ARM64 kernel translation unit compiles. This KMD change was not deployed during
+the five-minute desktop result above. Its later installation does not establish stability. See
 [the context-policy review](GR_HELPER_LOADS.md#november-13-shader-object-output-exception-policy).
 
 **November 13, 15:08 UTC DDI fix:** device-loss notifications now use
