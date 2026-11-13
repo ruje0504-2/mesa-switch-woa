@@ -52,16 +52,27 @@ function Check-Package {
     $m
 }
 function Check-Baseline {
-    if((Device-Property 'DriverVersion') -ne '0.1.0.59' -or (Device-Property 'ProblemCode') -ne 0) { throw 'Expected the working .59 Code 0 baseline' }
-    if((File-Hash "$env:windir\System32\drivers\tegragpuprobe.sys") -ne 'DE5E9CD492D35A73EA3D3F5F1723FD82F88922F6E91EF5966B430360F5EB5646') { throw 'Installed .59 driver differs' }
-    if((File-Hash "$env:windir\System32\acpitabl.dat") -ne 'B829B50944A90745FB6F6F7F44F453A6B8573FE4019A95FEFD0013A983703518') { throw 'ACPI baseline differs' }
+    $version=Device-Property 'DriverVersion';$problem=Device-Property 'ProblemCode'
+    if($version -eq '0.1.0.158' -and $problem -eq 43) {
+        # Expected closed startup gate: BasicDisplay remains usable while the
+        # retained .158 miniport is installed but native GPU work is disabled.
+        if((Device-Property 'Service') -ne 'tegragpurender' -or
+           (File-Hash "$env:windir\System32\drivers\tegragpurender.sys") -ne '46D1757674FF156028CE5B729BA53671981FFAB09948FCAF125751C46BB10088' -or
+           (File-Hash "$env:windir\System32\acpitabl.dat") -ne '515D8D9C1612514CA2F197D6C96774A9265785A7E519921A195F0F8D257AA500') { throw 'Retained .158 baseline differs' }
+    } elseif($version -eq '0.1.0.59' -and $problem -eq 0) {
+        # One-time migration from the previous baseline; recovery never
+        # automatically reinstalls this version.
+        if((File-Hash "$env:windir\System32\drivers\tegragpuprobe.sys") -ne 'DE5E9CD492D35A73EA3D3F5F1723FD82F88922F6E91EF5966B430360F5EB5646' -or
+           (File-Hash "$env:windir\System32\acpitabl.dat") -ne 'B829B50944A90745FB6F6F7F44F453A6B8573FE4019A95FEFD0013A983703518') { throw 'Initial .59 baseline differs' }
+    } else { throw 'Expected the gated .158 baseline or initial .59 Code 0' }
 }
 function Check-Recovery {
     $backup=Read-Json (Join-Path $script:TrialRoot 'recovery.json')
-    if($backup.InstanceId -ne $script:DeviceId -or $backup.Version -ne '0.1.0.59') { throw 'Recovery identity differs' }
+    if($backup.InstanceId -ne $script:DeviceId -or $backup.Version -notin @('0.1.0.59','0.1.0.158')) { throw 'Recovery identity differs' }
     foreach($entry in $backup.Files.PSObject.Properties) { Check-File (Package-Path $entry.Name) $entry.Value }
     $inf=Package-Path $backup.Inf
-    if([IO.Path]::GetFileName($inf) -ne 'tegragpuprobe.inf') { throw 'Recovery INF differs' }
-    if(!(Test-Path (Join-Path (Split-Path $inf) 'tegragpuprobe.cat'))) { throw 'Recovery catalogue missing' }
+    $name=if($backup.Version -eq '0.1.0.158'){'tegragpurender'}else{'tegragpuprobe'}
+    if([IO.Path]::GetFileName($inf) -ne ($name+'.inf')) { throw 'Recovery INF differs' }
+    if(!(Test-Path (Join-Path (Split-Path $inf) ($name+'.cat')))) { throw 'Recovery catalogue missing' }
     $backup
 }

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Adapted from the retained .158/.161 rollback, with a trial-local .59 export.
+# Keep the frozen .158 installed, close native startup, restore the desktop.
 . (Join-Path $PSScriptRoot 'Common.ps1')
 Require-Administrator
 $dir=$PSScriptRoot
@@ -48,45 +48,26 @@ try {
             } finally { $key.Dispose() }
         }
     }
+    # The owner's new baseline is .158. Do not uninstall it or bind the
+    # archived .59. Without the permit/grant the next boot keeps native GPU
+    # startup closed (expected Code 43), leaving BasicDisplay available.
+    $m=Read-Json (Join-Path $dir 'trial-components.json')
+    Check-File (Join-Path $dir 'package\tegragpurender.sys') $m.kmd.'tegragpurender.sys'
+    if($m.kmd.'tegragpurender.sys'.Sha256 -ne '46D1757674FF156028CE5B729BA53671981FFAB09948FCAF125751C46BB10088') { throw 'Retained .158 hash differs' }
+    if((Device-Property 'DriverVersion') -ne '0.1.0.158') {
+        & pnputil.exe /add-driver (Join-Path $dir 'package\tegragpurender.inf') /install
+        if($LASTEXITCODE -notin @(0,3010)) { throw 'Retaining .158 failed' }
+    }
+    if((Device-Property 'DriverVersion') -ne '0.1.0.158' -or
+       (File-Hash "$env:windir\System32\drivers\tegragpurender.sys") -ne $m.kmd.'tegragpurender.sys'.Sha256) { throw 'Installed .158 differs' }
     $table="$env:windir\System32\acpitabl.dat"
-    $baseline='B829B50944A90745FB6F6F7F44F453A6B8573FE4019A95FEFD0013A983703518'
-    if((File-Hash $table) -eq '515D8D9C1612514CA2F197D6C96774A9265785A7E519921A195F0F8D257AA500') {
+    Check-File (Join-Path $dir 'display158.aml') $m.helpers.'display158.aml'
+    if((File-Hash $table) -eq 'B829B50944A90745FB6F6F7F44F453A6B8573FE4019A95FEFD0013A983703518') {
         $pending=Join-Path $dir 'restore-acpitabl.pending'
-        Copy-Item (Join-Path $dir 'rollback\acpitabl.dat') $pending -Force
-        [IO.File]::Replace($pending,$table,(Join-Path $dir 'test-acpitabl.saved'))
+        Copy-Item (Join-Path $dir 'display158.aml') $pending -Force
+        [IO.File]::Replace($pending,$table,(Join-Path $dir 'before-retained158-acpitabl.dat'))
     }
-    if((File-Hash $table) -ne $baseline) { throw 'Unexpected ACPI table; preserve it for manual inspection' }
-    $packages=@(Get-WindowsDriver -Online|Where-Object {
-        [IO.Path]::GetFileName($_.OriginalFileName) -eq 'tegragpurender.inf' -and $_.ProviderName -eq 'SwitchWOA' -and
-        $_.Version -eq '0.1.0.158' -and $_.Driver -match '^oem[0-9]+\.inf$'
-    })
-    foreach($package in $packages) {
-        & pnputil.exe /delete-driver $package.Driver /uninstall
-        if($LASTEXITCODE -notin @(0,3010)) { throw ('Remove candidate failed: '+$LASTEXITCODE) }
-    }
-    $inf=Package-Path $backup.Inf
-    if((Device-Property 'DriverVersion') -ne '0.1.0.59') {
-        & pnputil.exe /add-driver $inf /install
-        if($LASTEXITCODE -notin @(0,3010)) { throw ('Stage .59 failed: '+$LASTEXITCODE) }
-        if((Device-Property 'DriverVersion') -ne '0.1.0.59') {
-            # pnputil /install does not force a lower-ranked package.
-            Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class Tgd3dRestoreDriver {
-    [DllImport("newdev.dll", CharSet=CharSet.Unicode, SetLastError=true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool UpdateDriverForPlugAndPlayDevicesW(IntPtr parent, string hardwareId, string inf, uint flags, out bool reboot);
-}
-'@
-            $reboot=$false
-            if(![Tgd3dRestoreDriver]::UpdateDriverForPlugAndPlayDevicesW([IntPtr]::Zero,'ACPI\SWOA0F01',$inf,5,[ref]$reboot)) {
-                throw ('Force .59 binding failed: '+[Runtime.InteropServices.Marshal]::GetLastWin32Error())
-            }
-        }
-    }
-    if((Device-Property 'DriverVersion') -ne '0.1.0.59') { throw 'Baseline driver did not bind' }
-    if((File-Hash "$env:windir\System32\drivers\tegragpuprobe.sys") -ne 'DE5E9CD492D35A73EA3D3F5F1723FD82F88922F6E91EF5966B430360F5EB5646') { throw 'Restored .59 file differs' }
+    if((File-Hash $table) -ne '515D8D9C1612514CA2F197D6C96774A9265785A7E519921A195F0F8D257AA500') { throw 'Retained .158 ACPI differs' }
     $action=New-ScheduledTaskAction -Execute "$env:windir\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument ('-NoProfile -ExecutionPolicy Bypass -File "'+$dir+'\restore-preference.ps1"')
     $trigger=New-ScheduledTaskTrigger -AtLogOn -User $backup.User;$trigger.Delay='PT20S'
     $principal=New-ScheduledTaskPrincipal -UserId $backup.User -LogonType Interactive -RunLevel Highest

@@ -10,6 +10,9 @@ not further dump/log investigation. Keep CPU **1497600 kHz**, fan
 driver **13**, the current sleep settings and the dynamic **512 MiB** GPU budget.
 The older CPU/fan values and parallel-chat workflow below are historical, not
 current instructions. This branch owns native tests and recovery; `main` is paused.
+**Latest recovery policy:** retain the frozen `.158` as the installed baseline;
+stop the temporary native path on failure and reboot with its startup gate
+closed (Code 43 / BasicDisplay). Do not automatically reinstall `.59`.
 See [the full tgd3d trial record](TGD3D_NATIVE_20261113.md) for frozen hashes,
 the separate `.59` collection-process OOM incident, and current diagnostic work.
 No five-minute desktop, pixel, rotation or vkcube acceptance has been obtained.

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Reuses display-state's saved-path rebasing after returning to .59.
+# Rebase saved display preferences on the retained, gated .158 driver.
 . (Join-Path $PSScriptRoot 'Common.ps1')
 Require-Administrator
 Check-Baseline
@@ -9,7 +9,7 @@ $helper=Join-Path $PSScriptRoot 'display-state.exe'
 Check-File $helper $m.helpers.'display-state.exe'
 if(!(Get-Process -Id $PID).SessionId) { throw 'Display preferences require an interactive session' }
 $evidence=Join-Path $PSScriptRoot 'evidence'
-$r=[ordered]@{Utc=[DateTime]::UtcNow.ToString('o');Verified=$false}
+$r=[ordered]@{Utc=[DateTime]::UtcNow.ToString('o');Verified=$false;Version=(Device-Property 'DriverVersion');Problem=(Device-Property 'ProblemCode');NativeGpuActive=$false}
 try {
     & $helper wake > "$evidence\restore-wake.json" 2> "$evidence\restore-wake.err"
     $r.WakeExit=$LASTEXITCODE

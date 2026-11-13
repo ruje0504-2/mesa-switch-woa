@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Stage files and save the working .59 driver. Does not install/start a GPU driver.
+# Save the starting driver/display configuration; future recovery retains .158.
 param([switch]$Installed)
 . (Join-Path $PSScriptRoot 'Common.ps1')
 Require-Administrator
@@ -38,13 +38,16 @@ if(Test-Path (Join-Path $PSScriptRoot 'recovery.json')) { throw 'This trial is a
 $backupDir=Join-Path $PSScriptRoot 'rollback'
 New-Item -ItemType Directory -Path $backupDir|Out-Null
 $oem=[string](Device-Property 'DriverInfPath')
+$baselineVersion=[string](Device-Property 'DriverVersion')
+$baselineName=if($baselineVersion -eq '0.1.0.158'){'tegragpurender'}else{'tegragpuprobe'}
 if($oem -notmatch '^oem[0-9]+\.inf$') { throw 'Expected an exported OEM GPU package' }
 & pnputil.exe /export-driver $oem $backupDir|Out-File (Join-Path $PSScriptRoot 'backup-driver.log')
 if($LASTEXITCODE -ne 0) { throw 'Cannot export the current rollback driver' }
-$infs=@(Get-ChildItem $backupDir -Recurse -Filter 'tegragpuprobe.inf')
-if($infs.Count -ne 1) { throw 'The .59 recovery INF was not exported exactly once' }
-$probe=Join-Path $infs[0].DirectoryName 'tegragpuprobe.sys'
-if((File-Hash $probe) -ne 'DE5E9CD492D35A73EA3D3F5F1723FD82F88922F6E91EF5966B430360F5EB5646') { throw 'Exported .59 driver differs' }
+$infs=@(Get-ChildItem $backupDir -Recurse -Filter ($baselineName+'.inf'))
+if($infs.Count -ne 1) { throw 'The starting driver INF was not exported exactly once' }
+$probe=Join-Path $infs[0].DirectoryName ($baselineName+'.sys')
+$expected=if($baselineVersion -eq '0.1.0.158'){'46D1757674FF156028CE5B729BA53671981FFAB09948FCAF125751C46BB10088'}else{'DE5E9CD492D35A73EA3D3F5F1723FD82F88922F6E91EF5966B430360F5EB5646'}
+if((File-Hash $probe) -ne $expected) { throw 'Exported starting driver differs' }
 Copy-Item "$env:windir\System32\acpitabl.dat" (Join-Path $backupDir 'acpitabl.dat')
 $user=(Get-CimInstance Win32_ComputerSystem).UserName
 if(!$user) { throw 'An interactive desktop is required to save its display preference' }
@@ -77,9 +80,9 @@ foreach($file in Get-ChildItem $backupDir -Recurse -File) {
 }
 $display=Get-Item (Join-Path $PSScriptRoot 'user-display.bin')
 $files['user-display.bin']=@{Length=$display.Length;Sha256=(File-Hash $display.FullName)}
-@{InstanceId=$DeviceId;Version='0.1.0.59';OriginalOem=$oem;User=$user;Utc=[DateTime]::UtcNow.ToString('o');Inf=$infs[0].FullName.Substring($PSScriptRoot.Length+1);Files=$files}|
+@{InstanceId=$DeviceId;Version=$baselineVersion;RecoveryTarget='0.1.0.158-gated';OriginalOem=$oem;User=$user;Utc=[DateTime]::UtcNow.ToString('o');Inf=$infs[0].FullName.Substring($PSScriptRoot.Length+1);Files=$files}|
     ConvertTo-Json -Depth 6|Set-Content (Join-Path $PSScriptRoot 'recovery.json') -Encoding UTF8
 $null=Check-Recovery
 & (Join-Path $PSScriptRoot 'Enable-RuntimeAppContainerRead.ps1') -Directory (Join-Path $PSScriptRoot 'app')|
     Set-Content (Join-Path $PSScriptRoot 'runtime-access.json') -Encoding UTF8
-'PREPARED: rollback .59 package, ACPI and display preference saved; no GPU installation or test started'
+'PREPARED: starting driver, ACPI and display preference saved; recovery retains gated .158; no GPU test started'

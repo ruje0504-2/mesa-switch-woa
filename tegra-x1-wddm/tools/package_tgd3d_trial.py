@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Package tgd3d with the frozen, previously visible .158 KMD and .59 recovery tools."""
+"""Package tgd3d with frozen .158 KMD and recovery that retains its closed startup gate."""
 import argparse
 import hashlib
 import json
@@ -34,7 +34,8 @@ def main():
     if frozen["kmd_version"] != "0.1.0.158" or frozen["kmd"]["tegragpurender.sys"]["Sha256"] != "46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088":
         raise ValueError("Only the retained visible-desktop .158 KMD is allowed")
     args.out.mkdir(parents=True, exist_ok=False)
-    manifest = {"scope": "tgd3d-vulkan tgd3d trial; .158 KMD reused by exact hash; .59 exported on device before installation",
+    manifest = {"scope": "tgd3d-vulkan trial; frozen .158 retained after recovery; starting driver exported but no automatic .59 binding",
+                "recovery_target": "0.1.0.158-gated",
                 "kmd_version": frozen["kmd_version"], "kmd_source": frozen["kmd_source"],
                 "umd_name": "TegraGpuD3DVk.dll", "umd_source": umd["mesa"], "icd_source": icd["mesa"],
                 "sync_mode": umd.get("sync_mode", "gpu-bridge"),

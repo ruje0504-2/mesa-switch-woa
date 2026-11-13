@@ -67,8 +67,8 @@ try {
     $pending=Join-Path $PSScriptRoot 'test-acpitabl.pending'
     Copy-Item (Join-Path $PSScriptRoot 'display158.aml') $pending
     [IO.File]::Replace($pending,$table,(Join-Path $PSScriptRoot 'before-acpitabl.dat'))
-    if((File-Hash $table) -ne '515D8D9C1612514CA2F197D6C96774A9265785A7E519921A195F0F8D257AA500' -or
-       (File-Hash (Join-Path $PSScriptRoot 'before-acpitabl.dat')) -ne 'B829B50944A90745FB6F6F7F44F453A6B8573FE4019A95FEFD0013A983703518') { throw 'ACPI staging differs' }
+    if((File-Hash $table) -ne '515D8D9C1612514CA2F197D6C96774A9265785A7E519921A195F0F8D257AA500') { throw 'ACPI staging differs' }
+    Check-File (Join-Path $PSScriptRoot 'before-acpitabl.dat') $backup.Files.'rollback\acpitabl.dat'
     @{Utc=[DateTime]::UtcNow.ToString('o');Boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')}|
         ConvertTo-Json|Set-Content (Join-Path $PSScriptRoot 'before-restart.json') -Encoding UTF8
     & shutdown.exe /r /t 5
