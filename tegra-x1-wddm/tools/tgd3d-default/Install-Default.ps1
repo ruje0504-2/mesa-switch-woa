@@ -3,7 +3,7 @@ param([switch]$Prepared)
 . (Join-Path $PSScriptRoot 'Common.ps1')
 Require-Administrator
 $m=Check-Package
-if($m.startup_mode -ne 'logon-default'){throw 'Use a default-start package'}
+if($m.startup_mode -notin @('logon-default','native-boot')){throw 'Use a default-start package'}
 if((Device-Property 'DriverVersion') -ne '0.1.0.158'){throw 'This package requires the retained .158 driver'}
 if(!$Prepared){
     Check-Baseline
@@ -41,12 +41,16 @@ try{
 $settings='HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\Tgd3dDefault'
 New-Item $settings -Force|Out-Null
 New-ItemProperty $settings Directory -PropertyType String -Value $PSScriptRoot -Force|Out-Null
-$action=New-ScheduledTaskAction -Execute "$env:windir\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$PSScriptRoot+'\Default-Start.ps1"')
-$trigger=New-ScheduledTaskTrigger -AtLogOn -User $backup.User
-$trigger.Delay='PT5S'
+$native=$m.startup_mode -eq 'native-boot'
+$entry=if($native){'Native-Boot.ps1'}else{'Default-Start.ps1'}
+$action=New-ScheduledTaskAction -Execute "$env:windir\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$PSScriptRoot+'\'+$entry+'"')
+if($native){$trigger=New-ScheduledTaskTrigger -AtStartup}
+else{$trigger=New-ScheduledTaskTrigger -AtLogOn -User $backup.User;$trigger.Delay='PT5S'}
 $taskSettings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 3)
 Register-ScheduledTask -TaskName Tgd3dDefaultEnable -Action $action -Trigger $trigger -Settings $taskSettings -User SYSTEM -RunLevel Highest -Force|Out-Null
-$result=@{Utc=[DateTime]::UtcNow.ToString('o');Directory=$PSScriptRoot;Version=(Device-Property 'DriverVersion');SyncMode=$m.sync_mode;User=$backup.User;EnabledAfterNextLogon=$true;GpuStartRequested=$false;OsRebootRequested=$false}
+if($native){& (Join-Path $PSScriptRoot 'Native-Boot.ps1') -Mode Configure}
+$result=@{Utc=[DateTime]::UtcNow.ToString('o');Directory=$PSScriptRoot;Version=(Device-Property 'DriverVersion');SyncMode=$m.sync_mode;User=$backup.User;StartupMode=$m.startup_mode;EnabledAfterNextLogon=(!$native);GpuStartRequested=$false;OsRebootRequested=$false}
 Save-Json (Join-Path $PSScriptRoot 'default-installed.json') $result
 $result|ConvertTo-Json
-'INSTALLED: restart Windows when ready; tgd3d will enable after logon.'
+if($native){'INSTALLED: restart Windows when ready; the miniport will start natively before logon.'}
+else{'INSTALLED: restart Windows when ready; tgd3d will enable after logon.'}

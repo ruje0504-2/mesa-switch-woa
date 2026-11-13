@@ -30,9 +30,13 @@ def main():
                         help="package automatic enablement after logon, with manual recovery")
     parser.add_argument("--candidate-kmd", type=Path,
                         help="reviewed bit14 artifact directory with manifest.json and signed-package")
+    parser.add_argument("--native-boot", action="store_true",
+                        help="arm .158 for direct driver startup before logon; no PnP restart task")
     args = parser.parse_args()
     if args.candidate_kmd and not args.default_start:
         parser.error("--candidate-kmd requires --default-start")
+    if args.native_boot and not args.default_start:
+        parser.error("--native-boot requires --default-start")
     root = Path(__file__).resolve().parents[2]
     umd = json.loads((args.umd / "manifest.json").read_text())
     icd = json.loads((args.icd / "manifest.json").read_text())
@@ -69,6 +73,9 @@ def main():
         kernel = args.candidate_kmd / "signed-package"
         for name, record in frozen["kmd"].items():
             checked_copy(args.kmd / name, args.out / "baseline-kmd" / name, record)
+    if args.native_boot:
+        manifest["startup_mode"] = "native-boot"
+        manifest["scope"] = ".158 direct native startup before logon; owner-operated restart and application tests"
     for name, record in manifest["kmd"].items():
         checked_copy(kernel / name, args.out / "package" / name, record)
     for directory, component in ((args.umd, umd), (args.icd, icd)):
