@@ -6,11 +6,6 @@ $null=Check-Package
 $backup=Check-Recovery
 $duration=@{Static=30;Window=60;Interaction=300}[$Stage]
 if((Device-Property 'DriverVersion') -ne '0.1.0.158' -or (Device-Property 'ProblemCode') -ne 0){throw 'Native KMD is not ready'}
-if((Get-ScheduledTask 'Tgd3dTrialRestore').State -ne 'Ready'){throw 'Rollback is not armed'}
-$next=(Get-ScheduledTaskInfo 'Tgd3dTrialRestore').NextRunTime
-$bootDeadline=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.AddMinutes(12)
-if($next -and $bootDeadline -lt $next){$next=$bootDeadline}
-if(!$next -or ($next-(Get-Date)).TotalSeconds -lt $duration+45){throw 'Insufficient time before the armed recovery deadline'}
 $task=Get-ScheduledTask 'Tgd3dTrialNative' -ErrorAction SilentlyContinue
 if($task -and $task.State -eq 'Running'){throw 'A native stage is already running'}
 $previous=@{Window='Static';Interaction='Window'}[$Stage]
@@ -46,6 +41,5 @@ try {
     $result|ConvertTo-Json -Depth 6
 } catch {
     $_|Out-String|Set-Content (Join-Path $PSScriptRoot ('stage-'+$Stage+'.controller-error.txt')) -Encoding UTF8
-    Start-ScheduledTask 'Tgd3dTrialRestore'
     throw
 }

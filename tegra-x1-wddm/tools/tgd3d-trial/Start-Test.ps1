@@ -4,23 +4,23 @@
 Require-Administrator
 $m=Check-Package
 $backup=Check-Recovery
+if((Device-Property 'DriverVersion') -eq '0.1.0.158' -and (Device-Property 'ProblemCode') -eq 0) {
+    throw 'Native .158 is already active; continue with Start-NativeStage.ps1 instead of reinstalling or rebooting'
+}
 Check-Baseline
 if(Get-ScheduledTask -TaskName 'TgGpuDisplay*','Tgd3dTrial*' -ErrorAction SilentlyContinue) { throw 'Another GPU trial or restore task is present' }
 if(Test-Path (Join-Path $PSScriptRoot 'before-restart.json')) { throw 'Use a newly prepared trial directory' }
 $permit="$env:windir\System32\drivers\TgGpuBootTest158.bin"
 if(Test-Path $permit) { throw 'A startup permit already exists' }
-$restore='Tgd3dTrialRestore'
 $ps="$env:windir\System32\WindowsPowerShell\v1.0\powershell.exe"
-$action=New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -File "'+$PSScriptRoot+'\Restore-AfterBoot.ps1"')
-$bootTrigger=New-ScheduledTaskTrigger -AtStartup;$bootTrigger.Delay='PT12M'
-$deadline=New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(15)
-$settings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-# Recovery is registered before binding the candidate, not after its first boot.
-Register-ScheduledTask -TaskName $restore -Action $action -Trigger @($bootTrigger,$deadline) -Settings $settings -User SYSTEM -RunLevel Highest|Out-Null
+# Recovery remains a manual tool. No timer or failure handler may reboot a
+# usable .158 desktop merely because a test stage ended.
 try {
-    & pnputil.exe /add-driver (Join-Path $PSScriptRoot 'package\tegragpurender.inf') /install|
-        Out-File (Join-Path $PSScriptRoot 'bind-closed.log')
-    if($LASTEXITCODE -notin @(0,3010)) { throw 'Candidate driver binding failed' }
+    if((Device-Property 'DriverVersion') -ne '0.1.0.158') {
+        & pnputil.exe /add-driver (Join-Path $PSScriptRoot 'package\tegragpurender.inf') /install|
+            Out-File (Join-Path $PSScriptRoot 'bind-closed.log')
+        if($LASTEXITCODE -notin @(0,3010)) { throw 'Candidate driver binding failed' }
+    }
     if((Device-Property 'DriverVersion') -ne '0.1.0.158' -or (Device-Property 'Service') -ne 'tegragpurender') { throw 'Unexpected candidate binding' }
     Check-File "$env:windir\System32\drivers\tegragpurender.sys" $m.kmd.'tegragpurender.sys'
     $parameters='HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\Parameters'
@@ -75,6 +75,5 @@ try {
     if($LASTEXITCODE -ne 0) { throw 'Reboot request failed' }
 } catch {
     $_|Out-String|Set-Content (Join-Path $PSScriptRoot 'start-failed.txt') -Encoding UTF8
-    Start-ScheduledTask -TaskName $restore
     throw
 }

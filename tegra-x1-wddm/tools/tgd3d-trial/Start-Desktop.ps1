@@ -8,7 +8,6 @@ $dir=$PSScriptRoot
 $evidence=Join-Path $dir 'evidence'
 $permitFile='C:\Windows\System32\drivers\TgGpuBootTest158.bin'
 $svcPath='SYSTEM\CurrentControlSet\Services\tegragpurender'
-$restore='Tgd3dTrialRestore'
 $observe='Tgd3dTrialObserve'
 $marker=Join-Path $dir 'demand-started.json'
 function Prop($key) { (Get-PnpDeviceProperty -InstanceId $id -KeyName "DEVPKEY_Device_$key").Data }
@@ -39,8 +38,8 @@ if ((Hash 'C:\Windows\System32\acpitabl.dat') -ne '515D8D9C1612514CA2F197D6C9677
 }
 $flushExe=Join-Path $dir 'trace-flush.exe'
 if ((Hash $flushExe) -ne '0AD8AF0DFCA072BF3D46251CB9D0205A7638B2C87AC7E2AD78B58A65BC91BA6B') { throw 'Unexpected trace flush helper' }
-if ((Get-ScheduledTask -TaskName $restore).State -ne 'Ready' -or (Get-ScheduledTask -TaskName $observe).State -ne 'Ready') {
-    throw 'Expected the ready desktop probe and restore task'
+if ((Get-ScheduledTask -TaskName $observe).State -ne 'Ready') {
+    throw 'Expected the ready desktop probe'
 }
 $boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime()
 $armed=Get-Content -Raw -LiteralPath (Join-Path $dir 'before-restart.json') | ConvertFrom-Json
