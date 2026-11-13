@@ -2663,11 +2663,9 @@ ALWAYS_INLINE static void
 align_offset_size(const VkDeviceSize alignment, VkDeviceSize *offset, VkDeviceSize *size, VkDeviceSize obj_size)
 {
    VkDeviceSize align = *offset % alignment;
-   if (alignment - 1 > *offset)
-      *offset = 0;
-   else
-      *offset -= align, *size += align;
-   align = alignment - (*size % alignment);
+   *offset -= align;
+   *size += align;
+   align = (alignment - (*size % alignment)) % alignment;
    if (*offset + *size + align > obj_size)
       *size = obj_size - *offset;
    else
@@ -3048,17 +3046,29 @@ zink_image_map(struct pipe_context *pctx,
       else
          trans->base.b.layer_stride = srl.arrayPitch;
       trans->offset = srl.offset;
-      trans->depthPitch = srl.depthPitch;
+      trans->depthPitch = trans->base.b.layer_stride;
       const struct util_format_description *desc = util_format_description(res->base.b.format);
-      unsigned offset = srl.offset +
-                        box->z * srl.depthPitch +
-                        (box->y / desc->block.height) * srl.rowPitch +
-                        (box->x / desc->block.width) * (desc->block.bits / 8);
+      /* Gallium's z coordinate denotes an array layer for array textures,
+       * but a depth slice for 3D textures. Vulkan only defines depthPitch
+       * for the latter. */
+      bool is_3d = res->base.b.target == PIPE_TEXTURE_3D;
+      unsigned z = is_3d ? box->z / desc->block.depth : box->z;
+      unsigned layers = is_3d ? util_format_get_nblocksz(pres->format, box->depth) : box->depth;
+      VkDeviceSize offset = srl.offset +
+                            z * (VkDeviceSize)trans->base.b.layer_stride +
+                            (box->y / desc->block.height) * srl.rowPitch +
+                            (box->x / desc->block.width) * (desc->block.bits / 8);
       if (!res->obj->coherent) {
-         VkDeviceSize size = (VkDeviceSize)box->width * box->height * desc->block.bits / 8;
+         /* Include padding between rows/layers, stopping at the last mapped
+          * block. The packed texel byte count does not cover this interval. */
+         VkDeviceSize size = (layers - 1) * (VkDeviceSize)trans->base.b.layer_stride +
+                             (util_format_get_nblocksy(pres->format, box->height) - 1) * srl.rowPitch +
+                             util_format_get_stride(pres->format, box->width);
          VkMappedMemoryRange range = zink_resource_init_mem_range(screen, res->obj, res->obj->offset + offset, size);
-         if (VKSCR(FlushMappedMemoryRanges)(screen->dev, 1, &range) != VK_SUCCESS) {
-            mesa_loge("ZINK: vkFlushMappedMemoryRanges failed");
+         if (VKSCR(InvalidateMappedMemoryRanges)(screen->dev, 1, &range) != VK_SUCCESS) {
+            mesa_loge("ZINK: vkInvalidateMappedMemoryRanges failed");
+            zink_bo_unmap(screen, res->obj->bo);
+            goto fail;
          }
       }
       ptr = ((uint8_t *)ptr) + offset;

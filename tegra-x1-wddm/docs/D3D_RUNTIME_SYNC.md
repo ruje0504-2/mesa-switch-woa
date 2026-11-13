@@ -306,6 +306,49 @@ pending forever for a tiled image is not sufficient. The new UMD is not
 deployed or promoted as a desktop candidate. The preceding physical failure
 remains unresolved, and five-minute physical acceptance is still required.
 
+## Linear image layout and cache audit
+
+The real `zink_image_map` linear-image branch contained three separate
+source defects:
+
+- Array-layer addressing multiplied Gallium's `box.z` by `depthPitch`.
+  Vulkan only defines this pitch for 3D images; arrays use `arrayPitch`.
+  The mapper now selects the resource's layer stride and uses a 64-bit
+  byte offset, including block coordinates for compressed formats.
+- Mapping non-coherent memory called `FlushMappedMemoryRanges`, which
+  does not make GPU writes visible to CPU readers. It now invalidates the
+  mapped interval and releases the mapping/transfer if invalidation fails.
+  The interval includes row and layer padding up to the final mapped
+  block, rather than using a tightly packed texel count.
+- The shared memory-range helper rounded a low offset down to zero
+  without adding that prefix to the length. A requested `[12,68)` interval
+  with a 64-byte atom became `[0,64)`, omitting the end. It now preserves
+  the full requested interval and does not add an extra atom to an already
+  aligned end. Allocation-end clamping remains in place.
+
+These changes follow Vulkan's [subresource layout definition](https://docs.vulkan.org/refpages/latest/refpages/source/VkSubresourceLayout.html)
+and [non-coherent invalidation contract](https://docs.vulkan.org/refpages/latest/refpages/source/vkInvalidateMappedMemoryRanges.html).
+Invalidation is a cache-visibility operation, not a replacement for GPU
+completion. The existing synchronization paths are unchanged.
+
+Validation retained in `runs/image-map-20261113/`:
+
+| Layer | Result |
+| --- | --- |
+| Actual old/new C range helper on the host | Old code fails the `[12,68)` regression; corrected code passes 178,611 ASan/UBSan range cases |
+| Real texture mapper with controlled Vulkan memory/layout operations | Six ARM64 before/after controls compile; Windows execution pending |
+| ARM64 UMD | Build succeeds; not deployed |
+| Native pixels and physical desktop | No new result |
+
+The texture controls enter through Gallium's real transfer helper and
+`zink_image_map`; only Vulkan memory/layout operations are controlled.
+They cover multi-layer arrays, 3D slices, padded rows, compressed blocks,
+invalidation failure cleanup and low-offset alignment. These are still CPU
+controls and cannot establish that a physical GPU or display is correct.
+In particular, the tiled-image `PIPE_MAP_DONTBLOCK` gap described above
+remains open. No connection between these linear-image defects and the
+reported desktop failure is established.
+
 ## Contracts and source
 
 - [Create synchronization object callback](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/ns-d3dumddi-_d3dddicb_createsynchronizationobject2)

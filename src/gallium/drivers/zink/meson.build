@@ -127,7 +127,9 @@ if with_tests
       dependencies : [driver_zink, idep_nir, idep_mesautil, idep_vulkan_util, idep_vulkan_wsi_defines, idep_xmlconfig],
       link_with : [libgallium],
       c_args : zink_c_args)
-    foreach map_case : ['write-contention', 'pending-cleanup', 'recycled-usage']
+    foreach map_case : ['write-contention', 'pending-cleanup', 'recycled-usage',
+                       'image-array', 'image-3d', 'image-cache', 'image-compressed',
+                       'image-cache-failure', 'image-small-offset']
       test('zink_win32_map_' + map_case, zink_win32_map_test,
         args : ['--' + map_case], suite : ['zink'])
     endforeach
