@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Package tgd3d with the frozen, previously visible .158 KMD and .59 recovery tools."""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import zipfile
+
+
+def identity(path):
+    return {"Length": path.stat().st_size, "Sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def checked_copy(source, target, expected):
+    actual = identity(source)
+    if actual["Sha256"].lower() != expected["Sha256"].lower() or actual["Length"] != expected["Length"]:
+        raise ValueError(f"Frozen component differs: {source}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in ("umd", "icd", "kmd", "frozen-manifest", "helpers", "out"):
+        parser.add_argument("--" + name, type=Path, required=True)
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parents[2]
+    umd = json.loads((args.umd / "manifest.json").read_text())
+    icd = json.loads((args.icd / "manifest.json").read_text())
+    frozen = json.loads(args.frozen_manifest.read_text(encoding="utf-8-sig"))
+    if frozen["kmd_version"] != "0.1.0.158" or frozen["kmd"]["tegragpurender.sys"]["Sha256"] != "46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088":
+        raise ValueError("Only the retained visible-desktop .158 KMD is allowed")
+    args.out.mkdir(parents=True, exist_ok=False)
+    manifest = {"scope": "claude-vulkan tgd3d trial; .158 KMD reused by exact hash; .59 exported on device before installation",
+                "kmd_version": frozen["kmd_version"], "kmd_source": frozen["kmd_source"],
+                "umd_name": "TegraGpuD3DVk.dll", "umd_source": umd["mesa"], "icd_source": icd["mesa"],
+                "tools_source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
+                "kmd": frozen["kmd"], "app": {}, "helpers": {}, "files": {}}
+    for name, record in frozen["kmd"].items():
+        checked_copy(args.kmd / name, args.out / "package" / name, record)
+    for directory, component in ((args.umd, umd), (args.icd, icd)):
+        for name, sha in component["files"].items():
+            src = directory / name
+            record = identity(src)
+            if record["Sha256"] != sha:
+                raise ValueError(f"Built artifact differs: {src}")
+            checked_copy(src, args.out / "app" / name, record)
+            manifest["app"][name] = record
+    for name in ("display-state.exe", "desktop-path.exe", "trace-flush.exe", "etl-export-full.exe", "display158.aml"):
+        record = frozen["helpers"][name]
+        checked_copy(args.helpers / name, args.out / name, record)
+        manifest["helpers"][name] = record
+    scripts = root / "tegra-x1-wddm/tools/tgd3d-trial"
+    for file in scripts.iterdir():
+        if file.suffix in (".ps1", ".cmd", ".json", ".md"):
+            shutil.copyfile(file, args.out / file.name)
+    licenses = args.out / "licenses"
+    licenses.mkdir()
+    for source, target in ((root / "docs/license.rst", "Mesa.txt"),
+                           (root / "subprojects/dxbc-spirv/LICENSE", "dxbc-spirv.txt")):
+        shutil.copyfile(source, licenses / target)
+    for file in sorted(args.out.rglob("*")):
+        if file.is_file():
+            manifest["files"][file.relative_to(args.out).as_posix()] = identity(file)
+    (args.out / "trial-components.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    archive = args.out.with_suffix(".zip")
+    with zipfile.ZipFile(archive, "x", zipfile.ZIP_DEFLATED) as z:
+        for file in sorted(args.out.rglob("*")):
+            if file.is_file():
+                z.write(file, file.relative_to(args.out).as_posix())
+    with zipfile.ZipFile(archive) as z:
+        if z.testzip():
+            raise ValueError("Archive CRC failed")
+        for name, record in manifest["files"].items():
+            data = z.read(name)
+            if len(data) != record["Length"] or hashlib.sha256(data).hexdigest() != record["Sha256"]:
+                raise ValueError("Archive manifest differs: " + name)
+    result = {"archive": str(archive.resolve()), **identity(archive), "files": len(manifest["files"]),
+              "umd_source": umd["mesa"], "icd_source": icd["mesa"], "kmd_source": frozen["kmd_source"]}
+    archive.with_suffix(".delivery.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result, indent=2))
+
+
+if __name__ == "__main__":
+    main()
