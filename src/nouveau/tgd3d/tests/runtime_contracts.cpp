@@ -145,6 +145,38 @@ void runtime_contracts()
    CHECK(deallocations == 2 && frees == 2 && unlocks == 2);
    std::puts("PASS: 65x17 shared pitch/metadata, E_PENDING paging, consumer handles and independent owner teardown");
 
+   /* Frozen .158 GetStandardAllocationDriverData returns this 48-byte
+    * allocation ABI with zero resource-level bytes. It predates TGSR and
+    * must not allocate replacement storage when opened by a consumer. */
+   const unsigned allocated_before_standard = allocations;
+   for (unsigned primary = 0; primary < 2; primary++) {
+      for (unsigned alpha = 0; alpha < 2; alpha++) {
+         tg_gpu_primary_allocation_request standard = {
+            {TG_GPU_ALLOCATION_ABI, TG_GPU_ALLOCATION_CPU_VISIBLE |
+               (primary ? TG_GPU_ALLOCATION_DISPLAY_PRIMARY : 0), UINT64_C(720) * 1280 * 4},
+            alpha ? D3DDDIFMT_A8R8G8B8 : D3DDDIFMT_X8R8G8B8,
+            {primary ? 60u : 0u, primary ? 1u : 0u}, D3DDDI_ROTATION_IDENTITY,
+            720, 1280, 2880, 0};
+         D3DDDI_OPENALLOCATIONINFO si = {};
+         si.hAllocation = 0x61; si.pPrivateDriverData = &standard; si.PrivateDriverDataSize = sizeof(standard);
+         D3D10DDIARG_OPENRESOURCE so = {};
+         so.NumAllocations = 1; so.pOpenAllocationInfo = &si;
+         RuntimeResource *opened = nullptr;
+         CHECK(SUCCEEDED(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description)));
+         CHECK(allocations == allocated_before_standard && runtime_allocation(opened) == 0x61);
+         CHECK(runtime_is_primary(opened) == bool(primary));
+         CHECK(description.width == 720 && description.height == 1280 && description.pitch == 2880);
+         CHECK(description.format == (alpha ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_B8G8R8X8_UNORM));
+         CHECK(bool(description.bind_flags & D3D10_DDI_BIND_PRESENT) == bool(primary));
+         CHECK(SUCCEEDED(runtime_destroy(opened)));
+         standard.Reserved = 1;
+         CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
+         standard.Reserved = 0; standard.Buffer.bytes += 4096;
+         CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
+      }
+   }
+   std::puts("PASS: standard primary/shadow opens without TGSR, XRGB/ARGB identity and consumer-owned handles (CPU control)");
+
    /* The ICD must positively acknowledge importing the runtime allocation. */
    CHECK(SUCCEEDED(runtime_shared_create(&producer, &desc, {rt_resource(0)}, &p, &pitch)));
    ignoreImport = true;

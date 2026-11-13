@@ -450,8 +450,49 @@ HRESULT runtime_shared_open(Device *dev, const D3D10DDIARG_OPENRESOURCE *args,
 {
    *out = nullptr;
    *description = {};
-   if (args->NumAllocations != 1 || !args->pOpenAllocationInfo ||
-       !args->hKMResource.handle || !args->pPrivateDriverData ||
+   if (args->NumAllocations != 1 || !args->pOpenAllocationInfo)
+      return DXGI_ERROR_UNSUPPORTED;
+   /* Standard primary/shadow surfaces are created by VidMm, without a UMD
+    * resource payload. The allocation still carries the KMD's explicit ABI.
+    * In particular, a pre-DWM OpenResource need not carry our TGSR envelope. */
+   const auto &info = args->pOpenAllocationInfo[0];
+   if (!info.hAllocation || !info.pPrivateDriverData)
+      return DXGI_ERROR_UNSUPPORTED;
+   if (!args->PrivateDriverDataSize) {
+      if (info.PrivateDriverDataSize != sizeof(tg_gpu_primary_allocation_request))
+         return DXGI_ERROR_UNSUPPORTED;
+      tg_gpu_primary_allocation_request a;
+      memcpy(&a, info.pPrivateDriverData, sizeof(a));
+      const bool primary = a.Buffer.flags & TG_GPU_ALLOCATION_DISPLAY_PRIMARY;
+      if (a.Buffer.version != TG_GPU_ALLOCATION_ABI ||
+          a.Buffer.flags != (TG_GPU_ALLOCATION_CPU_VISIBLE |
+                             (primary ? TG_GPU_ALLOCATION_DISPLAY_PRIMARY : 0)) ||
+          (a.Format != D3DDDIFMT_A8R8G8B8 && a.Format != D3DDDIFMT_X8R8G8B8) ||
+          a.Rotation != D3DDDI_ROTATION_IDENTITY || a.Reserved ||
+          a.Width != 720 || a.Height != 1280 || a.Pitch != 720 * 4 ||
+          a.Buffer.bytes != UINT64_C(720) * 1280 * 4)
+         return DXGI_ERROR_UNSUPPORTED;
+      RuntimeResource *p = nullptr;
+      HRESULT hr = create_owner(dev, runtime, &p);
+      if (FAILED(hr))
+         return hr;
+      p->associated = true;
+      p->primary = primary;
+      p->memory.allocation = info.hAllocation;
+      hr = make_ready(p, a.Buffer.bytes);
+      if (FAILED(hr)) {
+         runtime_destroy(p);
+         return hr;
+      }
+      const UINT bind = D3D10_DDI_BIND_SHADER_RESOURCE | D3D10_DDI_BIND_RENDER_TARGET |
+                        (primary ? D3D10_DDI_BIND_PRESENT : 0);
+      *description = {a.Width, a.Height, a.Pitch,
+         a.Format == D3DDDIFMT_X8R8G8B8 ? DXGI_FORMAT_B8G8R8X8_UNORM : DXGI_FORMAT_B8G8R8A8_UNORM,
+         bind, D3D10_DDI_USAGE_DEFAULT};
+      *out = p;
+      return S_OK;
+   }
+   if (!args->hKMResource.handle || !args->pPrivateDriverData ||
        args->PrivateDriverDataSize != sizeof(SharedMetadata))
       return DXGI_ERROR_UNSUPPORTED;
    SharedMetadata metadata;
@@ -470,9 +511,7 @@ HRESULT runtime_shared_open(Device *dev, const D3D10DDIARG_OPENRESOURCE *args,
    if (s.allocation_bytes != expected.Buffer.bytes || metadata.description.pitch != expected.Pitch)
       return DXGI_ERROR_UNSUPPORTED;
    /* Only the documented INFO/INFO2 common prefix is read. */
-   const auto &info = args->pOpenAllocationInfo[0];
-   if (!info.hAllocation || !info.pPrivateDriverData ||
-       info.PrivateDriverDataSize != sizeof(expected))
+   if (info.PrivateDriverDataSize != sizeof(expected))
       return DXGI_ERROR_UNSUPPORTED;
    tg_gpu_linear_allocation_request actual;
    memcpy(&actual, info.pPrivateDriverData, sizeof(actual));

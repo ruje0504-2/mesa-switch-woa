@@ -478,6 +478,7 @@ static void APIENTRY OpenResource(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_OP
    HRESULT hr = runtime_shared_open(dev, args, hRT, &res->storage.runtime, &d);
    trace(TGD3D_TRACE_OPEN_RESOURCE, hr, (uint64_t)d.width << 32 | d.height, d.pitch);
    if (SUCCEEDED(hr)) {
+      res->primary = runtime_is_primary(res->storage.runtime);
       res->dim = D3D10DDIRESOURCE_TEXTURE2D;
       res->kind = ResKind::Image;
       res->usage = d.usage;
