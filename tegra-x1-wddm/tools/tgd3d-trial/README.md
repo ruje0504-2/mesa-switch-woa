@@ -41,3 +41,10 @@
 收集前停止本包 ETW 会话；离线可用 app/tgd3d-trace-export.exe 解码 ETL。
 解码器也支持 --follow，使用 tgd3d 独立 provider，不使用 Zink loader 日志判断成功。
 已复用的工具来源记录在 tool-provenance.json；打包不会构建主线或合并 main。
+
+回退后的低开销SD/内存排查使用主机端 `../collect_recovery_health.py`，指定
+`--host`、已有密钥/HostKeyAlias和新的`--out`目录。它只读固定的SD设备、
+注册表、文件哈希、内存及限条数的事件记录，不安装任何组件。
+2026-11-13临时`sd-dump-state.ps1`曾在SSH超时后持续占用内存，禁止复用；
+客户端超时不代表远端进程终止。新入口遇到错误即停止并保留原始输出，
+不能把命令退出0当作SD转储或桌面实屏验收通过。

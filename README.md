@@ -34,6 +34,11 @@ The latest retained tgd3d trial used signed **.158** KMD (SHA256 prefix
 **7c677212** (`17dc31103933`). At the last verified recovery, the device was
 back on **.59 / Code 0**. Each component has its own build manifest and full
 source/artifact identity; the older Zink .158 combination is a separate trial.
+A later baseline freeze coincided with commit exhaustion from this chat's
+PowerShell SD inventory process. The process was identified from its recorded
+command, cleared by the owner's restart, and replaced by bounded native-tool
+collection. This does not resolve the earlier native-window restart.
+[Incident evidence](tegra-x1-wddm/docs/TGD3D_NATIVE_20261113.md).
 
 Continue in order: fix the current restart → 30-second static desktop →
 60-second window interaction → five-minute desktop interaction → known-pixel

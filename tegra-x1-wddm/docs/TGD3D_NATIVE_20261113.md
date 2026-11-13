@@ -110,7 +110,8 @@ D3D11 放宽规则直接用于未声明该能力的 D3D10 路径。
 
 - 实时 tgd3d 日志2219条事件、92条状态，DWM 389次成功 Present；离线主 ETL
   多保留最后6条事件，合计2225条、DWM 391次成功 Present 和394次成功提交。
-  DWM 的 Present 回压耗时均为0，保留的一次CPU等待属于读回；Explorer 有两次
+  DWM 的 Present 回压耗时均为0，保留的一次CPU等待被旧工具记为读回，但同一
+  wait_sequence 帮助函数也用于销毁，无法据此区分两者；Explorer 有两次
   两帧上限产生的回压。跨队列 GPU Fence 已实现，不代表全部API路径都无CPU等待。
 - 原始 ETW 339152条；已用该机模板解码335068条。1857条 Dwm-Core 203事件
   的载荷与模板长度不同，明确排除。没有保留 KMD recovery/execution 事件。
@@ -167,3 +168,47 @@ System记录中，本轮开始之后没有volmgr事件；旧的45/46记录早于
 [小转储说明](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/small-memory-dump)
 描述了可用于定位的崩溃线程、调用栈和驱动列表。本轮未修改SD、转储或分页配置，
 没有触发人为bugcheck。存储源码仍由其原仓库维护。
+
+## 回退后取证进程耗尽内存
+
+第二轮回退之后，用户又观察到 `.59` 桌面卡住、Explorer 系统错误弹窗，随后
+黑色背景只剩图标，部分时刻仅触摸可用。这是另一轮基线故障，不能继续把此前
+`recovery-verified=true` 当作系统持续稳定的证明。
+
+用户手动重启后，原生命令取回了 System 2004 事件40390、40394、40398、40413、
+40418、40429。它们反复指向 `powershell.exe` PID2408，创建时间
+`2026-11-13T06:43:36.1130143Z`。该进程提交内存从4542185472增长到5261848576字节；
+事件40413的系统提交量与上限同为6118985728字节。Explorer挂起事件15461、15497
+分别记录于07:21:36和07:24:26 UTC。没有取得该弹窗的异常码或分配调用栈。
+
+PowerShell 400事件36963记录同一个PID的完整EncodedCommand。解码后，与本窗口
+发起的 `sd-dump-state.ps1` 加固定输出编码前缀逐字一致，SHA256为
+`f4dc3dd17b57f0a03593880e1c2c6e5f162dc95cddb4517bedaff56f53b0e56b`。
+该临时脚本使用CIM/PnP查询并将注册表PowerShell对象送入JSON序列化；本地SSH
+超时后远端进程仍存活，后续取证未及时识别其内存增长。这是本窗口取证流程的
+明确问题。没有栈证据，不能进一步断言具体是哪条CIM或序列化语句造成增长。
+也不能用这次内存耗尽替代此前两轮原生tgd3d开窗重启的根因。
+
+手动重启启动事件为07:27:40 UTC。07:32与07:44两次进程清单均无PowerShell；
+07:44可用物理内存2287132 KiB，可用虚拟内存3002552 KiB。`.59` SYS及ACPI哈希
+与原基线一致，风扇13/CPU1497600 kHz、SD0.5.1.2及Wi-Fi0.5.7的实际SYS哈希
+均匹配安装记录，显示和睡眠超时仍为AC/DC均0。这是恢复时点的状态核对，
+不是新的长期稳定性验收。
+
+后续SD/基线取证改用主机端 `tools/collect_recovery_health.py`：调用原生
+reg、pnputil、certutil、wmic OS和限条数的wevtutil；SD只指定
+`ACPI\NVDA0101\0`，不再执行上述PowerShell/CIM库存脚本。输出直接写本地文件，
+SSH异常或超时记录“远端结束未知”并停止，不继续堆叠取证进程。
+六项基线命令在07:44全部退出0，五项SD/转储命令在07:47全部退出0；没有新装
+驱动、调频或开启原生测试。旧脚本与原始事件保留在独立产物目录
+`hardware/post-recovery-explorer-20261113/`及其相邻的`staged-4309434c/`。
+
+CPU寄存器读回1497600 kHz、OverclockActive=1、Throttled=0、LastError=0；
+Windows的CentralProcessor记录仍为998 MHz，与用户照片的任务管理器1.00 GHz
+相符。当前SwitchFan直接控制PLLX，不能用Windows的旧频率显示否定硬件读回；
+这里没有声称已测得应用性能提升。
+
+事件2004与提交量的解释参考微软
+[应用内存泄漏排查](https://learn.microsoft.com/en-us/troubleshoot/windows-server/performance/troubleshoot-application-service-memory-leaks)
+（2026-11-13查阅，适用于Windows Client/Server）：默认工作集列不能替代提交量。
+本次没有增加分页文件或改变GPU预算来掩盖取证进程增长。
