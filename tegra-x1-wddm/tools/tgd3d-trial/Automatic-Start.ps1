@@ -30,9 +30,9 @@ try {
     }
     $d|ConvertTo-Json|Set-Content "$p\startup-completion.json" -Encoding UTF8
     if($d.Problem -ne 0 -or $d.Permit -ne 0 -or $d.Hardware -ne 0) { throw 'Native startup failed' }
-    Start-ScheduledTask -TaskName 'Tgd3dTrialNative'
+    & (Join-Path $p 'Start-NativeStage.ps1') -Stage Static
     'STARTUP ONLY: awaiting physical feedback and five-minute desktop observation; rollback remains armed'|
-        Set-Content "$p\waiting-for-physical-feedback.txt" -Encoding UTF8
+        Set-Content "$p\waiting-for-static-feedback.txt" -Encoding UTF8
 } catch {
     $_|Out-String|Set-Content "$p\automatic-error.txt" -Encoding UTF8
     Start-ScheduledTask -TaskName 'Tgd3dTrialRestore'

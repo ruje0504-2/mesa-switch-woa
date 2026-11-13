@@ -47,6 +47,11 @@
     "Enable-RuntimeAppContainerRead.ps1": {
       "source": "existing repository tool",
       "sha256": "416f96806b7e2a9dfb57e65b63bbc31e988ec4fa2291d2b9741416e04fa80edf"
+    },
+    "Exercise-DesktopWindow.ps1": {
+      "source": "desktop161-map-poll-20261113/scripts/Exercise-DesktopWindow.ps1",
+      "sha256": "0a3105c4df91b368c0d50a04a6be81d1720fb98d39e8d300d14e81924e69bf90",
+      "adaptation": "Own-window minimize/restore and owned overlay for the requested interaction stage"
     }
   }
 }

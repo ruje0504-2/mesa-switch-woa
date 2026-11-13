@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: MIT
+param([ValidateSet('Static','Window','Interaction')][string]$Stage='Static', [string]$PreviousPhysicalObservation)
+. (Join-Path $PSScriptRoot 'Common.ps1')
+Require-Administrator
+$null=Check-Package
+$backup=Check-Recovery
+$duration=@{Static=30;Window=60;Interaction=300}[$Stage]
+if((Device-Property 'DriverVersion') -ne '0.1.0.158' -or (Device-Property 'ProblemCode') -ne 0){throw 'Native KMD is not ready'}
+if((Get-ScheduledTask 'Tgd3dTrialRestore').State -ne 'Ready'){throw 'Rollback is not armed'}
+$next=(Get-ScheduledTaskInfo 'Tgd3dTrialRestore').NextRunTime
+$bootDeadline=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.AddMinutes(12)
+if($next -and $bootDeadline -lt $next){$next=$bootDeadline}
+if(!$next -or ($next-(Get-Date)).TotalSeconds -lt $duration+45){throw 'Insufficient time before the armed recovery deadline'}
+$task=Get-ScheduledTask 'Tgd3dTrialNative' -ErrorAction SilentlyContinue
+if($task -and $task.State -eq 'Running'){throw 'A native stage is already running'}
+$previous=@{Window='Static';Interaction='Window'}[$Stage]
+$expected=$null
+if($previous){
+    $prior=Read-Json (Join-Path $PSScriptRoot ('evidence\stage-'+$previous+'.result.json'))
+    if(!$prior.ApiObservationPassed -or !$prior.Luid -or [string]::IsNullOrWhiteSpace($PreviousPhysicalObservation)){throw 'Previous API stage and physical observation are required'}
+    $expected=$prior.Luid
+}
+$requestPath=Join-Path $PSScriptRoot ('stage-'+$Stage+'.request.json')
+if(Test-Path $requestPath){throw 'This stage has already been requested'}
+@{Stage=$Stage;DurationSeconds=$duration;ExpectedLuid=$expected;PreviousStage=$previous;PreviousPhysicalObservation=$PreviousPhysicalObservation;Utc=[DateTime]::UtcNow.ToString('o');Qpc=[Diagnostics.Stopwatch]::GetTimestamp();ManifestSha256=(File-Hash (Join-Path $PSScriptRoot 'trial-components.json'))}|
+    ConvertTo-Json|Set-Content $requestPath -Encoding UTF8
+$ps="$env:windir\System32\WindowsPowerShell\v1.0\powershell.exe"
+$action=New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$PSScriptRoot+'\Observe-Native.ps1" -Stage '+$Stage)
+$principal=New-ScheduledTaskPrincipal -UserId $backup.User -LogonType Interactive -RunLevel Limited
+$settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Seconds ($duration+40))
+Register-ScheduledTask -TaskName 'Tgd3dTrialNative' -Action $action -Principal $principal -Settings $settings -Force|Out-Null
+try {
+    Start-ScheduledTask 'Tgd3dTrialNative'
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    $resultPath=Join-Path $PSScriptRoot ('evidence\stage-'+$Stage+'.result.json')
+    while(!(Test-Path $resultPath) -and $watch.Elapsed.TotalSeconds -lt $duration+45){Start-Sleep -Milliseconds 300}
+    $result=Read-Json $resultPath
+    if(!$result.ApiObservationPassed){throw ('Native stage failed: '+$result.Error)}
+    $result|ConvertTo-Json -Depth 6
+} catch {
+    $_|Out-String|Set-Content (Join-Path $PSScriptRoot ('stage-'+$Stage+'.controller-error.txt')) -Encoding UTF8
+    Start-ScheduledTask 'Tgd3dTrialRestore'
+    throw
+}

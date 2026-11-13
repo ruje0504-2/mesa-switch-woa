@@ -15,9 +15,13 @@
    保存 ACPI、交互桌面显示设置和电源设置，并校验备份。此步不装候选驱动。
 2. 进入输出的 PREPARED_DIRECTORY，再运行 START-TEST.cmd。
    自动还原任务先注册，再装 .158，保留启动门控；第一次重启后自动执行
-   一次原生启动并进行五分钟 API/截图观察。不会自动运行像素、旋转或 cube 测试。
+   一次原生启动并进行约30秒静止桌面观察。确认物理画面后，使用
+   `Start-NativeStage.ps1 -Stage Window -PreviousPhysicalObservation "实际观察"`
+   运行约60秒开窗、移动、缩放、关闭，再以同样方式指定 `-Stage Interaction`
+   进行五分钟交互（包含遮挡、最小化/恢复、菜单、快捷设置和性能程序回归）。
+   每段在同一次原生启动中继续，窗口不足时拒绝扩大测试并保持回退任务。
 3. 物理屏幕是否正常必须由人观察。Code 0、ETW Present、截图均不能单独证明
-   面板上屏。evidence/native-observation.json 的 API 结果与物理反馈分开记录。
+   面板上屏。evidence/stage-*.result.json 的 API 结果与物理反馈分开记录。
 
 ## 还原
 

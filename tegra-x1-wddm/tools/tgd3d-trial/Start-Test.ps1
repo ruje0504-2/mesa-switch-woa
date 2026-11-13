@@ -54,9 +54,6 @@ try {
     $principal=New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
     $settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Seconds 40)
     Register-ScheduledTask -TaskName 'Tgd3dTrialObserve' -Action $action -Trigger $trigger -Principal $principal -Settings $settings|Out-Null
-    $action=New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$PSScriptRoot+'\Observe-Native.ps1"')
-    $settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 7)
-    Register-ScheduledTask -TaskName 'Tgd3dTrialNative' -Action $action -Principal $principal -Settings $settings|Out-Null
     $action=New-ScheduledTaskAction -Execute $ps -Argument ('-NoProfile -ExecutionPolicy Bypass -File "'+$PSScriptRoot+'\Automatic-Start.ps1"')
     $trigger=New-ScheduledTaskTrigger -AtLogOn -User $user;$trigger.Delay='PT60S'
     $settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 3)

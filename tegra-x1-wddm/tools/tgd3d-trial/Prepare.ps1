@@ -28,6 +28,9 @@ if(!$Installed) {
     Write-Output ('PREPARED_DIRECTORY='+$dest)
     return
 }
+$os=Get-CimInstance Win32_OperatingSystem
+$version=Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+@{Caption=$os.Caption;Version=$os.Version;Build=$os.BuildNumber;UBR=$version.UBR;Boot=$os.LastBootUpTime.ToUniversalTime().ToString('o')}|ConvertTo-Json|Set-Content (Join-Path $PSScriptRoot 'windows-version.json') -Encoding UTF8
 $platform=& (Join-Path $PSScriptRoot 'Read-PlatformState.ps1')
 if($platform.CpuActualKhz -ne 1497600 -or $platform.CpuOverclockEnabled -ne 1 -or $platform.FanVersion -ne 13) { throw 'CPU/fan baseline differs' }
 $platform|ConvertTo-Json|Set-Content (Join-Path $PSScriptRoot 'before-platform.json') -Encoding UTF8
