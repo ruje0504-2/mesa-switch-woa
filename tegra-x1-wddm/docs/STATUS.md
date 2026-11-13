@@ -1,10 +1,12 @@
 # GPU status
 
 **November 13, tgd3d-vulkan update:** native tgd3d has produced a usable portrait
-desktop, but stability has failed. The latest trial froze when the owner opened
-Wi-Fi/Quick Settings; automatic recovery, not a second hard reset, explains its
-restart. `.59 / Code0` and the original display configuration were verified at
-08:48:48 UTC and the owner confirmed usable output. Keep CPU **1497600 kHz**, fan
+desktop, but stability has failed. The latest `94cc811a` trial passed its short
+physical static observation and then unexpectedly restarted before the colored
+window appeared. `.59 / Code0` and the original display configuration were
+verified at 10:03:56 UTC and the owner confirmed usable output. The owner now
+requests source comparison and a single-variable synchronous submission control,
+not further dump/log investigation. Keep CPU **1497600 kHz**, fan
 driver **13**, the current sleep settings and the dynamic **512 MiB** GPU budget.
 The older CPU/fan values and parallel-chat workflow below are historical, not
 current instructions. This branch owns native tests and recovery; `main` is paused.

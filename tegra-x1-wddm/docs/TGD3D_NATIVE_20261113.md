@@ -422,3 +422,66 @@ SHA256 `1b6f96ae70b92148dacb31fcf2052da7ef64027237154677580349140529cd16`。
 复构建使PE时间戳变化，CPU合约与取证程序已逐字节确认只有PE/Debug目录时间戳
 不同，代码和数据相同，详见`resource-phase-umd-arm64/control-equivalence.json`。
 设备只完成备份/准备，尚未启动这轮原生测试；仍需新的物理观察回复。
+
+## 第五轮结果与源码对照方向
+
+上述`94cc811a`包随后实际运行：同一冻结`.158`和`7c677212` ICD，DWM PID464、
+LUID`0000000000096c84`。09:55:23至09:56:06 UTC静止阶段完成，用户确认画面正常、
+能操作。09:58:54设备记录Window请求；用户随后报告“没有出现就重启”。本轮失败，
+不能记开窗通过。10:03:56 UTC系统恢复校验确认`.59 / Code0`和平台设置保持，用户
+确认桌面正常、能操作。此前已取回的174文件归档SHA256为
+`9f790c55b1abae6ef1ded72429d3378c38195307e1ebf94b19b342c96be7cee8`。
+保留的UMD/内核末尾早于开窗请求约51/53秒，不能据此定位故障瞬间。
+
+用户要求停止继续查新日志/Dump，改为直接对比源码、一次改变一个变量并上机。
+本轮不再扩展取证工具；恢复脚本不再先抓DWM Dump。
+
+2026-11-13源码对比以实际历史交付为基准：Zink UMD来源
+`833c4423ec6ed668a257d3896fabf26ff5e9f1ad`、ICD来源
+`8c361754f3059cec0ecacb5543e25adf7eba51b2`；tgd3d审查基线`2e5d1313`、ICD
+`7c677212e5843725f3dbb12ee0b9dad6b1339a05`，KMD仍冻结于
+`6c854e9f394c3d761fab85885bead4bbd4588581`。没有合入main或改KMD。
+
+| 路径 | Zink桌面UMD | tgd3d审查基线 | 结论范围 |
+|---|---|---|---|
+| 普通Flush/Present | `RuntimeDeviceFinish`等待Gallium fence完成 | runtime signal → Vulkan wait/render/signal → runtime wait | 有明确同步差异；未从源码证明环路 |
+| 多设备 | Zink按物理设备复用VkDevice及queue lock | 每个D3D Device独立创建VkDevice及KMT上下文 | 新设备/上下文压力不同；未发现已证实的句柄越界 |
+| 共享布局 | 72字节元数据、128字节pitch、4行补齐 | 同一格式/大小协议，另核对Vulkan rowPitch/offset/requirements | 未发现明确布局越界；不能代替已知像素验收 |
+| 编译 | SHDR→TGSI→NIR→Zink SPIR-V→NVK/NAK | 重建DXBC→dxbc-spirv→NVK/NAK，shader objects | NAK源码与目标SM53相同；输入/绑定/动态状态不同，不能排除特定输入的编译缺陷 |
+
+核对的微软契约包括[DDI线程规则](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/changes-from-direct3d-10)、
+[GPU wait callback](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/nc-d3dumddi-pfnd3dddi_waitforsynchronizationobjectfromgpucb)
+与[signal callback](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dumddi/nc-d3dumddi-pfnd3dddi_signalsynchronizationobjectfromgpucb)
+（后两者2024-02-22）、[共享资源创建](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createresource)、
+[像素着色器创建](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createpixelshader)
+（2021-04-01）。tgd3d只协商D3D10.0 DDI且不声明free-threading；不能套用已启用
+D3D11 free-threading的宽松条件。此KMD声明WDDM2.6；其monitored fence等待由
+调度器控制，不能当成[WDDM3.2 native GPU fence](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/native-gpu-fence-objects)。
+
+静态审查另发现两个失败路径问题，尚未修改或宣判为本轮根因：
+`wait_cpu`到期仅设置tgd3d局部lost，资源/设备销毁随后调用无期限`DeviceWaitIdle`；
+`create_shader`在失败时没有析构已经保存的tokens/signatures，而微软明确创建报错
+后不会调用DestroyShader。前者需要保持在途对象安全，不能简单删除等待后释放；
+后者属于失败清理问题，不能据此声称解释了成功提交时的硬件重启。
+
+### 仅关闭跨队列桥接的临时对照
+
+提交`d06e29e223b9ba22e85b58bf49eaca6fa457ec31`提供显式构建参数
+`build_tgd3d.py --cpu-sync-control`，默认构建仍保留GPU桥接。对照版不创建两个
+runtime monitored fence、不导入Vulkan，也不排runtime↔NVK的GPU wait/signal。
+本地Vulkan完成时间线和相邻提交依赖保留；普通Flush/Present/共享释放改为CPU
+等待真实完成，仿照旧桌面UMD。DONOTWAIT/Query轮询仍只提交、不做CPU等待。
+这是诊断构建，不是永久退回同步渲染或宣布同步问题已修复。
+
+ARM64/x64构建完成；x64 Wine下12项CPU控制通过，包括原生标志下不创建/导入
+跨上下文fence、普通Flush完成、轮询不阻塞和超时不伪造完成。三份实际转换的
+VS/PS/采样SPIR-V通过`spirv-val --target-env vulkan1.3`；这不验证SM53机器码执行。
+可还原包6936555字节，SHA256
+`603a778caea98ca15cbfe37b9895f8ffc961f18852a1841623ccb40119704152`。
+仅UMD同步方式改变，KMD/ICD仍为上述冻结文件。实机结果另记，不由控制测试推断。
+
+`.59`上ARM64同一控制程序亦通过12项，全部PowerShell脚本解析通过；已准备
+`C:\ProgramData\SwitchWOA\GpuUpdate\tgd3d-d06e29e2-20261113-185158`，备份和恢复
+校验完成，尚未安装启动。UMD SHA256
+`b3ba7de9bb07a5627ddf907fd7e6a07d1a2fe33dcab977d06f41ba0adb450ffc`。
+Antigravity CLI的Carbon High独立源码审计已启动；其结论须经本窗口复核。
