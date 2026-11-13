@@ -1063,3 +1063,21 @@ Create/OpenResource 将内存不足报告为 `E_OUTOFMEMORY`，保留 runtime �
 这些控制没有执行 GPU，尚无证据证明冷启动确实触发了此错误路径，故不认定为重启根因。
 超时后无界 DeviceWaitIdle 仍是独立未解决问题。下一候选继续冻结 `.158`/bit14/ICD，
 在原 XRGB 组合上只加入本项状态传播修正；缓存及 Flush 修正不混入该候选。
+
+`42ad5d1bfa95c73466b7f76378f28792522742ec` 的单项候选已于
+2026-11-13 23:41:44 UTC 写入 SD 并核对。采用冻结 `9de42c82` 头文件/其余对象，
+仅替换 resource/runtime/upload 三个生产文件和相应两个函数声明，保留 XRGB 修正；
+该组合单独通过 x64 CPU 合约。ARM64 DLL SHA256 为
+`ad5e3309f1d5e8b7e549d70e5a5741da1ee6cf7c4e4f49782e0067c7b858b3f7`，清单为
+`31d8ad2255f0276c393d8568805e834f56dee841e6ce0f79d03d6830934a7bd5`。
+同时纠正清单 `files` 索引中遗留的旧 UMD 哈希，使其与 `app` 索引及实际文件一致。
+
+复用 WinPE 离线更新流程，新副本 CHKDSK 返回0；75段、9043968字节差异先备份后
+写回并读回一致。实卡 KMD/ICD、SYSTEM 及两个事务日志均与本轮更新前哈希一致。
+本地副本使用13条 LOG1 事务恢复到182073，确认 ControlSet001 的 AllowNativeBoot
+存在，没有把恢复后的 hive 写回。备份 zip 为4167945字节，SHA256
+`bc51fc89e9a04f5dc93676c810facab722c5f7880a81267e8e071ea5f5cc985d`，Mac/SD FAT 各一份。
+测试包 `tgd3d-resource-status-42ad5d1b.zip` 为2141175字节，SHA256
+`3455f2273808322155c9cd6904870bc487369345ca0f6b1eab3fc4e064e5ae29`。
+完整记录在 `resource-status-deploy/deployment-final.json`。本次仍为 CPU 同步诊断组合，
+实机冷启动和物理画面尚未验收。
