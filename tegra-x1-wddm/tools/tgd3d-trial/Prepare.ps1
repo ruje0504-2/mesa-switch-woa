@@ -80,9 +80,8 @@ foreach($file in Get-ChildItem $backupDir -Recurse -File) {
 }
 $display=Get-Item (Join-Path $PSScriptRoot 'user-display.bin')
 $files['user-display.bin']=@{Length=$display.Length;Sha256=(File-Hash $display.FullName)}
-@{InstanceId=$DeviceId;Version=$baselineVersion;RecoveryTarget='0.1.0.158-gated';OriginalOem=$oem;User=$user;Utc=[DateTime]::UtcNow.ToString('o');Inf=$infs[0].FullName.Substring($PSScriptRoot.Length+1);Files=$files}|
-    ConvertTo-Json -Depth 6|Set-Content (Join-Path $PSScriptRoot 'recovery.json') -Encoding UTF8
-$null=Check-Recovery
+Save-Json (Join-Path $PSScriptRoot 'recovery.json') @{InstanceId=$DeviceId;Version=$baselineVersion;RecoveryTarget='0.1.0.158-gated';OriginalOem=$oem;User=$user;Utc=[DateTime]::UtcNow.ToString('o');Inf=$infs[0].FullName.Substring($PSScriptRoot.Length+1);Files=$files}
+$null=Sync-Recovery
 & (Join-Path $PSScriptRoot 'Enable-RuntimeAppContainerRead.ps1') -Directory (Join-Path $PSScriptRoot 'app')|
     Set-Content (Join-Path $PSScriptRoot 'runtime-access.json') -Encoding UTF8
 'PREPARED: starting driver, ACPI and display preference saved; recovery retains gated .158; no GPU test started'

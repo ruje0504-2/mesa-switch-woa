@@ -10,6 +10,11 @@ function Require-Administrator {
     }
 }
 function Read-Json([string]$Path) { [IO.File]::ReadAllText($Path)|ConvertFrom-Json }
+function Save-Json([string]$Path,$Value) {
+    $bytes=[Text.Encoding]::UTF8.GetBytes(($Value|ConvertTo-Json -Depth 8))
+    $file=[IO.FileStream]::new($Path,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::Read,4096,[IO.FileOptions]::WriteThrough)
+    try { $file.Write($bytes,0,$bytes.Length);$file.Flush($true) } finally { $file.Dispose() }
+}
 function File-Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
 function Stop-RecordedTrialProcess($Record) {
     $process=Get-Process -Id $Record.Pid -ErrorAction SilentlyContinue
@@ -74,5 +79,15 @@ function Check-Recovery {
     $name=if($backup.Version -eq '0.1.0.158'){'tegragpurender'}else{'tegragpuprobe'}
     if([IO.Path]::GetFileName($inf) -ne ($name+'.inf')) { throw 'Recovery INF differs' }
     if(!(Test-Path (Join-Path (Split-Path $inf) ($name+'.cat')))) { throw 'Recovery catalogue missing' }
+    $backup
+}
+function Sync-Recovery {
+    $backup=Check-Recovery
+    # Hashing a newly copied file can read cached bytes. Flush the complete
+    # recovery set before a GPU switch can interrupt the system's lazy writer.
+    foreach($name in @($backup.Files.PSObject.Properties.Name)+@('recovery.json')) {
+        $file=[IO.FileStream]::new((Package-Path $name),[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::Read)
+        try { $file.Flush($true) } finally { $file.Dispose() }
+    }
     $backup
 }

@@ -8,7 +8,12 @@ $service='SYSTEM\CurrentControlSet\Services\tegragpurender'
 $bootKey='HKLM:\'+$service+'\Tgd3dDefaultBoot'
 if((Test-Path $bootKey) -and !$Retry){return}
 if((Test-Path $stateFile) -and !$Retry){
-    $last=Read-Json $stateFile
+    try { $last=Read-Json $stateFile } catch {
+        # An interrupted write can leave a zero-filled JSON file. Disable
+        # the task before returning the parse error, without granting GPU start.
+        Disable-ScheduledTask Tgd3dDefaultEnable|Out-Null
+        throw
+    }
     if(!$last -or $last.Status -ne 'Enabled'){
         # An interrupted native activation must not turn the next boot into
         # another blind attempt. The frozen .158 remains behind its gate.
@@ -39,6 +44,7 @@ try{
     $boot.Close()
     if((Device-Property 'ProblemCode') -eq 0){$r.Status='Enabled';Save-State;return}
     Check-Baseline
+    $null=Sync-Recovery
     $params=Get-ItemProperty ('HKLM:\'+$service+'\Parameters')
     if([uint64]$params.StartGateStatus -ne 3221225635 -or [uint64]$params.HardwareStatus -ne 4294967295){throw 'The native startup gate is not closed'}
     Save-State
