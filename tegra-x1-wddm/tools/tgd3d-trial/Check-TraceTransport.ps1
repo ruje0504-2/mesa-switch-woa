@@ -24,7 +24,17 @@ $fixtureResult=Read-Json "$p\fixture.json"
 $live=@(Get-Content "$p\umd-live.jsonl"|ForEach-Object {$_|ConvertFrom-Json})
 $events=@($live|Where-Object {$_.id})
 $states=@($live|Where-Object {$_.event -eq 'TraceState'})
-if($events.Count -ne 6 -or !$states.Count) { throw 'Incomplete real-time records/buffers' }
+if($events.Count -ne 14 -or !$states.Count) { throw 'Incomplete real-time records/buffers' }
+foreach($id in 14,15,16) {
+    $pair=@($events|Where-Object {$_.id -eq $id})
+    if($pair.Count -ne 2 -or $pair[0].status -ne '8000000a' -or $pair[1].status -ne '00000000') { throw 'Call entry/return pair differs' }
+}
+$waitBegin=@($events|Where-Object {$_.id -eq 30 -and $_.kind -eq 4})
+$waitEnd=@($events|Where-Object {$_.id -eq 30 -and $_.kind -eq 3})
+if($waitBegin.Count -ne 1 -or $waitEnd.Count -ne 1 -or
+    $waitBegin[0].status -ne '8000000a' -or $waitEnd[0].status -ne '80004005' -or
+    $waitBegin[0].value[0] -ne 3 -or $waitEnd[0].value[0] -ne 3 -or
+    $waitEnd[0].value[2] -ne 2 -or $waitEnd[0].completed -ne 4) { throw 'Incomplete fence was misclassified' }
 foreach($e in $events) {
     if($e.version -ne 2 -or $e.pid -ne $fixtureResult.pid -or $e.process_start -ne $fixtureResult.process_start -or
        $e.qpc_stamp -lt $fixtureResult.begin_qpc -or $e.qpc_stamp -gt $fixtureResult.end_qpc) { throw 'Raw timestamp or process identity differs' }
@@ -35,10 +45,13 @@ foreach($s in $states) {
 }
 $offline=Start-Process "$p\app\tgd3d-trace-export.exe" -ArgumentList ('"'+$p+'\control.etl"') -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$p\offline.jsonl" -RedirectStandardError "$p\offline.log"
 $offlineRows=@(Get-Content "$p\offline.jsonl"|ForEach-Object {$_|ConvertFrom-Json})
-if($offline.ExitCode -ne 0 -or $offlineRows.Count -ne 6) { throw 'Offline v2 export failed' }
-for($i=0;$i -lt 6;$i++) {
+if($offline.ExitCode -ne 0 -or $offlineRows.Count -ne 14) { throw 'Offline v2 export failed' }
+for($i=0;$i -lt 14;$i++) {
     foreach($field in 'id','version','pid','process_start','image','status','kind','sequence','completed','arg0','arg1','message') {
         if($events[$i].$field -ne $offlineRows[$i].$field) { throw ('Live/offline payload mismatch: '+$field) }
+    }
+    foreach($field in 'qpc','value') {
+        if(($events[$i].$field -join ',') -ne ($offlineRows[$i].$field -join ',')) { throw ('Live/offline timing payload mismatch: '+$field) }
     }
 }
 $legacyCount=$null

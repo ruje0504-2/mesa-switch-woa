@@ -150,6 +150,29 @@ static void nonblocking_map()
    std::puts("PASS: DONOTWAIT submits progress without a CPU wait");
 }
 
+static void incomplete_fence_keeps_resources()
+{
+   Adapter adapter;
+   for (VkResult result : {VK_TIMEOUT, VK_ERROR_DEVICE_LOST}) {
+      reset(); Device dev = make_device(&adapter);
+      CHECK(cmd_begin(&dev)); CHECK(SUCCEEDED(flush(&dev, false)));
+      defer(&dev, DeferredType::ImageView, 0x500, 1);
+      dev.vk.WaitSemaphores = result == VK_TIMEOUT ?
+         +[](VkDevice, const VkSemaphoreWaitInfo *, uint64_t timeout) -> VkResult {
+            CHECK(timeout == UINT64_C(1000000000)); ++cpuWaits; return VK_TIMEOUT;
+         } : +[](VkDevice, const VkSemaphoreWaitInfo *, uint64_t) -> VkResult {
+            ++cpuWaits; return VK_ERROR_DEVICE_LOST;
+         };
+      CHECK(wait_sequence(&dev, 1, TGD3D_WAIT_DESTROY) == DXGI_ERROR_DEVICE_REMOVED);
+      CHECK(cpuWaits == (result == VK_TIMEOUT ? 30u : 1u));
+      CHECK(!completedValue && !cpuSignals && !viewsDestroyed);
+      CHECK(dev.submittedCommands.size() == 1 && dev.deferred.size() == 1);
+      const unsigned previous = cpuWaits;
+      CHECK(FAILED(wait_sequence(&dev, 1, TGD3D_WAIT_READBACK)) && cpuWaits == previous);
+   }
+   std::puts("PASS: timeout and device loss never complete or retire in-flight resources");
+}
+
 static void rotated_views()
 {
    reset(); Adapter adapter; Device dev = make_device(&adapter);
@@ -337,7 +360,8 @@ void runtime_contracts();
 
 int main()
 {
-   submission_contract(); nonblocking_map(); rotated_views(); descriptor_contract();
+   submission_contract(); nonblocking_map(); incomplete_fence_keeps_resources();
+   rotated_views(); descriptor_contract();
    query_contract();
    shader_contract(g_VS, true, "tgd3d-vs.spv"); shader_contract(g_PS, false, "tgd3d-ps.spv");
    sampled_shader_contract();

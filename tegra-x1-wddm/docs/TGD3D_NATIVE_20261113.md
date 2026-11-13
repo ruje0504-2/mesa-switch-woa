@@ -212,3 +212,47 @@ Windows的CentralProcessor记录仍为998 MHz，与用户照片的任务管理�
 [应用内存泄漏排查](https://learn.microsoft.com/en-us/troubleshoot/windows-server/performance/troubleshoot-application-service-memory-leaks)
 （2026-11-13查阅，适用于Windows Client/Server）：默认工作集列不能替代提交量。
 本次没有增加分页文件或改变GPU预算来掩盖取证进程增长。
+
+## 开窗重启：补齐调用进入记录
+
+冻结的早期Zink上屏实现`ee7b0d50`在RuntimePresent前通过
+`screen->fence_finish(..., UINT64_MAX)`等待NVK完成；tgd3d使用双向GPU时间线，
+只在回压/CPU访问/销毁时等待CPU。这个差异可以形成后续对照，但本轮尚未把
+CPU等待改回去，也未认定时间线是根因。两者的着色器前端和ICD也有差异，
+不能仅凭旧Zink短时开窗便排除共享资源或编译问题。
+
+此前日志仅记录编译、等待及提交返回，无法识别卡在调用内部的情况。新增
+事件14为设备创建阶段（runtime context、VkDevice、共享Fence、command pool、
+descriptor layout）；15为DXBC/SPIR-V前端和CreateShadersEXT后端；16为
+runtime signal、Vulkan QueueSubmit2和runtime wait。进入为`E_PENDING`，
+返回为对应状态，按PID/TID及阶段配对；编号4/30-kind2才是原来的成功设备/
+Present依据。时间记录30-kind4是CPU等待进入，kind3仍是结束，并增加原始
+VkResult。DESTROY调用现在显式传入原因，旧reason2不能反推它一定是读回。
+诊断改变不修改KMD、ICD、时钟、预算、同步算法或NAK编译算法。
+
+2026-11-13 07:58:13 UTC，在`.59 / Code0`运行12项ARM64 CPU控制全部通过，
+新增控制令等待返回VK_TIMEOUT或VK_ERROR_DEVICE_LOST，验证未完成的命令和
+view仍保留、没有CPU信号伪造完成。实时与离线各14条合成ETW记录字段一致，
+3个实时状态记录无丢失，进入/返回及销毁超时分类检查通过。控制包仅含测试和
+取证工具，没有加载新的UMD或创建GPU设备。构建曾因没有使用项目已有Python
+环境而配置失败，改用已有环境后完成ARM64构建；未修改系统Python配置。
+
+### 旧WATCHDOG转储
+
+10个已取回小转储的头部均为0x141，日期都早于本次tgd3d试验。对最新的
+`WATCHDOG-20261112-0204.dmp`，07:57 UTC已用系统自带ARM64 DbgEng成功读取。
+实际捕获时间是2026-11-11 18:04:24.860 UTC，系统运行309.031秒；它是旧的
+GPU引擎超时live dump。参数2落在`tegragpurender.sys+0x4cfc`，只能说明
+报告归属地址，不能当作最后执行指令。
+
+给DbgEng提供匹配系统镜像后可展开12层CPU栈，经过watchdog、dxgkrnl、dxgmms2
+和nt；没有匹配PDB，若干名称只是最近导出符号加偏移，不能据此断言具体内部
+函数。还读出GUID`270A33FD-3DA6-460D-BA89-3C1BAE21E39B`的19990字节TDR标签。
+尚未从中解出当前UMD着色器、GPU命令流或当前两轮硬复位的原因。
+
+读取器`inspect_kernel_dump.cpp`只打开已有转储，不附加活系统；本进程限制
+256MiB提交内存并在45秒自行退出，防止SSH断开遗留分析进程。两次受限读取均
+正常退出0，第二次解决了第一次缺少镜像unwind表的问题。日志和完整原始标签
+保留在独立产物目录`debugger/watchdog-0204-images.stdout`。微软
+[0x141说明](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x141---video-engine-timeout-detected)
+说明这是live dump并列出参数与TDR标签；它不等于拿到了GPU指令栈。

@@ -208,6 +208,10 @@ VkShaderEXT compile(Shader *shader, uint32_t key)
    Device *dev = shader->dev;
    const VulkanCaps &caps = *dev->caps;
    const uint64_t begin = qpc_now();
+   const uint64_t identity = (uintptr_t)shader;
+   const uint64_t frontend = (UINT64_C(1) << 32) | shader->stage;
+   const uint64_t backend = (UINT64_C(2) << 32) | shader->stage;
+   trace(TGD3D_TRACE_SHADER_PHASE, E_PENDING, frontend, identity);
    TraceLogger logger;
 
    uint32_t in_classes = 0, out_classes = 0;
@@ -226,6 +230,7 @@ VkShaderEXT compile(Shader *shader, uint32_t key)
    auto ir = dxbc::compileShaderToLegalizedIr(container.data(), container.size(), convert, options);
    if (!ir) {
       shader->error = E_INVALIDARG;
+      trace(TGD3D_TRACE_SHADER_PHASE, shader->error, frontend, identity);
       return VK_NULL_HANDLE;
    }
    {
@@ -255,8 +260,10 @@ VkShaderEXT compile(Shader *shader, uint32_t key)
    if (mapping.failed || code.empty()) {
       /* A register this layout cannot address; nothing is remapped silently. */
       shader->error = DXGI_ERROR_UNSUPPORTED;
+      trace(TGD3D_TRACE_SHADER_PHASE, shader->error, frontend, identity);
       return VK_NULL_HANDLE;
    }
+   trace(TGD3D_TRACE_SHADER_PHASE, S_OK, frontend, identity);
 
    VkShaderCreateInfoEXT info = {VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT};
    switch (shader->stage) {
@@ -280,7 +287,9 @@ VkShaderEXT compile(Shader *shader, uint32_t key)
    info.setLayoutCount = SET_COUNT;
    info.pSetLayouts = dev->setLayouts;
    VkShaderEXT handle = VK_NULL_HANDLE;
+   trace(TGD3D_TRACE_SHADER_PHASE, E_PENDING, backend, identity);
    const VkResult result = dev->vk.CreateShadersEXT(dev->vkdev, 1, &info, nullptr, &handle);
+   trace(TGD3D_TRACE_SHADER_PHASE, result == VK_SUCCESS ? S_OK : E_FAIL, backend, identity);
    const uint64_t end = qpc_now();
    LARGE_INTEGER frequency;
    QueryPerformanceFrequency(&frequency);

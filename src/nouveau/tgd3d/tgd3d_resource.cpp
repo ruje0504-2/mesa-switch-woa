@@ -345,7 +345,7 @@ static void resource_fail(Device *dev, Resource *res, HRESULT hr)
    /* Earlier initial-data uploads can already reference this backing when
     * a later subresource fails. Complete them before runtime-owned teardown. */
    if (res->storage.lastUse && !sequence_done(dev, res->storage.lastUse)) {
-      if (FAILED(wait_sequence(dev, res->storage.lastUse)))
+      if (FAILED(wait_sequence(dev, res->storage.lastUse, TGD3D_WAIT_DESTROY)))
          dev->vk.DeviceWaitIdle(dev->vkdev);
    }
    if (res->slice)
@@ -522,7 +522,7 @@ static void APIENTRY DestroyResource(D3D10DDI_HDEVICE hDevice, D3D10DDI_HRESOURC
           * GPU must be done with it first. This is the one synchronous
           * wait on teardown; private images are released by sequence. */
          end_rendering(dev);
-         HRESULT hr = wait_sequence(dev, res->storage.lastUse);
+         HRESULT hr = wait_sequence(dev, res->storage.lastUse, TGD3D_WAIT_DESTROY);
          if (FAILED(hr)) {
             dev->vk.DeviceWaitIdle(dev->vkdev);
             TG_ERROR(dev, hr);
@@ -901,7 +901,7 @@ static HRESULT wait_for_cpu(Device *dev, uint64_t seq, UINT flags)
       }
       return sequence_done(dev, seq) ? S_OK : DXGI_DDI_ERR_WASSTILLDRAWING;
    }
-   return wait_sequence(dev, seq);
+   return wait_sequence(dev, seq, TGD3D_WAIT_READBACK);
 }
 
 static void APIENTRY ResourceMap(D3D10DDI_HDEVICE hDevice, D3D10DDI_HRESOURCE hResource, UINT sub,
@@ -1050,7 +1050,7 @@ static void APIENTRY ResourceUpdateSubresourceUP(D3D10DDI_HDEVICE hDevice, D3D10
          }
          if (!whole) {
             if (res->sliceLastWrite && !sequence_done(dev, res->sliceLastWrite))
-               hr = wait_sequence(dev, res->sliceLastWrite);
+               hr = wait_sequence(dev, res->sliceLastWrite, TGD3D_WAIT_READBACK);
             if (FAILED(hr)) {
                slice_release(dev, fresh, 0);
                TG_ERROR(dev, hr);
@@ -1080,7 +1080,8 @@ static void APIENTRY ResourceUpdateSubresourceUP(D3D10DDI_HDEVICE hDevice, D3D10
       if (!box)
          box = &full;
       hr = wait_sequence(dev, res->sliceLastUse > res->sliceLastWrite ? res->sliceLastUse :
-                                                                         res->sliceLastWrite);
+                                                                         res->sliceLastWrite,
+                         TGD3D_WAIT_READBACK);
       if (FAILED(hr)) {
          TG_ERROR(dev, hr);
          return;
@@ -1161,10 +1162,11 @@ static void copy_region(Device *dev, Resource *dst, UINT dst_sub, UINT dx, UINT 
 
    if (dst->kind == ResKind::Staging && src->kind == ResKind::Staging) {
       /* Both sides are host memory; order the copy after the GPU. */
-      hr = wait_sequence(dev, src->sliceLastWrite);
+      hr = wait_sequence(dev, src->sliceLastWrite, TGD3D_WAIT_READBACK);
       if (SUCCEEDED(hr))
          hr = wait_sequence(dev, dst->sliceLastUse > dst->sliceLastWrite ? dst->sliceLastUse :
-                                                                          dst->sliceLastWrite);
+                                                                          dst->sliceLastWrite,
+                            TGD3D_WAIT_READBACK);
       if (FAILED(hr)) {
          TG_ERROR(dev, hr);
          return;

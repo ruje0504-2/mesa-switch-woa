@@ -28,6 +28,11 @@ enum tgd3d_trace_event {
    TGD3D_TRACE_ROTATE,             /* arg0 resources */
    TGD3D_TRACE_BLT,                /* arg0 flags, arg1 rotate */
    TGD3D_TRACE_SHADER,             /* arg0 stage << 32 | token count, arg1 microseconds */
+   /* E_PENDING is entry; the matching result is return, paired by PID/TID.
+    * These events must not be counted as successful device creation/submission. */
+   TGD3D_TRACE_DEVICE_STAGE,       /* arg0 creation stage 1..5, arg1 Device address */
+   TGD3D_TRACE_SHADER_PHASE,       /* arg0 phase << 32 | stage, arg1 Shader address */
+   TGD3D_TRACE_SUBMIT_PHASE,       /* arg0 phase (1 runtime signal, 2 Vulkan, 3 runtime wait), arg1 sequence */
    TGD3D_TRACE_ERROR = 20,         /* tgd3d_trace_error */
    TGD3D_TRACE_MESSAGE = 21,       /* tgd3d_trace_message */
    TGD3D_TRACE_TIMING = 30,        /* tgd3d_trace_timing */
@@ -40,8 +45,10 @@ enum tgd3d_timing_kind {
    /* qpc: enter, after submit and fence gate, after backpressure, after PresentCb.
     * value: DDI flags, interval, in-flight submissions, backpressure ns. */
    TGD3D_TIMING_PRESENT = 2,
-   /* qpc: wait begin, wait end. value: reason, target sequence. */
+   /* qpc: wait begin, wait end. value: reason, target sequence, raw VkResult. */
    TGD3D_TIMING_CPU_WAIT = 3,
+   /* Same fields, end is zero and result is E_PENDING. */
+   TGD3D_TIMING_CPU_WAIT_BEGIN = 4,
 };
 
 enum tgd3d_wait_reason {

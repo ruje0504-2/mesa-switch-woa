@@ -3,6 +3,7 @@
  */
 #include "tgd3d_trace.h"
 #include <cstdio>
+#include <initializer_list>
 
 int main()
 {
@@ -13,6 +14,19 @@ int main()
    const uint64_t begin = tgd3d::qpc_now();
    tgd3d::trace(TGD3D_TRACE_VULKAN, S_OK, 0xbc22f, (uint64_t(1) << 32) | 0x403000);
    tgd3d::trace(TGD3D_TRACE_CREATE_DEVICE, S_OK, 0xa0009, 0);
+   for (tgd3d_trace_event event : {TGD3D_TRACE_DEVICE_STAGE,
+                                  TGD3D_TRACE_SHADER_PHASE,
+                                  TGD3D_TRACE_SUBMIT_PHASE}) {
+      tgd3d::trace(event, E_PENDING, 1, 0x1234);
+      tgd3d::trace(event, S_OK, 1, 0x1234);
+   }
+   uint64_t wait_ticks[4] = {tgd3d::qpc_now(), 0, 0, 0};
+   uint64_t wait_values[6] = {TGD3D_WAIT_DESTROY, 5, 0, 0, 0, 0};
+   tgd3d::trace_timing(TGD3D_TIMING_CPU_WAIT_BEGIN, E_PENDING, 5, 4,
+                      wait_ticks, wait_values);
+   wait_ticks[1] = tgd3d::qpc_now();
+   wait_values[2] = 2; /* Synthetic VK_TIMEOUT, no actual Vulkan wait. */
+   tgd3d::trace_timing(TGD3D_TIMING_CPU_WAIT, E_FAIL, 5, 4, wait_ticks, wait_values);
    for (unsigned i = 0; i < 3; i++) {
       uint64_t ticks[4] = {tgd3d::qpc_now(), 0, 0, 0};
       uint64_t values[6] = {};

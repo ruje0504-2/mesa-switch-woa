@@ -425,23 +425,29 @@ static HRESULT wait_cpu(Device *dev, uint64_t seq, tgd3d_wait_reason reason)
 {
    if (FAILED(dev->lost))
       return dev->lost;
-   if (dev->completed() >= seq)
+   const uint64_t completed = dev->completed();
+   if (completed >= seq)
       return S_OK;
    const uint64_t begin = qpc_now();
+   const uint64_t entering[4] = {begin, 0, 0, 0};
+   const uint64_t requested[6] = {(uint64_t)reason, seq, 0, 0, 0, 0};
+   trace_timing(TGD3D_TIMING_CPU_WAIT_BEGIN, E_PENDING, dev->submitted,
+                completed, entering, requested);
    VkSemaphoreWaitInfo wait = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
    wait.semaphoreCount = 1;
    wait.pSemaphores = &dev->fence;
    wait.pValues = &seq;
    VkResult result = VK_TIMEOUT;
-   /* The driver sleeps on the fence's kernel event. A fence that does not
-    * advance for this long means the queue is gone, not slow. */
+   /* The driver sleeps on the fence's kernel event. Exhausting this wait
+    * fails the device; it does not establish GPU completion or permit
+    * in-flight resources to be retired. */
    for (int second = 0; second < 30 && result == VK_TIMEOUT; second++)
       result = dev->vk.WaitSemaphores(dev->vkdev, &wait, UINT64_C(1000000000));
    const uint64_t end = qpc_now();
    if (reason == TGD3D_WAIT_BACKPRESSURE)
       dev->stats.backpressureNs += qpc_nanoseconds(end - begin);
    const uint64_t qpc[4] = {begin, end, 0, 0};
-   const uint64_t value[6] = {(uint64_t)reason, seq, 0, 0, 0, 0};
+   const uint64_t value[6] = {(uint64_t)reason, seq, (uint32_t)result, 0, 0, 0};
    trace_timing(TGD3D_TIMING_CPU_WAIT, result == VK_SUCCESS ? S_OK : E_FAIL, dev->submitted,
                 dev->completed(), qpc, value);
    if (result != VK_SUCCESS) {
@@ -451,14 +457,14 @@ static HRESULT wait_cpu(Device *dev, uint64_t seq, tgd3d_wait_reason reason)
    return S_OK;
 }
 
-HRESULT wait_sequence(Device *dev, uint64_t seq)
+HRESULT wait_sequence(Device *dev, uint64_t seq, tgd3d_wait_reason reason)
 {
    if (seq > dev->submitted) {
       HRESULT hr = flush(dev, false);
       if (FAILED(hr))
          return hr;
    }
-   HRESULT hr = wait_cpu(dev, seq, TGD3D_WAIT_READBACK);
+   HRESULT hr = wait_cpu(dev, seq, reason);
    retire(dev);
    return hr;
 }
@@ -474,7 +480,9 @@ static HRESULT gate_runtime(Device *dev)
    wait.ObjectCount = 1;
    wait.ObjectHandleArray = &dev->runtimeFence;
    wait.MonitoredFenceValueArray = &dev->submitted;
+   trace(TGD3D_TRACE_SUBMIT_PHASE, E_PENDING, 3, dev->submitted);
    HRESULT hr = dev->kt.pfnWaitForSynchronizationObjectFromGpuCb(dev->hRTDevice.handle, &wait);
+   trace(TGD3D_TRACE_SUBMIT_PHASE, hr, 3, dev->submitted);
    if (FAILED(hr))
       return hr;
    dev->gated = dev->submitted;
@@ -520,8 +528,10 @@ HRESULT flush(Device *dev, bool waitForSpace)
          prepare.ObjectCount = 1;
          prepare.ObjectHandleArray = &dev->runtimeIngress;
          prepare.MonitoredFenceValueArray = &value;
+         trace(TGD3D_TRACE_SUBMIT_PHASE, E_PENDING, 1, value);
          HRESULT hr = dev->kt.pfnSignalSynchronizationObjectFromGpuCb(
             dev->hRTDevice.handle, &prepare);
+         trace(TGD3D_TRACE_SUBMIT_PHASE, hr, 1, value);
          if (FAILED(hr)) {
             TG_ERROR(dev, DXGI_ERROR_DEVICE_REMOVED);
             return hr;
@@ -545,7 +555,9 @@ HRESULT flush(Device *dev, bool waitForSpace)
       submit.pCommandBufferInfos = &buffer;
       submit.signalSemaphoreInfoCount = 1;
       submit.pSignalSemaphoreInfos = &signal;
+      trace(TGD3D_TRACE_SUBMIT_PHASE, E_PENDING, 2, value);
       VkResult result = dev->vk.QueueSubmit2(dev->queue, 1, &submit, VK_NULL_HANDLE);
+      trace(TGD3D_TRACE_SUBMIT_PHASE, result == VK_SUCCESS ? S_OK : E_FAIL, 2, value);
       if (result != VK_SUCCESS) {
          /* No wait is queued for a failed submission. Never fabricate GPU
           * completion on the CPU: older submissions can still own memory. */

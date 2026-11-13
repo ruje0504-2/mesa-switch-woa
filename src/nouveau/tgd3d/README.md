@@ -10,6 +10,14 @@ Zink 或软件光栅器。它不是应用侧 DXVK，也不是完整 D3D10/Vulkan
 
 ## 本轮修正
 
+最新诊断改动补齐设备创建的五个阶段、DXBC/SPIR-V前端与NVK/NAK后端、三段
+跨队列提交以及CPU Fence等待的进入记录。进入状态为`E_PENDING`，不能当作
+返回失败或成功；旧的成功CreateDevice/Present判定保持独立。等待结束保留原始
+VkResult，销毁明确标记为DESTROY，避免此前统一标记READBACK的误判。
+ARM64构建、12项CPU控制和14条实时/离线ETW传输通过；超时/设备丢失控制确认
+未完成对象仍保留且没有CPU伪造完成。尚未用该诊断UMD完成新的原生测试，
+这些结果不表示开窗重启已修复。
+
 - 修复 Windows 头文件顺序、DDI `ClearRenderTargetView` 签名和错误的资源标志名。
 - 接通 NVK 对私有 instance 请求的读取；只针对 Windows GM20B，普通 NVK/Zink
   instance 保持原来的选择规则。不设置 DWM 进程环境变量，也不改变 NVK 的公开能力。

@@ -65,7 +65,7 @@ static void device_teardown(Device *dev)
       if (dev->fence && dev->cmdPool) {
          flush(dev, false);
          if (SUCCEEDED(dev->lost) && dev->submitted) {
-            if (FAILED(wait_sequence(dev, dev->submitted)))
+            if (FAILED(wait_sequence(dev, dev->submitted, TGD3D_WAIT_DESTROY)))
                dev->vk.DeviceWaitIdle(dev->vkdev);
          } else {
             dev->vk.DeviceWaitIdle(dev->vkdev);
@@ -121,24 +121,35 @@ HRESULT APIENTRY CreateDevice(D3D10DDI_HADAPTER hAdapter, D3D10DDIARG_CREATEDEVI
    dev->nvk = adapter->vk.nvk;
 
    unsigned stage = 1;
+   const uint64_t identity = (uintptr_t)dev;
+   trace(TGD3D_TRACE_DEVICE_STAGE, E_PENDING, stage, identity);
    HRESULT hr = runtime_device_create(dev);
+   trace(TGD3D_TRACE_DEVICE_STAGE, hr, stage, identity);
    if (SUCCEEDED(hr)) {
       stage = 2;
+      trace(TGD3D_TRACE_DEVICE_STAGE, E_PENDING, stage, identity);
       const VkResult result = adapter->vk.createDevice(&dev->vkdev, &dev->vk, &dev->queue);
       hr = result == VK_SUCCESS ? S_OK :
            result == VK_ERROR_OUT_OF_HOST_MEMORY ? E_OUTOFMEMORY : DXGI_ERROR_UNSUPPORTED;
+      trace(TGD3D_TRACE_DEVICE_STAGE, hr, stage, identity);
    }
    if (SUCCEEDED(hr)) {
       stage = 3;
+      trace(TGD3D_TRACE_DEVICE_STAGE, E_PENDING, stage, identity);
       hr = sync_create(dev);
+      trace(TGD3D_TRACE_DEVICE_STAGE, hr, stage, identity);
    }
    if (SUCCEEDED(hr)) {
       stage = 4;
+      trace(TGD3D_TRACE_DEVICE_STAGE, E_PENDING, stage, identity);
       hr = cmd_create(dev);
+      trace(TGD3D_TRACE_DEVICE_STAGE, hr, stage, identity);
    }
    if (SUCCEEDED(hr)) {
       stage = 5;
+      trace(TGD3D_TRACE_DEVICE_STAGE, E_PENDING, stage, identity);
       hr = device_layouts_create(dev);
+      trace(TGD3D_TRACE_DEVICE_STAGE, hr, stage, identity);
    }
    if (FAILED(hr)) {
       trace(TGD3D_TRACE_CREATE_DEVICE, hr, args->Interface, stage);

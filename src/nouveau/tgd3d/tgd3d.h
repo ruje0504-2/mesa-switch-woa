@@ -429,7 +429,7 @@ VkCommandBuffer cmd_draw(Device *dev);        /* command buffer inside the curre
 void end_rendering(Device *dev);
 HRESULT flush(Device *dev, bool waitForSpace);
 void command_barrier(Device *dev);
-HRESULT wait_sequence(Device *dev, uint64_t seq);
+HRESULT wait_sequence(Device *dev, uint64_t seq, tgd3d_wait_reason reason);
 bool sequence_done(Device *dev, uint64_t seq);
 void retire(Device *dev, bool force = false);
 HRESULT sync_create(Device *dev);
