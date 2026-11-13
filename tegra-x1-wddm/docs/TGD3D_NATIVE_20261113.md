@@ -387,3 +387,38 @@ snapshot callback契约，但省去handle表和全内存，只保留本次DWM停
 尚未定位。控制证据归档1644793字节，SHA256
 `73a79b1ee360c3fd1ef37736822b4ed7de14d8ee2bce42051dd077bbf689ac7a`，位于
 独立产物`resource-phase-controls/`。后续原生试验仍须物理观察及失败即回退。
+
+### 末次渲染完成与冻结后的VBlank
+
+继续按内核对象和提交序号配对：DWM的NVK context `0xffff9906adb0cdd0`
+提交36对应DMA751，有177/176完成和180队列结束记录，未超时/抢占；随后同一
+context提交37的时间线15 signal结束。runtime context `0xffff9906ae3addd0`
+等待同一fence对象`0xffffd3040d4ee820`的值15（提交61）亦结束，Flip提交62及
+后续信号63/64/65均结束。故UMD末条Present中completed=14只是当时采样，
+不能据此认定序号15永远未完成。冻结`.158`源码`TgGpuSignalContextWork`在
+通知DMA完成前检查GPU marker、GPU/CPU完成及退休状态；本次仍只把ETW作为
+内核完成报告，不据此替代像素或物理桌面验收。
+
+通过同一内核记录的FrameQPCTime和UMD原始QPC作近似关联，可将末次纹理入口
+与后续驻留/两次GPU VA映射放在同一段时间，而不直接混用两份ETL的FILETIME。
+这一对齐存在通知延迟，不能当成微秒精度的函数进入/返回。paging fence7313
+的0.2005ms仍来自同一内核时钟的wait/unwait配对，与跨会话校准无关。
+
+该原生适配器在末次资源入口后另有4396条VSyncDPC，跨度73.25秒；周期中位数
+16.66651ms，范围16.64594至16.68682ms，报告的扫描地址始终为4223320064。
+冻结源码`panel_interrupt`仅在Tegra DC的VBlank状态位有效时发通知，先读取
+锁存状态，再报告Displayed.Address。因此证据表明显示中断仍在运行、上报地址
+未变化；不能把“约60Hz中断”写成画面持续更新、无撕裂或完整VSync通过。
+没有据此改KMD、提高CPU频率或加入CPU等待替代GPU Fence。
+
+回调边界再次核对微软[SetVidPnSourceAddress](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_setvidpnsourceaddress)
+（2022-11-04）及[DxgkCbNotifyInterrupt](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkcb_notify_interrupt)
+（2021-10-27），2026-11-13查阅；原始配对和时钟样本保留在
+`hardware/staged-04034cfd/analysis/last-render-completion.json`和相邻分析文件。
+
+下一轮冻结包源码为`94cc811acb056d0fbe9374c510a55c0dbe389be3`，6937619字节，
+SHA256 `1b6f96ae70b92148dacb31fcf2052da7ef64027237154677580349140529cd16`。
+正式UMD SHA256 `2f908f4e0f11bae47f093cf3c0ece7bf86cd94ce829d6349e219def490c0b1cf`；
+复构建使PE时间戳变化，CPU合约与取证程序已逐字节确认只有PE/Debug目录时间戳
+不同，代码和数据相同，详见`resource-phase-umd-arm64/control-equivalence.json`。
+设备只完成备份/准备，尚未启动这轮原生测试；仍需新的物理观察回复。
