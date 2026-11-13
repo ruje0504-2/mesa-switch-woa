@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "tgd3d_vk.h"
+#include "util/disk_cache.h"
 #include "vulkan/util/vk_internal_exts.h"
 
 #include <stdio.h>
@@ -121,6 +122,8 @@ uint32_t VulkanAdapter::findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags 
 
 void VulkanAdapter::close()
 {
+   disk_cache_destroy(shaderCache);
+   shaderCache = nullptr;
    if (instance && vk.DestroyInstance)
       vk.DestroyInstance(instance, nullptr);
    instance = VK_NULL_HANDLE;
@@ -294,6 +297,11 @@ HRESULT VulkanAdapter::open(uint64_t luid)
    }
    if (caps.queueFamily == UINT32_MAX)
       FAIL(DXGI_ERROR_UNSUPPORTED, "no graphics queue");
+   VkPhysicalDeviceShaderObjectPropertiesEXT shader = {
+      VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OBJECT_PROPERTIES_EXT};
+   props.pNext = &shader;
+   vk.GetPhysicalDeviceProperties2(pdev, &props);
+   shaderCache = create_shader_cache(shader);
    return S_OK;
 }
 

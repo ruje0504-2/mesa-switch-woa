@@ -18,6 +18,8 @@
 #include <vulkan/vulkan.h>
 #include <stdint.h>
 
+struct disk_cache;
+
 namespace tgd3d {
 
 #define TGD3D_VK_INSTANCE_FUNCS(X) \
@@ -79,6 +81,7 @@ namespace tgd3d {
    X(AllocateDescriptorSets) \
    X(UpdateDescriptorSets) \
    X(CreateShadersEXT) \
+   X(GetShaderBinaryDataEXT) \
    X(DestroyShaderEXT) \
    X(CreateQueryPool) \
    X(DestroyQueryPool) \
@@ -216,6 +219,7 @@ struct VulkanAdapter {
    VkPhysicalDevice pdev = VK_NULL_HANDLE;
    VkInstanceApi vk;
    VulkanCaps caps;
+   disk_cache *shaderCache = nullptr;
    /* True for the Tegra NVK ICD: runtime-owned WDDM allocations are imported
     * through the owner callbacks and the queue fence is a shared monitored
     * fence. False only in the controlled test build, where host pointers and
@@ -230,6 +234,8 @@ struct VulkanAdapter {
    VkResult createDevice(VkDevice *device, VkDeviceApi *api, VkQueue *queue) const;
    uint32_t findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags required) const;
 };
+
+disk_cache *create_shader_cache(const VkPhysicalDeviceShaderObjectPropertiesEXT &properties);
 
 }
 

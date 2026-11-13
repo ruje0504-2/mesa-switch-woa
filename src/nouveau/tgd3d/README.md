@@ -93,6 +93,29 @@ Zink UMD 和独立 ICD 构建入口明确禁用 tgd3d，各自只构建对应组
 单独输出。源码、部署、实机验证和恢复由执行当前目标的窗口统一负责；KMD 先冻结于已追溯的 `.158`，只有故障证据支持时才单独修改。
 具体已构建文件、提交和 SHA256 记录在交付清单，不用包号替代 UMD/ICD 身份。
 
+## 着色器二进制缓存
+
+tgd3d使用Shader Object，因此单纯启用NVK的pipeline cache不会覆盖此入口。
+现在通过`vkGetShaderBinaryDataEXT`保存编译后的二进制，命中后以BINARY类型在当前
+VkDevice重新创建Shader。DXBC反射和SPIR-V生成仍执行，缓存主要省去重复NVK/NAK编译；
+不缓存或跨设备复用VkShader句柄。
+
+复用本支线`16a0c400`已有的Win32 blob cache（该后端源码本轮不变）：后台低优先级写入、
+原子发布、内容校验、跨进程协调和淘汰。tgd3d独立缓存目录的磁盘上限为128MiB，
+与512MiB GPU预算无关。默认启用，沿用`MESA_SHADER_CACHE_DIR`和
+`MESA_SHADER_CACHE_DISABLE`；目录不可用或缓存损坏时正常编译。
+key包含SPIR-V、stage/nextStage、创建flags、描述符布局版本/槽位及shaderBinaryUUID/Version。
+只有INCOMPATIBLE_SHADER_BINARY会删除旧条目并重新编译；创建中的OOM/设备丢失保持原错误。
+导出缓存本身的OOM不使已创建Shader失败，若导出发现设备丢失则销毁尚未提交的新对象并报错。
+
+参考Vulkan 1.4头文件revision354及2026-11-13核查的
+[Shader Object二进制获取](https://docs.vulkan.org/refpages/latest/refpages/source/vkGetShaderBinaryDataEXT.html)、
+[创建约束](https://docs.vulkan.org/refpages/latest/refpages/source/VkShaderCreateInfoEXT.html)和
+[UUID/版本兼容约定](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceShaderObjectPropertiesEXT.html)。
+二进制输入/输出均按16字节对齐。ETW事件18的arg0为0未命中、1加载成功、2排入缓存写入；
+arg1为二进制字节数。写入事件不代表落盘，实机须另测新进程/重启命中和实际编译耗时。
+当前仅完成CPU控制与交叉构建，尚无Switch上的缓存收益和画面正确性验收。
+
 ## 验证边界
 
 控制程序覆盖逐提交双向 Fence 和三处故障、DONOTWAIT 映射、42 个常量缓冲槽位、
@@ -126,22 +149,24 @@ ARM64 控制程序需要另行在 Windows 执行；本机 x64/Wine CPU 控制也
 尚未实现。对应入口返回不支持；A8 可通过 R8 swizzle 采样，当前不支持 A8 render target。
 这些限制不允许描述为完整 FL10_0 兼容性通过。
 
-## 主聊天执行的实机验收顺序
+## 实机验收顺序
 
 1. 使用统一核对过 hash 的 KMD/UMD/ICD，单独注册 `TegraGpuD3DVk.dll`。
    先确认 DWM 加载了这个模块、NVK LUID 与真实 Tegra 适配器一致，再确认物理屏幕。
    不使用旧的 Zink UMD 注册记录作为 tgd3d 加载证据。
 2. 五分钟正确桌面：开窗、移动、缩放、菜单。物理观察、截图和 ETL 分开记录时间。
    任意花屏、冻结或黑屏即本轮实屏失败，停止扩大验收并保留现场证据。
-3. 在同一原生 LUID 上运行已知像素/共享采样读回；例如
+3. 在同一组件组合下验证着色器缓存冷/热启动、重启后命中及画面一致性；用真实VBlank、
+   扫描地址锁存和队列回压确认约60Hz呈现，区分CPU/GPU工作和等待。静止桌面按需提交。
+4. 在同一原生 LUID 上运行已知像素/共享采样读回；例如
    `tgd3d-runtime-check.exe --luid <16位LUID>`，再使用 `--shared-contract`、
    `--shared-layout`、`--sample`、`--load`。每次保存退出码、输出与组件 hash。
    这不是上屏证明，不能跳过前两步。
-4. 确认硬件 1280×720 旋转及物理方向。
-5. 用版本匹配的 Vulkan-Tools Win32 `vkcube` 持续呈现，同时记录实际 VBlank/Present
+5. 确认硬件 1280×720 旋转及物理方向。
+6. 用版本匹配的 Vulkan-Tools Win32 `vkcube` 持续呈现，同时记录实际 VBlank/Present
    节拍和丢帧；请求 interval 1 不等于已测得 60 Hz。
 
-ETW provider 为 `{5f0c4c6e-7a0b-4b52-9d3a-2f6d1e8b4a11}`，事件 version 1。
+ETW provider 为 `{5f0c4c6e-7a0b-4b52-9d3a-2f6d1e8b4a11}`，当前事件version 2，解码保留version 1兼容。
 主聊天可用 `logman` 记录后运行 `tgd3d-trace-export.exe trace.etl > trace.jsonl`。
 TIMING 事件含 QPC 频率和提交值；导出程序对事件丢失、无匹配事件或格式错误返回失败。
 物理帧节拍还需与 KMD 的 latched scanout/VBlank 证据对齐。

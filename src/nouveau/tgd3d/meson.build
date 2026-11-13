@@ -21,6 +21,7 @@ tgd3d_files = files(
   'tgd3d_resource.cpp',
   'tgd3d_runtime.cpp',
   'tgd3d_shader.cpp',
+  'tgd3d_shader_cache.cpp',
   'tgd3d_state.cpp',
   'tgd3d_trace.cpp',
   'tgd3d_upload.cpp',
@@ -29,7 +30,7 @@ tgd3d_files = files(
 
 tgd3d_inc = [inc_include, inc_src, inc_winddk]
 tgd3d_args = ['-DDXBC_SPV_ENABLE_SM5', '-DDXBC_SPV_ENABLE_SPIRV', '-DNOMINMAX']
-tgd3d_deps = [dep_dxbc_spv, cpp.find_library('advapi32')]
+tgd3d_deps = [dep_dxbc_spv, idep_mesautil, cpp.find_library('advapi32')]
 tgd3d_link_args = cc.get_argument_syntax() == 'gcc' ? ['-static', '-static-libgcc', '-static-libstdc++'] : []
 
 # The shipped driver: loads the NVK ICD installed beside it.

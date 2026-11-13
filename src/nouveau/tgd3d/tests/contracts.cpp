@@ -476,9 +476,14 @@ static void sampled_shader_contract(const char *source, const char *outputPath)
 }
 
 void runtime_contracts();
+void shader_cache_contracts(bool child);
 
-int main()
+int main(int argc, char **argv)
 {
+   if (argc == 2 && !strcmp(argv[1], "--shader-cache-child")) {
+      shader_cache_contracts(true);
+      return 0;
+   }
    submission_contract(); nonblocking_map(); incomplete_fence_keeps_resources();
    device_error_contract();
    rotated_views(); descriptor_contract();
@@ -499,5 +504,6 @@ int main()
       "sum+=tex.SampleLevel(samp,uv+step*i,0)*weights[i];"
       "clip(sum.a-threshold); return sum;}", "tgd3d-loop.spv");
    runtime_contracts();
+   shader_cache_contracts(false);
    std::puts("CPU controls passed; no GPU execution, WDDM runtime or physical display tested.");
 }

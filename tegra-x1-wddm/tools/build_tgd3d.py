@@ -44,7 +44,7 @@ def main():
         "-Dtgd3d=enabled", "-Dglx=disabled", "-Degl=disabled", "-Dgbm=disabled",
         "-Dllvm=disabled", "-Dbuild-tests=true", "-Dvideo-codecs=[]",
         "-Dvalgrind=disabled", "-Dlibunwind=disabled", "-Dgles1=disabled",
-        "-Dgles2=disabled", "-Dopengl=false", "-Dshader-cache=disabled",
+        "-Dgles2=disabled", "-Dopengl=false", "-Dshader-cache=enabled",
         "-Dzlib=disabled", "-Dzstd=disabled", "-Dexpat=disabled",
         "-Dbuildtype=release", f"-Dc_args={includes}", f"-Dcpp_args={json.dumps(cpp_args)}",
     ]

@@ -463,6 +463,7 @@ bool blend_uses_dual_source(const BlendState *state);
 /* tgd3d_shader.cpp */
 void shader_fill_table(D3D10DDI_DEVICEFUNCS *table);
 VkShaderEXT shader_variant(Shader *shader, uint32_t key);
+VkResult create_shader_cached(Device *dev, const VkShaderCreateInfoEXT &info, VkShaderEXT *shader);
 
 /* tgd3d_draw.cpp */
 void draw_fill_table(D3D10DDI_DEVICEFUNCS *table);

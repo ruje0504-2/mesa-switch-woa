@@ -288,7 +288,7 @@ VkShaderEXT compile(Shader *shader, uint32_t key)
    info.pSetLayouts = dev->setLayouts;
    VkShaderEXT handle = VK_NULL_HANDLE;
    trace(TGD3D_TRACE_SHADER_PHASE, E_PENDING, backend, identity);
-   const VkResult result = dev->vk.CreateShadersEXT(dev->vkdev, 1, &info, nullptr, &handle);
+   const VkResult result = create_shader_cached(dev, info, &handle);
    const HRESULT hr = result == VK_SUCCESS ? S_OK :
       result == VK_ERROR_DEVICE_LOST ? D3DDDIERR_DEVICEREMOVED :
       result == VK_ERROR_OUT_OF_HOST_MEMORY || result == VK_ERROR_OUT_OF_DEVICE_MEMORY ?

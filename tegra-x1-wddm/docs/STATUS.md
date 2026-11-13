@@ -2,6 +2,17 @@
 
 **Owner priority update:** repair the current pre-logon reboot first; then complete shader caching and measured ~60 Hz VBlank/presentation pacing before hardware rotation. Idle desktops should submit on demand. The owner explicitly requires native startup to stay enabled and authorizes deploying the next reviewed fix directly for their tests. The SD is currently mounted for offline diagnosis.
 
+**Shader cache implementation (not deployed):** tgd3d now saves/reloads Vulkan
+Shader Object binaries using the branch's existing Windows blob-cache backend.
+SPIR-V/state/layout/driver identities select entries; each hit creates a new
+device-local shader. Incompatible binaries fall back to compilation, while
+creation OOM/device loss stays an error. CPU controls cover a fresh process,
+different devices and keys, failure paths, plus existing backend integrity and
+concurrent-writer tests. Native cache hits, compilation-time improvement and
+~60 Hz display acceptance remain outstanding. The separately frozen
+`9de42c82` standard-surface candidate is still the next startup test; its files
+are not replaced by this cache build.
+
 **Latest installation, November 13, 17:26 UTC:** the selected test baseline is
 `.158 + bit14 + persistent native startup`, `fcc53bf1` CPU-sync UMD and
 `d3423d26` ICD. The actual installed kernel is now `oem94.inf`, SHA256
