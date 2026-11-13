@@ -49,6 +49,7 @@ VOID TgGpuTraceExecutionState(TG_GPU_CONTEXT_ENGINE *e,enum tg_gpu_execution_sou
             record.ChannelValue=e->Channel.last_value;
         }
     }
+    TgGpuCacheExecution(&e->DebugCache,&record);
     KeReleaseSpinLock(&e->Lock,irql);
     if(q)KeReleaseSpinLock(&q->Lock,queue_irql);
     TgGpuTraceExecution(&record);

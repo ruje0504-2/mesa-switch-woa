@@ -34,6 +34,16 @@ actual crash dump has been captured. GPU root cause and physical acceptance
 remain unresolved; no new native GPU candidate was deployed during the SD work.
 [Failure evidence and collection](NATIVE_DESKTOP_158.md#failure-investigation-and-missing-crash-dumps)
 
+**KMD report candidate, not deployed:** `CollectDbgInfo` now exports a bounded
+256-byte cached recovery/execution report instead of a single fence word.
+The collector avoids locks, waits, allocation and MMIO at undefined/high IRQL;
+interrupted publication is explicitly unavailable. Actual-helper host controls,
+the decoder and ARM64 build pass. The WDK callback control is built but has
+not yet run on Windows while the separate SD validation owns the device.
+The unsigned `.161` package includes current mainline changes, not only a
+diagnostic backport onto frozen `.158`. No native result is claimed.
+[Format, tests and limits](TDR_DEBUG_REPORT.md)
+
 **New mapping audit fixes, not deployed:** `ba8ed4cc` preserves D3D's
 nonblocking map flag, returns retryable contention, prevents CPU writes over
 pending GPU buffer readers, releases failed transfer references and ignores
