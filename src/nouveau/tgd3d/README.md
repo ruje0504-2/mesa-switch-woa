@@ -79,8 +79,20 @@ Zink UMD 和独立 ICD 构建入口明确禁用 tgd3d，各自只构建对应组
 绑定快照、交换链 view 生命周期、查询池扩展、真实 SM4 转译、非整齐尺寸的共享布局、
 E_PENDING paging、独立 owner 销毁、忽略导入的 ICD、Present token/status。
 这些测试不执行 GPU，也不模拟“物理上屏成功”。生成的 `tgd3d-vs.spv` / `tgd3d-ps.spv`
-及带纹理采样/常量缓冲 13 的 `tgd3d-sample.spv`
+及带纹理采样/常量缓冲 13 的 `tgd3d-sample.spv`、含动态循环/CB 索引/裁剪的 `tgd3d-loop.spv`
 另用 `spirv-val --target-env vulkan1.3` 检查。
+
+Windows NVK 构建开启 `build-tests` 后，可构建 `nvk-tgd3d-shader-check`，将这些
+SPIR-V 送进实际 NVK 描述符 lowering 和 NAK SM53 编码器。例如在控制文件目录运行：
+
+```text
+nvk-tgd3d-shader-check.exe vs tgd3d-vs.spv vs
+nvk-tgd3d-shader-check.exe ps tgd3d-loop.spv loop
+```
+
+输出 `.bin` 和 `.nak.txt`。工具使用 GM20B 编译参数和 tgd3d 的三个普通描述符集合，
+通过 NVK 已有的无 nvkmd 分支跳过上传；不枚举适配器、不创建 KMT 设备或提交 GPU 工作。
+这是编译接受性检查，不证明指令在硬件上正确执行，也不能排除实际桌面着色器的问题。
 
 ARM64 控制程序需要另行在 Windows 执行；本机 x64/Wine CPU 控制也不能替代它。
 2026-11-12（洛杉矶时间）本机 x64/Wine 11.21 执行的 11 项控制输出全部通过，

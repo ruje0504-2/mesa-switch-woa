@@ -376,6 +376,18 @@ _dev_icd = custom_target(
 devenv.append('VK_DRIVER_FILES', _dev_icd.full_path())
 
 if with_tests and with_platform_windows
+  # Manual CPU compiler control for SPIR-V exported by tgd3d-contracts.
+  executable('nvk-tgd3d-shader-check', 'test_tgd3d_shader.c',
+    include_directories : [inc_include, inc_src, include_directories('.')],
+    dependencies : [
+      declare_dependency(dependencies : nvk_deps).partial_dependency(
+        compile_args : true, includes : true),
+      cc.find_library('gdi32'),
+    ],
+    # Vulkan entrypoints are weak: ordinary archive linking can leave them null.
+    link_whole : libnvk,
+    objects : files(nvk_kmt_object),
+    link_args : ld_args_gc_sections)
   test('nvk_win32_sync', executable('test-nvk-win32-sync',
     'nvkmd/windows/test-win32-sync.c',
     include_directories : [inc_include, inc_src, include_directories('.')],

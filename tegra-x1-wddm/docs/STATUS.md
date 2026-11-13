@@ -1,5 +1,13 @@
 # GPU status
 
+**November 13 shader audit:** the owner also reports freezing when closing a
+web page, with large-area changes appearing easier to trigger. Shader execution
+and shared-surface retirement remain hypotheses, not established causes.
+The four CPU fixtures (VS, PS, sampled PS with CB13, and a loop/indexing/clip PS)
+pass SPIR-V validation and production NVK/NAK SM53 compilation. No GPU execution
+or new desktop acceptance is implied. The compiler control opens no adapter or
+KMT device; the running `.158`/CPU-sync package has not been replaced.
+
 **November 13, 12:54 UTC source fix:** failed shader creation now destroys its
 token/signature storage before reporting the error; the runtime never calls
 DestroyShader for a failed handle. A production-DDI failure injection fails

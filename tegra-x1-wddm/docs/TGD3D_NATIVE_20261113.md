@@ -590,3 +590,29 @@ token/输入签名/输出签名的vector分配因此泄漏。现在先析构，�
 ARM64/x64构建通过，产物及对照保存在`shader-create-cleanup-controls/`。
 三份控制着色器的SPIR-V通过`spirv-val --target-env vulkan1.3`。
 没有执行NVK/NAK或GPU，也未将修正部署到手动测试设备；不能归为天气重启根因已修复。
+
+### 网页关闭反馈与 SM53 编译控制
+
+用户补充：关闭网页也可能直接冻结，面积大的画面变化更容易触发。按失败记录保留，
+不能据此在着色器执行、大纹理/共享表面释放与复用之间选定根因。
+
+新增手动 CPU 编译检查复用生产 `nvk_device_shader_ops`、普通描述符布局和 GM20B
+参数：SM4 DDI → dxbc-spirv → SPIR-V → NVK lowering → NAK SM53。没有创建
+KMT/Vulkan 硬件设备、分配 GPU 内存、上传 shader 或提交 GPU 工作。原始三个 fixture
+之外增加由 CB13 控制循环次数、动态读取权重、采样和 clip 的像素着色器；其 SPIR-V
+实际含 OpLoopMerge、动态 OpAccessChain 和 OpDemoteToHelperInvocation。
+
+ARM64 Windows CPU 前端控制通过；四份 SPIR-V 均通过 Vulkan 1.3 目标校验；后端分别
+生成64/160/704/12000字节 SM53代码（6/13/63/1027条指令）。检查工具早期入口崩溃
+已定位为静态链接没有拉入 weak Vulkan entrypoint，改用 `link_whole` 修复；不是
+着色器编译失败，也不是 os_get_option/TLS 缺陷。控制输出在独立产物目录
+`nvk-shader-controls-arm64/`，保留 SPIR-V、NAK 文本与机器码。
+
+静态对照排除了两个直接套用的修复理由：Zink 与 tgd3d 都按微软 DXGI 契约保留
+callback 表指针；冻结 KMD `6c854e9f` 已在 golden context 保存前清除
+`0x419f78` 的 NO_HELPER_LOADS 位，并检查读回。因此不因 Horizon 片元全局加载问题
+直接撤回普通 CB 描述符，也没有修改 KMD。此处只确认源码配置，未新增寄存器实测。
+
+实际桌面 shader、描述符地址、GPU 执行和关闭窗口资源退休仍未验收。`68c1bb7e`
+失败创建清理修复已经推送；本轮没有将它部署到用户当前手动测试的 UMD，也没有
+修改双向 Fence、重启 Windows 或回退 `.59`。

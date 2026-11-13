@@ -409,22 +409,17 @@ static void shader_contract(const BYTE *dxbc, bool vertex, const char *outputPat
    std::puts("PASS: failed shader creation releases token/signature allocations before SetErrorCb");
 }
 
-static void sampled_shader_contract()
+static void sampled_shader_contract(const char *source, const char *outputPath)
 {
    HMODULE module = LoadLibraryW(L"d3dcompiler_47.dll"); CHECK(module);
    auto compile = reinterpret_cast<pD3DCompile>(reinterpret_cast<void *>(GetProcAddress(module, "D3DCompile")));
    CHECK(compile);
-   const char *source =
-      "Texture2D<float4> tex:register(t0); SamplerState samp:register(s0);"
-      "cbuffer C:register(b13){float4 color;}"
-      "float4 main(float4 p:SV_Position,float2 uv:TEXCOORD0):SV_Target {"
-      "return tex.Sample(samp,uv)*color;}";
    ID3DBlob *code = nullptr, *error = nullptr;
    HRESULT hr = compile(source, strlen(source), "tgd3d-control", nullptr, nullptr,
                         "main", "ps_4_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &error);
    if (error) { std::fwrite(error->GetBufferPointer(), 1, error->GetBufferSize(), stderr); error->Release(); }
    CHECK(SUCCEEDED(hr) && code);
-   shader_contract(static_cast<const BYTE *>(code->GetBufferPointer()), false, "tgd3d-sample.spv", true);
+   shader_contract(static_cast<const BYTE *>(code->GetBufferPointer()), false, outputPath, true);
    code->Release(); FreeLibrary(module);
    std::puts("PASS: SM4 sampled image, sampler and constant buffer 13 reflection and SPIR-V");
 }
@@ -437,7 +432,20 @@ int main()
    rotated_views(); descriptor_contract();
    query_contract();
    shader_contract(g_VS, true, "tgd3d-vs.spv"); shader_contract(g_PS, false, "tgd3d-ps.spv");
-   sampled_shader_contract();
+   sampled_shader_contract(
+      "Texture2D<float4> tex:register(t0); SamplerState samp:register(s0);"
+      "cbuffer C:register(b13){float4 color;}"
+      "float4 main(float4 p:SV_Position,float2 uv:TEXCOORD0):SV_Target {"
+      "return tex.Sample(samp,uv)*color;}", "tgd3d-sample.spv");
+   /* Exercise uniform-controlled loop bounds and dynamic constant-buffer
+    * indexing in a sampled pixel shader. A simple triangle omits both. */
+   sampled_shader_contract(
+      "Texture2D<float4> tex:register(t0); SamplerState samp:register(s0);"
+      "cbuffer C:register(b13){uint taps; float threshold; float2 step; float4 weights[16];}"
+      "float4 main(float4 p:SV_Position,float2 uv:TEXCOORD0):SV_Target {"
+      "float4 sum=0; [loop] for(uint i=0;i<min(taps,16u);++i)"
+      "sum+=tex.SampleLevel(samp,uv+step*i,0)*weights[i];"
+      "clip(sum.a-threshold); return sum;}", "tgd3d-loop.spv");
    runtime_contracts();
    std::puts("CPU controls passed; no GPU execution, WDDM runtime or physical display tested.");
 }
