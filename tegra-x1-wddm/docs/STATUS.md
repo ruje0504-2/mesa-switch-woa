@@ -1,5 +1,14 @@
 # GPU status
 
+**Current device handoff (November 13, 12:14 UTC):** the owner requested
+manual testing with the unfixed bidirectional bridge disabled. Frozen `.158`
+is active (Code 0, hardware/panel status 0) with CPU-sync UMD `d06e29e2`
+(`b3ba7de9…`). Automatic trial/recovery tasks and trace sessions were stopped;
+Windows was not rebooted. Leave the device to the owner until they hand it
+back. Source/audit work may continue. The bridge's implementation has not
+been fixed; the repository default remains GPU bridging, and this explicit
+CPU-control build is the current manual hardware configuration.
+
 **November 13, tgd3d-vulkan update:** native tgd3d has produced a usable portrait
 desktop, but stability has failed. The latest `94cc811a` trial passed its short
 physical static observation and then unexpectedly restarted before the colored
