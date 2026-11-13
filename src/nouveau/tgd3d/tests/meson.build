@@ -21,6 +21,12 @@ executable(
   link_args : tgd3d_link_args,
 )
 executable(
+  'tgd3d-display-timing',
+  'display_timing.cpp',
+  dependencies : [cpp.find_library('dxgi'), cpp.find_library('dwmapi')],
+  link_args : tgd3d_link_args,
+)
+executable(
   'tgd3d-trace-export',
   'trace_export.cpp',
   include_directories : [include_directories('..')],

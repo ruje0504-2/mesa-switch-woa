@@ -52,7 +52,7 @@ def main():
     artifacts = {"TegraGpuD3DVk.dll": "src/nouveau/tgd3d/TegraGpuD3DVk.dll",
                  "tgd3d-contracts.exe": "src/nouveau/tgd3d/tests/tgd3d-contracts.exe"}
     for name in ("tgd3d-runtime-check.exe", "tgd3d-trace-export.exe", "tgd3d-trace-control.exe",
-                 "tgd3d-dump-capture.exe"):
+                 "tgd3d-dump-capture.exe", "tgd3d-display-timing.exe"):
         artifacts[name] = "src/nouveau/tgd3d/tests/" + name
     subprocess.run(["ninja", "-C", str(build), *artifacts.values()],
                    cwd=source, check=True)

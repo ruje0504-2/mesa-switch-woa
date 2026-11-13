@@ -116,6 +116,26 @@ key包含SPIR-V、stage/nextStage、创建flags、描述符布局版本/槽位�
 arg1为二进制字节数。写入事件不代表落盘，实机须另测新进程/重启命中和实际编译耗时。
 当前仅完成CPU控制与交叉构建，尚无Switch上的缓存收益和画面正确性验收。
 
+## 垂直同步取样
+
+`tgd3d-display-timing.exe --luid <本轮16位原生LUID> 180`在该适配器唯一的活动输出上
+调用`IDXGIOutput::WaitForVBlank`，保存原始QPC和间隔中位数/p95/最大值。第一段不完整
+刷新只用于对齐，不参与频率统计；没有Sleep制造的60Hz。工具不创建窗口、提交绘制、
+Present或改变显示模式。取样数量30–600，超时只终止本工具。
+
+两次`DwmGetCompositionTimingInfo(NULL,...)`记录合成/提交/显示计数；只有第二次查询
+输出文档规定的区间计数。应在物理控制台会话执行，输出同时记录进程session与console
+session，不能把SSH服务会话的DWM数据直接归给实屏。CPU时间属于取样线程，
+wait调用耗时包含API本身的CPU成本；两者不等于GPU工作时间。
+
+退出0仅表示取样完成。原生同LUID/DWM模块、真实约60Hz、扫描地址锁存、交互期间的呈现
+和物理画面仍须结合本轮证据判断。静止桌面可以有60Hz扫描而没有60次新合成，不能为了
+计数持续空转。该工具尚未在Switch运行。
+参考微软[WaitForVBlank](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgioutput-waitforvblank)
+（2024-02-22）、[DwmGetCompositionTimingInfo](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmgetcompositiontiminginfo)
+（2024-02-22）和[DWM_TIMING_INFO](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ns-dwmapi-dwm_timing_info)
+（2021-04-02），核查日期2026-11-13；不是用文档声明代替硬件测量。
+
 ## 验证边界
 
 控制程序覆盖逐提交双向 Fence 和三处故障、DONOTWAIT 映射、42 个常量缓冲槽位、
