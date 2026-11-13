@@ -9,10 +9,8 @@ $m=Read-Json "$p\trial-components.json"
 foreach($binary in 'tgd3d-trace-export.exe','tgd3d-trace-control.exe') { Check-File "$p\app\$binary" $m.app.$binary }
 $started=$false;$consumerProcess=$null
 try {
-    New-EtwTraceSession -Name $name -LogFileMode 0x101 -LocalFilePath "$p\control.etl" -ClockType Performance -BufferSize 64 -MinimumBuffers 4 -MaximumBuffers 16 -FlushTimer 1|Out-Null
+    $consumer=& "$p\Start-NativeUmdTrace.ps1" -Directory $p -TraceName $name -CreateSession
     $started=$true
-    Add-EtwTraceProvider -Guid '{5f0c4c6e-7a0b-4b52-9d3a-2f6d1e8b4a11}' -SessionName $name -Level 4 -MatchAnyKeyword 1|Out-Null
-    $consumer=& "$p\Start-NativeUmdTrace.ps1" -Directory $p -TraceName $name
     $consumerProcess=Get-Process -Id $consumer.Pid
     $fixture=Start-Process "$p\app\tgd3d-trace-control.exe" -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$p\fixture.json" -RedirectStandardError "$p\fixture.err"
     if($fixture.ExitCode) { throw 'Synthetic ETW emitter failed' }
@@ -43,7 +41,7 @@ foreach($s in $states) {
     if($s.clock -ne 'qpc' -or $s.qpc_frequency -ne [Diagnostics.Stopwatch]::Frequency -or $s.query_status -ne 0 -or
        $s.invalid -ne 0 -or $s.events_lost -ne 0 -or $s.realtime_buffers_lost -ne 0 -or $s.log_buffers_lost -ne 0) { throw 'Live trace state differs' }
 }
-$offline=Start-Process "$p\app\tgd3d-trace-export.exe" -ArgumentList ('"'+$p+'\control.etl"') -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$p\offline.jsonl" -RedirectStandardError "$p\offline.log"
+$offline=Start-Process "$p\app\tgd3d-trace-export.exe" -ArgumentList ('"'+$p+'\umd.etl"') -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$p\offline.jsonl" -RedirectStandardError "$p\offline.log"
 $offlineRows=@(Get-Content "$p\offline.jsonl"|ForEach-Object {$_|ConvertFrom-Json})
 if($offline.ExitCode -ne 0 -or $offlineRows.Count -ne 14) { throw 'Offline v2 export failed' }
 for($i=0;$i -lt 14;$i++) {

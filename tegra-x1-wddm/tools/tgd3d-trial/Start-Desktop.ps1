@@ -81,7 +81,7 @@ do {
 } while ($flushWait.ElapsedMilliseconds -lt 4000)
 if (!$sample -or $sample.Length -lt 32) { throw 'No successful ETW flush before the startup request' }
 
-$umdConsumer=& (Join-Path $dir 'Start-NativeUmdTrace.ps1') -Directory $dir -TraceName 'Tgd3dTrialDxg'
+$umdConsumer=& (Join-Path $dir 'Start-NativeUmdTrace.ps1') -Directory $dir -TraceName 'Tgd3dTrialUmd' -CreateSession
 $svc=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($svcPath,$true)
 if (!$svc) { throw 'Display service key is unavailable' }
 $grant=$false

@@ -21,13 +21,15 @@ try {
     }
     try { & (Join-Path $dir 'Stop-DxgBootTrace.ps1') -TraceName 'Tgd3dTrialDxg' }
     catch { Write-Output ('Trace cleanup: '+$_.Exception.Message) }
+    if(Get-EtwTraceSession -Name 'Tgd3dTrialUmd' -ErrorAction SilentlyContinue) {
+        try { Stop-EtwTraceSession -Name 'Tgd3dTrialUmd' }
+        catch { Write-Output ('UMD trace cleanup: '+$_.Exception.Message) }
+    }
     foreach($name in 'umd-live-process.json','trace-flush-process.json') {
         $path=Join-Path $dir $name
         if(Test-Path $path) {
             $record=Read-Json $path
-            $process=Get-Process -Id $record.Pid -ErrorAction SilentlyContinue
-            if($process -and $process.StartTime.ToUniversalTime() -eq [DateTime]::Parse($record.StartTime).ToUniversalTime() -and
-               $process.ProcessName -eq [IO.Path]::GetFileNameWithoutExtension($record.Exe)) { Stop-Process -Id $process.Id -Force }
+            Stop-RecordedTrialProcess $record
         }
     }
     # Candidate files need not still be intact to recover. Validate the backups.

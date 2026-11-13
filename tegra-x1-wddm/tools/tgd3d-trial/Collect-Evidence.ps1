@@ -6,7 +6,9 @@ Require-Administrator
 Check-Baseline
 $p=$PSScriptRoot
 if(Get-ScheduledTask -TaskName 'Tgd3dTrial*' -ErrorAction SilentlyContinue) { throw 'Trial tasks remain' }
-if(Get-EtwTraceSession -Name 'Tgd3dTrialDxg' -ErrorAction SilentlyContinue) { throw 'Trial trace remains active' }
+foreach($trace in 'Tgd3dTrialDxg','Tgd3dTrialUmd') {
+    if(Get-EtwTraceSession -Name $trace -ErrorAction SilentlyContinue) { throw 'Trial trace remains active' }
+}
 if(Test-Path "$env:windir\System32\drivers\TgGpuBootTest158.bin") { throw 'Trial permit remains' }
 if(Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\AllowDesktopStart') { throw 'Trial grant remains' }
 $verified=Read-Json (Join-Path $p 'recovery-verified.json')
@@ -26,6 +28,11 @@ foreach($f in Get-ChildItem $p -Filter 'dxg-start.etl*' -File|Where-Object {$_.N
     $export+=@{File=$f.Name;UmdExit=$code;KernelExit=$kernel.ExitCode;UmdSummary=[IO.File]::ReadAllText("$base.umd.log");KernelSummary=[IO.File]::ReadAllText("$base.kernel.log")}
 }
 $export|ConvertTo-Json -Depth 5|Set-Content "$p\recovered-export.json" -Encoding UTF8
+if(Test-Path "$p\umd.etl") {
+    if(Test-Path "$p\umd.etl.recovered.jsonl"){throw 'A UMD export already exists; preserve it'}
+    $process=Start-Process "$p\app\tgd3d-trace-export.exe" -ArgumentList ('"'+$p+'\umd.etl"') -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$p\umd.etl.recovered.jsonl" -RedirectStandardError "$p\umd.etl.recovered.log"
+    if($process.ExitCode){throw 'Separate UMD export failed'}
+}
 $start=[DateTime]::Parse((Read-Json "$p\before-restart.json").Utc).AddMinutes(-2)
 @(Get-WinEvent -FilterHashtable @{LogName='System';StartTime=$start;Id=@(41,6005,6006,6008,1001,1074,12,13)} -ErrorAction SilentlyContinue|ForEach-Object {
     @{Time=$_.TimeCreated.ToUniversalTime().ToString('o');RecordId=$_.RecordId;Id=$_.Id;Provider=$_.ProviderName;Xml=$_.ToXml();Message=$_.Message}
@@ -37,8 +44,11 @@ foreach($dump in $dumps) {
     Copy-Item $dump.FullName (Join-Path "$p\crash-dumps" $dump.Name)
 }
 @{Settings=$crash;Dumps=@($dumps|Select-Object Name,Length,LastWriteTimeUtc)}|ConvertTo-Json -Depth 5|Set-Content "$p\crash-records.json" -Encoding UTF8
-Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\Parameters' -ErrorAction SilentlyContinue|
-    ConvertTo-Json -Depth 4|Set-Content "$p\kmd-parameters-after.json" -Encoding UTF8
+# Keep native registry output. Serializing provider-owned PowerShell objects
+# recursively was present in the SD inventory that exhausted system commit.
+& reg.exe query 'HKLM\SYSTEM\CurrentControlSet\Services\tegragpurender\Parameters'|
+    Out-File "$p\kmd-parameters-after.txt" -Encoding UTF8
+if($LASTEXITCODE -notin @(0,1)){throw 'KMD registry evidence query failed'}
 $entries=@()
 foreach($f in Get-ChildItem $p -Recurse -File|Where-Object {$_.Name -ne 'evidence-manifest.json'}) {
     # Directory enumeration can retain an old size after an interrupted writer.

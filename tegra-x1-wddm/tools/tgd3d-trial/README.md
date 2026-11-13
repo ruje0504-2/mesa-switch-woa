@@ -40,6 +40,10 @@
 保留整个准备目录的 JSON/JSONL、ETL、日志、evidence/ 和 recovery.json。
 收集前停止本包 ETW 会话；离线可用 app/tgd3d-trace-export.exe 解码 ETL。
 解码器也支持 --follow，使用 tgd3d 独立 provider，不使用 Zink loader 日志判断成功。
+UMD provider现在使用启动门控打开前创建的独立`Tgd3dTrialUmd`会话，输出
+`umd.etl`；内核/DXGI/DWM继续保留在`Tgd3dTrialDxg`。两者分别记录丢失计数，
+不会把内核会话丢失混作UMD会话丢失，也不忽略UMD自身的任何丢失。
+窗口工具在Shown时显式ShowWindow，并记录Win32可见状态；它仍不替代物理观察。
 已复用的工具来源记录在 tool-provenance.json；打包不会构建主线或合并 main。
 
 回退后的低开销SD/内存排查使用主机端 `../collect_recovery_health.py`，指定

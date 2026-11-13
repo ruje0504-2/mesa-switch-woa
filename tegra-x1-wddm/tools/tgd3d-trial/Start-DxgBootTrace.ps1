@@ -32,11 +32,8 @@ try {
     New-ItemProperty $scheduler Enabled -PropertyType DWord -Value 1 | Out-Null
     New-ItemProperty $scheduler EnableLevel -PropertyType DWord -Value 4 | Out-Null
     New-ItemProperty $scheduler MatchAnyKeyword -PropertyType QWord -Value 1 | Out-Null
-    $umd=Join-Path $key '{5f0c4c6e-7a0b-4b52-9d3a-2f6d1e8b4a11}'
-    New-Item -Path $umd | Out-Null
-    New-ItemProperty $umd Enabled -PropertyType DWord -Value 1 | Out-Null
-    New-ItemProperty $umd EnableLevel -PropertyType DWord -Value 4 | Out-Null
-    New-ItemProperty $umd MatchAnyKeyword -PropertyType QWord -Value 1 | Out-Null
+    # UMD identity uses a separate small session started before native entry.
+    # High-volume kernel traces must not share its buffer/loss accounting.
     # KMD first failure and execution/fetch-boundary records (events 1-3).
     $kmd=Join-Path $key '{c27c1f9b-62e8-4e21-b29b-6bb2d585c6d0}'
     New-Item -Path $kmd | Out-Null

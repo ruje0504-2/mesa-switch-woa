@@ -11,6 +11,23 @@ function Require-Administrator {
 }
 function Read-Json([string]$Path) { [IO.File]::ReadAllText($Path)|ConvertFrom-Json }
 function File-Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
+function Stop-RecordedTrialProcess($Record) {
+    $process=Get-Process -Id $Record.Pid -ErrorAction SilentlyContinue
+    if(!$process){return}
+    try {
+        # Retain the process object while checking identity; a recycled PID
+        # must never select an unrelated process for termination.
+        $null=$process.Handle
+        if($process.StartTime.ToUniversalTime() -eq [DateTime]::Parse($Record.StartTime).ToUniversalTime() -and
+           $process.ProcessName -eq [IO.Path]::GetFileNameWithoutExtension($Record.Exe)) {
+            $process.Kill()
+            if(!$process.WaitForExit(5000)){throw 'Owned collector did not exit'}
+        }
+    } catch {
+        # ETW stop can make the consumer exit between lookup and Kill.
+        if(!$process.HasExited){throw}
+    } finally { $process.Dispose() }
+}
 function Device-Property([string]$Name) {
     (Get-PnpDeviceProperty -InstanceId $script:DeviceId -KeyName ('DEVPKEY_Device_'+$Name)).Data
 }

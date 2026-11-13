@@ -256,3 +256,57 @@ GPU引擎超时live dump。参数2落在`tegragpurender.sys+0x4cfc`，只能说�
 保留在独立产物目录`debugger/watchdog-0204-images.stdout`。微软
 [0x141说明](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/bug-check-0x141---video-engine-timeout-detected)
 说明这是live dump并列出参数与TDR标签；它不等于拿到了GPU指令栈。
+
+## 第三轮：静止通过，隐藏窗口与共享ETW问题
+
+UMD源码`d6470feb38defeb824f34cda39ffbb9e886f611d`，SHA256
+`e25c01c90cb63587257baaa67468d480821e41f5e406cea410f220a3db115818`；KMD仍为
+冻结`.158`，ICD仍为`7c677212`，各自哈希未变。测试包6721338字节，SHA256
+`590f0bd4eec4eeef08a4a54fee0bc2820fa1939a94a2f94eecf73b5a9f9ca04a`。
+本轮目录`tgd3d-d6470feb-20261113-160356`，原生启动记录08:07:48 UTC，
+LUID`000000000008f379`，DWM PID580、创建FILETIME`134390307694560305`。
+静止阶段0/15/30秒检查通过，观察42.93秒；用户确认“画面正常，能操作”。
+
+08:11:03 UTC窗口子进程被启动，PID2576在08:11:06写出Managed Visible=true，
+记录8次移动/缩放并于65.03秒退出0。但用户没看到窗口，08:11:33的桌面截图
+也没有它。08:12:23观察器因共享会话`events_lost`增加而失败。最初将其说成
+“开窗前被工具中止”不正确；后来取回完整动作和进程记录后已更正。
+
+保留ETL有正常EndTime、1365个写出缓冲和1个丢失事件；解码6958个UMD事件，
+其中DWM有423次成功Present、429次成功提交。132个着色器返回均成功；
+75对设备创建阶段、264对编译阶段、1809对提交阶段的进入/返回数量一致。
+保留的两次CPU等待是READBACK，返回VK_SUCCESS；其它错误记录为
+DONOTWAIT Map的`0x887b0001`。这不构成实际窗口显示、真实60Hz或完整无丢失验证。
+
+回退首次被清理竞态阻断：停止ETW后，consumer PID1772自行退出；随后
+Stop-Process按PID停止时抛出“找不到进程”。08:17:49确认记录的collector都已
+退出后重试恢复，08:20:20完成`.59`/原ACPI/显示和平台设置验证，用户确认
+“已回到桌面，能操作”。原错误与重试记录均保留。用户报告风扇较快时，
+08:15的读回为SoC38C、板温36C、PWM118/236、CPU1497600kHz、未热降频；
+这是当时的控制器采样，不是实测RPM或此前峰值温度。
+
+### .59窗口对照与修正
+
+保持原启动参数和隐藏PowerShell父子进程，在`.59`运行同一窗口脚本：
+ManagedVisible=true，但IsWindowVisible=false、Iconic=false、Cloaked=0。
+它能报告13次移动/缩放并退出0，实际仍未显示，故这些软件计数不能作开窗通过依据。
+修正后在Shown回调显式ShowWindow(SW_SHOW)，再检查Win32可见状态并激活自有窗口。
+08:26的对照NativeVisible=true、Foreground等于该窗口句柄，90.13秒内17次
+移动/缩放并退出0；用户确认“能看到，显示和操作正常”。这是工具在`.59`的
+对照通过，不是tgd3d原生窗口通过，也没有修复前两次硬重启。
+
+依据微软[ShowWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow)
+（2023-06-06），父进程STARTUPINFO可以覆盖第一次显示命令；后续显式显示才
+使用请求状态。[IsWindowVisible](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-iswindowvisible)
+（2021-10-13）检查WS_VISIBLE，但仍不能证明未被遮挡或面板正确，因此保留实屏反馈。
+
+另外将UMD独立为64KiB、4至16个缓冲、1秒刷新会话，原内核会话继续保留；
+identity读取跳过无关的调用阶段JSON对象构造，原始日志全部保留。回退通过
+持有并核对进程对象来停止collector，已退出视为清理成功，真实失败仍报错。
+08:31在`.59`通过3项实际进程控制、18项身份读取控制、14条实时/离线合成ETW
+传输和脚本语法检查，无GPU工作。原生显示、垂直同步和重启修复仍待下一轮。
+
+本轮证据196文件、130470854字节均已按清单长度/SHA256取回校验。归档20886011
+字节，SHA256`0c8d6289eda282f3a6a9de204edf8a8bac100ae4925bee4b0102105ddc447ef7`，
+位于独立产物目录`hardware/staged-d6470feb/`。其中原工具、修正后`.59`对照、
+两次回退记录分别保留，未覆盖原始失败记录。

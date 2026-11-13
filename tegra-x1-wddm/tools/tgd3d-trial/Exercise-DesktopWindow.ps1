@@ -9,6 +9,14 @@ $ErrorActionPreference='Stop'
 if((Get-Process -Id $PID).SessionId -eq 0){throw 'Use an interactive desktop session'}
 if(Test-Path ($OutputPrefix+'.json')){throw 'Window exercise result already exists'}
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class Tgd3dWindowVisibility {
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr window, int command);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+}
+'@
 [Windows.Forms.Application]::EnableVisualStyles()
 $form=New-Object Windows.Forms.Form
 $form.Text='Desktop observation '+$CandidateVersion
@@ -41,8 +49,16 @@ function Save-WindowRecord([string]$suffix,$record){
 $timer=New-Object Windows.Forms.Timer
 $timer.Interval=500
 $form.add_Shown({
+    # STARTUPINFO from the hidden PowerShell launch can override the first
+    # ShowWindow call. WinForms.Visible then describes managed state only.
+    # A subsequent explicit show must make this owned test window visible.
+    $null=[Tgd3dWindowVisibility]::ShowWindow($form.Handle,5)
+    $form.Activate()
+    if(![Tgd3dWindowVisibility]::IsWindowVisible($form.Handle)) {
+        $state.Error='Owned test HWND remains hidden';$script:closeReason='Error';$form.Close();return
+    }
     $watch.Start();$timer.Start()
-    Save-WindowRecord '.ready.json' @{Utc=[DateTime]::UtcNow.ToString('o');Pid=$PID;Session=$state.Session;Handle=$form.Handle.ToInt64();Visible=$form.Visible}
+    Save-WindowRecord '.ready.json' @{Utc=[DateTime]::UtcNow.ToString('o');Pid=$PID;Session=$state.Session;Handle=$form.Handle.ToInt64();Visible=$form.Visible;NativeVisible=[Tgd3dWindowVisibility]::IsWindowVisible($form.Handle)}
 })
 $timer.add_Tick({
     try{
@@ -68,7 +84,7 @@ $timer.add_Tick({
             if($before.X -ne $after.X -or $before.Y -ne $after.Y){$state.Moves++}
             if($before.Width -ne $after.Width -or $before.Height -ne $after.Height){$state.Resizes++}
             $script:lastStep=$step
-            Save-WindowRecord '.position.json' @{Utc=[DateTime]::UtcNow.ToString('o');ElapsedSeconds=$watch.Elapsed.TotalSeconds;Moves=$state.Moves;Resizes=$state.Resizes;X=$after.X;Y=$after.Y;Width=$after.Width;Height=$after.Height;Visible=$form.Visible}
+            Save-WindowRecord '.position.json' @{Utc=[DateTime]::UtcNow.ToString('o');ElapsedSeconds=$watch.Elapsed.TotalSeconds;Moves=$state.Moves;Resizes=$state.Resizes;X=$after.X;Y=$after.Y;Width=$after.Width;Height=$after.Height;Visible=$form.Visible;NativeVisible=[Tgd3dWindowVisibility]::IsWindowVisible($form.Handle)}
         }
     }catch{$state.Error=($_|Out-String);$script:closeReason='Error';$form.Close()}
 })
