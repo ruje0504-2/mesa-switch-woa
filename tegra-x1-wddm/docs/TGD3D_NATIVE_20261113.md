@@ -943,3 +943,29 @@ Windows方向标志便宣布全面支持。VidPN和Blt按逆时针约定，而MP
 列扫描使用交换后的预缩放维度，反向水平起点为末字节而非末像素。这里只用于核对语义，
 没有复制GPL代码或把Linux路径当作Windows实机结果。核查日期2026-11-13；仍须先完成
 该组件组合的桌面和已知像素阶段，才进行物理横屏方向、裁剪、鼠标与五分钟验收。
+
+### 双向 Fence 审查：修正 Flush 错误类别，未宣称死锁已解决
+
+Antigravity CLI 的 Gemini 4 Carbon High 独立审查已交付报告和 diff。主代理复核后
+仅提取错误传播修正：runtime ingress signal 或 GPU gate 回调失败时，内部已通过
+SetErrorCb 报告设备移除，却返回原始 E_FAIL；DDI Flush 外层再次把 E_FAIL 交给
+runtime。现在内部返回已记录的设备丢失状态，外层不覆盖本次已报告的错误；设备在
+DDI 进入前已经移除时，仍为这次调用报告移除。生产默认双向桥接保持开启。
+
+依据微软 [Flush 契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_flush)
+和 [SetErrorCb 契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_seterror_cb)
+（均更新于2024-02-22，本轮2026-11-13核查）：Flush 应报告设备移除，其他错误被
+runtime 视为严重错误；同一 DDI 多次 SetErrorCb 本身是允许的。
+
+ARM64 CPU-sync 与 x64 两种同步模式构建通过。控制直接调用真实 DDI 函数表中的
+Flush，覆盖 ingress signal、Vulkan submit、runtime gate 失败，以及已移除设备再次
+Flush。相同新断言配旧 cmd/device 源码退出1，修正后的默认双向桥接和 CPU-sync 控制
+均退出0；不伪造 Fence 完成，不提前退休资源。证据在产物目录 `flush-error-controls/`。
+这些是 runtime/Vulkan 替身控制，未执行 Switch GPU，不能证明重启根因或实机稳定性。
+
+未整份合入 Gemini 的设备隔离方案：它保留 VkDevice，却没有同时保留 VkInstance 和
+ICD 模块生命周期；后续 CloseAdapter 仍会销毁 instance、卸载模块，违反
+[vkDestroyInstance 的子对象契约](https://docs.vulkan.org/refpages/latest/refpages/source/vkDestroyInstance.html)
+`VUID-vkDestroyInstance-instance-00629`。超时后无界 DeviceWaitIdle 仍待修复；正常
+双向依赖链没有在本次审查中被证明必然死锁。标准主表面启动候选 `9de42c82` 保持
+独立冻结，本次 Flush 修正和 `35696545` 着色器缓存均未混入该 SD 候选。

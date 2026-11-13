@@ -14,9 +14,12 @@ static void APIENTRY Flush(D3D10DDI_HDEVICE hDevice)
 {
    Device *dev = D(hDevice);
    /* Submit, then keep the runtime's own context behind the render queue.
-    * Nothing here waits for the GPU. */
+    * The production path waits on the CPU only for bounded queue backpressure. */
+   /* A new failure is reported by flush itself. A previously removed device
+    * takes its early-return path and needs a notification for this DDI. */
+   const bool wasLost = FAILED(dev->lost);
    HRESULT hr = flush(dev, true);
-   if (FAILED(hr))
+   if (FAILED(hr) && wasLost)
       TG_ERROR(dev, hr);
 }
 
@@ -90,6 +93,15 @@ static void APIENTRY DestroyDevice(D3D10DDI_HDEVICE hDevice)
    trace(TGD3D_TRACE_DESTROY_DEVICE, dev->lost, dev->submitted, dev->completed());
    device_teardown(dev);
    dev->~Device();
+}
+
+void device_fill_table(D3D10DDI_DEVICEFUNCS *table)
+{
+   table->pfnFlush = Flush;
+   table->pfnRelocateDeviceFuncs = RelocateDeviceFuncs;
+   table->pfnCheckFormatSupport = CheckFormatSupport;
+   table->pfnCheckMultisampleQualityLevels = CheckMultisampleQualityLevels;
+   table->pfnDestroyDevice = DestroyDevice;
 }
 
 SIZE_T APIENTRY CalcPrivateDeviceSize(D3D10DDI_HADAPTER, const D3D10DDIARG_CALCPRIVATEDEVICESIZE *)
@@ -167,11 +179,7 @@ HRESULT APIENTRY CreateDevice(D3D10DDI_HADAPTER hAdapter, D3D10DDIARG_CREATEDEVI
    shader_fill_table(table);
    draw_fill_table(table);
    query_fill_table(table);
-   table->pfnFlush = Flush;
-   table->pfnRelocateDeviceFuncs = RelocateDeviceFuncs;
-   table->pfnCheckFormatSupport = CheckFormatSupport;
-   table->pfnCheckMultisampleQualityLevels = CheckMultisampleQualityLevels;
-   table->pfnDestroyDevice = DestroyDevice;
+   device_fill_table(table);
    /* The Windows 7 interface revisions pass the DXGI 1.1 table, which adds
     * the shared-surface resolve notification. */
    dxgi_fill_table(args->DXGIBaseDDI.pDXGIDDIBaseFunctions2,

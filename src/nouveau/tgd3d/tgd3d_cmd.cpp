@@ -545,7 +545,7 @@ HRESULT flush(Device *dev, bool waitForSpace)
          trace(TGD3D_TRACE_SUBMIT_PHASE, hr, 1, value);
          if (FAILED(hr)) {
             TG_ERROR(dev, DXGI_ERROR_DEVICE_REMOVED);
-            return hr;
+            return dev->lost;
          }
          auto &wait = waits[waitCount++];
          wait = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
@@ -598,7 +598,7 @@ HRESULT flush(Device *dev, bool waitForSpace)
    HRESULT hr = gate_runtime(dev);
    if (FAILED(hr)) {
       TG_ERROR(dev, DXGI_ERROR_DEVICE_REMOVED);
-      return hr;
+      return dev->lost;
    }
    retire(dev);
 #ifdef TGD3D_CPU_SYNC_CONTROL

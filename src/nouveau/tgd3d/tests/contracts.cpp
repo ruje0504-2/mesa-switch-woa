@@ -19,7 +19,7 @@ template<typename R, typename... A> struct Stub<R(VKAPI_PTR *)(A...)> {
 };
 static uint64_t completedValue;
 static unsigned signals, submissions, gates, cpuWaits, cpuSignals, barriers, viewsDestroyed;
-static unsigned failAt, layouts, descriptorSets, updates;
+static unsigned failAt, layouts, descriptorSets, updates, setErrorCalls;
 static HRESULT lastError;
 static std::vector<unsigned> events;
 static std::vector<uint32_t> cbBindings;
@@ -68,7 +68,7 @@ static Device make_device(Adapter *adapter)
    TGD3D_VK_DEVICE_FUNCS(X)
    TGD3D_VK_OPTIONAL_DEVICE_FUNCS(X)
 #undef X
-   dev.um.pfnSetErrorCb = [](D3D10DDI_HRTCORELAYER, HRESULT hr) { lastError = hr; };
+   dev.um.pfnSetErrorCb = [](D3D10DDI_HRTCORELAYER, HRESULT hr) { ++setErrorCalls; lastError = hr; };
    dev.vk.AllocateCommandBuffers = [](VkDevice, const VkCommandBufferAllocateInfo *, VkCommandBuffer *out) {
       *out = handle<VkCommandBuffer>(0x100); return VK_SUCCESS;
    };
@@ -130,7 +130,7 @@ static void reset()
 {
    completedValue = 0;
    signals = submissions = gates = cpuWaits = cpuSignals = barriers = viewsDestroyed = 0;
-   failAt = layouts = descriptorSets = updates = 0;
+   failAt = layouts = descriptorSets = updates = setErrorCalls = 0;
    lastError = S_OK; events.clear(); cbBindings.clear();
 }
 
@@ -158,7 +158,9 @@ static void submission_contract()
    CHECK(SUCCEEDED(flush(&dev, true)) && cpuWaits == 1 && completedValue == 4);
    CHECK(dev.submittedCommands.empty() && !cpuSignals && !signals && !gates);
    reset(); dev = make_device(&adapter); failAt = 2;
-   CHECK(cmd_begin(&dev)); CHECK(FAILED(flush(&dev, true)));
+   D3D10DDI_DEVICEFUNCS devTable = {}; device_fill_table(&devTable);
+   CHECK(cmd_begin(&dev)); devTable.pfnFlush({&dev});
+   CHECK(setErrorCalls == 1 && lastError == D3DDDIERR_DEVICEREMOVED);
    CHECK(FAILED(dev.lost) && !cpuWaits && !cpuSignals && !signals && !gates);
    std::puts("PASS: CPU sync control has no cross-context fence; ordinary Flush completes, polling does not block");
 #else
@@ -171,14 +173,17 @@ static void submission_contract()
    CHECK(barriers >= 8);
    completedValue = 4; retire(&dev);
    CHECK(dev.submittedCommands.empty());
+   D3D10DDI_DEVICEFUNCS devTable = {}; device_fill_table(&devTable);
    for (unsigned failure = 1; failure <= 3; failure++) {
       reset(); dev = make_device(&adapter); failAt = failure;
-      CHECK(cmd_begin(&dev)); CHECK(FAILED(flush(&dev, false)));
+      CHECK(cmd_begin(&dev)); devTable.pfnFlush({&dev});
+      CHECK(setErrorCalls == 1 && lastError == D3DDDIERR_DEVICEREMOVED);
       CHECK(FAILED(dev.lost) && !cpuSignals);
       CHECK(submissions == (failure >= 2) && gates == (failure == 3));
       CHECK(dev.submitted == (failure == 3));
       const unsigned previous = signals;
-      CHECK(FAILED(flush(&dev, true)) && signals == previous);
+      devTable.pfnFlush({&dev});
+      CHECK(signals == previous && setErrorCalls == 2 && lastError == D3DDDIERR_DEVICEREMOVED);
    }
    std::puts("PASS: every submit is bidirectional; failures never fabricate completion");
 #endif

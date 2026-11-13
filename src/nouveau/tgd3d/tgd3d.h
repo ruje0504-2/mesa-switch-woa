@@ -420,6 +420,7 @@ static inline Device *D(D3D10DDI_HDEVICE h) { return static_cast<Device *>(h.pDr
 static inline Resource *R(D3D10DDI_HRESOURCE h) { return static_cast<Resource *>(h.pDrvPrivate); }
 
 /* tgd3d_device.cpp */
+void device_fill_table(D3D10DDI_DEVICEFUNCS *table);
 SIZE_T APIENTRY CalcPrivateDeviceSize(D3D10DDI_HADAPTER, const D3D10DDIARG_CALCPRIVATEDEVICESIZE *);
 HRESULT APIENTRY CreateDevice(D3D10DDI_HADAPTER, D3D10DDIARG_CREATEDEVICE *);
 
