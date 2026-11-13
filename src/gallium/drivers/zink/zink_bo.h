@@ -173,15 +173,9 @@ zink_bo_usage_matches(const struct zink_bo *bo, const struct zink_batch_state *b
 static ALWAYS_INLINE bool
 zink_bo_usage_check_completion(struct zink_screen *screen, struct zink_bo *bo, enum zink_resource_access access)
 {
-   /* A completed batch may already be recording unrelated work. Match its
-    * generation just as zink_bo_has_usage does before polling that work. */
-   if (access & ZINK_RESOURCE_ACCESS_READ && bo->reads.u &&
-       zink_batch_submit_count_diff(bo->reads.u->submit_count, bo->reads.submit_count) <= 1 &&
-       !zink_screen_usage_check_completion(screen, bo->reads.u))
+   if (access & ZINK_RESOURCE_ACCESS_READ && !zink_screen_usage_check_completion(screen, bo->reads.u))
       return false;
-   if (access & ZINK_RESOURCE_ACCESS_WRITE && bo->writes.u &&
-       zink_batch_submit_count_diff(bo->writes.u->submit_count, bo->writes.submit_count) <= 1 &&
-       !zink_screen_usage_check_completion(screen, bo->writes.u))
+   if (access & ZINK_RESOURCE_ACCESS_WRITE && !zink_screen_usage_check_completion(screen, bo->writes.u))
       return false;
    return true;
 }
@@ -189,13 +183,9 @@ zink_bo_usage_check_completion(struct zink_screen *screen, struct zink_bo *bo, e
 static ALWAYS_INLINE bool
 zink_bo_usage_check_completion_fast(struct zink_screen *screen, struct zink_bo *bo, enum zink_resource_access access)
 {
-   if (access & ZINK_RESOURCE_ACCESS_READ && bo->reads.u &&
-       zink_batch_submit_count_diff(bo->reads.u->submit_count, bo->reads.submit_count) <= 1 &&
-       !zink_screen_usage_check_completion_fast(screen, bo->reads.u))
+   if (access & ZINK_RESOURCE_ACCESS_READ && !zink_screen_usage_check_completion_fast(screen, bo->reads.u))
       return false;
-   if (access & ZINK_RESOURCE_ACCESS_WRITE && bo->writes.u &&
-       zink_batch_submit_count_diff(bo->writes.u->submit_count, bo->writes.submit_count) <= 1 &&
-       !zink_screen_usage_check_completion_fast(screen, bo->writes.u))
+   if (access & ZINK_RESOURCE_ACCESS_WRITE && !zink_screen_usage_check_completion_fast(screen, bo->writes.u))
       return false;
    return true;
 }

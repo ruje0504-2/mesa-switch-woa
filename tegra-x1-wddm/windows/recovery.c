@@ -44,7 +44,6 @@ NTSTATUS TgGpuRequestEngineRecoveryAt(TG_GPU_CONTEXT_ENGINE *e,NTSTATUS reason,
                 record.UmdPrivateBytes=submit->DmaBufferUmdPrivateDataSize;
                 record.SubmissionFence=submit->SubmissionFenceId;
             }
-            TgGpuCacheRecovery(&e->DebugCache,&record);
         }
         e->RecoverySending=TRUE;send=TRUE;status=STATUS_SUCCESS;
     }

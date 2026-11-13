@@ -6,8 +6,6 @@
 #include "RuntimeMemory.h"
 #include "State.h"
 #include "nouveau/vulkan/nvkmd/windows/allocation_abi.h"
-#include <d3dkmthk.h>
-#include <winternl.h>
 #include <stdlib.h>
 
 struct PrimaryMapping {
@@ -29,125 +27,6 @@ struct RuntimeResource {
    bool cpu_locked, dead, associated, primary;
    PrimaryMapping *mappings;
 };
-
-/* Two timelines keep the runtime context and NVK's KMT context ordered in
- * both directions, including Zink's internal batch submissions. Runtime
- * hContext stays opaque; only the documented kernel sync-object handles
- * returned by the callbacks are passed to D3DKMTShareObjects. */
-struct RuntimeSubmissionSync {
-   Device *device;
-   D3DKMT_HANDLE objects[2];
-   pipe_fence_handle *fences[2];
-   HRESULT error;
-};
-
-static bool submission_prepare(void *data, uint64_t value)
-{
-   auto sync = static_cast<RuntimeSubmissionSync *>(data);
-   auto device = sync->device;
-   D3DDDICB_SIGNALSYNCHRONIZATIONOBJECTFROMGPU signal = {};
-   signal.hContext = device->hContext;
-   signal.ObjectCount = 1;
-   signal.ObjectHandleArray = &sync->objects[0];
-   signal.MonitoredFenceValueArray = &value;
-   sync->error = device->KTCallbacks.pfnSignalSynchronizationObjectFromGpuCb(device->hDevice, &signal);
-   D3D10Trace(D3D10_TRACE_RUNTIME_CONTEXT, sync->error, 4, value);
-   return SUCCEEDED(sync->error);
-}
-
-static bool submission_complete(void *data, uint64_t value, bool success)
-{
-   auto sync = static_cast<RuntimeSubmissionSync *>(data);
-   if (!success) {
-      sync->error = D3DDDIERR_DEVICEREMOVED;
-      return false;
-   }
-   auto device = sync->device;
-   D3DDDICB_WAITFORSYNCHRONIZATIONOBJECTFROMGPU wait = {};
-   wait.hContext = device->hContext;
-   wait.ObjectCount = 1;
-   wait.ObjectHandleArray = &sync->objects[1];
-   wait.MonitoredFenceValueArray = &value;
-   sync->error = device->KTCallbacks.pfnWaitForSynchronizationObjectFromGpuCb(device->hDevice, &wait);
-   D3D10Trace(D3D10_TRACE_RUNTIME_CONTEXT, sync->error, 5, value);
-   return SUCCEEDED(sync->error);
-}
-
-static HRESULT destroy_submission_sync(Device *device)
-{
-   auto sync = device->runtime_sync;
-   if (!sync) return S_OK;
-   auto screen = device->pipe->screen;
-   device->pipe->set_submission_sync(device->pipe, NULL);
-   HRESULT hr = S_OK;
-   for (unsigned i = 0; i < 2; ++i) {
-      screen->fence_reference(screen, &sync->fences[i], NULL);
-      if (sync->objects[i]) {
-         D3DDDICB_DESTROYSYNCHRONIZATIONOBJECT destroy = {};
-         destroy.hSyncObject = sync->objects[i];
-         HRESULT next = device->KTCallbacks.pfnDestroySynchronizationObjectCb(device->hDevice, &destroy);
-         if (SUCCEEDED(hr)) hr = next;
-      }
-   }
-   free(sync);
-   device->runtime_sync = NULL;
-   return hr;
-}
-
-static HRESULT create_submission_sync(Device *device)
-{
-   auto pipe = device->pipe;
-   auto screen = pipe->screen;
-   const auto &cb = device->KTCallbacks;
-   /* Other Gallium backends retain the existing CPU completion bridge. */
-   if (!pipe->set_submission_sync) return S_OK;
-   if (!screen->create_fence_win32 || !cb.pfnCreateSynchronizationObject2Cb ||
-       !cb.pfnDestroySynchronizationObjectCb ||
-       !cb.pfnSignalSynchronizationObjectFromGpuCb || !cb.pfnWaitForSynchronizationObjectFromGpuCb)
-      return DXGI_ERROR_UNSUPPORTED;
-   auto sync = static_cast<RuntimeSubmissionSync *>(calloc(1, sizeof(RuntimeSubmissionSync)));
-   if (!sync) return E_OUTOFMEMORY;
-   sync->device = device;
-   device->runtime_sync = sync;
-   HRESULT hr = S_OK;
-   for (unsigned i = 0; i < 2; ++i) {
-      D3DDDICB_CREATESYNCHRONIZATIONOBJECT2 create = {};
-      create.Info.Type = D3DDDI_MONITORED_FENCE;
-      create.Info.Flags.Shared = 1;
-      create.Info.Flags.NtSecuritySharing = 1;
-      create.Info.MonitoredFence.EngineAffinity = 1;
-      hr = cb.pfnCreateSynchronizationObject2Cb(device->hDevice, &create);
-      sync->objects[i] = create.hSyncObject;
-      if (FAILED(hr)) break;
-      if (!create.hSyncObject) { hr = E_FAIL; break; }
-      OBJECT_ATTRIBUTES attributes = {};
-      attributes.Length = sizeof(attributes);
-      HANDLE handle = NULL;
-      NTSTATUS status = D3DKMTShareObjects(1, &create.hSyncObject, &attributes,
-                                           D3DDDI_SYNC_OBJECT_ALL_ACCESS, &handle);
-      if (status < 0 || !handle) {
-         if (handle) CloseHandle(handle);
-         hr = status < 0 ? HRESULT_FROM_NT(status) : E_FAIL;
-         break;
-      }
-      screen->create_fence_win32(screen, &sync->fences[i], handle, NULL,
-                                 PIPE_FD_TYPE_TIMELINE_SEMAPHORE_D3D12);
-      CloseHandle(handle);
-      if (!sync->fences[i]) { hr = E_FAIL; break; }
-   }
-   if (SUCCEEDED(hr)) {
-      pipe_submission_sync bridge = {};
-      bridge.wait_fence = sync->fences[0];
-      bridge.signal_fence = sync->fences[1];
-      bridge.data = sync;
-      bridge.prepare = submission_prepare;
-      bridge.submitted = submission_complete;
-      if (!pipe->set_submission_sync(pipe, &bridge)) hr = DXGI_ERROR_UNSUPPORTED;
-   }
-   if (FAILED(hr)) destroy_submission_sync(device);
-   D3D10Trace(D3D10_TRACE_RUNTIME_CONTEXT, hr, 6, SUCCEEDED(hr));
-   return hr;
-}
 
 /* arg0: stage in high 32 bits, allocation handle in low 32 bits.
  * arg1: byte count, paging-fence value, or paging-queue handle. */
@@ -650,7 +529,7 @@ HRESULT RuntimePresent(const DXGI_DDI_ARG_PRESENT *args)
       return E_INVALIDARG;
    if (src->dead || !src->associated || (dst && (dst->dead || !dst->associated)))
       return D3DDDIERR_DEVICEREMOVED;
-   HRESULT hr = RuntimeResourceFlush(device, source);
+   HRESULT hr = RuntimeResourceFinish(device, source);
    if (FAILED(hr)) return hr;
    DXGIDDICB_PRESENT present = {};
    present.hSrcAllocation = src->memory.allocation;
@@ -698,21 +577,15 @@ HRESULT RuntimeDeviceCreateContext(Device *device)
       else device->hContext = args.hContext;
    }
    D3D10Trace(D3D10_TRACE_RUNTIME_CONTEXT, hr, 1, device->hContext != NULL);
-   if (SUCCEEDED(hr)) {
-      hr = create_submission_sync(device);
-      if (FAILED(hr)) RuntimeDeviceDestroyContext(device);
-   }
    return hr;
 }
 
 HRESULT RuntimeDeviceDestroyContext(Device *device)
 {
-   HRESULT hr = destroy_submission_sync(device);
-   if (!device->hContext) return hr;
+   if (!device->hContext) return S_OK;
    D3DDDICB_DESTROYCONTEXT args = {};
    args.hContext = device->hContext;
-   HRESULT next = device->KTCallbacks.pfnDestroyContextCb(device->hDevice, &args);
-   if (SUCCEEDED(hr)) hr = next;
+   HRESULT hr = device->KTCallbacks.pfnDestroyContextCb(device->hDevice, &args);
    D3D10Trace(D3D10_TRACE_RUNTIME_CONTEXT, hr, 2, 1);
    device->hContext = NULL;
    return hr;
@@ -720,15 +593,14 @@ HRESULT RuntimeDeviceDestroyContext(Device *device)
 
 HRESULT RuntimeDeviceFinish(Device *device)
 {
-   if (device->runtime_sync && FAILED(device->runtime_sync->error))
-      return device->runtime_sync->error;
    auto pipe = device->pipe;
    auto screen = pipe->screen;
    if (!screen->fence_finish || !screen->fence_reference) return E_FAIL;
    struct pipe_fence_handle *fence = NULL;
-   /* Resource/device destruction still needs completion before runtime
-    * allocations or mappings can be released. Normal Flush/Present uses the
-    * per-submission GPU timeline bridge in RuntimeDeviceFlush instead. */
+   /* NVK submits on a separate KMT context. Complete its work before the
+    * runtime signals the context above, so an implicit signal cannot pass
+    * pending rendering. A shared GPU fence can replace this synchronous
+    * bridge when the two context owners expose a common timeline. */
    pipe->flush(pipe, &fence, PIPE_FLUSH_HINT_FINISH);
    bool finished = fence && screen->fence_finish(screen, pipe, fence, UINT64_MAX);
    screen->fence_reference(screen, &fence, NULL);
@@ -739,31 +611,10 @@ HRESULT RuntimeDeviceFinish(Device *device)
    return hr;
 }
 
-HRESULT RuntimeDeviceFlush(Device *device)
-{
-   if (!device->runtime_sync) return RuntimeDeviceFinish(device);
-   if (FAILED(device->runtime_sync->error)) return device->runtime_sync->error;
-   auto pipe = device->pipe;
-   pipe->flush(pipe, NULL, 0);
-   HRESULT hr = device->runtime_sync->error;
-   if (SUCCEEDED(hr) && pipe->get_device_reset_status &&
-       pipe->get_device_reset_status(pipe) != PIPE_NO_RESET)
-      hr = D3DDDIERR_DEVICEREMOVED;
-   return hr;
-}
-
 HRESULT RuntimeResourceFinish(Device *device, Resource *resource)
 {
    if (!resource->runtime_memory || !resource->resource) return S_OK;
    if (device->pipe->flush_resource)
       device->pipe->flush_resource(device->pipe, resource->resource);
    return RuntimeDeviceFinish(device);
-}
-
-HRESULT RuntimeResourceFlush(Device *device, Resource *resource)
-{
-   if (!resource->runtime_memory || !resource->resource) return S_OK;
-   if (device->pipe->flush_resource)
-      device->pipe->flush_resource(device->pipe, resource->resource);
-   return RuntimeDeviceFlush(device);
 }

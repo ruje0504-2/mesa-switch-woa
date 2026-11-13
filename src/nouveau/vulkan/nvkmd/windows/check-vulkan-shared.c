@@ -22,12 +22,10 @@
    X(DestroyInstance) X(EnumeratePhysicalDevices) X(GetPhysicalDeviceProperties2) \
    X(GetPhysicalDeviceMemoryProperties) X(GetPhysicalDeviceQueueFamilyProperties) \
    X(GetPhysicalDeviceExternalBufferProperties) X(GetPhysicalDeviceImageFormatProperties2) \
-   X(GetPhysicalDeviceFeatures2) X(GetPhysicalDeviceExternalSemaphoreProperties) \
    X(CreateDevice) X(DestroyDevice) X(GetDeviceProcAddr) X(GetDeviceQueue) \
    X(CreateCommandPool) X(DestroyCommandPool) X(ResetCommandPool) \
    X(AllocateCommandBuffers) X(BeginCommandBuffer) X(EndCommandBuffer) \
    X(CreateFence) X(DestroyFence) X(ResetFences) X(WaitForFences) X(QueueSubmit) \
-   X(CreateSemaphore) X(DestroySemaphore) \
    X(CreateBuffer) X(DestroyBuffer) X(GetBufferMemoryRequirements) X(BindBufferMemory) \
    X(CreateImage) X(DestroyImage) X(GetImageMemoryRequirements) X(BindImageMemory) \
    X(AllocateMemory) X(FreeMemory) X(MapMemory) X(UnmapMemory) \
@@ -36,7 +34,7 @@
 #define DECLARE(n) static PFN_vk##n vk##n;
 FUNCTIONS(DECLARE)
 #undef DECLARE
-static bool gpu_timelines;
+static PFN_vkGetMemoryWin32HandleKHR get_handle;
 
 enum { WIDTH = 64, HEIGHT = 64, WORDS = WIDTH * HEIGHT, BYTES = WORDS * 4,
        GUARD_WORDS = 32, READ_WORDS = WORDS + 2 * GUARD_WORDS };
@@ -54,9 +52,6 @@ struct device {
    VkCommandPool pool;
    VkCommandBuffer cmd;
    VkFence fence;
-   PFN_vkGetMemoryWin32HandleKHR get_memory_handle;
-   PFN_vkGetSemaphoreWin32HandleKHR get_semaphore_handle;
-   PFN_vkImportSemaphoreWin32HandleKHR import_semaphore;
 };
 
 struct resource {
@@ -68,34 +63,6 @@ struct resource {
    uint32_t memory_type;
 };
 
-struct readback {
-   struct resource resource;
-   uint32_t *map;
-};
-
-static void
-create_commands(struct device *d)
-{
-   const VkCommandPoolCreateInfo pool = {
-      .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .queueFamilyIndex = family,
-   };
-   VK(vkCreateCommandPool(d->vk, &pool, NULL, &d->pool));
-   const VkCommandBufferAllocateInfo cmd = {
-      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-      .commandPool = d->pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1,
-   };
-   VK(vkAllocateCommandBuffers(d->vk, &cmd, &d->cmd));
-   const VkFenceCreateInfo fence = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-   VK(vkCreateFence(d->vk, &fence, NULL, &d->fence));
-}
-
-static void
-destroy_commands(struct device *d)
-{
-   vkDestroyFence(d->vk, d->fence, NULL);
-   vkDestroyCommandPool(d->vk, d->pool, NULL);
-}
-
 static struct device
 create_device(void)
 {
@@ -104,37 +71,36 @@ create_device(void)
       .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
       .queueFamilyIndex = family, .queueCount = 1, .pQueuePriorities = &priority,
    };
-   const char *extensions[] = {VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME,
-                              VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME};
-   const VkPhysicalDeviceTimelineSemaphoreFeatures timeline = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES,
-      .timelineSemaphore = VK_TRUE,
-   };
+   const char *extension = VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME;
    const VkDeviceCreateInfo info = {
       .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-      .pNext = gpu_timelines ? &timeline : NULL,
       .queueCreateInfoCount = 1, .pQueueCreateInfos = &queue,
-      .enabledExtensionCount = gpu_timelines ? 2 : 1, .ppEnabledExtensionNames = extensions,
+      .enabledExtensionCount = 1, .ppEnabledExtensionNames = &extension,
    };
    struct device d = {0};
    VK(vkCreateDevice(physical, &info, NULL, &d.vk));
-   /* Device-proc pointers belong to the device used to obtain them. */
-   d.get_memory_handle = (void *)vkGetDeviceProcAddr(d.vk, "vkGetMemoryWin32HandleKHR");
-   CHECK(d.get_memory_handle);
-   if (gpu_timelines) {
-      d.get_semaphore_handle = (void *)vkGetDeviceProcAddr(d.vk, "vkGetSemaphoreWin32HandleKHR");
-      d.import_semaphore = (void *)vkGetDeviceProcAddr(d.vk, "vkImportSemaphoreWin32HandleKHR");
-      CHECK(d.get_semaphore_handle && d.import_semaphore);
-   }
+   get_handle = (void *)vkGetDeviceProcAddr(d.vk, "vkGetMemoryWin32HandleKHR");
+   CHECK(get_handle);
    vkGetDeviceQueue(d.vk, family, 0, &d.queue);
-   create_commands(&d);
+   const VkCommandPoolCreateInfo pool = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .queueFamilyIndex = family,
+   };
+   VK(vkCreateCommandPool(d.vk, &pool, NULL, &d.pool));
+   const VkCommandBufferAllocateInfo cmd = {
+      .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+      .commandPool = d.pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1,
+   };
+   VK(vkAllocateCommandBuffers(d.vk, &cmd, &d.cmd));
+   const VkFenceCreateInfo fence = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+   VK(vkCreateFence(d.vk, &fence, NULL, &d.fence));
    return d;
 }
 
 static void
 destroy_device(struct device *d)
 {
-   destroy_commands(d);
+   vkDestroyFence(d->vk, d->fence, NULL);
+   vkDestroyCommandPool(d->vk, d->pool, NULL);
    vkDestroyDevice(d->vk, NULL);
    memset(d, 0, sizeof(*d));
 }
@@ -152,30 +118,14 @@ begin(struct device *d)
 }
 
 static void
-enqueue(struct device *d, VkSemaphore wait, VkSemaphore signal, VkFence fence)
-{
-   VK(vkEndCommandBuffer(d->cmd));
-   const uint64_t value = 1;
-   const VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-   const VkTimelineSemaphoreSubmitInfo timeline = {
-      .sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
-      .waitSemaphoreValueCount = wait ? 1 : 0, .pWaitSemaphoreValues = &value,
-      .signalSemaphoreValueCount = signal ? 1 : 0, .pSignalSemaphoreValues = &value,
-   };
-   const VkSubmitInfo submit = {
-      .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1,
-      .pNext = wait || signal ? &timeline : NULL,
-      .waitSemaphoreCount = wait ? 1 : 0, .pWaitSemaphores = &wait, .pWaitDstStageMask = &stage,
-      .signalSemaphoreCount = signal ? 1 : 0, .pSignalSemaphores = &signal,
-      .pCommandBuffers = &d->cmd,
-   };
-   VK(vkQueueSubmit(d->queue, 1, &submit, fence));
-}
-
-static void
 submit(struct device *d)
 {
-   enqueue(d, VK_NULL_HANDLE, VK_NULL_HANDLE, d->fence);
+   VK(vkEndCommandBuffer(d->cmd));
+   const VkSubmitInfo submit = {
+      .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1,
+      .pCommandBuffers = &d->cmd,
+   };
+   VK(vkQueueSubmit(d->queue, 1, &submit, d->fence));
    VK(vkWaitForFences(d->vk, 1, &d->fence, VK_TRUE, UINT64_C(10000000000)));
 }
 
@@ -262,7 +212,7 @@ export_resource(struct device *d, const struct resource *r, bool inherit)
       .memory = r->memory, .handleType = opaque,
    };
    HANDLE handle = NULL;
-   VK(d->get_memory_handle(d->vk, &info, &handle));
+   VK(get_handle(d->vk, &info, &handle));
    DWORD flags;
    CHECK(handle && GetHandleInformation(handle, &flags));
    CHECK(!!(flags & HANDLE_FLAG_INHERIT) == inherit);
@@ -323,7 +273,7 @@ write_resource(struct device *d, struct resource *r, bool second)
 }
 
 static void
-record_produce(struct device *d, struct resource *r)
+produce(struct device *d, struct resource *r)
 {
    begin(d);
    barrier(d, r, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -335,10 +285,11 @@ record_produce(struct device *d, struct resource *r)
             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
             family, VK_QUEUE_FAMILY_EXTERNAL,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+   submit(d);
 }
 
-static struct readback
-record_consume(struct device *d, struct resource *r, bool second)
+static void
+consume(struct device *d, struct resource *r, bool second)
 {
    struct resource readback = create_resource(d, VK_FORMAT_UNDEFINED, false);
    allocate_resource(d, &readback, false, NULL, NULL, NULL);
@@ -377,17 +328,12 @@ record_consume(struct device *d, struct resource *r, bool second)
             family, VK_QUEUE_FAMILY_EXTERNAL,
             second ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_IMAGE_LAYOUT_GENERAL);
-   return (struct readback){readback, map};
-}
-
-static void
-check_readback(struct device *d, struct resource *r, bool second, struct readback *readback)
-{
+   submit(d);
    unsigned mismatches = 0;
    for (unsigned i = 0; i < READ_WORDS; i++) {
       uint32_t expected = i < GUARD_WORDS || i >= GUARD_WORDS + WORDS ? guard : pattern(r->format, second);
-      if (readback->map[i] != expected) {
-         if (!mismatches) fprintf(stderr, "first mismatch at %u: %08x expected %08x\n", i, readback->map[i], expected);
+      if (map[i] != expected) {
+         if (!mismatches) fprintf(stderr, "first mismatch at %u: %08x expected %08x\n", i, map[i], expected);
          mismatches++;
       }
    }
@@ -395,16 +341,8 @@ check_readback(struct device *d, struct resource *r, bool second, struct readbac
            r->format, second + 1, WORDS, 2 * GUARD_WORDS, mismatches);
    CHECK(!mismatches);
    checked_words += READ_WORDS;
-   vkUnmapMemory(d->vk, readback->resource.memory);
-   destroy_resource(d, &readback->resource);
-}
-
-static void
-consume(struct device *d, struct resource *r, bool second)
-{
-   struct readback readback = record_consume(d, r, second);
-   submit(d);
-   check_readback(d, r, second, &readback);
+   vkUnmapMemory(d->vk, readback.memory);
+   destroy_resource(d, &readback);
 }
 
 static void
@@ -416,8 +354,7 @@ run_case(VkFormat format, bool named)
    WCHAR name[96];
    swprintf(name, 96, L"Local\\nvk-shared-%lu-%u", GetCurrentProcessId(), format);
    allocate_resource(&producer, &a, true, NULL, NULL, named ? name : NULL);
-   record_produce(&producer, &a);
-   submit(&producer);
+   produce(&producer, &a);
    HANDLE handle = export_resource(&producer, &a, named);
    struct resource b = create_resource(&consumer, format, true);
    CHECK(a.reqs.size == b.reqs.size && a.memory_type == b.memory_type);
@@ -439,106 +376,6 @@ run_case(VkFormat format, bool named)
    destroy_resource(&producer, &a);
    destroy_device(&producer);
    printf("PASS format=%u named=%u producer-release/import/re-export/GPU-write-read\n", format, named);
-}
-
-static void
-share_timeline(struct device *from, struct device *to,
-               VkExternalSemaphoreHandleTypeFlagBits handle_type,
-               VkSemaphore *signal, VkSemaphore *wait)
-{
-   const VkSemaphoreTypeCreateInfo type = {
-      .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
-      .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
-   };
-   const VkExportSemaphoreCreateInfo export_info = {
-      .sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO,
-      .pNext = &type, .handleTypes = handle_type,
-   };
-   const VkSemaphoreCreateInfo shared = {
-      .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, .pNext = &export_info,
-   };
-   const VkSemaphoreCreateInfo imported = {
-      .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, .pNext = &type,
-   };
-   VK(vkCreateSemaphore(from->vk, &shared, NULL, signal));
-   VK(vkCreateSemaphore(to->vk, &imported, NULL, wait));
-   const VkSemaphoreGetWin32HandleInfoKHR get = {
-      .sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR,
-      .semaphore = *signal, .handleType = handle_type,
-   };
-   HANDLE handle = NULL;
-   VK(from->get_semaphore_handle(from->vk, &get, &handle));
-   CHECK(handle);
-   const VkImportSemaphoreWin32HandleInfoKHR import = {
-      .sType = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR,
-      .semaphore = *wait, .handleType = handle_type, .handle = handle,
-   };
-   VK(to->import_semaphore(to->vk, &import));
-   CHECK(CloseHandle(handle));
-}
-
-static void
-run_timeline_case(VkFormat format, VkExternalSemaphoreHandleTypeFlagBits handle_type)
-{
-   printf("GPU timeline case format=%u handle_type=%u\n", format, handle_type);
-   struct device producer = create_device(), consumer = create_device();
-   /* A second pool on the producer device permits recording the return
-    * transfer without resetting its still-pending first command buffer. */
-   struct device returning = producer;
-   create_commands(&returning);
-   struct resource a = create_resource(&producer, format, true);
-   allocate_resource(&producer, &a, true, NULL, NULL, NULL);
-   HANDLE memory = export_resource(&producer, &a, false);
-   struct resource b = create_resource(&consumer, format, true);
-   CHECK(a.reqs.size == b.reqs.size && a.memory_type == b.memory_type);
-   allocate_resource(&consumer, &b, true, memory, NULL, NULL);
-   CHECK(CloseHandle(memory));
-   VkSemaphore forward_signal, forward_wait, reverse_signal, reverse_wait;
-   share_timeline(&producer, &consumer, handle_type, &forward_signal, &forward_wait);
-   share_timeline(&consumer, &producer, handle_type, &reverse_signal, &reverse_wait);
-   record_produce(&producer, &a);
-   struct readback first = record_consume(&consumer, &b, false);
-   struct readback second = record_consume(&returning, &a, true);
-
-   /* Queue the consumer before the producer's signal exists. Neither a
-    * producer host wait nor CPU readback may hide a missing GPU dependency.
-    * The return transfer waits for the consumer's second GPU-written pattern. */
-   enqueue(&consumer, forward_wait, reverse_signal, VK_NULL_HANDLE);
-   enqueue(&producer, VK_NULL_HANDLE, forward_signal, VK_NULL_HANDLE);
-   enqueue(&returning, reverse_wait, VK_NULL_HANDLE, returning.fence);
-   VK(vkWaitForFences(returning.vk, 1, &returning.fence, VK_TRUE, UINT64_C(10000000000)));
-   check_readback(&consumer, &b, false, &first);
-   check_readback(&returning, &a, true, &second);
-   vkDestroySemaphore(producer.vk, forward_signal, NULL);
-   vkDestroySemaphore(consumer.vk, forward_wait, NULL);
-   vkDestroySemaphore(consumer.vk, reverse_signal, NULL);
-   vkDestroySemaphore(producer.vk, reverse_wait, NULL);
-   destroy_commands(&returning);
-   destroy_resource(&consumer, &b);
-   destroy_resource(&producer, &a);
-   destroy_device(&consumer);
-   destroy_device(&producer);
-   printf("PASS GPU timeline format=%u handle_type=%u GPU-round-trip/consumer-wait-before-signal/readback\n",
-          format, handle_type);
-}
-
-static void
-check_timeline_properties(VkExternalSemaphoreHandleTypeFlagBits handle_type)
-{
-   const VkSemaphoreTypeCreateInfo type = {
-      .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
-      .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
-   };
-   const VkPhysicalDeviceExternalSemaphoreInfo info = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO,
-      .pNext = &type, .handleType = handle_type,
-   };
-   VkExternalSemaphoreProperties props = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES};
-   vkGetPhysicalDeviceExternalSemaphoreProperties(physical, &info, &props);
-   const VkExternalSemaphoreFeatureFlags required =
-      VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT | VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT;
-   CHECK((props.externalSemaphoreFeatures & required) == required);
-   CHECK(props.compatibleHandleTypes & handle_type);
 }
 
 static void
@@ -586,11 +423,7 @@ int main(int argc, char **argv)
 {
    setvbuf(stdout, NULL, _IONBF, 0);
    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
-   gpu_timelines = argc == 3 && !strcmp(argv[2], "--gpu-timelines");
-   if (argc != 2 && !gpu_timelines) {
-      fprintf(stderr, "usage: %s <absolute-vulkan-1.dll> [--gpu-timelines]\n", argv[0]);
-      return 2;
-   }
+   CHECK(argc == 2);
    struct tg_kmt_scan scan;
    CHECK(tg_gpu_kmt_scan_system(&scan) >= 0 && scan.native_ready == 1);
    HMODULE loader = LoadLibraryExA(argv[1], NULL, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -600,8 +433,7 @@ int main(int argc, char **argv)
    PFN_vkCreateInstance create = (void *)gipa(NULL, "vkCreateInstance");
    CHECK(create);
    const VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-                                  .pApplicationName = "NVK Win32 shared memory",
-                                  .apiVersion = gpu_timelines ? VK_API_VERSION_1_2 : VK_API_VERSION_1_1};
+                                  .pApplicationName = "NVK Win32 shared memory", .apiVersion = VK_API_VERSION_1_1};
    const VkInstanceCreateInfo info = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, .pApplicationInfo = &app};
    VkInstance instance;
    VK(create(&info, NULL, &instance));
@@ -631,29 +463,6 @@ int main(int argc, char **argv)
    for (unsigned i = 0; i < queues; i++) if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {family = i; break;}
    CHECK(family != UINT32_MAX);
    check_properties();
-   if (gpu_timelines) {
-      VkPhysicalDeviceTimelineSemaphoreFeatures timeline = {
-         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES,
-      };
-      VkPhysicalDeviceFeatures2 features = {
-         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &timeline,
-      };
-      vkGetPhysicalDeviceFeatures2(physical, &features);
-      CHECK(timeline.timelineSemaphore);
-      const VkExternalSemaphoreHandleTypeFlagBits handles[] = {
-         VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT,
-         VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT,
-      };
-      const VkFormat formats[] = {VK_FORMAT_UNDEFINED, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM};
-      for (unsigned h = 0; h < 2; h++) {
-         check_timeline_properties(handles[h]);
-         for (unsigned f = 0; f < 3; f++)
-            run_timeline_case(formats[f], handles[h]);
-      }
-      vkDestroyInstance(instance, NULL);
-      printf("PASS Win32 GPU timelines: checked_words=%" PRIu64 "; final host wait only; no presentation\n", checked_words);
-      return 0;
-   }
    run_case(VK_FORMAT_UNDEFINED, false);
    run_case(VK_FORMAT_UNDEFINED, true);
    run_case(VK_FORMAT_R8G8B8A8_UNORM, false);

@@ -639,8 +639,8 @@ typedef enum {
    ZINK_SUBMIT_WAIT_ACQUIRE,
    ZINK_SUBMIT_WAIT_FD,
    ZINK_SUBMIT_CMDBUF,
-   ZINK_SUBMIT_SIGNAL_USER,
    ZINK_SUBMIT_SIGNAL_INTERNAL,
+   ZINK_SUBMIT_SIGNAL_USER,
    ZINK_SUBMIT_MAX
 } zink_submit;
 
@@ -738,8 +738,7 @@ submit_queue(void *data, void *gdata, int thread_index)
    si[ZINK_SUBMIT_CMDBUF].signalSemaphoreCount = util_dynarray_num_elements(&bs->signal_semaphores, VkSemaphore);
    si[ZINK_SUBMIT_CMDBUF].pSignalSemaphores = bs->signal_semaphores.data;
 
-   /* The internal completion timeline is last, after external user signals.
-    * Batch cleanup uses it to release the retained semaphore references. */
+   /* then the signal submit with the timeline (fence) semaphore */
    VkSemaphore signals[ZINK_MAX_SIGNALS];
    si[ZINK_SUBMIT_SIGNAL_INTERNAL].signalSemaphoreCount = !!bs->signal_semaphore;
    signals[0] = bs->signal_semaphore;
@@ -773,10 +772,9 @@ submit_queue(void *data, void *gdata, int thread_index)
    if (si[ZINK_SUBMIT_SIGNAL_USER].signalSemaphoreCount) {
       si[ZINK_SUBMIT_SIGNAL_USER].pNext = &user_sem_submit;
    } else {
-      /* Remove the empty user-signal submit while keeping the internal
-       * completion signal as the last submitted operation. */
-      si[ZINK_SUBMIT_SIGNAL_USER] = si[ZINK_SUBMIT_SIGNAL_INTERNAL];
       num_si--;
+      if (!si[ZINK_SUBMIT_SIGNAL_INTERNAL].signalSemaphoreCount)
+         num_si--;
    }
 
    VkResult result;
@@ -866,25 +864,6 @@ end:
    screen->last_active_batch_state = NULL;
    simple_mtx_unlock(&screen->free_batch_states_lock);
    simple_mtx_unlock(&screen->active_batch_states_lock);
-}
-
-static void
-submission_sync_failed(struct zink_context *ctx, struct zink_batch_state *bs)
-{
-   struct zink_screen *screen = zink_screen(ctx->base.screen);
-   /* A frontend callback failure is not a Vulkan device loss. Drain work
-    * which Vulkan already accepted before reporting the context failure;
-    * otherwise teardown could release runtime-owned mappings still in use.
-    * This completion wait is confined to the error path. */
-   if (!screen->device_lost) {
-      if (screen->threaded_submit)
-         util_queue_finish(&screen->flush_queue);
-      simple_mtx_lock(screen->queue_lock);
-      VKSCR(QueueWaitIdle)(screen->queue);
-      simple_mtx_unlock(screen->queue_lock);
-   }
-   bs->is_device_lost = true;
-   post_submit(bs, screen);
 }
 
 /* called during flush */
@@ -977,11 +956,6 @@ zink_end_batch(struct zink_context *ctx)
       bs->has_work = true;
    }
 
-   if (!zink_submission_sync_prepare(ctx)) {
-      submission_sync_failed(ctx, bs);
-      return;
-   }
-
    util_dynarray_foreach(&bs->fences, struct zink_tc_fence*, mfence)
       (*mfence)->deferred_ctx = NULL;
 
@@ -990,16 +964,6 @@ zink_end_batch(struct zink_context *ctx)
                          submit_queue, NULL, 0);
    } else {
       submit_queue(bs, NULL, 0);
-   }
-
-   if (ctx->submission_sync.submitted) {
-      /* Wait for vkQueueSubmit to return, not for GPU completion. A runtime
-       * wait must not be queued for a signal whose submission failed. */
-      if (screen->threaded_submit)
-         util_queue_fence_wait(&bs->flush_completed);
-      if (!zink_submission_sync_complete(ctx, !bs->is_device_lost)) {
-         submission_sync_failed(ctx, bs);
-      }
    }
 
    ctx->last_transfer_sync = 0;

@@ -64,7 +64,6 @@ struct Shader
 
 struct Query;
 struct ElementLayout;
-struct RuntimeSubmissionSync;
 
 struct Device
 {
@@ -97,7 +96,6 @@ struct Device
 
    HANDLE hDevice;
    HANDLE hContext;
-   RuntimeSubmissionSync *runtime_sync;
 
    D3DDDI_DEVICECALLBACKS KTCallbacks;
    D3D10DDI_CORELAYER_DEVICECALLBACKS UMCallbacks;

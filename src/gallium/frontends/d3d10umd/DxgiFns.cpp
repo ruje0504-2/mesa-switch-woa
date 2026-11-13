@@ -232,7 +232,7 @@ rotate_hardware_resources(const DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *args)
          hr = DXGI_ERROR_UNSUPPORTED; goto done;
       }
    }
-   hr = RuntimeDeviceFlush(device);
+   hr = RuntimeDeviceFinish(device);
    if (FAILED(hr)) goto done;
 
    /* Prepare all immutable sampler views before changing any identities.

@@ -80,14 +80,11 @@ static NTSTATUS APIENTRY reset_engine(HANDLE adapter,DXGKARG_RESETENGINE *a)
 }
 static NTSTATUS APIENTRY collect_debug_info(HANDLE adapter,const DXGKARG_COLLECTDBGINFO *a)
 {
-    TG_GPU_ADAPTER *d=adapter;
-    if(!d || !a)return STATUS_UNSUCCESSFUL;
-    /* May run during a bugcheck at undefined IRQL. All data is resident:
-     * no queue/context dereference, lock wait, allocation, ETW or MMIO here.
-     * LastCompletedFence is an independent aligned observation; cached
-     * boundaries include their own fence/generation and validity flags. */
-    return TgGpuCopyDebugReport(&d->Engine.DebugCache,d->Engine.LastCompletedFence,
-        a->Reason,a->pBuffer,a->BufferSize);
+    const TG_GPU_ADAPTER *d=adapter;
+    if (!d || !a || !a->pBuffer || a->BufferSize<sizeof(UINT)) return STATUS_INVALID_PARAMETER;
+    UINT fence=d->Engine.LastCompletedFence;
+    RtlCopyMemory(a->pBuffer,&fence,sizeof(fence));
+    return STATUS_SUCCESS;
 }
 void TgGpuRegisterResetDdis(DRIVER_INITIALIZATION_DATA *d)
 {

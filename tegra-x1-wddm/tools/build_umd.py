@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Build the NVK D3D UMD, controlled Windows tests and explicit native probe.
 
-Requires Meson/Ninja, an LLVM-MinGW cross file and Mesa's Python dependencies.
-The Zink-only UMD does not require NVK's native OpenCL compiler tools. SDK/WDK headers
+Requires Meson/Ninja, an LLVM-MinGW cross file, Mesa's Python dependencies,
+and native mesa_clc/vtn_bindgen2 on PATH, as for build_icd.py. SDK/WDK headers
 are copied to the output directory, not into Mesa or the compiler sysroot.
 This does not install the UMD or enable KMD native submissions.
 """
@@ -51,22 +51,19 @@ def main():
         "-Dgbm=disabled", "-Dllvm=disabled", "-Dbuild-tests=true", "-Dvideo-codecs=[]",
         "-Dvalgrind=disabled", "-Dlibunwind=disabled", "-Dgles1=disabled", "-Dgles2=disabled",
         "-Dopengl=false", "-Dshader-cache=enabled", "-Dzlib=disabled", "-Dzstd=disabled",
-        "-Dexpat=disabled", "-Dmesa-clc=auto", "-Dbuildtype=release",
+        "-Dexpat=disabled", "-Dmesa-clc=system", "-Dbuildtype=release",
         f"-Dc_args={includes}", f"-Dcpp_args={includes}",
     ], check=True)
     target = "src/gallium/targets/d3d10umd/"
     names = ["TegraGpuD3D.dll", "test_d3d10_nvk_adapter.exe", "test_d3d10_nvk_entry.exe",
              "test_d3d10_nvk_device.exe", "nvk_d3d_check.exe", "nvk_d3d_runtime_check.exe",
              "d3d10-trace-export.exe", "test_d3d10_runtime_primary.exe",
-             "test_d3d10_runtime_present.exe", "test_d3d10_runtime_shared.exe",
-             "test_d3d10_runtime_sync.exe"]
+             "test_d3d10_runtime_present.exe", "test_d3d10_runtime_shared.exe"]
     sample_test = "src/gallium/auxiliary/gallium-aux.exe"
     binding_test = "src/gallium/drivers/zink/nir_to_spirv/test_zink_descriptor_binding.exe"
     cache_test = "src/util/test-win32-disk-cache.exe"
     sync_test = "src/gallium/drivers/zink/test-zink-win32-sync.exe"
-    surface_test = "src/gallium/drivers/zink/test-zink-win32-surface.exe"
-    import_test = "src/gallium/drivers/zink/test-zink-win32-import.exe"
-    subprocess.run(["ninja", "-C", str(build), *(target + name for name in names), sample_test, binding_test, cache_test, sync_test, surface_test, import_test], check=True)
+    subprocess.run(["ninja", "-C", str(build), *(target + name for name in names), sample_test, binding_test, cache_test, sync_test], check=True)
     for name in names:
         shutil.copyfile(build / target / name, out / name)
     shutil.copyfile(build / sample_test, out / "test_tgsi_to_nir.exe")
@@ -77,10 +74,6 @@ def main():
     names.append("test-win32-disk-cache.exe")
     shutil.copyfile(build / sync_test, out / "test-zink-win32-sync.exe")
     names.append("test-zink-win32-sync.exe")
-    shutil.copyfile(build / surface_test, out / "test-zink-win32-surface.exe")
-    names.append("test-zink-win32-surface.exe")
-    shutil.copyfile(build / import_test, out / "test-zink-win32-import.exe")
-    names.append("test-zink-win32-import.exe")
     hashes = {name: hashlib.sha256((out / name).read_bytes()).hexdigest() for name in names}
     (out / "manifest.json").write_text(json.dumps({
         "component": "d3d10-umd",

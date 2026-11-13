@@ -479,7 +479,7 @@ Flush(D3D10DDI_HDEVICE hDevice)  // IN
    LOG_ENTRYPOINT();
 
 #ifdef D3D10_UMD_HARDWARE
-   HRESULT hr = RuntimeDeviceFlush(CastDevice(hDevice));
+   HRESULT hr = RuntimeDeviceFinish(CastDevice(hDevice));
    if (FAILED(hr)) SetError(hDevice, hr);
 #else
    struct pipe_context *pipe = CastPipeContext(hDevice);

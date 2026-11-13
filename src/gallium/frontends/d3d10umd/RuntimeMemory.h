@@ -11,7 +11,6 @@ struct Resource;
 HRESULT RuntimeDeviceCreateContext(Device *device);
 HRESULT RuntimeDeviceDestroyContext(Device *device);
 HRESULT RuntimeDeviceFinish(Device *device);
-HRESULT RuntimeDeviceFlush(Device *device);
 HRESULT RuntimePrimaryCreate(Device *device, const D3D10DDIARG_CREATERESOURCE *desc,
                               D3D10DDI_HRTRESOURCE runtime, RuntimeResource **out);
 struct RuntimeSharedDescription {
@@ -28,7 +27,6 @@ HRESULT RuntimeResourceDestroy(RuntimeResource *primary);
 HRESULT RuntimePrimarySetMode(RuntimeResource *primary, HANDLE device, UINT subresource);
 HRESULT RuntimeResourceError(RuntimeResource *primary);
 HRESULT RuntimeResourceFinish(Device *device, Resource *resource);
-HRESULT RuntimeResourceFlush(Device *device, Resource *resource);
 HRESULT RuntimePresent(const DXGI_DDI_ARG_PRESENT *args);
 HRESULT RuntimeRotateOwnership(Device *device, Resource *const *resources, UINT count);
 const wsi_win32_memory *RuntimeResourceMemory(RuntimeResource *primary);

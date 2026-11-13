@@ -121,30 +121,6 @@ driver_zink = declare_dependency(
 
 if with_tests
   if with_platform_windows
-    zink_win32_map_test = executable('test-zink-win32-map',
-      'zink_win32_map_test.c',
-      include_directories : [inc_include, inc_src, inc_gallium, inc_gallium_aux, inc_vulkan_util, inc_zink_vk],
-      dependencies : [driver_zink, idep_nir, idep_mesautil, idep_vulkan_util, idep_vulkan_wsi_defines, idep_xmlconfig],
-      link_with : [libgallium],
-      c_args : zink_c_args)
-    foreach map_case : ['write-contention', 'pending-cleanup', 'recycled-usage',
-                       'image-array', 'image-3d', 'image-cache', 'image-compressed',
-                       'image-cache-failure', 'image-small-offset']
-      test('zink_win32_map_' + map_case, zink_win32_map_test,
-        args : ['--' + map_case], suite : ['zink'])
-    endforeach
-    test('zink_win32_import', executable('test-zink-win32-import',
-      'zink_win32_import_test.c',
-      include_directories : [inc_include, inc_src, inc_gallium, inc_gallium_aux, inc_vulkan_util, inc_zink_vk],
-      dependencies : [driver_zink, idep_nir, idep_mesautil, idep_vulkan_util, idep_vulkan_wsi_defines, idep_xmlconfig],
-      link_with : [libgallium],
-      c_args : zink_c_args), suite : ['zink'])
-    test('zink_win32_surface', executable('test-zink-win32-surface',
-      'zink_win32_surface_test.c',
-      include_directories : [inc_include, inc_src, inc_gallium, inc_gallium_aux, inc_vulkan_util, inc_zink_vk],
-      dependencies : [driver_zink, idep_nir, idep_mesautil, idep_vulkan_util, idep_vulkan_wsi_defines, idep_xmlconfig],
-      link_with : [libgallium],
-      c_args : zink_c_args), suite : ['zink'])
     test('zink_win32_sync', executable('test-zink-win32-sync',
       'zink_win32_sync_test.c',
       include_directories : [inc_include, inc_src, inc_gallium, inc_gallium_aux, inc_vulkan_util, inc_zink_vk],
