@@ -23,10 +23,7 @@ components remain a short-observation baseline, not a stable desktop release.
 **Pending CPU baseline update:** the owner subsequently requests approximately
 1.5 GHz in the SD side chat, superseding the earlier 1996.8 MHz preference.
 That chat is preparing 1497.6 MHz with fan driver `1.0.0.13`; installation
-and measured-frequency verification are pending. The bundled GPU-project
-integration is synchronized with driver source `bc411af3`; its CPU control
-passes ASan/UBSan and its ARM64 SYS matches the side chat's unsigned build
-byte for byte. The GPU PMIC bridge is unchanged. GPU validation must retain
+and measured-frequency verification are pending. GPU validation must retain
 the verified new setting when the device window is released, not restore the
 historical clock merely to satisfy an old test precondition.
 

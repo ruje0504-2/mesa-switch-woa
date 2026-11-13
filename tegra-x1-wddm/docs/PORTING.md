@@ -1306,16 +1306,6 @@ nonstall interrupt route. For the WDDM panel package also enable
 display controller to GPU0. Use a single ACPI owner for POST.
 [Base and lineage](../UPSTREAM.md) · [WinX Lite build](https://github.com/ruje0504-2/winx/blob/hdh001-hekate-sd/docs/hdh001-home/README.md#firmware-build)
 
-The bundled SwitchFan `1.0.0.13` now selects a **1497.6 MHz** runtime CPU
-target, following the owner's updated preference. The firmware handoff's
-1996800-kHz field is retained for compatibility and recorded separately as
-`CpuHandoffKhz`; `CpuRequestedKhz` records the driver target. CPU rail voltage,
-fan curve, RAM settings and sleep/thermal restoration are unchanged. Keep
-this integration synchronized when rebuilding a GPU-enabled board driver.
-The [CPU control](../integration/switch-lite/windows/SwitchFan/tests/test-t214-clock.c)
-checks the actual helper against simulated registers and PMIC operations;
-its success is not hardware acceptance.
-
 The Lite bridge reuses SwitchFan's kernel-owned SPB connection to the
 MAX77812 M1 rail. `windows/pmic.h` defines the interface. Build the bundled
 bridge with `--probe` if a compatible bridge is needed. Use the

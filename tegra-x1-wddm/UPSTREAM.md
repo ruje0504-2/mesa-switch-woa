@@ -18,11 +18,6 @@
   chain, battery, power button and other platform drivers. The optional GPU
   ACPI patch here uses WinX commit `63d3c5aa85719b8fd009f4b166e741537eed80d7`
   as its base. [WinX](https://github.com/ruje0504-2/winx) · [Windows-for-Switch-Drivers](https://github.com/ruje0504-2/Windows-for-Switch-Drivers)
-  The bundled SwitchFan CPU helper, version metadata and CPU control test
-  are synchronized with driver commit
-  `bc411af3349a0cb270a0f8ddf1b7a7343af7aaa2` (`1.0.0.13`, 1497.6 MHz runtime
-  target). The GPU PMIC bridge remains owned by this repository; the
-  companion repository's forwarding include is not copied back here.
 
 The Windows resource and display model draws on Microsoft's public graphics
 driver samples. GM20B page tables, power sequences and engine initialization
