@@ -1,15 +1,30 @@
 # GPU status
 
+**November 13, 12:54 UTC source fix:** failed shader creation now destroys its
+token/signature storage before reporting the error; the runtime never calls
+DestroyShader for a failed handle. A production-DDI failure injection fails
+against the previous shader source and passes with the fix, observing actual
+deallocations before SetErrorCb. ARM64 and x64 cross-builds pass; the ARM64 CPU
+controls pass. This is not a GPU/NAK execution or weather-flyout stability result.
+The fix has not replaced the owner's running UMD.
+
+**Current device handoff (November 13, 12:51 UTC):** the installed default-start
+package's restore entry had removed its startup task and returned `.158` to
+Code 43. Re-registering the task and starting it once on the existing Windows
+boot succeeded: Code 0, hardware/panel 0, task exit 0, and DWM PID 484 plus
+Explorer and shell processes load TegraGpuD3DVk.dll. The logon trigger is
+registered again. CPU-sync UMD remains `d06e29e2`; the new shader fix is not
+deployed. No new physical stability acceptance or Windows reboot is claimed.
+
 **Latest owner report:** opening the large weather flyout can freeze/restart
 the machine before it appears or while only part is visible. This follows
 the requested CPU-sync activation; the post-activation DWM module query did
 not complete, so retain that observation separately from loaded-module proof.
-CPU-sync mode is not accepted as stable. The owner now requests a package
-that enables tgd3d automatically after logon, still with the bridge disabled,
-and will reboot it themselves. Self-review must focus on this chat's tgd3d
+CPU-sync mode is not accepted as stable. The requested package enables tgd3d
+after logon, still with the bridge disabled. Self-review must focus on this chat's tgd3d
 changes; no further unchanged-build comparisons or new dump searches.
 
-**Current device handoff (November 13, 12:14 UTC):** the owner requested
+**Earlier device handoff (November 13, 12:14 UTC):** the owner requested
 manual testing with the unfixed bidirectional bridge disabled. Frozen `.158`
 is active (Code 0, hardware/panel status 0) with CPU-sync UMD `d06e29e2`
 (`b3ba7de9…`). Automatic trial/recovery tasks and trace sessions were stopped;

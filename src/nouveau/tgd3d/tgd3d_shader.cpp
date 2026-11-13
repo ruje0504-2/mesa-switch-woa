@@ -308,6 +308,16 @@ SIZE_T APIENTRY CalcPrivateShaderSize(D3D10DDI_HDEVICE, const UINT *, const D3D1
    return sizeof(Shader);
 }
 
+void shader_create_failed(Shader *shader, HRESULT hr)
+{
+   Device *dev = shader->dev;
+   /* A failed Create*Shader invalidates the private handle. The runtime
+    * never calls DestroyShader for it, and may reclaim the handle when we
+    * report the error. Release the token/signature arrays first. */
+   shader->~Shader();
+   TG_ERROR(dev, hr);
+}
+
 void create_shader(D3D10DDI_HDEVICE hDevice, const UINT *code, D3D10DDI_HSHADER handle, Stage stage,
                    const D3D10DDIARG_STAGE_IO_SIGNATURES *signatures)
 {
@@ -316,8 +326,7 @@ void create_shader(D3D10DDI_HDEVICE hDevice, const UINT *code, D3D10DDI_HSHADER 
    shader->dev = dev;
    shader->stage = stage;
    if (stage == STAGE_GS && !dev->caps->geometryShader) {
-      shader->error = DXGI_ERROR_UNSUPPORTED;
-      TG_ERROR(dev, shader->error);
+      shader_create_failed(shader, DXGI_ERROR_UNSUPPORTED);
       return;
    }
    /* Token 1 of a shader program is its length in 32-bit words. */
@@ -331,7 +340,7 @@ void create_shader(D3D10DDI_HDEVICE hDevice, const UINT *code, D3D10DDI_HSHADER 
    }
    VkShaderEXT base = compile(shader, 0);
    if (!base) {
-      TG_ERROR(dev, FAILED(shader->error) ? shader->error : E_FAIL);
+      shader_create_failed(shader, FAILED(shader->error) ? shader->error : E_FAIL);
       return;
    }
    shader->variants.push_back({0, base});
@@ -370,11 +379,7 @@ void APIENTRY CreateGeometryShaderWithStreamOutput(
    if (args->NumEntries) {
       /* Stream output is not implemented: capturing needs transform
        * feedback, and DrawAuto needs an indirect draw that the Windows
-       * submission transport cannot carry yet. The object stays unusable. */
-      Shader *shader = new (handle.pDrvPrivate) Shader();
-      shader->dev = dev;
-      shader->stage = STAGE_GS;
-      shader->error = E_NOTIMPL;
+       * submission transport cannot carry yet. No object is created. */
       TG_ERROR(dev, E_NOTIMPL);
       return;
    }

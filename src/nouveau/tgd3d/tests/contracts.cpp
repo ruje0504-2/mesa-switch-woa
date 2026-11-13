@@ -25,6 +25,24 @@ static std::vector<unsigned> events;
 static std::vector<uint32_t> cbBindings;
 static VkDeviceSize cbOffsets[3];
 static const char *shaderOutput;
+static Shader *failedShader;
+static void *shaderAllocations[3];
+static unsigned shaderAllocationFrees;
+
+/* Observe the real vector deallocations of a failed CreateShader. Do not
+ * inspect its private storage after its C++ lifetime has ended. */
+void operator delete(void *p) noexcept
+{
+   for (void *&allocation : shaderAllocations) {
+      if (p && allocation == p) {
+         allocation = nullptr;
+         ++shaderAllocationFrees;
+      }
+   }
+   std::free(p);
+}
+
+void operator delete(void *p, size_t) noexcept { ::operator delete(p); }
 
 static Device make_device(Adapter *adapter)
 {
@@ -367,6 +385,28 @@ static void shader_contract(const BYTE *dxbc, bool vertex, const char *outputPat
    }
    table.pfnDestroyShader({&dev}, {storage}); retire(&dev, true);
    std::puts(vertex ? "PASS: real SM4 VS DDI-to-SPIR-V conversion" : "PASS: real SM4 PS DDI-to-SPIR-V conversion");
+
+   /* The runtime does not call DestroyShader after a creation error. Test
+    * that the production callback frees its arrays before reporting it. */
+   failedShader = reinterpret_cast<Shader *>(storage);
+   shaderAllocationFrees = 0;
+   dev.vk.CreateShadersEXT = [](VkDevice, uint32_t, const VkShaderCreateInfoEXT *,
+                               const VkAllocationCallbacks *, VkShaderEXT *out) {
+      shaderAllocations[0] = failedShader->tokens.data();
+      shaderAllocations[1] = failedShader->inputs.data();
+      shaderAllocations[2] = failedShader->outputs.data();
+      CHECK(shaderAllocations[0] && shaderAllocations[1] && shaderAllocations[2]);
+      *out = VK_NULL_HANDLE;
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   };
+   dev.um.pfnSetErrorCb = [](D3D10DDI_HRTCORELAYER, HRESULT hr) {
+      CHECK(shaderAllocationFrees == 3);
+      lastError = hr;
+   };
+   create({&dev}, tokens.data(), {storage}, {}, &sig);
+   CHECK(lastError == E_OUTOFMEMORY && shaderAllocationFrees == 3 && dev.deferred.empty());
+   failedShader = nullptr;
+   std::puts("PASS: failed shader creation releases token/signature allocations before SetErrorCb");
 }
 
 static void sampled_shader_contract()

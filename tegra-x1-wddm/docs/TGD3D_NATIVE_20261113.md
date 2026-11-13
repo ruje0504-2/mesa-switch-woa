@@ -560,3 +560,33 @@ UMD和`7c677212` ICD，在登录后自动授予一次启动许可并启用设备
 CPU/风扇/睡眠设置，不自动开窗测试或回退`.59`。启用过程未完成时下次停止重复
 尝试，手动还原仍保留`.158`。该包只是启动/交付方式变化，渲染根因修复尚未完成。
 Carbon High同一审计会话的报告输出最终超时，只有不完整开头，没有可验收结论。
+
+### 默认启动的实际启用与着色器失败清理
+
+默认包于12:30安装、12:33完成文件/任务配置核对，尚未运行启动任务。随后该包
+的恢复入口于12:44留下restore-staged记录、删除默认任务并恢复门控。用户报告
+开机未进入tgd3d后，12:49读取到`.158 / Code43`、任务不存在、default-state缺失；
+没有把它算成原生启动失败或再次调查GPU转储。12:50重新登记现有包的登录任务并
+执行一次，12:51:26状态Enabled；12:51:45核对Code0、Hardware/Panel均0、任务退出0，
+DWM PID484、Explorer、开始菜单、TextInputHost及ShellExperienceHost均加载
+`TegraGpuD3DVk.dll`。仍是冻结`.158`、`d06e29e2` CPU同步UMD和`7c677212` ICD，
+没有重装KMD或重启Windows。本次证明实际模块加载和启用，不是物理稳定性通过。
+`RESTORE-TGD3D.cmd`会关闭自动启用；正常重启应使用Windows的重启操作。
+
+用户再次授权Antigravity CLI继续审计，12:40:22以Carbon High恢复原会话，加入
+CPU同步下天气弹层仍冻结的新事实，只读审计保持进行中，初步意见尚需主代理核实。
+
+本轮源码修复限于`create_shader`失败的对象生命周期。微软
+[CreateVertexShader](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createvertexshader)
+（页面2024-02-22；Vista及后续D3D10 DDI）及
+[CreatePixelShader](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createpixelshader)
+规定：创建上报失败后，runtime不会调用DestroyShader。原实现返回前遗漏Shader析构，
+token/输入签名/输出签名的vector分配因此泄漏。现在先析构，再调用SetErrorCb；
+直接拒绝stream-output创建时不再构造无主对象。暂不改变shader错误码或双向Fence。
+
+12:54:13完成原生ARM64 **CPU控制**：同一新增失败测试链接HEAD `838d775d`的旧shader
+实现时退出1；链接修正后退出0，VS、PS和采样PS在模拟backend内存不足时，其三份
+真实堆分配均在SetErrorCb之前释放，没有调用DestroyShader。其余现有控制通过。
+ARM64/x64构建通过，产物及对照保存在`shader-create-cleanup-controls/`。
+三份控制着色器的SPIR-V通过`spirv-val --target-env vulkan1.3`。
+没有执行NVK/NAK或GPU，也未将修正部署到手动测试设备；不能归为天气重启根因已修复。
