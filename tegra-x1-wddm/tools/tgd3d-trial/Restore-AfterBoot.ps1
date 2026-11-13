@@ -15,8 +15,9 @@ try {
     }
     $grant='HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\AllowDesktopStart'
     if(Test-Path $grant) { Remove-Item $grant -Force }
-    $default='HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\Tgd3dDefault'
-    if(Test-Path $default) { Remove-Item $default -Recurse -Force }
+    # Keep the protected installed-directory pointer so RESTORE.cmd can be
+    # retried if a later display/backup check fails. The startup task above
+    # is already removed; this pointer does not enable the GPU.
     $permit="$env:windir\System32\drivers\TgGpuBootTest158.bin"
     if(Test-Path $permit) {
         Copy-Item $permit (Join-Path $dir 'startup-contract.bin') -Force
