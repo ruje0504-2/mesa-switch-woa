@@ -9,17 +9,19 @@
 #define TG_WIDE_(x) L##x
 #define TG_WIDE(x) TG_WIDE_(x)
 
-/* The controller creates a volatile grant only after an interactive desktop
- * and the recovery task are ready. Consume the file permit before touching
- * hardware, so another StartDevice or an unexpected reboot stays closed. */
+/* Explicit native boot authorization survives repeated StartDevice calls and
+ * Windows restarts. Without it, retain the one-use desktop test gate. */
 NTSTATUS TgGpuConsumeNativeStartPermit(void)
 {
+    static WCHAR native_name[]=
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\tegragpurender\\AllowNativeBoot";
     static WCHAR grant_name[]=
         L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\tegragpurender\\AllowDesktopStart";
     static WCHAR path_name[]=
         L"\\SystemRoot\\System32\\drivers\\TgGpuBootTest"
         TG_WIDE(TG_STRING(TG_GPU_NATIVE_TEST_VERSION)) L".bin";
     UNICODE_STRING grant={sizeof(grant_name)-sizeof(WCHAR),sizeof(grant_name),grant_name};
+    UNICODE_STRING native={sizeof(native_name)-sizeof(WCHAR),sizeof(native_name),native_name};
     UNICODE_STRING path={sizeof(path_name)-sizeof(WCHAR),sizeof(path_name),path_name};
     OBJECT_ATTRIBUTES attributes;
     IO_STATUS_BLOCK iosb;
@@ -28,8 +30,16 @@ NTSTATUS TgGpuConsumeNativeStartPermit(void)
     HANDLE handle;
     ULONG permit=0;
     PAGED_CODE();
-    InitializeObjectAttributes(&attributes,&grant,OBJ_CASE_INSENSITIVE|OBJ_KERNEL_HANDLE,NULL,NULL);
+    InitializeObjectAttributes(&attributes,&native,OBJ_CASE_INSENSITIVE|OBJ_KERNEL_HANDLE,NULL,NULL);
     NTSTATUS status=ZwOpenKey(&handle,KEY_QUERY_VALUE,&attributes);
+    if(NT_SUCCESS(status)) {
+        ZwClose(handle);
+        return STATUS_SUCCESS;
+    }
+    if(status!=STATUS_OBJECT_NAME_NOT_FOUND && status!=STATUS_OBJECT_PATH_NOT_FOUND)
+        return status;
+    InitializeObjectAttributes(&attributes,&grant,OBJ_CASE_INSENSITIVE|OBJ_KERNEL_HANDLE,NULL,NULL);
+    status=ZwOpenKey(&handle,KEY_QUERY_VALUE,&attributes);
     if(!NT_SUCCESS(status))return status;
     ZwClose(handle);
     InitializeObjectAttributes(&attributes,&path,OBJ_CASE_INSENSITIVE|OBJ_KERNEL_HANDLE,NULL,NULL);

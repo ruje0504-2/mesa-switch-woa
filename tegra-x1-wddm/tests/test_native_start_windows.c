@@ -14,7 +14,7 @@ __declspec(dllimport) int __stdcall WriteFile(HANDLE,const void *,ULONG,ULONG *,
 #define CHECK(x) do{if(!(x))ExitProcess(__LINE__);}while(0)
 void *memset(void *p,int c,size_t n){UCHAR *d=p;while(n--)*d++=(UCHAR)c;return p;}
 void *memcpy(void *p,const void *s,size_t n){UCHAR *d=p;const UCHAR *a=s;while(n--)*d++=*a++;return p;}
-static struct {ULONG failure,handles,opens,writes,flushes,permit;} model;
+static struct {ULONG failure,handles,opens,writes,flushes,permit;BOOLEAN native;NTSTATUS native_error;} model;
 static BOOLEAN named(const UNICODE_STRING *name,PCWSTR expected)
 {
     USHORT i=0;while(expected[i]){if(i>=name->Length/sizeof(WCHAR)||name->Buffer[i]!=expected[i])return FALSE;++i;}
@@ -23,6 +23,11 @@ static BOOLEAN named(const UNICODE_STRING *name,PCWSTR expected)
 static NTSTATUS NTAPI open_key(PHANDLE handle,ACCESS_MASK access,POBJECT_ATTRIBUTES a)
 {
     CHECK(access==KEY_QUERY_VALUE && a->Attributes==(OBJ_CASE_INSENSITIVE|OBJ_KERNEL_HANDLE));
+    if(named(a->ObjectName,L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\tegragpurender\\AllowNativeBoot")) {
+        if(model.native_error)return model.native_error;
+        if(!model.native)return STATUS_OBJECT_NAME_NOT_FOUND;
+        *handle=(HANDLE)3;++model.handles;return STATUS_SUCCESS;
+    }
     CHECK(named(a->ObjectName,L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\tegragpurender\\AllowDesktopStart"));
     if(model.failure==1)return STATUS_OBJECT_NAME_NOT_FOUND;
     *handle=(HANDLE)1;++model.handles;return STATUS_SUCCESS;
@@ -64,7 +69,7 @@ static NTSTATUS NTAPI write_file(HANDLE h,HANDLE event,PIO_APC_ROUTINE apc,PVOID
 static NTSTATUS NTAPI flush_file(HANDLE h,PIO_STATUS_BLOCK io)
 {(void)io;CHECK(h==(HANDLE)2 && model.permit==0);++model.flushes;return model.failure==10?STATUS_UNSUCCESSFUL:STATUS_SUCCESS;}
 static NTSTATUS NTAPI close_handle(HANDLE h)
-{CHECK((h==(HANDLE)1||h==(HANDLE)2) && model.handles==1);--model.handles;return STATUS_SUCCESS;}
+{CHECK((h==(HANDLE)1||h==(HANDLE)2||h==(HANDLE)3) && model.handles==1);--model.handles;return STATUS_SUCCESS;}
 NTSTATUS (NTAPI * const __imp_ZwOpenKey)(PHANDLE,ACCESS_MASK,POBJECT_ATTRIBUTES)=open_key;
 NTSTATUS (NTAPI * const __imp_ZwCreateFile)(PHANDLE,ACCESS_MASK,POBJECT_ATTRIBUTES,PIO_STATUS_BLOCK,
     PLARGE_INTEGER,ULONG,ULONG,ULONG,ULONG,PVOID,ULONG)=create_file;
@@ -75,7 +80,7 @@ NTSTATUS (NTAPI * const __imp_ZwFlushBuffersFile)(HANDLE,PIO_STATUS_BLOCK)=flush
 NTSTATUS (NTAPI * const __imp_ZwClose)(HANDLE)=close_handle;
 void start(void)
 {
-    static const char pass[]="PASS: native test gate requires a grant and one durable permit, rejects I/O failures and closes handles (controlled substitutes)\r\n";
+    static const char pass[]="PASS: persistent native boot tolerates repeated starts; absent authorization retains durable one-use gating; errors close handles (controlled substitutes)\r\n";
     for(ULONG failure=0;failure<=10;++failure){
         memset(&model,0,sizeof(model));model.failure=failure;model.permit=failure==7?0:1;
         NTSTATUS status=TgGpuConsumeNativeStartPermit();
@@ -90,5 +95,13 @@ void start(void)
             if(failure==8||failure==9)CHECK(!model.flushes);
         }
     }
+    memset(&model,0,sizeof(model));model.native=TRUE;model.failure=1;
+    CHECK(TgGpuConsumeNativeStartPermit()==STATUS_SUCCESS && !model.handles);
+    CHECK(TgGpuConsumeNativeStartPermit()==STATUS_SUCCESS && !model.handles);
+    CHECK(!model.opens && !model.writes && !model.flushes);
+    model.native=FALSE;
+    CHECK(TgGpuConsumeNativeStartPermit()==STATUS_OBJECT_NAME_NOT_FOUND);
+    model.failure=0;model.permit=1;model.native_error=STATUS_ACCESS_DENIED;
+    CHECK(TgGpuConsumeNativeStartPermit()==STATUS_ACCESS_DENIED && !model.handles && !model.opens);
     ULONG written;CHECK(WriteFile(GetStdHandle((ULONG)-11),pass,sizeof(pass)-1,&written,NULL));ExitProcess(0);
 }
