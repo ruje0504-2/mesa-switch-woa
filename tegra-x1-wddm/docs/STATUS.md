@@ -1,20 +1,39 @@
 # GPU status
 
-**Current handoff, November 13, 17:06 UTC:** the owner's new test baseline is
-`.158 + bit14 fix + d3423d26 ICD`, retaining the `fcc53bf1` CPU-sync UMD.
-The signed bit14 kernel is installed as `oem93.inf` (SYS SHA256 `2e4ae808…`).
-Its first post-logon activation did not complete: Windows restarted at
-16:56:40 UTC and returned to Code 43. This combination is not accepted as stable.
-At the owner's request, the package now arms direct native StartDevice on the
-next Windows boot, rather than restarting the GPU after logon. The persistent
-grant, durable one-use permit and enabled startup rearm task were verified.
-The task only rearms after native Code 0 / hardware / panel remain active for
-30 seconds; it never starts or restarts a device. The owner will perform the
-restart and application tests. Current Code 43 is awaiting that restart, not
-proof of a running tgd3d desktop. CPU1497600 kHz, fan13 and sleep settings stay
-unchanged. Source rotation review may proceed; no physical rotation or pixel
-acceptance is implied. See the full component identities and failed activation
-in [the trial record](TGD3D_NATIVE_20261113.md).
+**Owner priority update:** repair the current pre-logon reboot first; then complete shader caching and measured ~60 Hz VBlank/presentation pacing before hardware rotation. Idle desktops should submit on demand. The owner explicitly requires native startup to stay enabled and authorizes deploying the next reviewed fix directly for their tests. The SD is currently mounted for offline diagnosis.
+
+**Latest installation, November 13, 17:26 UTC:** the selected test baseline is
+`.158 + bit14 + persistent native startup`, `fcc53bf1` CPU-sync UMD and
+`d3423d26` ICD. The actual installed kernel is now `oem94.inf`, SHA256
+`c629328e…`; registration and package hashes pass. KMD patch `b916f531`
+adds explicit persistent `AllowNativeBoot` authorization. No startup/logon
+GPU-switching task or one-use permit is needed. One Windows restart was
+requested at 17:27:36 UTC to verify this path. The owner reported another
+automatic restart before the username appeared. This startup attempt failed;
+there is no post-restart Code 0 or DWM loaded-module proof. Offline recovery of
+a copied SYSTEM hive finds successful persisted initialization-stage statuses,
+which do not establish desktop success. Native startup authorization remains
+enabled at the owner's request. Do not call this stable or claim that the
+earlier Code 43 desktop used tgd3d.
+
+**Next UMD candidate:** accept the frozen KMD's standard primary/shadow
+allocation descriptor when resource-level private data is empty. Preserve the
+consumer's allocation handle, backing and primary identity. The same CPU
+contract fails on the old implementation and passes on the fix; ARM64 and x64
+cross-builds pass. This is an interface correction, not a demonstrated cause
+of the pre-logon restart. KMD, ICD and native boot settings stay unchanged.
+
+**Superseded startup attempts:** the bit14-only kernel `2e4ae808…` installed
+successfully, but its post-logon activation restarted Windows at 16:56:40.
+The owner's subsequent 17:09 boot still returned Code 43: the one-use permit
+returned `STATUS_ACCESS_DENIED` before that StartDevice reached hardware.
+The attempted persistent-grant/permit-rearm task was therefore inadequate
+and has been removed. The replacement KMD's repeated-start control fails
+with the old source (exit 99) and passes with the new source (exit 0), without
+GPU execution. A separate installer identity failure returned success while
+retaining `oem93.inf`; a distinct INF identity corrected it, and installed SYS
+hash verification confirms the replacement. CPU1497600 kHz, fan13 and sleep
+settings remain unchanged. See [the trial record](TGD3D_NATIVE_20261113.md).
 
 **Earlier handoff, November 13, 16:10 UTC:** SSH and the owner's physical
 confirmation show an operable desktop after a real Windows restart. Frozen

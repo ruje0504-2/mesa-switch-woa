@@ -848,3 +848,98 @@ SHA256 `a8bd3884f33355bc2265b7d8c7b90240e3332eb54da51e44727a84cd0bddcf22`。
 及[启动／登录任务触发器](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasktrigger?view=windowsserver2025-ps)，
 核查日期2026-11-13。前者说明非易失键跨重启保留；后者区分AtStartup和AtLogOn。
 实际Windows仍为11 ARM64 23H2，任务只是续写许可，不能用较新文档页面版本宣称该组合已上屏。
+
+
+### 一次性许可方案失败，替换为KMD持久原生启动授权
+
+用户17:09重启后报告仍为Code43。17:11:57 SSH确认：实际SYS为`2e4ae808…`、
+OEM `oem93.inf`；BootPermitStatus=`0xc0000022`，StartGateStatus=`0xc00000a3`，
+Hardware/Panel为`0xffffffff`。这一StartDevice在门控处被拒绝，不能称tgd3d已启用。
+`Native-Boot.ps1`已记失败并删除许可、禁用任务。没有从这些状态推断具体访问被拒绝的
+系统调用，也没有把一次性许可的拒绝当作GPU指令故障。该工具方案不足以承担持续直接启动。
+
+`b916f53105f991294d6811718362e90f9af0ba01`在KMD中增加显式`AllowNativeBoot`键：
+存在时允许重复StartDevice及正常重启，不消费文件；不存在时保留旧的单次测试门控。
+非“不存在”类注册表错误仍返回错误，不隐瞒权限失败。ARM64控制测试在相同新断言下，
+旧源码退出99，新源码退出0；覆盖重复原生启动无文件操作、移除授权重新门控、拒绝访问
+不降级，以及原有文件错误与句柄关闭。完整主机模型/ARM64构建通过，未等同GPU通过。
+
+新的KMD导出相对冻结`6c854e9f`只有bit14生产文件/控制文件，以及native_start_test
+生产文件/控制文件这四处变化；没有带入main或其他KMD改动。初始新包与bit14-only包
+生成了同一INF内容。17:19安装API返回成功、不要求重启，但SYS仍是`2e4ae808…`，
+OEM仍93；Driver Store中没有新SYS，因此工具正确阻止了后续配置。随后将这个变体的
+设备描述设为`Switch Lite GM20B .158 bit14 native boot b916f531`，保留版本0.1.0.158，
+重新生成并签名CAT。`build.py`今后为同版本native测试KMD的INF加入实际二进制hash标识，
+避免再次复用相同INF。Windows重新验证CAT及12个载荷全部通过。
+
+17:26:15–17:26:17从Code43安装成功，OEM93→94，实际SYS变为
+`c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53`。
+本次INF SHA256为`51c2094af405739492dec1709376590b5156d004ae586603d66bf03607692e40`。
+UMD仍为`7c7f88cc…`，ICD仍为`dee3d580…`；两者完整hash见上表，没有再次改变Fence或渲染代码。
+`5bd93331`的工具只配置持久键并flush，移除旧任务/测试许可；恢复入口会先删除持久键。
+实际ACPI反编译确认GPU0已有`_DEP { FAN0 }`，未修改ACPI或风扇驱动。
+
+最终包`tgd3d-158-bit14-d3423d26-persistent-boot2.zip`为7073289字节，66个清单文件，
+SHA256 `445513a8efddcb684cc91cfe5db39703c77ed6155e0d497bc8ee9be1d3b53873`。
+远端完整包、15个恢复文件及脚本解析通过。17:26:25实际核对安装文件、UMD/ICD注册、
+持久授权存在、旧许可不存在、旧任务移除，状态为等待开机初始化，并未误记Code0。
+17:27:36只请求一次Windows正常重启（非强制关闭应用），命令退出0；目标是确认直接
+原生启动后的Code0和DWM加载。不会因SSH短时未恢复重复启动GPU或追加重启。
+
+### 持久原生启动失败与标准主表面OpenResource修正
+
+用户随后确认在登录用户名ruje出现前自动重启，本次启动失败。SSH未恢复，未取得Code0
+或DWM加载证明。最初的远程关闭请求在SSH连接阶段超时，没有执行；用户随后要求
+保留原生启动并检查已挂载SD，故`AllowNativeBoot`仍保留，没有回退或再次启动设备。
+
+只读SD复制的SYSTEM序号为182019/182018，用现有LOG2在本地副本重放103项后为
+182032/182032。副本中OEM94、SYS/UMD/ICD哈希及持久键与安装记录相符；17:30:27保存的
+Initialize/Resource/Hardware/Trace/Panel/BootPermit/StartGateStatus均为0。
+这些只确认所记录的初始化阶段完成，不说明登录或DWM成功。系统事件保留17:27:52的新启动，
+没有可定位该重启的新转储；没有继续扩大日志搜寻。证据位于独立产物目录
+`hardware/sd-native-boot-20261113/`，未写回注册表hive。
+
+源码发现明确ABI缺口：冻结`.158`的`TgGpuDdiGetStandardAllocationDriverData`给标准
+shared primary和shadow返回48字节`TG_GPU_PRIMARY_ALLOCATION_REQUEST`，资源级私有数据
+长度为0；tgd3d的`runtime_shared_open`此前只接受72字节TGSR资源数据，会拒绝此输入。
+新路径验证该冻结ABI的版本、flags、格式、identity方向、720×1280几何、2880字节pitch
+和3686400字节backing；复用消费者allocation、驻留和GPU VA回调，不另建替代存储。
+OpenResource同时保留primary标志供NVK的scanout布局使用。普通TGSR路径保留原校验。
+
+2026-11-13核查微软文档：
+[标准allocation契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgkarg_getstandardallocationdriverdata)
+（2024-11-11）允许资源级私有数据为0；
+[D3D10 OpenResource](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/ns-d3d10umddi-d3d10ddiarg_openresource)
+（2024-02-22）区分resource与allocation数据；
+[windowed-mode行为](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/windowed-mode-behavior)
+（2021-12-15）说明DWM未运行时会打开共享primary。这是与登录前阶段有关的调用路径，
+并不是已观察到本次重启的调用栈或根因。
+
+ARM64/x64 CPU-sync UMD构建通过。Windows x64合约在Wine下使用Vulkan/runtime替身，
+新断言配旧runtime源码退出1，定位于标准allocation的打开失败；新实现退出0。
+覆盖primary/shadow、ARGB/XRGB、消费者句柄、无额外allocation及畸形长度/保留字段拒绝，
+原共享资源、同步和错误传播控制均通过。未执行Switch GPU，不计为实机通过。
+结果与编译/链接命令在`standard-open-controls/`，本轮仅UMD改变。
+
+用户要求本轮完成后直接部署供其测试，保持原生启动。修复当前启动失败后，先完成
+着色器缓存和实际约60Hz VBlank/Present节拍，再进入硬件旋转；静止桌面按需提交。
+
+### 旋转的静态准备（未改变实机显示方向）
+
+冻结`.158`已含DC列扫描、H/V取址方向、完整几何锁存和VidPN/MPO映射；当前新包
+保持这些文件逐字节不变。tgd3d的`runtime_primary_create`为四分之一转选择1280×720、
+5120字节pitch、BGRA8888，与DC期望一致，并单独处理NONPREROTATED，不能重复旋转。
+
+还需解决/验证的具体边界：`tgd3d_dxgi.cpp::Blt`明确拒绝非identity旋转。
+微软[DXGI DDI契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgi_ddi_base_functions)
+说明，若驱动允许主表面创建返回DDI unsupported，必须支持相应旋转复制；不能只设置
+Windows方向标志便宣布全面支持。VidPN和Blt按逆时针约定，而MPO plane按顺时针约定；
+应按实际接口映射，不按枚举数字直接推断。参考
+[VidPN旋转](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/supporting-rotation-in-a-display-miniport-driver)
+与[MPO属性](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgi_ddi_multiplane_overlay_attributes)。
+
+重新核对Switchroot固定`3c40adf1081096bc61a7c1280434c163e7e79b48`的
+[window.c](https://gitlab.com/switchroot/kernel/l4t-kernel-nvidia/-/blob/3c40adf1081096bc61a7c1280434c163e7e79b48/drivers/video/tegra/dc/window.c)：
+列扫描使用交换后的预缩放维度，反向水平起点为末字节而非末像素。这里只用于核对语义，
+没有复制GPL代码或把Linux路径当作Windows实机结果。核查日期2026-11-13；仍须先完成
+该组件组合的桌面和已知像素阶段，才进行物理横屏方向、裁剪、鼠标与五分钟验收。
