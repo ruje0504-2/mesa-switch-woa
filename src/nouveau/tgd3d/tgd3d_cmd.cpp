@@ -318,6 +318,8 @@ void flush_pending_clears(Device *dev, const View *except_bound)
       dev->cmdHasWork = true;
       VkRenderingAttachmentInfo attachment = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
       attachment.imageView = view_get(view);
+      if (!attachment.imageView)
+         return;
       attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
       attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
       attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;

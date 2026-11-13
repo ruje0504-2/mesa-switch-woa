@@ -162,7 +162,7 @@ static void prepare_reads(Device *dev)
    }
 }
 
-static void bind_textures(Device *dev, VkCommandBuffer cmd)
+static bool bind_textures(Device *dev, VkCommandBuffer cmd)
 {
    bool any = false, any_buffers = false;
    for (const auto &stage : dev->stage) {
@@ -183,7 +183,7 @@ static void bind_textures(Device *dev, VkCommandBuffer cmd)
    if (any && (dev->dirty & DIRTY_TEXTURES)) {
       VkDescriptorSet set = alloc_set(dev, SET_TEX);
       if (!set)
-         return;
+         return false;
       for (uint32_t s = 0; s < STAGE_COUNT; s++) {
          const StageBindings &stage = dev->stage[s];
          const Shader *shader = stage.shader;
@@ -210,8 +210,11 @@ static void bind_textures(Device *dev, VkCommandBuffer cmd)
                const uint8_t kind = shader->srvKind[slot];
                VkImageView handle = VK_NULL_HANDLE;
                /* An empty or mismatched slot reads zero, as Direct3D defines. */
-               if (view && srv_matches(kind, view))
+               if (view && srv_matches(kind, view)) {
                   handle = view_get(view, kind == 4 || kind == 6 || kind == 10);
+                  if (!handle)
+                     return false;
+               }
                images.push_back({VK_NULL_HANDLE, handle, VK_IMAGE_LAYOUT_GENERAL});
                VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
                write.dstSet = set;
@@ -232,7 +235,7 @@ static void bind_textures(Device *dev, VkCommandBuffer cmd)
    if (any_buffers && (dev->dirty & DIRTY_TEXEL_BUFFERS)) {
       VkDescriptorSet set = alloc_set(dev, SET_TBUF);
       if (!set)
-         return;
+         return false;
       writes.clear();
       for (uint32_t s = 0; s < STAGE_COUNT; s++) {
          const StageBindings &stage = dev->stage[s];
@@ -243,8 +246,13 @@ static void bind_textures(Device *dev, VkCommandBuffer cmd)
             for (uint32_t mask = shader->srvBufferMask[word]; mask; mask &= mask - 1) {
                const uint32_t slot = word * 32 + __builtin_ctz(mask);
                View *view = stage.srv[slot];
-               buffers.push_back(view && srv_matches(shader->srvKind[slot], view) ?
-                                 view_get_buffer(view) : VK_NULL_HANDLE);
+               VkBufferView handle = VK_NULL_HANDLE;
+               if (view && srv_matches(shader->srvKind[slot], view)) {
+                  handle = view_get_buffer(view);
+                  if (!handle)
+                     return false;
+               }
+               buffers.push_back(handle);
                VkWriteDescriptorSet write = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
                write.dstSet = set;
                write.dstBinding = s * D3D_SRV_SLOTS + slot;
@@ -260,6 +268,7 @@ static void bind_textures(Device *dev, VkCommandBuffer cmd)
                                     SET_TBUF, 1, &set, 0, nullptr);
       dev->texelBufferSet = set;
    }
+   return true;
 }
 
 static bool bind_constant_buffers(Device *dev, VkCommandBuffer cmd)
@@ -368,6 +377,8 @@ static bool begin_rendering(Device *dev)
       color[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
       if (View *view = dev->rtv[i]) {
          color[i].imageView = view_get(view);
+         if (!color[i].imageView)
+            return false;
          take_clear(view, VK_IMAGE_ASPECT_COLOR_BIT, &color[i]);
       }
    }
@@ -378,6 +389,8 @@ static bool begin_rendering(Device *dev)
    info.pColorAttachments = color;
    if (View *view = dev->dsv) {
       depth.imageView = stencil.imageView = view_get(view);
+      if (!depth.imageView)
+         return false;
       depth.imageLayout = stencil.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
       depth.storeOp = stencil.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
       take_clear(view, VK_IMAGE_ASPECT_DEPTH_BIT, &depth);
@@ -694,7 +707,8 @@ static VkCommandBuffer prepare_draw(Device *dev, bool indexed)
    emit_state(dev, cmd);
    if (!bind_constant_buffers(dev, cmd))
       return VK_NULL_HANDLE;
-   bind_textures(dev, cmd);
+   if (!bind_textures(dev, cmd))
+      return VK_NULL_HANDLE;
    if (indexed && (dev->dirty & DIRTY_INDEX_BUFFER)) {
       Resource *res = dev->indexBuffer;
       dev->vk.CmdBindIndexBuffer(cmd, res->slice.buffer(), res->slice.offset + dev->indexOffset,
