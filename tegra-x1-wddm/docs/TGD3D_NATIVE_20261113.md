@@ -1081,3 +1081,30 @@ Create/OpenResource 将内存不足报告为 `E_OUTOFMEMORY`，保留 runtime �
 `3455f2273808322155c9cd6904870bc487369345ca0f6b1eab3fc4e064e5ae29`。
 完整记录在 `resource-status-deploy/deployment-final.json`。本次仍为 CPU 同步诊断组合，
 实机冷启动和物理画面尚未验收。
+
+### 42ad5d1b 冷启动失败；收窄登录前路径审查
+
+用户确认本轮仍自动重启，并进一步明确顺序为：Windows 启动界面之后、黑屏阶段之后、
+出现用户名 `ruje` 之前。该候选记为失败，不能从这一画面顺序推断 DWM 已成功加载
+tgd3d，更不能声称已定位到某条 GPU 指令。没有重复安装同一候选或追加远程重启。
+物理反馈记录在 `resource-status-deploy/hardware-observation.json`。
+
+本轮静态核对实际冻结代码和已取得的 SYSTEM 副本：
+
+- `AllowNativeBoot` 分支只改变许可，不跳过 GPU 电源、时钟、固件或 panel 初始化。
+  冻结 KMD 仍通过 `SwitchBacklight` 桥访问 PMIC；这不是本轮新加的路径。既有首次
+  冷启动记录中的 Hardware/Panel 状态0只适用于那次记录，不证明新一轮已执行完成。
+- 本次 SYSTEM 恢复副本的显示类0000仍为OEM94对应的`.158`驱动，D3D10/11注册入口
+  指向已读回校验的持久目录 tgd3d DLL，ICD路径亦对应当前组合。没有发现注册入口
+  意外换回旧版 UMD 的配置证据；实际模块加载仍未取得。
+- 对照 WDK10.0.26100 的 D3D10DDI_DEVICEFUNCS，101个非D3D10PSGP回调均已填入。
+  ResetPrimitiveID/SetVertexPipelineOutput 位于本构建未启用的 rasterization-only
+  条件结构内，不能把它们误报为缺失的普通 DDI 入口。
+- 当前实机候选是无GPU桥的CPU同步诊断构建。其出站同步不能替代异步外部生产者的
+  入站依赖；此前 Gemini 审计也指出此局限。没有证据证明本次触发了该竞态，亦不能
+  再仅凭“开窗/启动失败”把新双向GPU Fence认定为唯一原因。仓库生产默认桥接不变。
+
+Microsoft [CreateContext flags](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_createcontextflags)
+（2024-06-21）将 SystemContext 定义为 paging engine 上下文；没有把它与所有GDI
+上下文混为一谈。继续核对冻结 KMD 的 GDI shadow Present、显示接管及 tgd3d 的
+首次设备/主表面/绘制提交。未以不相关的错误码补丁、延迟或强制成功替代启动修复。
