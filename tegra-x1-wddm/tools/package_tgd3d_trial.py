@@ -26,6 +26,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("umd", "icd", "kmd", "frozen-manifest", "helpers", "out"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--default-start", action="store_true",
+                        help="package automatic enablement after logon, with manual recovery")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     umd = json.loads((args.umd / "manifest.json").read_text())
@@ -42,6 +44,9 @@ def main():
                 "sync_mode": umd.get("sync_mode", "gpu-bridge"),
                 "tools_source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
                 "kmd": frozen["kmd"], "app": {}, "helpers": {}, "files": {}}
+    if args.default_start:
+        manifest["scope"] = "frozen .158 with automatic tgd3d enablement after logon; manual testing"
+        manifest["startup_mode"] = "logon-default"
     for name, record in frozen["kmd"].items():
         checked_copy(args.kmd / name, args.out / "package" / name, record)
     for directory, component in ((args.umd, umd), (args.icd, icd)):
@@ -57,9 +62,18 @@ def main():
         checked_copy(args.helpers / name, args.out / name, record)
         manifest["helpers"][name] = record
     scripts = root / "tegra-x1-wddm/tools/tgd3d-trial"
+    default_shared = {"Common.ps1", "Prepare.ps1", "Enable-RuntimeAppContainerRead.ps1",
+                      "Read-PlatformState.ps1", "Restore-AfterBoot.ps1",
+                      "restore-preference.ps1", "Stop-DxgBootTrace.ps1", "tool-provenance.json"}
     for file in scripts.iterdir():
+        if args.default_start and file.name not in default_shared:
+            continue
         if file.suffix in (".ps1", ".cmd", ".json", ".md"):
             shutil.copyfile(file, args.out / file.name)
+    if args.default_start:
+        for file in (root / "tegra-x1-wddm/tools/tgd3d-default").iterdir():
+            if file.is_file():
+                shutil.copyfile(file, args.out / file.name)
     licenses = args.out / "licenses"
     licenses.mkdir()
     for source, target in ((root / "docs/license.rst", "Mesa.txt"),

@@ -1,5 +1,14 @@
 # GPU status
 
+**Latest owner report:** opening the large weather flyout can freeze/restart
+the machine before it appears or while only part is visible. This follows
+the requested CPU-sync activation; the post-activation DWM module query did
+not complete, so retain that observation separately from loaded-module proof.
+CPU-sync mode is not accepted as stable. The owner now requests a package
+that enables tgd3d automatically after logon, still with the bridge disabled,
+and will reboot it themselves. Self-review must focus on this chat's tgd3d
+changes; no further unchanged-build comparisons or new dump searches.
+
 **Current device handoff (November 13, 12:14 UTC):** the owner requested
 manual testing with the unfixed bidirectional bridge disabled. Frozen `.158`
 is active (Code 0, hardware/panel status 0) with CPU-sync UMD `d06e29e2`

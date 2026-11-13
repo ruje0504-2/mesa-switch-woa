@@ -7,7 +7,7 @@ $task='Tgd3dTrialRestore'
 Start-Transcript -Path (Join-Path $dir 'restore-transcript.log') -Append
 try {
     # Restore immediately. Dump capture is disabled at the owner's request.
-    foreach($name in 'Tgd3dTrialAutomatic','Tgd3dTrialObserve','Tgd3dTrialNative') {
+    foreach($name in 'Tgd3dDefaultEnable','Tgd3dTrialAutomatic','Tgd3dTrialObserve','Tgd3dTrialNative') {
         if(Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
             Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
             Unregister-ScheduledTask -TaskName $name -Confirm:$false
@@ -15,6 +15,8 @@ try {
     }
     $grant='HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\AllowDesktopStart'
     if(Test-Path $grant) { Remove-Item $grant -Force }
+    $default='HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\Tgd3dDefault'
+    if(Test-Path $default) { Remove-Item $default -Recurse -Force }
     $permit="$env:windir\System32\drivers\TgGpuBootTest158.bin"
     if(Test-Path $permit) {
         Copy-Item $permit (Join-Path $dir 'startup-contract.bin') -Force
