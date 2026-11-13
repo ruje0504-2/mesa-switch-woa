@@ -39,8 +39,8 @@ try {
     if($dwm.Count -ne 1){throw 'Expected one DWM process in the interactive session'}
     $r.DwmPid=$dwm[0].Id
     $r.DwmStart=$dwm[0].StartTime.ToUniversalTime().ToString('o')
-    # The receiver is still writing. Retain the matching current-process line,
-    # rather than using a previous boot's successful loader message.
+    # Loader selection is auxiliary evidence: its "Using ... with driver"
+    # message precedes vkCreateDevice and is also emitted when creation fails.
     $f=[IO.FileStream]::new((Join-Path $p 'loader-debug.csv'),[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
     $reader=[IO.StreamReader]::new($f)
     try{$text=$reader.ReadToEnd()}finally{$reader.Dispose()}
@@ -49,6 +49,12 @@ try {
     $loaded=@($messages|Where-Object {$_.Pid -eq [string]$r.DwmPid -and $_.Message.Contains('Using "NVIDIA Tegra X1 (GM20B)') -and $_.Message.Contains($driver)})
     if(!$loaded.Count){throw 'No current DWM loader record for the trial NVK ICD'}
     $r.DwmLoader=$loaded[-1]
+    $consumer=[IO.File]::ReadAllText((Join-Path $p 'umd-live-process.json'))|ConvertFrom-Json
+    $process=Get-Process -Id $consumer.Pid
+    if($process.StartTime.ToUniversalTime() -ne [DateTime]::Parse($consumer.StartTime).ToUniversalTime() -or
+        $process.Path -ne $consumer.Exe){throw 'The current trial UMD consumer is no longer running'}
+    $trialStart=[DateTime]::Parse([IO.File]::ReadAllText((Join-Path $p 'restart-requested.txt'))).ToUniversalTime()
+    $r.Umd=& (Join-Path $p 'Read-NativeUmdEvidence.ps1') -Path (Join-Path $p 'umd-live.jsonl') -DwmProcessId $r.DwmPid -DwmStart ([DateTime]::Parse($r.DwmStart)) -TrialStart $trialStart -TraceName $consumer.TraceName
     $r.Verified=$true
 } catch {
     $r.Error=$_.Exception.Message

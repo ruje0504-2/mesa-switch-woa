@@ -75,6 +75,47 @@ Stop-EtwTraceSession -Name TegraUmd
 .\d3d10-trace-export.exe C:\test\umd.etl > umd.jsonl
 ```
 
+For a live desktop trial, include `EVENT_TRACE_REAL_TIME_MODE` (`0x100`)
+in the controller's log mode and run `d3d10-trace-export.exe --follow SessionName`
+before enabling the native device. It consumes the existing session and exits
+when the controller stops it; it does not create or stop a logging session.
+`TraceStart` and once-per-second `TraceState` records report controller loss
+counters, decoder errors and FILETIME timestamps. Complete output buffers are
+flushed for the live reader. `TraceEnd` marks termination. The original ETL
+export command remains available after collection stops.
+
+`tegra-x1-wddm/tools/Start-NativeUmdTrace.ps1` starts the pinned exporter and
+records its process identity. `Assert-NativeDesktop.ps1` additionally requires
+this consumer to remain live and `Read-NativeUmdEvidence.ps1` to find a
+successful hardware `CreateDeviceResult` followed by a successful `Present`
+from the current DWM PID, after both process creation and the current trial's
+`restart-requested.txt` timestamp. A later device creation/destruction, failed
+Present, consumer exit, missing complete buffer or increased loss counter
+cannot validate an older success. Loader selection alone is insufficient:
+the Vulkan Loader emits its `Using ... with driver ...` message before calling
+the ICD's `vkCreateDevice` in
+[SDK 1.3.296.0](https://github.com/KhronosGroup/Vulkan-Loader/blob/vulkan-sdk-1.3.296.0/loader/loader.c#L5466).
+Even these post-call events prove neither physical scanout nor pixel correctness;
+the physical-screen and known-pixel acceptance steps remain separate.
+
+On November 13, the evidence reader passed 23 controlled JSONL cases under
+Windows ARM64 PowerShell 5.1. The real ETW integration control retained one
+creation event and four Present events, with zero losses/invalid payloads,
+and its consumer exited after the session stopped. These are CPU controls
+with `control.exe` payloads, not DWM/GPU results. The controls are
+`tegra-x1-wddm/tests/test_native_umd_evidence.ps1` and
+`tegra-x1-wddm/tests/test_native_umd_trace.ps1`; the latter requires an elevated
+Windows session and a test directory containing the pinned exporter manifest.
+`Exercise-DesktopWindow.ps1` supplies an owned, colored WinForms window for
+the desktop observation. It records actual window bounds while moving/resizing
+every five seconds, and exits on its stop file or bounded duration. Its
+12-second `.59` baseline control completed two moves and two resizes in the
+interactive session; this does not validate native rendering or physical pixels.
+The controller/query/timestamp behavior follows Microsoft's
+[consumer documentation](https://learn.microsoft.com/en-us/windows/win32/etw/consuming-events),
+[EVENT_TRACE_LOGFILE](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/ns-evntrace-event_trace_logfilew)
+and [ControlTrace](https://learn.microsoft.com/en-us/windows/win32/api/evntrace/nf-evntrace-controltracew).
+
 `Trace.h` defines the version-1, 88-byte numeric payload. `ScreenQuery` logs adapter
 flags/budget; `ZinkBegin` logs LUID and opt-in state (0 absent, 1 exactly
 `"1"`, 2 another value); `SupportedVersion` logs index/DDI version;

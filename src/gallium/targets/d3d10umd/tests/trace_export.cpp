@@ -8,10 +8,13 @@
 #include <evntcons.h>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include "Trace.h"
 
 static const GUID provider = D3D10_UMD_TRACE_GUID_INIT;
 static unsigned matched, invalid;
+static const WCHAR *live_session;
+static ULONGLONG last_state;
 
 static const char *event_name(USHORT id)
 {
@@ -104,21 +107,81 @@ static void WINAPI record(EVENT_RECORD *event)
    std::puts("}");
 }
 
+/* The live consumer starts before the native device is enabled. Retain the
+ * initial loss counters: losses before attachment cannot describe this trial,
+ * but any increase after it invalidates the lifecycle evidence. Query the
+ * controller rather than EVENT_TRACE_LOGFILE::EventsLost (reserved/unused).
+ * ProcessTrace converts event timestamps to FILETIME; do not enable RAW_TIMESTAMP.
+ */
+static ULONG live_state(const char *event, ULONG process_status = ERROR_SUCCESS)
+{
+   struct {
+      EVENT_TRACE_PROPERTIES properties;
+      WCHAR session[1024], filename[1024];
+   } buffer = {};
+   auto props = &buffer.properties;
+   props->Wnode.BufferSize = sizeof(buffer);
+   props->LoggerNameOffset = sizeof(*props);
+   props->LogFileNameOffset = sizeof(*props) + sizeof(buffer.session);
+   ULONG status = ControlTraceW(0, live_session, props, EVENT_TRACE_CONTROL_QUERY);
+   if (!status && !(props->LogFileMode & EVENT_TRACE_REAL_TIME_MODE))
+      status = ERROR_INVALID_PARAMETER;
+   FILETIME now;
+   GetSystemTimeAsFileTime(&now);
+   const uint64_t time = (uint64_t(now.dwHighDateTime) << 32) | now.dwLowDateTime;
+   std::printf("{\"event\":\"%s\",\"time\":%llu,\"pid\":%lu,\"session\":",
+      event, (unsigned long long)time, GetCurrentProcessId());
+   json_image(live_session);
+   std::printf(",\"query_status\":%lu,\"process_status\":%lu,\"matched\":%u,\"invalid\":%u,"
+      "\"events_lost\":%lu,\"log_buffers_lost\":%lu,\"realtime_buffers_lost\":%lu}\n",
+      status, process_status, matched, invalid, props->EventsLost,
+      props->LogBuffersLost, props->RealTimeBuffersLost);
+   last_state = GetTickCount64();
+   std::fflush(stdout);
+   return status;
+}
+
+static ULONG WINAPI live_buffer(EVENT_TRACE_LOGFILEW *)
+{
+   /* Flush complete records at buffer boundaries, not per printf/event. */
+   if (GetTickCount64() - last_state >= 1000) {
+      if (live_state("TraceState") != ERROR_SUCCESS)
+         return FALSE;
+   }
+   return std::fflush(stdout) == 0;
+}
+
 int wmain(int argc, WCHAR **argv)
 {
-   if (argc != 2) { std::fprintf(stderr, "usage: d3d10-trace-export.exe trace.etl\n"); return 2; }
+   const bool follow = argc == 3 && !std::wcscmp(argv[1], L"--follow");
+   if (argc != 2 && !follow) {
+      std::fprintf(stderr, "usage: d3d10-trace-export.exe trace.etl | --follow session\n");
+      return 2;
+   }
    EVENT_TRACE_LOGFILEW log = {};
-   log.LogFileName = argv[1];
    log.ProcessTraceMode = PROCESS_TRACE_MODE_EVENT_RECORD;
+   if (follow) {
+      live_session = log.LoggerName = argv[2];
+      log.ProcessTraceMode |= PROCESS_TRACE_MODE_REAL_TIME;
+      log.BufferCallback = live_buffer;
+   } else {
+      log.LogFileName = argv[1];
+   }
    log.EventRecordCallback = record;
    TRACEHANDLE handle = OpenTraceW(&log);
    if (handle == INVALID_PROCESSTRACE_HANDLE) {
       std::fprintf(stderr, "OpenTrace failed: %lu\n", GetLastError()); return 1;
    }
+   if (follow && live_state("TraceStart") != ERROR_SUCCESS) {
+      CloseTrace(handle);
+      return 1;
+   }
    const ULONG status = ProcessTrace(&handle, 1, nullptr, nullptr);
    CloseTrace(handle);
+   if (follow)
+      live_state("TraceEnd", status);
    std::fprintf(stderr, "ProcessTrace=%lu matched=%u invalid=%u events_lost=%lu buffers_lost=%lu end_time=%llu buffers_written=%lu\n",
                 status, matched, invalid, log.LogfileHeader.EventsLost, log.LogfileHeader.BuffersLost,
                 (unsigned long long)log.LogfileHeader.EndTime.QuadPart, log.LogfileHeader.BuffersWritten);
-   return status || invalid || !matched ? 1 : 0;
+   return status || invalid || !matched || std::ferror(stdout) ? 1 : 0;
 }
