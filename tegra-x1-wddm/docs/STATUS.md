@@ -26,9 +26,12 @@ restarts. The previous exclusion is superseded. Recent system records show
 unexpected restarts with zero bugcheck fields **and repeated volmgr 46 dump
 initialization failures**. No matching recent crash dump exists; neither
 zero bugcheck fields nor missing dumps rule out a kernel crash. The actual
-SD driver is `0.4.0.1`, which must be distinguished from newer source trees.
-New native deployment is deferred while existing failure evidence and the
-SD dump path are examined. No cause or physical fix is established yet.
+SD INF was labelled `0.4.0.1`, but its active SYS differed from the exported
+DriverStore package. The authorized **SD 0.5.1.1** update now aligns INF/SYS/CAT;
+planned boot, Code 0/hash verification and an 8 MiB file write/flush/readback
+passed. No new volmgr event was found through 00:55 UTC in that boot, but no
+actual crash dump has been captured. GPU root cause and physical acceptance
+remain unresolved; no new native GPU candidate was deployed during the SD work.
 [Failure evidence and collection](NATIVE_DESKTOP_158.md#failure-investigation-and-missing-crash-dumps)
 
 **New mapping audit fixes, not deployed:** `ba8ed4cc` preserves D3D's
@@ -38,7 +41,8 @@ completed/recycled batch uses when polling. Four controlled regressions fail
 before the fix and pass afterward on ARM64. The UMD builds as `5c9454f2…`.
 The real Zink texture-mapping path still needs nonblocking readback work;
 these controls do not establish native pixels or desktop acceptance. The
-device remains `.59` / Code 0, with no new native deployment or restart.
+device still selects the `.59` package after the separate planned SD-update
+restart. No new native GPU candidate has been deployed.
 [Mapping contracts, exact controls and remaining gap](D3D_RUNTIME_SYNC.md#nonblocking-mapping-audit)
 
 **Query-polling fix passes controls, but the native trial fails physically:** `760db8b2` makes D3D

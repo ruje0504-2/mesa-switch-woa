@@ -705,3 +705,36 @@ The owner has requested adding SD crashdump support. Work on that storage
 path belongs in the drivers repository; GPU source remains in this project.
 Dump-file creation and contents will need their own validation and cannot be
 claimed from a build or CPU control. The GPU root cause remains undetermined.
+
+### SD update enabling further crash investigation
+
+The storage work is maintained in
+[Windows-for-Switch-Drivers](https://github.com/ruje0504-2/Windows-for-Switch-Drivers/blob/hdh001-winarm-bounded-write/drivers/Tegra210Sdhc/README.md#0511-installation-and-runtime-result),
+source **`cca463704d5a78577d86cc1adde1ce83dd547ae2`**, version **0.5.1.1**.
+Before installation, exporting the bound `oem23.inf` produced a 31,632-byte
+SYS different from the 44,432-byte active system file. Both are backed up;
+the old INF label did not identify the separately replaced implementation.
+
+The new package preserves DDR200/SDR104 runtime operation and adds bounded
+PIO dump takeover, card/partition identity checks, polled-event handling and
+diagnostics retained across DDR200 fallback. Official Inf2Cat checks and
+native signature/catalog-membership verification passed. Installation at
+**2026-11-13 00:49:31–00:49:34 UTC** requested one restart; the resulting
+boot is **00:52:13 UTC**. At **00:54 UTC**, **0.5.1.1 / oem89.inf / Code 0**
+and SYS SHA256
+`5286cb72a99a7bdc3e6e9fe4ac8f4e7a50c0d068917cdd217506daf320aeca7b`
+were verified. An 8 MiB file write/flush/readback matched its expected hash.
+The GPU remains on its `.59` recovery package; no native desktop trial ran.
+
+The pagefile remains 512 MiB, CPU readback is 1996.8 MHz, fan version is 12,
+and the complete power-settings output matches before/after. The explicit
+volmgr query succeeded with no events since this boot through **00:55 UTC**.
+This removes the previously recurring initialization-error observation for
+this boot, but **does not establish successful crash capture or a GPU fix**.
+No forced bugcheck was triggered. Retained storage evidence is under
+`switch-maintenance/sd-crashdump/verified-evidence/` outside the GPU repository.
+
+The card advertises DDR200 but produces a one-tap window after all 128 samples,
+then recovers to SDR104. That compatibility investigation is now assigned to
+the owner's separate sidebar chat; it does not block the main GPU source audit
+and must not lower the eight-tap qualification threshold.
