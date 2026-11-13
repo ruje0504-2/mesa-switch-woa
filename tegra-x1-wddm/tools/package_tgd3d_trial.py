@@ -37,6 +37,7 @@ def main():
     manifest = {"scope": "tgd3d-vulkan tgd3d trial; .158 KMD reused by exact hash; .59 exported on device before installation",
                 "kmd_version": frozen["kmd_version"], "kmd_source": frozen["kmd_source"],
                 "umd_name": "TegraGpuD3DVk.dll", "umd_source": umd["mesa"], "icd_source": icd["mesa"],
+                "sync_mode": umd.get("sync_mode", "gpu-bridge"),
                 "tools_source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
                 "kmd": frozen["kmd"], "app": {}, "helpers": {}, "files": {}}
     for name, record in frozen["kmd"].items():

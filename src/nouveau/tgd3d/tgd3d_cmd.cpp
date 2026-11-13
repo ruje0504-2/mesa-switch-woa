@@ -55,6 +55,12 @@ HRESULT sync_create(Device *dev)
    if (dev->vk.CreateSemaphore(dev->vkdev, &info, nullptr, &dev->fence) != VK_SUCCESS)
       return E_OUTOFMEMORY;
 
+#ifdef TGD3D_CPU_SYNC_CONTROL
+   /* Diagnostic build: reproduce the old desktop UMD's synchronous Flush /
+    * Present boundary. Keep the local Vulkan completion timeline, but create
+    * neither runtime fence nor Vulkan import of a runtime fence. */
+   return S_OK;
+#endif
    /* The generic control build has no WDDM queue to synchronize. */
    if (!dev->nvk)
       return S_OK;
@@ -590,11 +596,21 @@ HRESULT flush(Device *dev, bool waitForSpace)
       return hr;
    }
    retire(dev);
+#ifdef TGD3D_CPU_SYNC_CONTROL
+   /* Ordinary Flush, Present and shared-resource release must complete the
+    * rendering before the runtime can signal its own context. Polling calls
+    * still submit without waiting, preserving DONOTWAIT / QueryGetData. */
+   if (waitForSpace && SUCCEEDED(hr)) {
+      hr = wait_cpu(dev, dev->submitted, TGD3D_WAIT_SYNC_CONTROL);
+      retire(dev);
+   }
+#else
    if (waitForSpace && SUCCEEDED(hr) && dev->submitted > TGD3D_MAX_IN_FLIGHT &&
        dev->completed() < dev->submitted - TGD3D_MAX_IN_FLIGHT) {
       hr = wait_cpu(dev, dev->submitted - TGD3D_MAX_IN_FLIGHT, TGD3D_WAIT_BACKPRESSURE);
       retire(dev);
    }
+#endif
    return hr;
 }
 

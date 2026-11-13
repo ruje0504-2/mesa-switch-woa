@@ -37,9 +37,11 @@ static Device make_device(Adapter *adapter)
    dev.vkdev = handle<VkDevice>(1);
    dev.queue = handle<VkQueue>(2);
    dev.fence = handle<VkSemaphore>(3);
+#ifndef TGD3D_CPU_SYNC_CONTROL
    dev.ingress = handle<VkSemaphore>(4);
    dev.runtimeFence = 0x20;
    dev.runtimeIngress = 0x21;
+#endif
    dev.hContext = handle<HANDLE>(0x3000);
    dev.hRTDevice.handle = handle<HANDLE>(0x4000);
 #define X(n) dev.vk.n = Stub<PFN_vk##n>::call;
@@ -73,14 +75,20 @@ static Device make_device(Adapter *adapter)
       CHECK(count == 1 && info->commandBufferInfoCount == 1 && info->signalSemaphoreInfoCount == 1);
       CHECK(info->pSignalSemaphoreInfos[0].value == submissions + 1);
       CHECK(info->pSignalSemaphoreInfos[0].semaphore == handle<VkSemaphore>(3));
+#ifdef TGD3D_CPU_SYNC_CONTROL
+      CHECK(info->waitSemaphoreInfoCount == (submissions ? 1u : 0u));
+#else
       CHECK(info->waitSemaphoreInfoCount == (submissions ? 2u : 1u));
+#endif
       if (submissions) {
          CHECK(info->pWaitSemaphoreInfos[0].semaphore == handle<VkSemaphore>(3));
          CHECK(info->pWaitSemaphoreInfos[0].value == submissions);
       }
+#ifndef TGD3D_CPU_SYNC_CONTROL
       const auto &wait = info->pWaitSemaphoreInfos[info->waitSemaphoreInfoCount - 1];
       CHECK(wait.semaphore == handle<VkSemaphore>(4) && wait.value == submissions + 1);
       CHECK(wait.stageMask == VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+#endif
       ++submissions; events.push_back(2);
       return failAt == 2 ? VK_ERROR_DEVICE_LOST : VK_SUCCESS;
    };
@@ -110,6 +118,30 @@ static void submission_contract()
 {
    Adapter adapter;
    reset(); Device dev = make_device(&adapter);
+#ifdef TGD3D_CPU_SYNC_CONTROL
+   dev.nvk = true;
+   dev.vk.CreateSemaphore = [](VkDevice, const VkSemaphoreCreateInfo *info,
+                               const VkAllocationCallbacks *, VkSemaphore *out) {
+      const auto *type = static_cast<const VkSemaphoreTypeCreateInfo *>(info->pNext);
+      CHECK(type && type->semaphoreType == VK_SEMAPHORE_TYPE_TIMELINE);
+      *out = handle<VkSemaphore>(3); return VK_SUCCESS;
+   };
+   /* No runtime create/import callbacks are supplied. The diagnostic path
+    * must not need them even for the native adapter. */
+   CHECK(SUCCEEDED(sync_create(&dev)));
+   CHECK(dev.fence && !dev.ingress && !dev.runtimeFence && !dev.runtimeIngress);
+   for (unsigned i = 0; i < 4; i++) {
+      CHECK(cmd_begin(&dev)); CHECK(SUCCEEDED(flush(&dev, false)));
+   }
+   CHECK(dev.submitted == 4 && !dev.gated && !cpuWaits && !signals && !gates);
+   CHECK(events == std::vector<unsigned>({2,2,2,2}));
+   CHECK(SUCCEEDED(flush(&dev, true)) && cpuWaits == 1 && completedValue == 4);
+   CHECK(dev.submittedCommands.empty() && !cpuSignals && !signals && !gates);
+   reset(); dev = make_device(&adapter); failAt = 2;
+   CHECK(cmd_begin(&dev)); CHECK(FAILED(flush(&dev, true)));
+   CHECK(FAILED(dev.lost) && !cpuWaits && !cpuSignals && !signals && !gates);
+   std::puts("PASS: CPU sync control has no cross-context fence; ordinary Flush completes, polling does not block");
+#else
    for (unsigned i = 0; i < 4; i++) {
       CHECK(cmd_begin(&dev));
       CHECK(SUCCEEDED(flush(&dev, false)));
@@ -129,6 +161,7 @@ static void submission_contract()
       CHECK(FAILED(flush(&dev, true)) && signals == previous);
    }
    std::puts("PASS: every submit is bidirectional; failures never fabricate completion");
+#endif
 }
 
 static void nonblocking_map()

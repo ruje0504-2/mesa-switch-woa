@@ -15,6 +15,8 @@ def main():
     parser.add_argument("--cross-file", type=Path, required=True)
     parser.add_argument("--sdk-include", type=Path, required=True)
     parser.add_argument("--wdk-include", type=Path, required=True)
+    parser.add_argument("--cpu-sync-control", action="store_true",
+                        help="diagnostic only: replace cross-context fences with synchronous Flush/Present")
     args = parser.parse_args()
     source = Path(__file__).resolve().parents[2]
     out = args.out.resolve()
@@ -32,6 +34,9 @@ def main():
     build = out / "build"
     reconfigure = ["--reconfigure"] if (build / "meson-private/coredata.dat").is_file() else []
     includes = json.dumps(["-I" + str(headers)])
+    cpp_args = ["-I" + str(headers)]
+    if args.cpu_sync_control:
+        cpp_args.append("-DTGD3D_CPU_SYNC_CONTROL")
     command = [
         "meson", "setup", *reconfigure, str(build), str(source),
         "--cross-file", str(args.cross_file.resolve()),
@@ -41,7 +46,7 @@ def main():
         "-Dvalgrind=disabled", "-Dlibunwind=disabled", "-Dgles1=disabled",
         "-Dgles2=disabled", "-Dopengl=false", "-Dshader-cache=disabled",
         "-Dzlib=disabled", "-Dzstd=disabled", "-Dexpat=disabled",
-        "-Dbuildtype=release", f"-Dc_args={includes}", f"-Dcpp_args={includes}",
+        "-Dbuildtype=release", f"-Dc_args={includes}", f"-Dcpp_args={json.dumps(cpp_args)}",
     ]
     subprocess.run(command, cwd=source, check=True)
     artifacts = {"TegraGpuD3DVk.dll": "src/nouveau/tgd3d/TegraGpuD3DVk.dll",
@@ -61,6 +66,7 @@ def main():
         "component": "tgd3d", "mesa": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=source, text=True).strip(),
         "source_dirty": bool(source_status), "source_status": source_status,
+        "sync_mode": "cpu-control" if args.cpu_sync_control else "gpu-bridge",
         "configure": command, "files": hashes,
         "validation": "cross-built only; native rendering and display acceptance pending",
     }, indent=2) + "\n")

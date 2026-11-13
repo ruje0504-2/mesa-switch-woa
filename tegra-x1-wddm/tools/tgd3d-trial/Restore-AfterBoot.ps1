@@ -6,10 +6,7 @@ $dir=$PSScriptRoot
 $task='Tgd3dTrialRestore'
 Start-Transcript -Path (Join-Path $dir 'restore-transcript.log') -Append
 try {
-    # Once per trial, before the native driver/UMD registration is removed.
-    # The writer has its own memory/time bounds and captures a PSS snapshot.
-    try { & (Join-Path $dir 'Capture-PreRecovery.ps1') }
-    catch { Write-Output ('Pre-recovery evidence unavailable: '+$_.Exception.Message) }
+    # Restore immediately. Dump capture is disabled at the owner's request.
     foreach($name in 'Tgd3dTrialAutomatic','Tgd3dTrialObserve','Tgd3dTrialNative') {
         if(Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
             Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
