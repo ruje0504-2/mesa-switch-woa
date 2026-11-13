@@ -969,3 +969,31 @@ ICD 模块生命周期；后续 CloseAdapter 仍会销毁 instance、卸载模�
 `VUID-vkDestroyInstance-instance-00629`。超时后无界 DeviceWaitIdle 仍待修复；正常
 双向依赖链没有在本次审查中被证明必然死锁。标准主表面启动候选 `9de42c82` 保持
 独立冻结，本次 Flush 修正和 `35696545` 着色器缓存均未混入该 SD 候选。
+
+### 标准主表面候选已离线写入 SD，等待实机启动
+
+`9de42c82a03e84674954d8175237dcfd5bb4dc2e` UMD 已替换原持久启动目录中的
+`app/TegraGpuD3DVk.dll`，实际读回 SHA256 为
+`6612e45e8059086e9fe8dfb7b1f9c1cd868bed78e19722da0aff9ce90d26fa9c`。
+组件清单同步更新，SHA256 为
+`ed2f6ee1cef70ceb462029efd34799f18a804c46a7efa2e668b20eaf61692c85`。
+`.158` KMD 仍为 `c629328e…`，ICD 仍为 `dee3d580…`（完整哈希见前文）。
+实卡 SYSTEM、SYSTEM.LOG1、SYSTEM.LOG2 与更新前逐字节哈希一致，原生启动授权
+保留，没有切回 BasicDisplay、`.59` 或登录后启用，也未修改 CPU、风扇和显示方向。
+
+原 Mac ntfscp 因 Windows 缓存元数据拒绝写入；只读 ntfsrecover 模拟也未能完成，
+没有强制清空日志。原 ARM64 安装镜像在本地虚拟维护环境启动失败，最终使用微软
+WinPE add-on `10.1.22621.5337` 的 x64 维护环境，仅处理 NTFS 和复制 ARM64 文件。
+原生挂载后 CHKDSK `/f /x` 返回0，报告未发现文件系统问题；未用此结果推断
+Switch 重启根因。WinPE 在写时复制副本内完成替换并核对全部组件后正常关机。
+
+对该副本的971段改动、135856128字节保存原始前后扇区备份，再写回唯一匹配 UUID
+的 WINARM 分区。全部扇区读回一致；随后以只读 ntfscat 从未挂载的实卡再次核对
+UMD、组件清单、KMD、ICD 和上述注册表文件。备份在 Mac 及 SD FAT 分区各保留一份，
+备份 zip SHA256 为 `247ea36fb5e097a594cc14c0dda77909411e866e15dbedf8b102ff8607fe8f8a`。
+扇区恢复工具仅适用于记录内容仍匹配时的离线还原；Windows 运行后的驱动回退应使用
+单独保存的旧 UMD/清单，不能盲目覆盖旧文件系统扇区。验证记录见产物目录
+`standard-open-deploy/deployment-final.json` 和 `sector-backup/`。
+
+本轮仅完成离线部署与读回，仍为 CPU 同步控制组合；尚未验证登录前原生启动、
+DWM 实际加载或物理画面稳定性。缓存、生产双向 Fence 和实际60Hz时序仍须分轮验收。
