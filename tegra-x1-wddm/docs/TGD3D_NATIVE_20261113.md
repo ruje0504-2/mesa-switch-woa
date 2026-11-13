@@ -1,4 +1,4 @@
-# tgd3d 首轮原生桌面与异常重启
+# tgd3d 原生桌面试验与异常重启
 
 状态：短时原生上屏，稳定性失败。当前开发分支为 `tgd3d-vulkan`，原名
 `claude-vulkan`。本轮没有五分钟、已知像素、硬件旋转或 vkcube 通过结果。
@@ -84,3 +84,86 @@ D3D11 放宽规则直接用于未声明该能力的 D3D10 路径。
 随后在 `.59` 进行同一性能程序的无参数对照：进程7776持续运行30.18秒，
 06:01:53 UTC正常退出0，控制进程连续运行，GPU仍为`.59`，没有重启。
 这仅证明该次基线运行成功，不能排除程序I/O与原生路径的交互问题。
+
+## 第二轮：静止阶段通过，开窗阶段异常重启
+
+本轮只更新取证工具和分阶段观察，没有修改绘制、同步或 KMD。组件为上述
+`4309434c8b2f087883e673515df16aa346f5903d` UMD、原 `7c677212` ICD 和冻结
+`.158` KMD；完整组件 SHA256 见前述清单。阶段工具为 `b4942e7a`，测试包
+6718393 字节，SHA256
+`2a7ce341d84915c0287fed038e578d311f235897c46893f4451b73ddc8e80833`。
+
+试验目录为 `tgd3d-4309434c-20261113-142254`。Windows 仍为
+`10.0.22621.2861`；WMI 启动时间为 `06:24:41.602617 UTC`，控制记录在
+`06:26:56.6543149 UTC` 确认 `.158 / Code 0`、Hardware/Panel 0、许可消费为0。
+原生 LUID 为 `0000000000086d7d`，DWM PID812，创建 FILETIME
+`134390247145347024`。原始 QPC 与进程创建时间匹配了本轮 DWM 的 NVK 初始化、
+设备创建和呈现，修正后的 helper 退出4判定也通过。
+
+静止观察在 QPC `2935736109` 开始，频率19200000；0/15/30秒检查均成功，
+30秒后截图，观察计时40.27秒。用户确认“画面正常，能操作”，该阶段通过。
+随后请求60秒开窗阶段，用户报告“已经死机重启了”，并确认“尚未看到彩色窗口
+就死机”。没有 Window observer 的动作/结果，也没有五分钟或性能程序回归结果。
+用户另补充系统自带窗口可以使用，而新程序开窗时会重启；这是排查差异，尚非根因。
+
+保留数据如下：
+
+- 实时 tgd3d 日志2219条事件、92条状态，DWM 389次成功 Present；离线主 ETL
+  多保留最后6条事件，合计2225条、DWM 391次成功 Present 和394次成功提交。
+  DWM 的 Present 回压耗时均为0，保留的一次CPU等待属于读回；Explorer 有两次
+  两帧上限产生的回压。跨队列 GPU Fence 已实现，不代表全部API路径都无CPU等待。
+- 原始 ETW 339152条；已用该机模板解码335068条。1857条 Dwm-Core 203事件
+  的载荷与模板长度不同，明确排除。没有保留 KMD recovery/execution 事件。
+  最后的原生 DMA1885有完成记录，随后有 PresentId391 的 MPO 回调；尾部仍有
+  排队记录。主 ETL EndTime/BuffersWritten 为0，不能用尾部未配对事件认定GPU挂起。
+- 系统事件记录6008/41、BugcheckCode 0；没有对应 Minidump、MEMORY.DMP、
+  LiveKernelReports、用户转储或 WER 报告。EventRecordId40235是异常重启，
+  40289是恢复脚本正常请求重启，两者必须区分。墙钟经过校正，不能混算ETW、
+  WMI与系统事件时间来推导崩溃耗时。
+- 后续只读补查的 PowerShell 400事件36883确认控制进程PID3864启动过
+  `Start-NativeStage.ps1 -Stage Window`。脚本块日志只能证明解析/加载，不能
+  当作每条命令已执行。TaskScheduler Operational当时未开启。
+  `stage-Window.request.json` 保留408字节全零内容，说明原请求记录未完整保存，
+  不能据此证明 observer 已启动。后续工具改用 WriteThrough、Flush(true)、
+  pending文件完成后发布，并携带控制进程PID/创建时间；不把这项取证修正当作重启修复。
+  更新脚本已于06:47:18 UTC在Windows PowerShell通过语法解析（0错误），未执行
+  新的原生动作，也没有用解析成功证明断电持久性。
+
+06:33:42 UTC完成恢复核对：`.59 / Code 0`，SYS/ACPI哈希与原基线完全一致，
+显示restore/verify均为0，CPU1497600kHz、风扇13、电源/睡眠设置保持，
+临时任务、许可、UMD/ICD注册及ETW已清理。用户随后确认“已回到桌面，能操作”。
+没有再次启动该失败组合。
+
+证据163个文件、157525799字节，逐文件长度和SHA256全部匹配；归档18635015字节，
+SHA256 `3b94140003b54590383533e28ddefbafd283e1b74cfa3a39c895d7d4ef7f306b`。
+独立产物目录为 `hardware/staged-4309434c/`；归档、`verified.json`、
+后补系统事件与物理反馈分别保存，未改写已归档的原始记录。
+
+逐项审查 `main` 的 `0ced476d` 和 `7a1f7176`：前者修改 Gallium/Zink 的图像
+映射与缓存范围，不在 tgd3d 直接调用链；后者扩充已有 TDR 回调的缓存报告，
+不负责建立 SD 转储通道，也不能保证硬复位能留下转储。本轮均未移植或部署。
+CreateProcess/CreateContext的冻结KMD实现与当前支线相同，审查参考微软
+[CreateProcess](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_createprocess)
+（2025-02-07）与
+[CreateContext](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_createcontext)
+（2024-02-22）；仅有新进程时间关联，不足以认定某个回调违约。
+
+### 已安装的 SD 转储路径
+
+按用户提醒核对主会话的存储安装记录及实机：06:45:46 UTC，SDMMC1
+`ACPI\NVDA0101\0` 为 **0.5.1.2 / oem90.inf / Code 0**，48056字节 SYS，
+SHA256 `5389b30d3a04fad330b9afef36b0d500ad363c6c5b39c55c9b60096669bfd945`。
+与 Windows-for-Switch-Drivers 的
+[固定安装记录](https://github.com/ruje0504-2/Windows-for-Switch-Drivers/blob/6cd7305e7e932b4df4bb4e53282fedd9d53e8bd8/drivers/Tegra210Sdhc/README.md#0512-installation-and-runtime-result)
+匹配，记录的SD源码为 `5345692e4b7ec0d52e80937ae451bb2c52750fe8`。
+该版本保留SDPORT的独立PIO转储支持；无需因GPU回退重新安装SD驱动。
+
+实机 CrashDumpEnabled=3、AutoReboot=1，分页文件512MiB。补查到06:39 UTC的
+System记录中，本轮开始之后没有volmgr事件；旧的45/46记录早于这轮。
+这证明没有再次观察到初始化错误，仍不是成功捕获转储的证明。两次tgd3d异常重启
+都没有可用转储。微软
+[Event 41说明](https://learn.microsoft.com/en-us/troubleshoot/windows-client/performance/event-id-41-restart)
+明确指出零Bugcheck字段也可能来自无法写盘或关机过快，不能排除内核崩溃；
+[小转储说明](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/small-memory-dump)
+描述了可用于定位的崩溃线程、调用栈和驱动列表。本轮未修改SD、转储或分页配置，
+没有触发人为bugcheck。存储源码仍由其原仓库维护。

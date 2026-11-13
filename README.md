@@ -21,7 +21,7 @@ neither application path has completed hardware acceptance on this port.
 | Native Vulkan | NVK rendered an offscreen triangle and read back the expected pixels and guards with driver **0.1.0.87**. A Win32 preview showed that readback. |
 | Display adapter | **0.1.0.130** reached **Code 0**, completed GDI copies and displayed verified RGB bars on the internal panel through the GM20B VidPN and native scanout. |
 | Shared storage | **0.1.0.144** passes Vulkan Win32 buffer/image sharing, GPU read/write after producer-device release, and re-export: 32,768 payload words plus 512 guards match. [Scope and evidence](tegra-x1-wddm/docs/VULKAN_WIN32_MEMORY.md). |
-| Native Windows desktop (`tgd3d`) | **Short native desktop confirmed; stability not passed.** The D3D10 WDDM UMD translates resources, DXBC shaders, drawing and DXGI operations directly to Vulkan/NVK. DWM creation and 251 successful Present calls are retained; the user reports a normal, operable desktop before an unexpected restart after opening the performance utility. Five-minute interaction and known-pixel acceptance remain pending. [Implementation and validation scope](src/nouveau/tgd3d/README.md). |
+| Native Windows desktop (`tgd3d`) | **30-second static desktop confirmed; window stage failed.** The D3D10 WDDM UMD translates resources, DXBC shaders, drawing and DXGI operations directly to Vulkan/NVK. The latest trial retains DWM creation and 391 successful Present calls, plus physical confirmation of the static desktop. The user then reported a freeze/restart before the test window appeared. Five-minute interaction and known-pixel acceptance remain pending. [Implementation and validation scope](src/nouveau/tgd3d/README.md). |
 | Previous Windows desktop (Zink/NVK) | **Development paused on `main`.** The historical .158 combination reached a complete taskbar and native FL10_0 composition, but subsequent trials did not establish sustained visual stability. [Exact components and evidence](tegra-x1-wddm/docs/NATIVE_DESKTOP_158.md). |
 | DX9 / DX10 / DX11 games (`DXVK`) | **Planned; application compatibility unverified on GM20B Windows.** Games can use D3D → DXVK → Vulkan/NVK → KMD, independently of tgd3d's D3D translation. The selected DXVK version requires matching Vulkan features, Win32 presentation and a compatible application/loader/ICD architecture. [DXVK requirements](https://github.com/doitsujin/dxvk/wiki/Driver-support). |
 | OpenGL (`Zink`) | **Separate compatibility path; hardware acceptance pending.** Mesa OpenGL/WGL → Zink → NVK shares the Vulkan driver with tgd3d and DXVK. Pausing the old Zink desktop frontend does not remove the OpenGL route. |
@@ -30,7 +30,7 @@ neither application path has completed hardware acceptance on this port.
 
 Package versions above identify KMD test packages, not a combined UMD/ICD release.
 The latest retained tgd3d trial used signed **.158** KMD (SHA256 prefix
-`46d1757674ff`), UMD source **3c5d327d** (`8232217dbede`) and NVK ICD source
+`46d1757674ff`), UMD source **4309434c** (`d90404c27cfa`) and NVK ICD source
 **7c677212** (`17dc31103933`). At the last verified recovery, the device was
 back on **.59 / Code 0**. Each component has its own build manifest and full
 source/artifact identity; the older Zink .158 combination is a separate trial.
