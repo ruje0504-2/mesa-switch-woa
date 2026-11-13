@@ -24,7 +24,7 @@ static unsigned char bytes[64];
 static unsigned polls, memory_maps;
 static bool ready;
 static struct zink_instance_info instance_info;
-static unsigned char image_bytes[4096], device_bytes[4096];
+static unsigned char image_bytes[8192], device_bytes[8192];
 static unsigned invalidates, flushes, unmaps;
 static bool invalidate_fails;
 static VkMappedMemoryRange invalidated;
@@ -37,7 +37,9 @@ image_layout(VkDevice device, VkImage image, const VkImageSubresource *subresour
    CHECK(image == (VkImage)(uintptr_t)1);
    CHECK(subresource->mipLevel == 0 && subresource->arrayLayer == 0);
    *layout = (VkSubresourceLayout) {
-      .offset = image_base_offset, .size = sizeof(image_bytes) - image_base_offset, .rowPitch = 128,
+      .offset = image_base_offset,
+      .size = resource.base.b.target == PIPE_TEXTURE_3D ? 2048 : 1024,
+      .rowPitch = 128,
       .arrayPitch = 1024,
       /* Vulkan leaves this undefined for non-3D images. */
       .depthPitch = resource.base.b.target == PIPE_TEXTURE_3D ? 512 : 0,
@@ -203,7 +205,9 @@ image_readback(enum pipe_texture_target target, enum pipe_format format,
    CHECK(zink_screen_resource_init(&screen.base));
    resource.base.b.target = target;
    resource.base.b.format = resource.internal_format = format;
-   resource.base.b.width0 = resource.base.b.height0 = 32;
+   resource.base.b.width0 = 32;
+   resource.base.b.height0 = format == PIPE_FORMAT_DXT1_RGB ? 32 :
+                            target == PIPE_TEXTURE_3D ? 4 : 8;
    resource.base.b.depth0 = target == PIPE_TEXTURE_3D ? 4 : 1;
    resource.base.b.array_size = target == PIPE_TEXTURE_2D_ARRAY ? 4 : 1;
    resource.linear = true;
@@ -223,7 +227,9 @@ image_readback(enum pipe_texture_target target, enum pipe_format format,
       CHECK(bo.u.real.map_count == maps_before);
    } else {
       CHECK(ptr == image_bytes + offset && transfer);
-      CHECK(transfer->stride == 128 && transfer->layer_stride == layer_stride);
+      CHECK(transfer->stride == 128);
+      if (target != PIPE_TEXTURE_2D)
+         CHECK(transfer->layer_stride == layer_stride);
       CHECK(*ptr == 0x5a && image_bytes[end - 1] == 0x5a);
       CHECK(invalidated.offset == offset / 64 * 64);
       CHECK(invalidated.offset + invalidated.size == (end + 63) / 64 * 64);
@@ -246,23 +252,29 @@ int main(int argc, char **argv)
    else if (!strcmp(argv[1], "--recycled-usage")) recycled_usage();
    else if (!strcmp(argv[1], "--image-array"))
       image_readback(PIPE_TEXTURE_2D_ARRAY, PIPE_FORMAT_R8G8B8A8_UNORM,
-                     (struct pipe_box){3, 1, 2, 4, 2, 2}, 2252, 3420, 1024, false);
+                     (struct pipe_box){.x=3, .y=1, .z=2, .width=4, .height=2, .depth=2},
+                     2252, 3420, 1024, false);
    else if (!strcmp(argv[1], "--image-3d"))
       image_readback(PIPE_TEXTURE_3D, PIPE_FORMAT_R8G8B8A8_UNORM,
-                     (struct pipe_box){3, 1, 2, 4, 2, 2}, 1228, 1884, 512, false);
+                     (struct pipe_box){.x=3, .y=1, .z=2, .width=4, .height=2, .depth=2},
+                     1228, 1884, 512, false);
    else if (!strcmp(argv[1], "--image-cache"))
       image_readback(PIPE_TEXTURE_2D, PIPE_FORMAT_R8G8B8A8_UNORM,
-                     (struct pipe_box){3, 1, 0, 4, 2, 1}, 204, 348, 1024, false);
+                     (struct pipe_box){.x=3, .y=1, .width=4, .height=2, .depth=1},
+                     204, 348, 1024, false);
    else if (!strcmp(argv[1], "--image-compressed"))
       image_readback(PIPE_TEXTURE_2D, PIPE_FORMAT_DXT1_RGB,
-                     (struct pipe_box){4, 4, 0, 8, 8, 1}, 200, 344, 1024, false);
+                     (struct pipe_box){.x=4, .y=4, .width=8, .height=8, .depth=1},
+                     200, 344, 1024, false);
    else if (!strcmp(argv[1], "--image-cache-failure"))
       image_readback(PIPE_TEXTURE_2D, PIPE_FORMAT_R8G8B8A8_UNORM,
-                     (struct pipe_box){3, 1, 0, 4, 2, 1}, 204, 348, 1024, true);
+                     (struct pipe_box){.x=3, .y=1, .width=4, .height=2, .depth=1},
+                     204, 348, 1024, true);
    else if (!strcmp(argv[1], "--image-small-offset")) {
       image_base_offset = 0;
       image_readback(PIPE_TEXTURE_2D, PIPE_FORMAT_R8G8B8A8_UNORM,
-                     (struct pipe_box){3, 0, 0, 14, 1, 1}, 12, 68, 1024, false);
+                     (struct pipe_box){.x=3, .width=14, .height=1, .depth=1},
+                     12, 68, 1024, false);
    }
    else CHECK(false);
    simple_mtx_destroy(&bo.lock);

@@ -58,13 +58,16 @@ The actual WDK callback control compiles for ARM64. It calls the registered
 DDI with simulated `HIGH_LEVEL`, held engine/queue locks and unusable private
 owner pointers; it checks no hardware/model allocation side effects, exact
 buffer bounds, cached trace publication and unavailable records. This control
-has **not yet executed on Windows**: the separate user-authorized SD test
-currently owns the hardware window.
+executes successfully on Windows ARM64 at **02:04:37 UTC on 2026-11-13**.
+It remains a user-mode CPU control with substituted kernel operations,
+not a live WDDM callback or GPU execution. Its result is included in the
+[verified mapping/control run](D3D_RUNTIME_SYNC.md#linear-image-layout-and-cache-audit).
 
 The full host backend suite and ARM64 kernel build pass. The local unsigned
-`.161` package is built from current `main`, including its earlier GR
-helper-load, queue-validation and trace changes; it is not the frozen `.158`
-KMD plus diagnostics alone. SYS SHA256 before signing:
+`.161` package is built from `main` at `7a1f7176`, including queue-validation
+and execution/reset trace changes; it is not the frozen `.158` KMD plus this
+report alone. Its GR/helper-load sources match the frozen `.158` source.
+SYS SHA256 before signing:
 `9e7642914ccdace2b606504d46675763d2e37621a588fd6ee82e69f625d6da9f`.
 The ARM64 CPU control SHA256 is
 `41dd36f8530d0364565f49cf59224989616d15a71d94488646884b555d006027`.

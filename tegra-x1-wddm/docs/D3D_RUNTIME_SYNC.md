@@ -336,7 +336,8 @@ Validation retained in `runs/image-map-20261113/`:
 | Layer | Result |
 | --- | --- |
 | Actual old/new C range helper on the host | Old code fails the `[12,68)` regression; corrected code passes 178,611 ASan/UBSan range cases |
-| Real texture mapper with controlled Vulkan memory/layout operations | Six ARM64 before/after controls compile; Windows execution pending |
+| Real texture mapper with controlled Vulkan memory/layout operations | Six old-code cases fail as expected and six corrected-code cases pass on Windows ARM64 |
+| Existing buffer and WDK context controls | Three buffer controls and the KMD callback/context control pass on Windows ARM64 |
 | ARM64 UMD | Build succeeds; not deployed |
 | Native pixels and physical desktop | No new result |
 
@@ -348,6 +349,30 @@ controls and cannot establish that a physical GPU or display is correct.
 In particular, the tiled-image `PIPE_MAP_DONTBLOCK` gap described above
 remains open. No connection between these linear-image defects and the
 reported desktop failure is established.
+
+The first Windows invocation at 01:58 UTC stops at the array test: both old
+and corrected code fail because the fixture initialized `pipe_box` positionally
+as x/y/z/width/height/depth, while this Mesa version declares
+x/width/y/height/z/depth. That run cannot validate the driver change. Its
+eight returned records (7,301 bytes) are retained separately. The fixture now
+uses designated fields and consistent resource/layout extents.
+
+The corrected invocation at **02:04:34-02:04:37 UTC on 2026-11-13** records
+all 16 expected outcomes without timeouts. The device remains `.59` / Code 0,
+CPU 1497600 kHz and companion fan version 13; no GPU command, installation
+or restart occurs. All **36 records / 15,049 bytes** match device-side lengths
+and hashes. Result SHA256:
+`ca9b1d04ca8d9cbc3cfa70d462a3e22ef5920bc21189cc98c54a7ba05ce016a3`.
+
+| Artifact | SHA256 |
+| --- | --- |
+| Original mapper with corrected fixture | `4446793d8955ffb7f3fead93f104f07fe110f0bedb2f6dbe1de8f0304504aa7a` |
+| Corrected mapper with corrected fixture | `798150eb1ed12b6149fe7aebbe938879facb109e8a682d425935a69659985cf3` |
+| Undeployed ARM64 UMD from `0ced476d` | `dd8cb6fdc3c0458eb152dc30fdefb95fdaab15a95d2552f7ae0233e9d7299f02` |
+
+Verified records are retained under
+`runs/image-map-20261113/fixture-fix/evidence/`. The fixture correction changes
+the control executable; it does not change the UMD's production code.
 
 ## Contracts and source
 

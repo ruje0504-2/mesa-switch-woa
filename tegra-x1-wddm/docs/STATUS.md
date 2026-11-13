@@ -20,13 +20,6 @@ models/ARM64 controls; rotated physical output remains unvalidated. Portrait
 desktop or cube results cannot satisfy this requirement. The frozen `.158`
 components remain a short-observation baseline, not a stable desktop release.
 
-**Pending CPU baseline update:** the owner subsequently requests approximately
-1.5 GHz in the SD side chat, superseding the earlier 1996.8 MHz preference.
-That chat is preparing 1497.6 MHz with fan driver `1.0.0.13`; installation
-and measured-frequency verification are pending. GPU validation must retain
-the verified new setting when the device window is released, not restore the
-historical clock merely to satisfy an old test precondition.
-
 **Physical failure investigation is now in scope:** the owner explicitly
 requests investigation of black output, corruption, hangs and automatic
 restarts. The previous exclusion is superseded. Recent system records show
@@ -45,8 +38,9 @@ remain unresolved; no new native GPU candidate was deployed during the SD work.
 256-byte cached recovery/execution report instead of a single fence word.
 The collector avoids locks, waits, allocation and MMIO at undefined/high IRQL;
 interrupted publication is explicitly unavailable. Actual-helper host controls,
-the decoder and ARM64 build pass. The WDK callback control is built but has
-not yet run on Windows while the separate SD validation owns the device.
+the decoder and ARM64 build pass. At 02:04 UTC on November 13, the WDK
+callback CPU control also passes on Windows ARM64 with controlled kernel
+operations; this does not exercise a live WDDM callback or native GPU.
 The `.161` build includes current mainline changes, not only a
 diagnostic backport onto frozen `.158`. No native result is claimed.
 [Format, tests and limits](TDR_DEBUG_REPORT.md)
@@ -58,8 +52,13 @@ invalidation. Range alignment retains the original low-offset prefix.
 The old range helper fails a host regression; the corrected actual C helper
 passes 178,611 ASan/UBSan cases. Six additional controls call the real Zink
 texture mapper, covering arrays, 3D, row padding, compressed blocks, failed
-invalidation and low offsets. The before/after ARM64 executables and UMD
-build, but the image controls have **not run on Windows yet**. These changes
+invalidation and low offsets. After correcting the fixture's positional
+`pipe_box` initializer, all six old-code cases fail as expected and all six
+corrected-code cases pass on Windows ARM64. Three existing buffer controls
+and the WDK context control also pass: 16 expected outcomes, no timeouts.
+The 36 returned records match device hashes and lengths. The test host stays
+on `.59` / Code 0, with its companion-driver CPU setting of 1497.6 MHz and
+fan version 13 unchanged. The ARM64 UMD remains undeployed. These changes
 do not complete tiled-image nonblocking readback or identify the physical
 desktop failure's cause.
 [Contracts and validation boundaries](D3D_RUNTIME_SYNC.md#linear-image-layout-and-cache-audit)
