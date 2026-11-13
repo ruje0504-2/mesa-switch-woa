@@ -51,8 +51,11 @@ try {
     $r.DwmLoader=$loaded[-1]
     $consumer=[IO.File]::ReadAllText((Join-Path $p 'umd-live-process.json'))|ConvertFrom-Json
     $process=Get-Process -Id $consumer.Pid
+    # The observer runs at the interactive user's normal integrity level;
+    # reading a SYSTEM consumer's module path would require extra privileges.
+    # Its PID and creation time identify the process started by the controller.
     if($process.StartTime.ToUniversalTime() -ne [DateTime]::Parse($consumer.StartTime).ToUniversalTime() -or
-        $process.Path -ne $consumer.Exe){throw 'The current trial UMD consumer is no longer running'}
+        $process.ProcessName -ne [IO.Path]::GetFileNameWithoutExtension($consumer.Exe)){throw 'The current trial UMD consumer is no longer running'}
     $trialStart=[DateTime]::Parse([IO.File]::ReadAllText((Join-Path $p 'restart-requested.txt'))).ToUniversalTime()
     $r.Umd=& (Join-Path $p 'Read-NativeUmdEvidence.ps1') -Path (Join-Path $p 'umd-live.jsonl') -DwmProcessId $r.DwmPid -DwmStart ([DateTime]::Parse($r.DwmStart)) -TrialStart $trialStart -TraceName $consumer.TraceName
     $r.Verified=$true
