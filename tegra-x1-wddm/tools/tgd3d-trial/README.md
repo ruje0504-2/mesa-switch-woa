@@ -15,8 +15,9 @@
    工具会复制包到受保护的 ProgramData 目录，导出当前签名驱动包，
    保存 ACPI、交互桌面显示设置和电源设置，并校验备份。此步不装候选驱动。
 2. 进入输出的 PREPARED_DIRECTORY，再运行 START-TEST.cmd。
-   首次迁移才安装 .158，保留启动门控；显式初始启动后的首次重启会自动执行
-   一次原生启动并进行约30秒静止桌面观察。使用
+   已在冻结 .158 / Code43 且ACPI匹配时，直接在当前Windows启动中观察并启用
+   显卡设备，不重装驱动或重启Windows；首次从.59迁移才需要初始重启。
+   原生启用后进行约30秒静止桌面观察。使用
    `Start-NativeStage.ps1 -Stage Window -PreviousPhysicalObservation "实际观察"`
    运行约60秒开窗、移动、缩放、关闭，再以同样方式指定 `-Stage Interaction`
    进行五分钟交互（包含遮挡、最小化/恢复、菜单、快捷设置和性能程序回归）。

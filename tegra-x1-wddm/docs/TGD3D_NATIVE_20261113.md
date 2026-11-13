@@ -523,3 +523,19 @@ Carbon High的tgd3d审计和DXVK后续任务按用户要求停止，均返回int
 `gemini-takeover-20261113/`，不作为已验收结论合入。随后用户要求恢复审计，
 11:30:37 UTC通过Antigravity CLI恢复同一Carbon High会话，补充上述对照结果，
 保持只读并要求给出具体缺陷及最小修复；DXVK后续任务仍停止。
+
+### 统一对照条件，复用当前.158启动
+
+进一步核对本轮已完成的身份结果：Static-30的TraceState间隔26.103秒，
+Window-0为3.404秒，Window-60为11.152秒。旧检查对GPU桥接模式仍强制10秒，
+但CPU对照允许静止，因此工具条件不一致；不能把这轮差异全部归因于Fence。
+`Assert-NativeDesktop`现在对两种提交模式都接受同一当前进程/适配器的静止身份，
+仍校验LUID、进程创建时间、消费者存活、成功创建/Present及事件损失。此身份
+检查不证明画面持续更新，窗口动作和物理反馈仍需分别验收。
+
+冻结KMD的`start_device`每次调用`TgGpuConsumeNativeStartPermit`，并非只在
+DriverEntry读取许可。对已确认`.158 / Code43`、SYS/ACPI匹配的当前启动，
+测试入口改为直接观察、授予一次许可并PnP重启显卡设备；不重装KMD、不重启
+Windows、不改CPU/风扇。原生已经启用时仍直接继续阶段，不再次启用。
+11:45:58 UTC，在实机`.158 / Code43`解析26份脚本并通过22项读取控制，尚未
+启用本次GPU对照。GPU桥接默认、KMD/ICD及渲染代码均未改变。

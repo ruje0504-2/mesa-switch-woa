@@ -46,7 +46,7 @@ try {
     $readerArgs.NowQpc=$nowQpc+20*$frequency
     Check 'quiet completed buffer fails ordinary freshness check' (Rows) $false
     $readerArgs.AllowIdle=$true
-    Check 'CPU sync comparison accepts idle current-process identity' (Rows) $true
+    Check 'either submission mode accepts idle current-process identity' (Rows) $true
     $r=Rows;$r[3].status='887a0005';Check 'idle comparison still rejects failed Present' $r $false
     $r=Rows;$r[4].events_lost=1;Check 'idle comparison still rejects event loss' $r $false
 } finally { Remove-Item $dir -Recurse -Force }

@@ -8,6 +8,7 @@ if((Device-Property 'DriverVersion') -eq '0.1.0.158' -and (Device-Property 'Prob
     throw 'Native .158 is already active; continue with Start-NativeStage.ps1 instead of reinstalling or rebooting'
 }
 Check-Baseline
+$reuseBoot=(Device-Property 'DriverVersion') -eq '0.1.0.158'
 if(Get-ScheduledTask -TaskName 'TgGpuDisplay*','Tgd3dTrial*' -ErrorAction SilentlyContinue) { throw 'Another GPU trial or restore task is present' }
 if(Test-Path (Join-Path $PSScriptRoot 'before-restart.json')) { throw 'Use a newly prepared trial directory' }
 $permit="$env:windir\System32\drivers\TgGpuBootTest158.bin"
@@ -64,15 +65,26 @@ try {
     $file=[IO.FileStream]::new($permit,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read,4096,[IO.FileOptions]::WriteThrough)
     try { $file.Write($data,0,$data.Length);$file.Flush($true) } finally { $file.Dispose() }
     $table="$env:windir\System32\acpitabl.dat"
-    $pending=Join-Path $PSScriptRoot 'test-acpitabl.pending'
-    Copy-Item (Join-Path $PSScriptRoot 'display158.aml') $pending
-    [IO.File]::Replace($pending,$table,(Join-Path $PSScriptRoot 'before-acpitabl.dat'))
+    if($reuseBoot) {
+        # Check-Baseline already verified this boot's .158 SYS and ACPI.
+        # The frozen KMD consumes its permit in StartDevice, not DriverEntry.
+        Copy-Item $table (Join-Path $PSScriptRoot 'before-acpitabl.dat')
+    } else {
+        $pending=Join-Path $PSScriptRoot 'test-acpitabl.pending'
+        Copy-Item (Join-Path $PSScriptRoot 'display158.aml') $pending
+        [IO.File]::Replace($pending,$table,(Join-Path $PSScriptRoot 'before-acpitabl.dat'))
+    }
     if((File-Hash $table) -ne '515D8D9C1612514CA2F197D6C96774A9265785A7E519921A195F0F8D257AA500') { throw 'ACPI staging differs' }
     Check-File (Join-Path $PSScriptRoot 'before-acpitabl.dat') $backup.Files.'rollback\acpitabl.dat'
-    @{Utc=[DateTime]::UtcNow.ToString('o');Boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')}|
+    @{Utc=[DateTime]::UtcNow.ToString('o');Boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o');RebootRequired=(!$reuseBoot)}|
         ConvertTo-Json|Set-Content (Join-Path $PSScriptRoot 'before-restart.json') -Encoding UTF8
-    & shutdown.exe /r /t 5
-    if($LASTEXITCODE -ne 0) { throw 'Reboot request failed' }
+    if($reuseBoot) {
+        Start-ScheduledTask 'Tgd3dTrialObserve'
+        Start-ScheduledTask 'Tgd3dTrialAutomatic'
+    } else {
+        & shutdown.exe /r /t 5
+        if($LASTEXITCODE -ne 0) { throw 'Reboot request failed' }
+    }
 } catch {
     $_|Out-String|Set-Content (Join-Path $PSScriptRoot 'start-failed.txt') -Encoding UTF8
     throw

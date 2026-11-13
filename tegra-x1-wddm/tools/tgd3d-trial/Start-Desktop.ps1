@@ -45,11 +45,15 @@ $boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime()
 $armed=Get-Content -Raw -LiteralPath (Join-Path $dir 'before-restart.json') | ConvertFrom-Json
 $initial=Get-Content -Raw -LiteralPath (Join-Path $evidence 'observed-interactive.json') | ConvertFrom-Json
 $display=@(Get-Content -LiteralPath (Join-Path $evidence 'desktop-path.log') | ForEach-Object { $_ | ConvertFrom-Json })
-if ($boot -le [DateTime]::Parse($armed.Utc).ToUniversalTime() -or
-    [DateTime]::UtcNow -ge $boot.AddMinutes(8) -or [DateTime]::Parse($initial.Utc).ToUniversalTime() -le $boot -or
+$prepared=[DateTime]::Parse($armed.Utc).ToUniversalTime()
+$reuseBoot=$armed.RebootRequired -eq $false
+$expectedBoot=[DateTime]::Parse($armed.Boot).ToUniversalTime()
+$earliestObservation=if($reuseBoot){$prepared}else{$boot}
+if ((!$reuseBoot -and $boot -le $prepared) -or ($reuseBoot -and $boot -ne $expectedBoot) -or
+    [DateTime]::Parse($initial.Utc).ToUniversalTime() -le $earliestObservation -or
     $initial.Session -eq 0 -or $initial.Version -ne '0.1.0.158' -or $initial.Problem -ne 43 -or
     $display.Count -lt 2 -or !$display[0].active_path -or $display[1].matching_kmd -ne 0) {
-    throw 'Expected a new BasicDisplay desktop within the test window'
+    throw 'Expected a fresh BasicDisplay observation on the prepared boot'
 }
 $parameters=Get-ItemProperty -LiteralPath ("HKLM:\$svcPath\Parameters")
 if ([uint64]$parameters.StartGateStatus -ne 3221225635 -or $parameters.InitializeStatus -ne 0 -or
