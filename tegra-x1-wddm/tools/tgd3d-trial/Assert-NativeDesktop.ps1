@@ -28,7 +28,11 @@ try {
     $r.HelperOutput=$lines
     $rows=@($lines|ForEach-Object {$_|ConvertFrom-Json})
     $r.Paths=$rows
-    if($r.HelperExitCode -ne 0 -or $rows.Count -ne 2){throw 'Active display path query failed'}
+    # Frozen helper 6a10be74 prints its read-only DisplayConfig/KMT records,
+    # then exits 4 because the no3d bridge deliberately has no
+    # TgGpuReadD3DAdapterProbe export. This occurs before D3D11CreateDevice.
+    # Actual DWM device creation/presentation is checked separately via ETW.
+    if($r.HelperExitCode -ne 4 -or $rows.Count -ne 2 -or $rows[1].kmt_status -ne '00000000'){throw 'Active display path query failed'}
     $r.Luid=$rows[1].kmt_luid
     if(!$rows[0].active_path -or !$rows[1].matching_kmd -or !$rows[1].nvk_ready -or
         $rows[0].source_luid -ne $r.Luid -or $rows[0].target_luid -ne $r.Luid -or
@@ -57,8 +61,8 @@ try {
     # Its PID and creation time identify the process started by the controller.
     if($process.StartTime.ToUniversalTime() -ne [DateTime]::Parse($consumer.StartTime).ToUniversalTime() -or
         $process.ProcessName -ne [IO.Path]::GetFileNameWithoutExtension($consumer.Exe)){throw 'The current trial UMD consumer is no longer running'}
-    $trialStart=[DateTime]::Parse([IO.File]::ReadAllText((Join-Path $p 'restart-requested.txt'))).ToUniversalTime()
-    $r.Umd=& (Join-Path $p 'Read-NativeUmdEvidence.ps1') -Path (Join-Path $p 'umd-live.jsonl') -DwmProcessId $r.DwmPid -DwmStart ([DateTime]::Parse($r.DwmStart)) -TrialStart $trialStart -TraceName $consumer.TraceName -ExpectedLuid $r.Luid
+    $request=[IO.File]::ReadAllText((Join-Path $p 'native-request.json'))|ConvertFrom-Json
+    $r.Umd=& (Join-Path $p 'Read-NativeUmdEvidence.ps1') -Path (Join-Path $p 'umd-live.jsonl') -DwmProcessId $r.DwmPid -DwmStart ([DateTime]::Parse($r.DwmStart)) -TrialQpc $request.Qpc -Frequency $request.Frequency -TraceName $consumer.TraceName -ExpectedLuid $r.Luid
     $r.Verified=$true
 } catch {
     $r.Error=$_.Exception.Message

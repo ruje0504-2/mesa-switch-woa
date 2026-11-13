@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <cstddef>
 
 static const GUID provider = TGD3D_TRACE_GUID_INIT;
 static unsigned matched, invalid;
@@ -28,16 +29,21 @@ static void json_string(const WCHAR *value)
 
 template<typename T> static bool payload(EVENT_RECORD *event, T *out)
 {
-   if (event->UserDataLength != sizeof(T)) return false;
-   std::memcpy(out, event->UserData, sizeof(T));
+   const size_t size = event->EventHeader.EventDescriptor.Version == 1 ?
+      offsetof(T, process_start_time) : sizeof(T);
+   if (event->UserDataLength != size) return false;
+   *out = {};
+   std::memcpy(out, event->UserData, size);
    return !out->image[31];
 }
 
-static void header(const EVENT_HEADER &h, const WCHAR *image)
+static void header(const EVENT_HEADER &h, const WCHAR *image, uint64_t process_start)
 {
    ++matched;
-   std::printf("{\"id\":%u,\"pid\":%lu,\"tid\":%lu,\"time\":%llu,\"image\":",
-      h.EventDescriptor.Id, h.ProcessId, h.ThreadId, (unsigned long long)h.TimeStamp.QuadPart);
+   std::printf("{\"id\":%u,\"version\":%u,\"pid\":%lu,\"tid\":%lu,\"%s\":%llu,\"process_start\":%llu,\"image\":",
+      h.EventDescriptor.Id, h.EventDescriptor.Version, h.ProcessId, h.ThreadId,
+      live_session ? "qpc_stamp" : "time", (unsigned long long)h.TimeStamp.QuadPart,
+      (unsigned long long)process_start);
    json_string(image);
 }
 
@@ -45,21 +51,21 @@ static void WINAPI record(EVENT_RECORD *event)
 {
    const auto &h = event->EventHeader;
    if (std::memcmp(&h.ProviderId, &provider, sizeof(provider))) return;
-   if (h.EventDescriptor.Version != 1) { ++invalid; return; }
+   if (h.EventDescriptor.Version != 1 && h.EventDescriptor.Version != 2) { ++invalid; return; }
    if (h.EventDescriptor.Id == TGD3D_TRACE_ERROR) {
       tgd3d_trace_error p;
       if (!payload(event, &p) || p.file[63]) { ++invalid; return; }
-      header(h, p.image);
+      header(h, p.image, p.process_start_time);
       std::printf(",\"status\":\"%08x\",\"line\":%u,\"file\":", (unsigned)p.result, p.line);
       json_string(p.file);
    } else if (h.EventDescriptor.Id == TGD3D_TRACE_MESSAGE) {
       tgd3d_trace_message p;
       if (!payload(event, &p) || p.message[255]) { ++invalid; return; }
-      header(h, p.image); std::printf(",\"message\":"); json_string(p.message);
+      header(h, p.image, p.process_start_time); std::printf(",\"message\":"); json_string(p.message);
    } else if (h.EventDescriptor.Id == TGD3D_TRACE_TIMING) {
       tgd3d_trace_timing p;
       if (!payload(event, &p)) { ++invalid; return; }
-      header(h, p.image);
+      header(h, p.image, p.process_start_time);
       std::printf(",\"status\":\"%08x\",\"kind\":%u,\"sequence\":%llu,\"completed\":%llu,\"qpc_frequency\":%llu,\"qpc\":[",
          (unsigned)p.result, p.kind, (unsigned long long)p.sequence,
          (unsigned long long)p.completed, (unsigned long long)p.qpc_frequency);
@@ -70,7 +76,7 @@ static void WINAPI record(EVENT_RECORD *event)
    } else {
       tgd3d_trace_data p;
       if (!payload(event, &p)) { ++invalid; return; }
-      header(h, p.image);
+      header(h, p.image, p.process_start_time);
       std::printf(",\"status\":\"%08x\",\"arg0\":%llu,\"arg1\":%llu",
          (unsigned)p.result, (unsigned long long)p.arg0, (unsigned long long)p.arg1);
    }
@@ -94,10 +100,15 @@ static ULONG live_state(const char *event, ULONG process_status = ERROR_SUCCESS)
       status = ERROR_INVALID_PARAMETER;
    FILETIME now;
    GetSystemTimeAsFileTime(&now);
+   LARGE_INTEGER counter, frequency;
+   QueryPerformanceCounter(&counter);
+   QueryPerformanceFrequency(&frequency);
    const uint64_t time = (uint64_t(now.dwHighDateTime) << 32) | now.dwLowDateTime;
    std::printf("{\"event\":\"%s\",\"time\":%llu,\"pid\":%lu,\"session\":",
       event, (unsigned long long)time, GetCurrentProcessId());
    json_string(live_session);
+   std::printf(",\"clock\":\"qpc\",\"qpc_stamp\":%llu,\"qpc_frequency\":%llu",
+      (unsigned long long)counter.QuadPart, (unsigned long long)frequency.QuadPart);
    std::printf(",\"query_status\":%lu,\"process_status\":%lu,\"matched\":%u,\"invalid\":%u,"
       "\"events_lost\":%lu,\"log_buffers_lost\":%lu,\"realtime_buffers_lost\":%lu}\n",
       status, process_status, matched, invalid, props->EventsLost,
@@ -128,7 +139,7 @@ int wmain(int argc, WCHAR **argv)
    log.ProcessTraceMode = PROCESS_TRACE_MODE_EVENT_RECORD;
    if (follow) {
       live_session = log.LoggerName = argv[2];
-      log.ProcessTraceMode |= PROCESS_TRACE_MODE_REAL_TIME;
+      log.ProcessTraceMode |= PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_RAW_TIMESTAMP;
       log.BufferCallback = live_buffer;
    } else {
       log.LogFileName = argv[1];

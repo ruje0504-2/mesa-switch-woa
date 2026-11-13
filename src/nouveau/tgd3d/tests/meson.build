@@ -27,3 +27,11 @@ executable(
   dependencies : [cpp.find_library('advapi32')],
   link_args : tgd3d_link_args + (cc.get_argument_syntax() == 'gcc' ? ['-municode'] : []),
 )
+# CPU-only provider/consumer transport fixture for real Windows ETW.
+executable(
+  'tgd3d-trace-control',
+  ['trace_control.cpp', '../tgd3d_trace.cpp'],
+  include_directories : [include_directories('..')],
+  dependencies : [cpp.find_library('advapi32')],
+  link_args : tgd3d_link_args,
+)

@@ -1,12 +1,12 @@
 # tgd3d：原生 D3D DDI → Vulkan 桌面候选
 
-开发和推送目的地是 `claude-vulkan`。本分支的 Windows 构建默认开启
+开发和推送目的地是 `tgd3d-vulkan`（原 `claude-vulkan`，现为仓库默认分支）。本分支的 Windows 构建默认开启
 `tgd3d`，DLL 为 `TegraGpuD3DVk.dll`；Zink 的 `TegraGpuD3D.dll` 和注册入口
 保持独立。构建开启不等于 Windows 已切换到这个 UMD。
 
 实现路径是 **D3D10 WDDM DDI → Vulkan → NVK → GM20B**，不链接 Gallium、
 Zink 或软件光栅器。它不是应用侧 DXVK，也不是完整 D3D10/Vulkan 一致性认证。
-目前没有本后端的原生 Windows runtime、DWM、GM20B 像素或物理上屏通过结果。
+首轮已确认 DWM 使用本后端，用户观察到正常可操作的短时原生桌面，随后打开性能程序时异常重启；稳定性、已知像素、硬件旋转与 vkcube 均未通过。详见[实机记录](../../../tegra-x1-wddm/docs/TGD3D_NATIVE_20261113.md)。
 
 ## 本轮修正
 
@@ -38,12 +38,13 @@ Zink 或软件光栅器。它不是应用侧 DXVK，也不是完整 D3D10/Vulkan
 ## 构建
 
 需要 Meson/Ninja、LLVM-MinGW、Windows SDK/WDK 10.0.26100.0。
-`build_tgd3d.py` 将所需 WDK 头复制到独立输出目录，生成四个文件：
+`build_tgd3d.py` 将所需 WDK 头复制到独立输出目录，生成五个文件：
 
 - `TegraGpuD3DVk.dll`
 - `tgd3d-contracts.exe`：生产代码加 Vulkan/runtime 替身，仅 CPU 控制
 - `tgd3d-runtime-check.exe`：实际 Windows D3D11 runtime / FL10_0 / LUID 检查
-- `tgd3d-trace-export.exe`：tgd3d ETW JSONL 导出
+- `tgd3d-trace-export.exe`：tgd3d ETW JSONL 导出；live 使用原始 QPC，离线兼容 v1/v2
+- `tgd3d-trace-control.exe`：仅生成合成 ETW，验证记录传输，不创建 D3D/Vulkan 设备
 
 ```sh
 python tegra-x1-wddm/tools/build_tgd3d.py \
@@ -61,7 +62,7 @@ Zink UMD 和独立 ICD 构建入口明确禁用 tgd3d，各自只构建对应组
 必须配套包含本轮 `nvk_embedded_instance_info` 消费端的 NVK ICD，放在 UMD 同目录。
 只换 tgd3d DLL，不能让旧 ICD 自动理解这个私有请求。ICD 继续使用现有
 `src/nouveau/vulkan/nvkmd/windows/build_icd.py`、相同 SDK/WDK 与 ARM64 工具链，
-单独输出。KMD 由主聊天负责，本轮不重建、签名、安装或重启 KMD。
+单独输出。源码、部署、实机验证和恢复由执行当前目标的窗口统一负责；KMD 先冻结于已追溯的 `.158`，只有故障证据支持时才单独修改。
 具体已构建文件、提交和 SHA256 记录在交付清单，不用包号替代 UMD/ICD 身份。
 
 ## 验证边界

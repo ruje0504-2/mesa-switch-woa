@@ -1,9 +1,8 @@
 /* SPDX-License-Identifier: MIT
  *
- * Opt-in ETW provider. Events carry no pointers. Numeric events share the
- * 88-byte layout of the earlier UMD provider so the same exporter decodes
- * them with a different event table; timing events add QPC stamps that split
- * a frame into recording, submission, fence gating and present queuing.
+ * Opt-in ETW provider. Version 2 appends the emitter's process creation
+ * FILETIME to each v1 payload. This is identity, not an event clock: live
+ * consumers use raw QPC stamps so wall-clock corrections cannot hide events.
  */
 #ifndef TGD3D_TRACE_H
 #define TGD3D_TRACE_H
@@ -57,6 +56,7 @@ struct tgd3d_trace_data {
    uint32_t reserved;
    uint64_t arg0, arg1;
    WCHAR image[32];
+   uint64_t process_start_time;
 };
 
 struct tgd3d_trace_timing {
@@ -67,11 +67,13 @@ struct tgd3d_trace_timing {
    uint64_t value[6];
    uint64_t qpc_frequency;
    WCHAR image[32];
+   uint64_t process_start_time;
 };
 
 struct tgd3d_trace_message {
    WCHAR image[32];
    WCHAR message[256];
+   uint64_t process_start_time;
 };
 
 struct tgd3d_trace_error {
@@ -79,6 +81,7 @@ struct tgd3d_trace_error {
    uint32_t line;
    WCHAR image[32];
    WCHAR file[64];
+   uint64_t process_start_time;
 };
 
 #ifdef __cplusplus

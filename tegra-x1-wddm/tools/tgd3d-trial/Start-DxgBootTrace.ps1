@@ -14,6 +14,7 @@ New-Item -Path $key | Out-Null
 try {
     New-ItemProperty $key Guid -PropertyType String -Value ('{' + [Guid]::NewGuid().ToString() + '}') | Out-Null
     New-ItemProperty $key FileName -PropertyType String -Value $FileName | Out-Null
+    New-ItemProperty $key ClockType -PropertyType DWord -Value 1 | Out-Null
     New-ItemProperty $key LogFileMode -PropertyType DWord -Value 0x122 | Out-Null
     New-ItemProperty $key MaxFileSize -PropertyType DWord -Value 64 | Out-Null
     New-ItemProperty $key FileMax -PropertyType DWord -Value 4 | Out-Null

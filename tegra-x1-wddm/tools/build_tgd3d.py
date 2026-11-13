@@ -46,7 +46,7 @@ def main():
     subprocess.run(command, cwd=source, check=True)
     artifacts = {"TegraGpuD3DVk.dll": "src/nouveau/tgd3d/TegraGpuD3DVk.dll",
                  "tgd3d-contracts.exe": "src/nouveau/tgd3d/tests/tgd3d-contracts.exe"}
-    for name in ("tgd3d-runtime-check.exe", "tgd3d-trace-export.exe"):
+    for name in ("tgd3d-runtime-check.exe", "tgd3d-trace-export.exe", "tgd3d-trace-control.exe"):
         artifacts[name] = "src/nouveau/tgd3d/tests/" + name
     subprocess.run(["ninja", "-C", str(build), *artifacts.values()],
                    cwd=source, check=True)
@@ -54,11 +54,12 @@ def main():
     for name, path in artifacts.items():
         shutil.copyfile(build / path, out / name)
     hashes = {name: hashlib.sha256((out / name).read_bytes()).hexdigest() for name in names}
+    source_status = subprocess.check_output(
+        ["git", "status", "--porcelain", "--untracked-files=normal"], cwd=source, text=True).splitlines()
     (out / "manifest.json").write_text(json.dumps({
         "component": "tgd3d", "mesa": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=source, text=True).strip(),
-        "source_dirty": bool(subprocess.check_output(
-            ["git", "status", "--porcelain", "--untracked-files=normal"], cwd=source)),
+        "source_dirty": bool(source_status), "source_status": source_status,
         "configure": command, "files": hashes,
         "validation": "cross-built only; native rendering and display acceptance pending",
     }, indent=2) + "\n")

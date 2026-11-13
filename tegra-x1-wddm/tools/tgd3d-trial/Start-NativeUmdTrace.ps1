@@ -26,7 +26,7 @@ try{
         Start-Sleep -Milliseconds 50
     }while($limit.ElapsedMilliseconds -lt 4000)
     if(!$ready -or $ready.event -ne 'TraceStart' -or $ready.pid -ne $consumer.Id -or
-        $ready.session -cne $TraceName -or $ready.query_status -ne 0 -or $ready.invalid -ne 0 -or $consumer.HasExited){
+        $ready.session -cne $TraceName -or $ready.clock -ne 'qpc' -or $ready.qpc_frequency -ne [Diagnostics.Stopwatch]::Frequency -or $ready.query_status -ne 0 -or $ready.invalid -ne 0 -or $consumer.HasExited){
         throw 'UMD live consumer did not attach before the native trial'
     }
     $record=[ordered]@{Pid=$consumer.Id;StartTime=$consumer.StartTime.ToUniversalTime().ToString('o');Exe=$exe;TraceName=$TraceName;Ready=$ready}

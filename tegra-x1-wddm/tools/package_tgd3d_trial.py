@@ -34,7 +34,7 @@ def main():
     if frozen["kmd_version"] != "0.1.0.158" or frozen["kmd"]["tegragpurender.sys"]["Sha256"] != "46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088":
         raise ValueError("Only the retained visible-desktop .158 KMD is allowed")
     args.out.mkdir(parents=True, exist_ok=False)
-    manifest = {"scope": "claude-vulkan tgd3d trial; .158 KMD reused by exact hash; .59 exported on device before installation",
+    manifest = {"scope": "tgd3d-vulkan tgd3d trial; .158 KMD reused by exact hash; .59 exported on device before installation",
                 "kmd_version": frozen["kmd_version"], "kmd_source": frozen["kmd_source"],
                 "umd_name": "TegraGpuD3DVk.dll", "umd_source": umd["mesa"], "icd_source": icd["mesa"],
                 "tools_source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),

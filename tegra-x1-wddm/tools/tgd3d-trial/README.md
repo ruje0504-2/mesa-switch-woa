@@ -1,6 +1,6 @@
 # tgd3d ARM64 可还原实机测试包
 
-本包由 claude-vulkan 支线打包。UMD/ICD 使用该支线构建；KMD 固定复用
+本包由 tgd3d-vulkan 支线打包。UMD/ICD 使用该支线构建；KMD 固定复用
 支线 NATIVE_DESKTOP_158.md 记录的、曾完整任务栏上屏的签名 .158：
 源提交 6c854e9f394c3d761fab85885bead4bbd4588581，SYS SHA256
 46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088。

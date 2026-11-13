@@ -100,7 +100,10 @@ try {
     $key=$svc.CreateSubKey('AllowDesktopStart',[Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,[Microsoft.Win32.RegistryOptions]::Volatile)
     $grant=$true
     $key.Close()
+    $requestQpc=[Diagnostics.Stopwatch]::GetTimestamp()
     $restartRequested=[DateTime]::UtcNow.ToString('o')
+    $request=@{Utc=$restartRequested;Qpc=$requestQpc;Frequency=[Diagnostics.Stopwatch]::Frequency}|ConvertTo-Json -Compress
+    Write-StartEvidence (Join-Path $dir 'native-request.json') ([Text.Encoding]::UTF8.GetBytes($request))
     Write-StartEvidence (Join-Path $dir 'restart-requested.txt') ([Text.Encoding]::UTF8.GetBytes($restartRequested))
     if ($flusher.HasExited) { throw 'Trace flush helper exited before the startup request' }
     $umdProcess=Get-Process -Id $umdConsumer.Pid
