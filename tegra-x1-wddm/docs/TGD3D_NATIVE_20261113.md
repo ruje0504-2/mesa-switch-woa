@@ -1108,3 +1108,36 @@ Microsoft [CreateContext flags](https://learn.microsoft.com/en-us/windows-hardwa
 （2024-06-21）将 SystemContext 定义为 paging engine 上下文；没有把它与所有GDI
 上下文混为一谈。继续核对冻结 KMD 的 GDI shadow Present、显示接管及 tgd3d 的
 首次设备/主表面/绘制提交。未以不相关的错误码补丁、延迟或强制成功替代启动修复。
+
+### 冷启动 LogonUI / DWM 并发捕获已配置，尚待实机产生记录
+
+按用户最新要求恢复有范围的冷启动取证。当前 SD 取回的 Application/System、
+Winlogon、CodeIntegrity 和 WER 尚无能归属本次冻结组合的 LogonUI/DWM 崩溃记录。
+旧 WER 指向 2026-11-11 的 `TegraGpuD3D.dll`；Application 中较新的 DWM 访问冲突
+（2026-11-13 08:46:02 UTC，`c0000005`、偏移`b542c`）来自旧
+`tgd3d-d6470feb-20261113-164031`目录的 ICD，不能当作 persistent-boot2 冷启动根因。
+EVTX 中记录顺序不等于时间顺序，离线解析已分开两者。尚未证明缺 DLL 或特定锁超时。
+
+新增 `tools/cold-boot-trace/`，根据微软 AutoLogger、GlobalLogger、WER LocalDumps
+契约配置四路 QPC 时间戳跟踪：kernel 进程/线程/image-load/CSwitch，现有 tgd3d API/
+submit/CPU-wait 事件，现有图形 provider 组合，以及目标 SOFTWARE 登记的
+User-Loader/Winlogon/CodeIntegrity。ETL 分别64/32/64/32MiB循环，每种最多四轮；
+每秒刷缓冲。WER仅为`dwm.exe`及`LogonUI.exe`各保存最多两份完整用户态转储。
+没有 IFEO Debugger、loader snaps 或超时/恢复行为修改。硬复位仍可能没有 dump、
+丢失 ETL 尾部；开始等待后没有结束事件不能独立证明死锁。
+
+WinPE首次配置因`icacls`无法解析离线 DWM 虚拟组而退出8，该副本未写实卡；改用
+数字SID构造DACL的`setacl.c`后，构建无告警、Windows原生ACL写入/读回和注册表
+导入通过。DWM组仅获得自身转储目录的写权限，LogonUI转储仅SYSTEM/管理员可访问。
+新COW内检查完成后备份134段、13434880字节，再写回并逐段读回成功；备份ZIP SHA256
+`11d507997a7ffa1fe0c86fa87a5b75ce4bee10b4d1df1178d644adef9be8422b`，Mac/SD FAT各一份。
+2026-11-14 00:24:24 UTC实卡读回：KMD/UMD/ICD/组件清单哈希保持原值，
+AllowNativeBoot仍存在。逐键原始值比较仅增加14个SYSTEM跟踪键、3个SOFTWARE转储键，
+未发现其他设置差异。比较工具对原注册表中无法解码的0x13类型改用原始字节比较，
+没有忽略这些值。SD已安全弹出，等待用户直接冷启动一次。
+
+证据和交付记录位于输出目录`cold-boot-concurrent-20261113/`，实卡目标为
+`C:\ProgramData\SwitchWOA\ColdBootTrace-20261113`。当前仍是CPU同步对照UMD，
+不能称为双向GPU Fence验证。按用户明确要求，**用户确认问题修复后才关闭本轮
+LogonUI/DWM转储及启动跟踪**，由本窗口清理并核对重启不再自动采集，保留已取回证据。
+恢复脚本与离线删除配置已备妥；不因单轮收证结束自动关闭，不改变原生启动。
