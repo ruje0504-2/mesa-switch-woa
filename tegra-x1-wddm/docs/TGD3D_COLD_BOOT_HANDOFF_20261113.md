@@ -402,4 +402,46 @@ SUCCESS时，旧主表面仍可能在active寄存器组，新表面只在pending
 退出0。覆盖反复0/90/0/90/0、上一笔MPO仍pending、错误IRQL、无锁存超时和后续恢复；
 没有执行GPU。第一轮新控制曾因测试读取未模拟的全局active镜像退出228，已改为读取
 模型实际维护的REG_ACT_CONTROL寄存器；该工具问题与GPU失败分别记录。
-源码/构建/控制位于 `rotation-modeset-latch-candidate/`，候选尚未安装。
+源码/构建/控制位于 `rotation-modeset-latch-candidate/`；后续安装及实屏失败如下。
+
+## 模式切换锁存候选的黑屏结果（modeset-e）
+
+`7880abcd563b93a2d05699c7931761a7336f27ef` 已推送。签名SYS SHA256：
+`7e9c1984072a6abd057841c37dd104bc745c84bd725c6332b1b401974bfd616f`；
+UMD仍34e35bcf…、ICD仍dee3d580…，相对apply90d只改变KMD模式切换锁存路径。
+归档SHA256为 `cae8950894f53a1ad5aa7b3ce8ad180dc6865f7296fa2ab0468573a909fa1321`，
+Windows签名13项及包内70个文件校验通过。05:44:30请求一次安装所需重启，
+05:44:57启动；05:49:46原生启用完成。05:51:13核对Code0，DWM PID828实际加载
+34e35bcf…/dee3d580…；仍gpu-bridge、logon-default，CPU1497600kHz/1120mV、
+GPU460800kHz/800000µV、RAM1600000kHz、风扇驱动13。
+
+05:51:55临时切90°返回0，05:51:57–05:52:30的逻辑横屏图案完成，5020个RGB像素
+容差0、差异0。但用户随后明确反馈：**没有横屏显示成功，屏幕是黑的，约30秒后恢复
+竖屏显示。** 因此本轮为**实屏黑屏失败**，不得把逻辑截图、Code0或模式API成功
+写成硬件旋转通过。05:53:04读回仍为05:44:57启动，DWM PID828和Explorer PID5188
+及其启动时间均未改变；本轮没有系统或这两个桌面进程重启的证据。
+
+同轮窗口控制另有独立工具错误：控制器从logon-default安装目录寻找未打包的
+`Exercise-DesktopWindow.ps1`，PowerShell在运行脚本前退出-196608，未开始60秒开窗。
+控制器05:52:32恢复原720×1280/identity，05:52:35结束，后备恢复任务已撤销。
+已准备工具修正：从独立试验目录使用现有Exercise脚本，并在模式切换前检查脚本
+存在及语法。保留实际执行版本和修正diff；**未因此重测已黑屏的组合**。
+第二次横屏、五分钟交互和vkcube均未执行。
+
+收到实屏失败后停止扩大测试，05:54:31发出一次关闭门控后的正常恢复重启；
+05:55:08启动，05:56:33确认Code43、StartGateStatus=c00000a3、硬件尚未初始化。
+恢复目标为59dd5ea7…/14d51a55…/dee3d580…及原方向，保留双向Fence和当前频率。
+05:58:45恢复完成，Code0、gpu-bridge、logon-default。05:59:39核对实际SYS及
+DWM PID788加载模块均为上述恢复组合，CPU/GPU/RAM/风扇设置与试验前一致。
+06:00:38在交互Default桌面只读校验原快照通过，当前模式和注册表均为
+720×1280/identity/60Hz；未再次应用模式。临时旋转及后备恢复任务已撤销，
+只读校验任务完成后也已清理。本次恢复未索要人工确认，不另宣称实屏验收。
+原始轮次状态位于 `rotation-bidirectional-20261113/modeset-sequence-status-03.json`，
+用户实屏反馈及工具修正位于 `rotation-modeset-latch-candidate/`。
+
+继续核对微软旋转、[DXGI Blt](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgi_ddi_arg_blt)
+与[MPO attributes3](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_multiplane_overlay_attributes3)
+契约和固定Switchroot的window.c（查阅2026-11-14 UTC）：
+现有源码仍缺旋转Blt回退，DC列扫描与pitch/offset需要对照实际绑定的primary确认。
+这些是尚未排除的路径，不能将缺失Blt、Fence、供电或DC带宽直接写作本轮根因。
+NVIDIA TRM下载入口本次要求登录，未取得正文，不声称已据TRM验证硬件限制。
