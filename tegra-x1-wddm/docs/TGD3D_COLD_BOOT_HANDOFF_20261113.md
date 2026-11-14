@@ -543,6 +543,10 @@ VIC_ROTATION_270，等待VIC合成后调用pitch_vic配置；刷新路径也调�
 因此该版本Nyx是VIC预旋转后竖屏pitch扫描，不能当作本驱动DC列扫描已验证的旁证，
 也不证明Windows必须使用VIC。具体来源为
 [固定Nyx调用路径](https://github.com/CTCaer/hekate/blob/8e1392df4569ac501a115867056b13c361429e9e/nyx/nyx_gui/frontend/gui.c)。
+历史提交 [833f060c](https://github.com/CTCaer/hekate/commit/833f060c7b0860b8dc7832b071c4dc55188f833d)
+（2022-10-11）说明改用VIC是为了改善T210B01的瀑布式缓慢绘制。其diff将CPU写入旋转
+framebuffer改为中间横屏buffer加VIC合成，并不是从本驱动这条DC pitch列扫描路径迁出。
+因此该记录可支持检查扫描效率，不能直接证明当前DC列扫描不受支持或黑屏根因已找到。
 上述源码、完整归档调用者扫描结果及SHA256保存于
 `rotation-black-static-review/references/`，未复制Linux实现进MIT驱动。
 
