@@ -91,9 +91,36 @@ ignored writes. The changed ARM64 kernel translation unit compiles with WDK
 10.0.26100.0 and the production kernel flags. Outputs are retained under
 `shader-output-context-controls/`; these checks do not execute GPU work.
 
-No new signed KMD has been built or deployed for this change. The current
-physical test still uses the original `.158` SYS with SHA256
+At the time of the initial validation above, the physical test still used
+the original `.158` SYS with SHA256
 `46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088`.
 Its five-minute desktop result belongs to that unchanged KMD, not this patch.
-Any subsequent KMD trial must preserve the frozen baseline outside this
-specific policy change and record the new source and binary hashes.
+
+The later persistent-native package has been installed. It combines frozen
+`6c854e9f`, bit-14 patch `253bc813`, and native-boot authorization `b916f531`;
+its SYS SHA256 is
+`c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53`.
+Thus both the bit-3 helper-load correction and bit-14 output policy are in
+the installed KMD. Full deployment and failed cold-boot observations are in
+[the native progress record](TGD3D_NATIVE_20261113.md).
+
+## Helper policy and shader translation are separate questions
+
+The bit in question is `0x419f78[3]`, not `0x419e44[14]`. The vendor NETB
+sets the former, and the KMD clears/read-checks it after all context, bundle
+and method streams, before the FECS golden save. New contexts clone the
+saved payload; `tg_gpu_gr_image_build` changes specified image-header and
+address fields, not the register payload. Later submissions retain each
+context's saved image. This is a source-level ordering/ownership check,
+not a live readback after every context switch.
+
+The pinned dxbc-spirv `bf14419e` emits `OpDemoteToHelperInvocation` for its
+demote operation. tgd3d requires/enables the corresponding Vulkan 1.3
+feature, and NAK lowers NIR demote to its SM50-family `OpKill` encoding.
+[Vulkan's demote semantics](https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_shader_demote_to_helper_invocation.html)
+explicitly preserve derivative participation while suppressing further
+side effects and framebuffer output, matching HLSL discard. Encountering
+this instruction therefore does not establish a translation defect or
+illegal SM53 code. A disabled helper-load policy can still violate the
+compiled shader's assumptions; the current failure has not been attributed
+to that state, a particular shader, or a particular instruction.
