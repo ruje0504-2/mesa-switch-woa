@@ -719,3 +719,72 @@ primary布局，也没有开启smooth rotation。测试覆盖四个方向、失�
 TargetActive冻结候选再叠加本项源码/测试，两个修正保留独立提交。未签名SYS SHA256：
 `058a07555b08a75ff80d4ec660240ee80ef14a58d0d09352297b06a3e3019ac0`。
 **未安装、未启用、未重启；实机仍保持cb0aef82，物理横屏未通过。**
+
+## 组合B之后：Jammy/Noble最终上屏链路复核（2026-11-14 UTC）
+
+本节以顶部组合B（69aa6036…）为当前基线；上一节“未安装”是部署前的历史记录。
+用户要求继续对照Jammy/Noble旋转后实际送到面板的路径。本轮只审查源码与已有G轮
+结果，没有再次切换方向或安装驱动。G轮实屏仍为黑屏失败，竖屏已恢复。
+
+参考来源仍为官方Noble指南链接的构建脚本`1fb0e92e…`和维护者内核
+`7d95822acda1f6dab3f3d1d099b43ff9e0d0e626`。这是固定的公开源码参照，不是对每个
+Jammy/Noble发布镜像内核二进制的哈希认证。官方[问题说明](https://wiki.switchroot.org/wiki/common-issues)
+确认这两个发行版采用Tegra DC内核硬件旋转，绕过NVIDIA Xorg旋转的帧节拍问题。
+
+### 正常提交链与当前路径的对应关系
+
+| 环节 | Ubuntu固定源码 | 本基线及结论 |
+|---|---|---|
+| 确定实际生产者缓冲区 | `ext/dev.c::tegra_dc_ext_pin_windows`固定dma-buf映射；`tegra_dc_ext_set_windowattr`使用映射地址加surface offset，并保留生产者提供的stride、像素格式和布局标志 | Windows使用runtime allocation、VidMm驻留和`TgGpuResolveScanoutAddress`。不能把Linux DMA地址或fd直接当Windows物理地址；也不能用逻辑桌面截图确认最终primary内容 |
+| 等渲染完成 | `tegra_dc_ext_set_windowattr`在提交窗口前等待pre-syncpoint/fence | 本基线仍使用runtime↔NVK双向Fence，Present回调后由调度器触发DC翻转。Linux等待函数本身的返回值没有在此处完整传播，不能机械复制成正确的错误处理 |
+| 变换与尺寸 | 该维护者分支按panel rotation替换producer旋转标志；90/270度将横屏out_w/out_h归一为物理竖屏输出。`window.c`分别设置source尺寸、output尺寸、pitch、kind、H/V offset及DDA | 当前KMD的90/270度列扫描位、起始偏移、固定物理输出及单位DDA计算与该路径一致。Windows MPO已经给出显式顺时针变换，不能再强加Linux面板角度 |
+| 显示取数保障 | `window.c`更新动态带宽；T21x `bandwidth.c`在切换前使用新旧需求较大值，在同步后再应用新状态，并根据布局计算LA（内存访问延迟预算） | 当前DC继承Hekate启动配置，没有对应的显示LA更新。RAM1600MHz不是这项契约的替代；目前没有证据证明G轮发生underflow，因此不能直接认定这是黑屏根因 |
+| 提交和锁存 | `_tegra_dc_program_windows`写assembly状态，经UPDATE复制到armed，再发ACT_REQ；布局变化强制VBlank，`sync_windows`等待窗口状态完成 | 本基线也将布局/可见性变化限定为VBlank，并读active地址、pitch和偏移确认。Linux每次包含GENERAL更新，当前仅改变counter选择时附带GENERAL；这是实现差异，尚无依据断言单独WIN_A激活一定错误 |
+| 旧缓冲区退休 | `tegra_dc_ext_flip_worker`调用`sync_windows`后才解除前一批front buffer映射和引用 | 当前由真实锁存后的VSync/PresentId回执交还VidMm。应保留该完成边界，不能把UPDATE写入或逻辑截图成功视为显示完成 |
+
+对32位、无缩放、无裁剪的全屏表面，按上述`window.c`公式展开后：
+
+| DC字段 | 竖屏identity | 横屏CCW90 | 横屏CCW270 |
+|---|---|---|---|
+| producer宽×高 | 720×1280 | 1280×720 | 1280×720 |
+| pitch（字节，线性布局时） | 2880 | 5120 | 5120 |
+| WIN_OPTIONS（已使能） | `0x40000000` | `0x40000011` | `0x40000014` |
+| H_OFFSET（字节） | 0 | 5119 | 0 |
+| V_OFFSET（行） | 0 | 0 | 719 |
+| WIN_SIZE（物理输出） | 720×1280 | 720×1280 | 720×1280 |
+| PRESCALED（水平字节×垂直像素） | 2880×1280 | 2880×1280 | 2880×1280 |
+| H/V DDA | 1.0 / 1.0 | 1.0 / 1.0 | 1.0 / 1.0 |
+
+所以，横屏时保留720×1280的物理扫描及PRESCALED值本身不是错误；不能将这些寄存器
+一并盲改为1280×720。当前`tg_t214_dc_get_layout`与该计算相符。这是源码核对结果，
+不是DC实机寄存器已按此锁存的证明，也不证明pitch-linear列扫描的全部硬件约束。
+Ubuntu的`SURFACE_KIND`来自实际producer布局：普通pitch、旧式tiled和block-linear
+分开设置。Vulkan的`OPTIMAL`枚举不能代替具体的DC kind/block-height/pitch契约。
+
+另两项硬件差异需准确描述：T21x的`MEMFETCH_RESET`写入在每次窗口编程路径执行，
+没有“刚发生DC复位”条件；注释中的用途不能改写成执行条件。当前基线未写该寄存器。
+Ubuntu还处理窗口underflow中断与计数；当前只处理VBlank。两项都尚未证明是G轮根因，
+不据此盲目复位DC或更改CPU/GPU/RAM、电压及Fence。NVIDIA在线X1 TRM下载本轮跳转
+登录页，没有取得其具体约束；公开Jetson `nvimp_util`章节的TX2/Xavier参数也不能
+代替T210B01显示配置。
+
+源码：[窗口编程与锁存](https://github.com/theofficialgman/switch-l4t-kernel-nvidia/blob/7d95822acda1f6dab3f3d1d099b43ff9e0d0e626/drivers/video/tegra/dc/window.c)、
+[buffer提交与退休](https://github.com/theofficialgman/switch-l4t-kernel-nvidia/blob/7d95822acda1f6dab3f3d1d099b43ff9e0d0e626/drivers/video/tegra/dc/ext/dev.c)、
+[T21x带宽与LA](https://github.com/theofficialgman/switch-l4t-kernel-nvidia/blob/7d95822acda1f6dab3f3d1d099b43ff9e0d0e626/drivers/video/tegra/dc/t21x/bandwidth.c)。
+
+### 独立审计的验收限制
+
+Carbon High首版报告与diff已于08:38:41UTC完成；父任务复核后未采纳其diff，08:41:48
+在同一Antigravity CLI会话发回修订要求。首版把逻辑截图的具体内部资源、shadow尺寸
+及dxgkrnl可能合成的MPO参数推断成了事实。实际G轮CCD source与target均为720×1280，
+逻辑桌面才是1280×720；[微软shadow契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmdt/ns-d3dkmdt-_d3dkmdt_shadowsurfacedata)
+规定shadow与shared primary同尺寸、同格式，不能据此断言它必须是横屏shadow。
+
+首版diff将primary拒绝改成`DXGI_DDI_ERR_UNSUPPORTED`，却没有实现该选择要求的
+[旋转copy回退](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgi1_2_ddi_base_functions)。
+不能将这样不完整的回退引入当前基线。旋转Blt未实现是功能缺口，但G轮是否进入该路径
+仍未知；CW的MPO与CCW的VidPN使用不同映射也不构成已证明的冲突。
+
+下一项修复应区分最终primary没有有效提交/写入，与DC已经收到正确primary但未能取数。
+现有5020像素逻辑截图不能替代这一边界。当前没有新的、足以解释黑屏的已证实硬件
+补丁，因此本轮没有重复构建或再次部署同一失败组合；基线继续保留组合B。
