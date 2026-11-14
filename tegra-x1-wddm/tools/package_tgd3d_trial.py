@@ -61,6 +61,10 @@ def main():
     kernel = args.kmd
     if args.candidate_kmd:
         candidate = json.loads((args.candidate_kmd / "manifest.json").read_text())
+        if candidate.get("force_red_scanout"):
+            if not umd.get("red_primary_control"):
+                raise ValueError("Forced scanout diagnostic requires the matching red-primary UMD")
+            manifest["force_red_scanout"] = True
         changed = {"tegra-x1-wddm/platform/t214_gr_context.c",
                    "tegra-x1-wddm/tests/test_gr_context.c"}
         vidpn_fix = candidate["variant"] == "shader-output-bit14-gpu460-vidpn"

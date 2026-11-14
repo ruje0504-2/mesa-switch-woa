@@ -37,7 +37,11 @@ parser.add_argument("--native-test-version", type=int, metavar="N",
                     help="with --display, build gated native submission as package 0.1.0.N")
 parser.add_argument("--render-gpu-khz", type=int, choices=(460800, 729600), default=729600,
                     help="fixed GPU clock; 460800 is an opt-in display power control")
+parser.add_argument("--force-red-scanout", action="store_true",
+                    help="diagnostic only: force a valid primary visible despite the OS source-visibility gate")
 args = parser.parse_args()
+if args.force_red_scanout and (not args.display or args.native_test_version != 158):
+    parser.error("--force-red-scanout requires the gated --display --native-test-version 158 diagnostic")
 if args.native_test_version is not None and (not args.display or not 1 <= args.native_test_version <= 65535):
     parser.error("--native-test-version requires --display and a version from 1 to 65535")
 if args.keep_fan and not args.probe:
@@ -187,6 +191,8 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
          "/DDXGKDDI_INTERFACE_VERSION=DXGKDDI_INTERFACE_VERSION_WDDM2_6",
          f"/I{windows_abi}", *[f"/I{p}" for p in mesa_includes],
          *[f"/imsvc{p}" for p in includes]]
+if args.force_red_scanout:
+    flags.append("/DTG_GPU_TEST_FORCE_RED_SCANOUT")
 objects = []
 for source in [*core, power, clock, root / "platform/t214_dc.c", root / "windows/resources.c",
                root / "windows/panel.c", root / "windows/panel_vidpn.c",

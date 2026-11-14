@@ -5,7 +5,7 @@
 #include "../platform/t214_resources.h"
 
 typedef struct _FLIP_ACTION {
-    TG_GPU_PANEL *Panel;
+    TG_GPU_ADAPTER *Adapter;
     TG_GPU_PANEL_FLIP Flip;
     NTSTATUS Status;
 } FLIP_ACTION;
@@ -34,7 +34,7 @@ BOOLEAN TgGpuPanelReadLatched(TG_GPU_PANEL *panel, struct tg_t214_dc_scanout *ac
 static BOOLEAN program_flip(PVOID context)
 {
     FLIP_ACTION *action = context;
-    TG_GPU_PANEL *panel = action->Panel;
+    TG_GPU_PANEL *panel = &action->Adapter->Panel;
     if (!panel->Dc.owned || panel->Stopping) {
         action->Status = STATUS_DEVICE_NOT_READY;
         return TRUE;
@@ -55,7 +55,7 @@ static BOOLEAN program_flip(PVOID context)
         }
         flip.Address = active.address;
     }
-    flip.Visible = flip.Visible && panel->SourceVisible && panel->TargetActive;
+    flip.Visible = TgGpuPanelEffectiveVisibility(action->Adapter, flip.Address, flip.Visible);
     if (flip.Immediate && latched && matches(&flip, &active) &&
         panel->Displayed.PresentId==flip.PresentId) {
         action->Status=STATUS_SUCCESS;
@@ -79,9 +79,9 @@ static BOOLEAN confirm_flip(PVOID context)
     FLIP_ACTION *action=context;
     struct tg_t214_dc_scanout active;
     action->Status=STATUS_PENDING;
-    if (TgGpuPanelReadLatched(action->Panel, &active) && matches(&action->Flip, &active)) {
-        action->Panel->Displayed=action->Flip;
-        action->Panel->Pending=(TG_GPU_PANEL_FLIP){0};
+    if (TgGpuPanelReadLatched(&action->Adapter->Panel, &active) && matches(&action->Flip, &active)) {
+        action->Adapter->Panel.Displayed=action->Flip;
+        action->Adapter->Panel.Pending=(TG_GPU_PANEL_FLIP){0};
         action->Status=STATUS_SUCCESS;
     }
     return TRUE;
@@ -89,7 +89,7 @@ static BOOLEAN confirm_flip(PVOID context)
 
 static NTSTATUS flip(TG_GPU_ADAPTER *adapter, TG_GPU_PANEL_FLIP scanout, BOOLEAN mode_change)
 {
-    FLIP_ACTION action = {&adapter->Panel, scanout, STATUS_UNSUCCESSFUL};
+    FLIP_ACTION action = {adapter, scanout, STATUS_UNSUCCESSFUL};
     /* A modeset has no scheduled flip receipt to retire the previous primary.
      * Keep the PASSIVE-level call alive until its address and layout are active.
      * Ordinary MMIO flips retain their asynchronous VSync notification path. */

@@ -277,10 +277,24 @@ void start(void)
 
     /* Visibility changes stop/start the assigned primary. They do not replace
      * it with POST: no new flip is required to recover the same surface. */
+#ifdef TG_GPU_TEST_FORCE_RED_SCANOUT
+    const BOOLEAN hidden_visible=TRUE;
+#else
+    const BOOLEAN hidden_visible=FALSE;
+#endif
     plane.InputFlags.FlipImmediate=0;plane.PresentId=203;
     CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
     CHECK(TgGpuPanelSetVisibility(&adapter,FALSE)==STATUS_SUCCESS && !adapter.Panel.Pending.Address);
-    active_is(0x98400000,FALSE);
+    active_is(0x98400000,hidden_visible);
+    CHECK(!adapter.Panel.SourceVisible);
+#ifdef TG_GPU_TEST_FORCE_RED_SCANOUT
+    CHECK(!TgGpuPanelEffectiveVisibility(&adapter,T214_GPU_POST_FB_BASE,TRUE));
+    CHECK(!TgGpuPanelEffectiveVisibility(&adapter,0x99000000,TRUE));
+    CHECK(!TgGpuPanelEffectiveVisibility(&adapter,0x98400000,FALSE));
+    adapter.Panel.Stopping=TRUE;
+    CHECK(!TgGpuPanelEffectiveVisibility(&adapter,0x98400000,TRUE));
+    adapter.Panel.Stopping=FALSE;
+#endif
     signal_vblank(&d);CHECK(reported_present==203);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
     active_is(0x98400000,TRUE);
@@ -292,7 +306,7 @@ void start(void)
     CHECK(TgGpuPanelSetTargetActive(&adapter,FALSE)==STATUS_SUCCESS);
     CHECK(TgGpuPanelSetTargetActive(&adapter,TRUE)==STATUS_SUCCESS);
     CHECK(!adapter.Panel.SourceVisible && adapter.Panel.TargetActive);
-    active_is(0x98400000,FALSE);
+    active_is(0x98400000,hidden_visible);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
     CHECK(TgGpuPanelSetTargetActive(&adapter,FALSE)==STATUS_SUCCESS);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
@@ -321,7 +335,7 @@ void start(void)
     static DXGKARG_SETVIDPNSOURCEADDRESS hidden={.PrimarySegment=TG_GPU_SCANOUT_SEGMENT,
         .Flags={.ModeChange=1},.PrimaryAddress={.QuadPart=0x98800000},.hAllocation=&allocations[2]};
     CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&hidden)==STATUS_SUCCESS);
-    active_is(0x98800000,FALSE);
+    active_is(0x98800000,hidden_visible);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
     active_is(0x98800000,TRUE);
 
@@ -332,18 +346,29 @@ void start(void)
     const UINT hidden_notifications=notifications;
     signal_vblank(&d);
     CHECK(notifications==hidden_notifications+1 && reported_present==205);
-    active_is(0x98400000,FALSE);
+    active_is(0x98400000,hidden_visible);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
     active_is(0x98400000,TRUE);
 
     /* A blanking timeout does not pretend the old scanout has stopped. */
     auto_latch=FALSE;
+#ifdef TG_GPU_TEST_FORCE_RED_SCANOUT
+    /* Source-hide is bypassed only in this diagnostic. Target-off and stop
+     * must still really stop DMA before memory/power can be released. */
+    CHECK(TgGpuPanelSetTargetActive(&adapter,FALSE)==STATUS_IO_TIMEOUT);
+    CHECK(model.active[T214_DC_WIN_A_OPTIONS]&T214_DC_WIN_ENABLE);
+    auto_latch=TRUE;latch(&model,true);
+    CHECK(TgGpuPanelSetTargetActive(&adapter,FALSE)==STATUS_SUCCESS);
+    active_is(0x98400000,FALSE);
+    CHECK(TgGpuPanelSetTargetActive(&adapter,TRUE)==STATUS_SUCCESS);
+#else
     CHECK(TgGpuPanelSetVisibility(&adapter,FALSE)==STATUS_IO_TIMEOUT);
     CHECK(model.active[T214_DC_WIN_A_OPTIONS]&T214_DC_WIN_ENABLE);
     auto_latch=TRUE;latch(&model,true);
     CHECK(TgGpuPanelSetVisibility(&adapter,FALSE)==STATUS_SUCCESS);
     active_is(0x98400000,FALSE);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
+#endif
     active_is(0x98400000,TRUE);
 
     /* Unlike a scheduled flip, a modeset returns only after the new primary
