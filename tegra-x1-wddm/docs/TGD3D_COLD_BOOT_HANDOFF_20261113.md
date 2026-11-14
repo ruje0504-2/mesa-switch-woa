@@ -630,3 +630,38 @@ Gemini初次审计于07:11:29主动中断，以在原会话补入用户的“正
 及winx对照要求；不是因SSH或观察超时判定终止。07:11:51同一Carbon High会话接续，
 自动工具许可仍为always-proceed。Noble源码已复制到审计参考目录，后续追加说明待
 当前审计回合结束后发送；尚未把未收到的报告或diff记作验收完成。
+
+## Jammy/Noble硬件配套对照（2026-11-14 UTC）
+
+按用户要求继续检查旋转以外、与本轮上屏直接相关的硬件处理，仍固定维护者内核
+`7d95822acda1f6dab3f3d1d099b43ff9e0d0e626`。新增只读参考文件
+`dc/t21x/bandwidth.c` SHA256为
+`e39db1ed567748e1f0196254f395be81c6e60c14486f91ddde4bea6ad5e988cd`，
+`dc/dc.c`为`6ff3394760062fa9f7aaa647d27b9e90fb1fc38d71e9cc3243d1d2d3d08b2ac8`。
+完整来源和文件副本保存在`rotation-black-static-review/references/noble-maintainer-dc/`。
+
+| 环节 | 固定Ubuntu实现 | 当前Windows路径及采用判断 |
+|---|---|---|
+| 显示取数带宽/延迟 | `t21x/bandwidth.c::calc_disp_params`按pitch/block、列扫描、像素格式和缩放计算缓冲条件；`tegra_dc_handle_latency_allowance`同时设置LA和EMC下限；切换期间取新旧需求较大者 | 当前DC路径继承启动配置，没有对应按扫描布局更新LA的实现。RAM固定1600MHz不等于取数延迟已满足。这是待核对的硬件差异，不能直接推出当前黑屏是带宽不足，也不据此提高频率、电压或照搬Linux DVFS |
+| 几何与锁存 | `window.c::update_is_hsync_safe`仅允许少量不改布局的更新走HBlank；旋转/布局变化强制VBlank，随后检查ACT_REQ清除 | 本驱动也限制immediate为相同旋转/pitch/offset/可见性，布局变更走VBlank；模式切换等待active地址/布局匹配。尚未发现该原则缺失。维护者HEAD撤回过“所有列扫描一律VBlank”的试验，不能把被撤回代码当作现行Ubuntu要求 |
+| 取数FIFO | `window.c`在T21x提交窗口UPDATE之前写MEMFETCH_RESET，注释说明用于避免复位后FIFO取到旧数据 | 当前驱动接管正在运行的Hekate显示，不主动复位DC，也没有这项写入。需核对该寄存器对T210B01、继承状态与布局切换的实际适用条件，不能仅凭两份源码不同就新增复位 |
+| 显示欠载 | `dc.c`分别统计各窗口underflow，暂时屏蔽中断后由worker清除并重新开放 | 当前只处理VBlank，缺少相同的underflow处理。固定源码中T21x handler实际是计数/清除；附近“连续四帧后reset”的旧注释没有对应复位实现，不能据注释声称Ubuntu会重启DC，也不据此新增整机重启/转储流程 |
+| backing退休 | `ext/dev.c`更新窗口并同步后才解除上一批front buffer的DMA映射和引用 | Windows由VidMm管理驻留，KMD用真实锁存及VSync完成回执交还旧primary；复用生命周期原则，不移植Linux dma-buf/syncpoint私有ABI |
+
+参考：[窗口编程](https://github.com/theofficialgman/switch-l4t-kernel-nvidia/blob/7d95822acda1f6dab3f3d1d099b43ff9e0d0e626/drivers/video/tegra/dc/window.c)、
+[T21x带宽](https://github.com/theofficialgman/switch-l4t-kernel-nvidia/blob/7d95822acda1f6dab3f3d1d099b43ff9e0d0e626/drivers/video/tegra/dc/t21x/bandwidth.c)、
+[显示中断](https://github.com/theofficialgman/switch-l4t-kernel-nvidia/blob/7d95822acda1f6dab3f3d1d099b43ff9e0d0e626/drivers/video/tegra/dc/dc.c)。
+本轮没有移植GPL代码，也没有更改平台功耗设置。
+
+同时检查冻结ICD的最终线性主表面：`nvk_rendering_linear`要求地址与row stride均为
+128字节对齐，且没有depth/stencil或非线性色附件。竖屏pitch2880余64，必须走tiled
+shadow；横屏pitch5120余0，在其他条件满足时可直接走线性render target。因此旋转
+会同时改变DC列扫描和潜在的渲染存储路径，不能将CopyFromScreen截图正确直接等同于
+最终primary内存正确，也不能反过来认定线性渲染有错。shadow路径在LOAD时复制进入、
+STORE时复制回去，使用NON_PIPELINED copy和flush；tgd3d在结束rendering后记录host
+读依赖再提交，KMD提交尾部仍有WFI与SET_REFERENCE。未发现“完全没有回拷/提交完成
+标记”的缺口；本轮没有最终scanout backing的实机像素读回，缓存正确性仍未验收。
+
+本轮仅源码比较和记录，不新增驱动改动或重复构建。已通过控制与ARM64构建的
+SourceVisible/TargetActive修正仍只在本地候选中；实机保持原cb0aef82组合，横屏实屏
+仍为失败。下一次需要区分最终primary写入与DC扫描，而不是把逻辑截图再次记作上屏。
