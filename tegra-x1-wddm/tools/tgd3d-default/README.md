@@ -3,6 +3,30 @@
 当前实机采用 `logon-default`：进入系统后由5秒延迟任务启用tgd3d。
 直接原生冷启动尚未通过；下文的 `native-boot` 为显式诊断选项。
 
+## 当前缓存更新
+
+2026-11-14已在活动`.158`组合上接入shader-object磁盘缓存，双向GPU Fence开启。
+完整当前组件和验证范围见[交接记录](../../docs/TGD3D_COLD_BOOT_HANDOFF_20261113.md)。
+
+`Update-ShaderCache.ps1 -CandidateDirectory <目录> -Restart`仅用于该次缓存专用UMD
+更新。候选目录需包含`update.json`、ARM64 UMD、配套控制程序、同候选的原生CPU控制
+结果`controls-state.json`，以及两个更新/恢复脚本。清单固定更新前的目录和组件哈希，
+不接受任意版本。更新器复制已有受保护包到新目录，替换UMD及配套控制程序，保留KMD、
+ICD、恢复文件和平台设置；切换注册及登录任务，下一次重启生效，不覆盖已映射DLL。
+
+缓存使用当前令牌的LocalAppData下`mesa_shader_cache_win32-*`目录，每个缓存目录
+上限128MiB；这是磁盘容量，不占用512MiB GPU预算。缓存命中仍在当前VkDevice上
+重建shader object，不跨设备复用句柄。DXBC→SPIR-V转换仍会执行；缓存主要节省NVK/NAK
+编译。源码已有缓存不代表旧冻结UMD已启用，构建必须同时包含缓存源码及
+`ENABLE_SHADER_CACHE`后端。
+
+本轮需要撤回时，在**新包目录**以管理员身份运行`Restore-ShaderCache.ps1 -Restart`。
+它恢复保存的旧UMD/ICD注册、包目录和登录任务，重启后加载旧UMD；保留原`.158` KMD、
+ICD二进制和频率，不安装`.59`。恢复入口与更新后的实际路径写入交接记录。
+脚本及哈希核对通过；未为验证恢复工具而额外回退、重启或重复安装。
+
+## 历史冷启动诊断包
+
 本包使用清单中指定的 `.158` KMD 和配套 ARM64 NVK ICD。
 `shader-output-bit14-native-boot` 变体在冻结 `.158` 上只移植 bit14 修复及显式
 持久原生启动门控；附带原签名 KMD 的恢复文件。UMD为CPU同步对照版，双向GPU

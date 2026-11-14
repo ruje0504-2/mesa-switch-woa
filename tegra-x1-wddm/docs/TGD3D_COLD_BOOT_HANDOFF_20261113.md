@@ -5,14 +5,18 @@
 
 ## 当前设备授权（2026-11-14 UTC）
 
-**最新状态：I轮54dc5597仍物理黑屏，已恢复竖屏。设备目前运行Ubuntu24.04.3、
-4.9.140-l4t，SSH为switch@192.168.124.5。用户随后明确要求取消DC列扫描旋转、改为
-tgd3d GPU预旋转；该实现已完成控制测试与ARM64构建，尚未安装或验证实屏。**
-用户已重新启用持续目标，随后明确选择“先保持Ubuntu，继续本地开发”；因此没有自行
-重启Ubuntu或重新开展Windows实机试验。Noble显示、DVFS、充电和SC7配置已取回；APT源修复
-完成。Antigravity CLI Gemini4 Carbon High在独立工作树继续DVFS、Windows电源/充电托盘
-和5秒鼠标隐藏工具，禁止操作实机。以下组合B是用户指定的Windows恢复/开发基线，
-不是当前系统。GPU预旋转实现与构建状态见文末。
+**最新状态：用户已自行切回Windows，并要求先接入着色器缓存。缓存专用UMD已安装，
+11:11:32 UTC读回`.158 / Code0`，DWM实际加载新UMD，磁盘已有真实桌面shader binary。
+登录后5秒触发启用、双向GPU Fence及频率设置保持；未安装J轮GPU预旋转候选。**
+当前SSH为`ruje@192.168.124.5`，不是Ubuntu用户。I轮54dc5597横屏物理黑屏后已恢复
+竖屏；本次只更新其UMD缓存，KMD/ICD不变。完整哈希、验证范围及本轮恢复入口见
+文末“缓存接入与Windows安装”。当前运行组合不能再写成“未含shader cache”。
+
+用户此前要求保持Ubuntu期间，没有自行切回Windows。Noble显示、DVFS、充电和SC7
+配置已取回，APT源修复完成。Antigravity CLI Gemini4 Carbon High仍在独立工作树
+处理DVFS、Windows电源/充电托盘和5秒鼠标隐藏工具，禁止操作实机。组合B保留为
+此前选定的KMD恢复/开发基线；本轮缓存恢复仅回到更新前的I轮UMD，不更换KMD。
+GPU预旋转实现与构建状态见文末，仍未完成物理横屏验收。
 
 **选定基线：用户在组合B测试后明确要求“现在这个驱动直接作为基线”，后续在此基础上
 修横屏上屏。** 组合为`.158 / Code0`，SYS
@@ -1043,3 +1047,85 @@ NAK、NIR、SPIR-V和descriptor-layout实现无差异。结果与机器码/汇�
 原49d21…候选保存在`gpu-prerotation/superseded-01e5/`，不再用于测试。
 UMD75df9…与ICDdee3…不变；CAT仍待原生Windows生成及验证。用户指定保持Ubuntu，
 本轮不触发Windows安装/启动/显示测试；主目标继续active，本地代码与Gemini交付仍推进。
+
+
+### 后续静态审查（与缓存更新分开）
+
+用户要求审查其他tgd3d代码，并取消新增离屏检查；未创建或运行新的离屏像素探针。
+继续沿描述符、slice/view退休、设备销毁、Query/Fence调用链读源码。设备销毁目前
+先等待真实提交Fence，必要时DeviceWaitIdle，再强制退休对象；没有找到新证据支持
+“新增预旋转对象必定提前释放”。不因审查未发现就宣称该路径已实机通过。
+
+Query错误回调有两处明确契约差异待单独修复：`CreateQuery`对未实现类型或缺少
+capability调用SetErrorCb(E_NOTIMPL)，微软仅允许E_OUTOFMEMORY、NONEXCLUSIVE、
+DEVICEREMOVED；`QueryGetData`会将pool创建失败后记录的q->error=E_OUTOFMEMORY直接
+转交SetErrorCb，而该DDI只允许WASSTILLDRAWING/DEVICEREMOVED。对应源码为
+`src/nouveau/tgd3d/tgd3d_query.cpp`的CreateQuery、query_pass_begin、QueryBegin/End
+和QueryGetData。问题可以触发runtime认定critical driver error，尚无证据证明它就是
+历史硬件自动重启的根因。不得把不支持的查询静默写成成功或CPU伪造结果。
+依据2026-11-14核查的Microsoft CreateQuery及QueryGetData文档（更新时间分别见官方页），
+先保留独立修复项，不混入本轮已冻结的缓存UMD。
+
+## 缓存接入与Windows安装（2026-11-14 11:11 UTC）
+
+用户自行切回Windows后明确要求“先把缓存接上”。此前源码已有
+`35696545d482ff7bbe68c1dcf5da496d357ba0f8`的shader-object缓存，但冻结UMD没有带入，
+其旧构建也未启用`ENABLE_SHADER_CACHE`；不能把源码存在当作实机已使用。本次从
+I轮冻结UMD源码单独移植该提交，使用含Win32缓存后端
+`16a0c400a93255a846e3add6b427c897f9b4a3b9`的库，所有tgd3d对象重编，强制核对缓存
+宏且不带CPU同步控制宏。没有夹带GPU预旋转、Query修复或Gemini的DVFS改动。
+
+| 组件 | 本轮实际SHA256 |
+|---|---|
+| 保持的`.158 + bit14 + 460.8MHz` KMD | `1a86a02b479b716b2b695ade0bd6860076d4d5f61a29d95b804cb655ce0bf164` |
+| 新ARM64缓存UMD | `0cd34833bbeff8dff4b6a7f6db5f1b681ca7f5df38a44190b03085a229c7b2e8` |
+| 保持的d3423d26 ICD | `dee3d5805af80696f87d094ec1c5f557d662f435336207992baf588e2dc1cee0` |
+| 保留的更新前I轮UMD | `cefc41cffaed8dd4005ad820c27369ad0f66dbce72bdf228a1e5c790d94f864c` |
+
+冻结基础为`9de42c82a03e84674954d8175237dcfd5bb4dc2e`，此前已包含XRGB、资源错误
+传播、Flush、standard primary及DriverFlags修正；完整提交链、源码和链接输入哈希
+见OUT `cache-only-live/update.json`及`build-manifest.json`。x64/ARM64构建均通过，
+x64/Wine和Switch原生ARM64 CPU控制均通过，覆盖冷缓存写入、新进程二进制命中、键和
+driver/stage失效、不兼容回退及OOM/device-loss错误传播。同步和资源退休控制继续通过。
+这些控制不执行真实GPU，不是用户已取消的新增离屏像素检查。
+
+11:01:06 UTC更新器完成暂存，并发出本轮唯一一次计划重启；11:01:41为新启动时间。
+第一次读回仍为Code43且登录任务Running，未据此重复启用或追加重启；原任务随后
+完成。11:05:26及11:11:32均为Code0/HardwareStatus0/PanelStatus0，默认任务Ready、
+LastTaskResult0。DWM816实际加载上述新UMD及原ICD，路径位于新包目录；DWM启动时间
+及系统启动时间连续，Explorer、StartMenu、TextInput和ShellExperience也加载tgd3d。
+Windows为23H2/22631.2861，仍为登录触发延迟PT5S，AllowNativeBoot不存在。
+CPU1497600kHz/1120mV、GPU启动实测460800kHz/PMIC设定800000µV、RAM1600000kHz、
+风扇13保持；动态512MiB预算策略未改。
+
+实际桌面运行在用户LocalAppData下生成13个缓存二进制，共25758字节，写入时间在
+本次原生启用后，目录后缀为
+`685de1ecb01eb6342da277bfcdeedba5e25592019c6d58fcdd7b90ece37981bc`。
+这些文件不是CPU控制在TEMP内创建的样本。此机器现有SYSTEM/服务账户Shell Folder
+注册同样指向该LocalAppData；本轮未改用户配置或扩展缓存ACL。目录存在与文件写入
+不能单独确定每个写入进程，也不等于已测得真实GPU热缓存命中率或提速幅度。
+缓存上限128MiB是磁盘预算；DXBC→SPIR-V转换仍执行，持久缓存主要复用NVK/NAK编译
+结果。未把本轮进程/启动连续性写成五分钟物理交互验收或横屏通过。
+
+当前包：
+`C:\ProgramData\SwitchWOA\GpuUpdate\tgd3d-cache-0cd34833-20261114-190102`。
+更新前完整目录保留：
+`C:\ProgramData\SwitchWOA\GpuUpdate\tgd3d-54dc5597-20261114-172511`。
+新包内`cache-update-backup.json`、`cache-prior-task.xml`及`Restore-ShaderCache.ps1`
+保留原注册和任务。恢复命令为管理员PowerShell执行：
+
+```powershell
+& 'C:\ProgramData\SwitchWOA\GpuUpdate\tgd3d-cache-0cd34833-20261114-190102\Restore-ShaderCache.ps1' -Restart
+```
+
+它仅恢复更新前UMD注册/包路径及登录任务，重启后加载旧UMD，不更换本轮KMD/ICD，
+不回退`.59`。两脚本已通过Windows原生PowerShell解析，旧UMD哈希和恢复文件已读回
+核对；未额外执行恢复演练。UMD/控制程序载荷ZIP的SHA256为
+`3e7e08f5091dced20a0716504cd4fbc161b2ef0c4d7b7415b7e544c5954217d3`。
+更新/恢复脚本另行传入暂存目录；完整交付归档为
+`cache-only-live/tgd3d-cache-0cd34833-delivery.zip`，含载荷、脚本、构建清单和本轮回执。
+安装、启动及缓存元数据在OUT `cache-only-live/`的`native-controls.json`、
+`install-request.json`、`installed-verified.json`和`cache-files-01.json`。
+
+下一步仍按单问题推进：真实GPU热缓存收益尚未测量；Query错误回调单独修复；J候选
+需与缓存版重新组合构建后再进行横屏测试，不能安装旧75df9…旋转UMD而无意撤掉缓存。

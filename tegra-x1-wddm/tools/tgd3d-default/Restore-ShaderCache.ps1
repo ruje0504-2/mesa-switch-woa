@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# Restore the prior UMD registration; leave the KMD, ICD and power untouched.
+[CmdletBinding()]
+param([switch]$Restart)
+. (Join-Path $PSScriptRoot 'Common.ps1')
+Require-Administrator
+$b=Read-Json (Join-Path $PSScriptRoot 'cache-update-backup.json')
+Check-File ($b.PreviousDirectory+'\app\TegraGpuD3DVk.dll') @{Length=(Get-Item ($b.PreviousDirectory+'\app\TegraGpuD3DVk.dll')).Length;Sha256=$b.PreviousUmd}
+if((File-Hash "$env:windir\System32\drivers\tegragpurender.sys") -ne $b.Kernel -or
+   (File-Hash ($b.PreviousDirectory+'\app\libvulkan_nouveau.dll')) -ne $b.PreviousIcd){throw 'Baseline changed; inspect before restoring'}
+$settings='HKLM:\SYSTEM\CurrentControlSet\Services\tegragpurender\Tgd3dDefault'
+$active=[string](Get-ItemProperty $settings).Directory
+if($active -ne $b.Directory -and $active -ne $b.PreviousDirectory){throw 'A different update owns the startup configuration'}
+$key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($b.Subkey,$true)
+try{
+    $key.SetValue('UserModeDriverName',[string[]]$b.UmdSlots,[Microsoft.Win32.RegistryValueKind]::MultiString)
+    $key.SetValue('VulkanDriverName',[string]$b.Icd,[Microsoft.Win32.RegistryValueKind]::String);$key.Flush()
+}finally{$key.Dispose()}
+Set-ItemProperty $settings Directory $b.PreviousDirectory
+Register-ScheduledTask Tgd3dDefaultEnable -Xml ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'cache-prior-task.xml'))) -Force|Out-Null
+$r=@{Utc=[DateTime]::UtcNow.ToString('o');Directory=$b.PreviousDirectory;KernelChanged=$false;IcdChanged=$false;OsRebootRequested=[bool]$Restart}
+Save-Json (Join-Path $PSScriptRoot 'cache-restore.json') $r;$r|ConvertTo-Json
+if($Restart){& shutdown.exe /r /t 10;if($LASTEXITCODE){throw 'Planned restore restart was not accepted'}}
