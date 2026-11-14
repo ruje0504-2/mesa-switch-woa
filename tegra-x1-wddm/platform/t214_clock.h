@@ -6,9 +6,18 @@
 
 /* Fixed bring-up profile, not a governor. GPCCLK = 38.4 MHz * 38 / 2. */
 #define TG_GPU_FIXED_KHZ 729600u
+#define TG_GPU_LOW_POWER_KHZ 460800u
 #define TG_GPU_OVERCLOCK_KHZ 1228800u
 #define TG_GPU_REFERENCE_KHZ 38400u
 #define TG_GPU_CLOCK_SAVED_REGS 13u
+
+/* The low-power control is an explicit build choice, not a live governor. */
+#ifndef TG_GPU_RENDER_KHZ
+#define TG_GPU_RENDER_KHZ TG_GPU_FIXED_KHZ
+#endif
+#if TG_GPU_RENDER_KHZ != TG_GPU_FIXED_KHZ && TG_GPU_RENDER_KHZ != TG_GPU_LOW_POWER_KHZ
+#error Unsupported render clock profile
+#endif
 
 enum tg_gpu_clock_result {
     TG_GPU_CLOCK_OK, TG_GPU_CLOCK_BAD_STATE, TG_GPU_CLOCK_RAIL_ERROR,
@@ -43,8 +52,8 @@ enum tg_gpu_clock_result tg_gpu_clock_measure(const struct tg_gpu_power_io *io,
 enum tg_gpu_clock_result tg_gpu_clock_stop(const struct tg_gpu_power_io *io,
     struct tg_gpu_clock *clock);
 
-/* Conservative non-SLT 768/1228.8 MHz CVB envelopes, covering -40..105 C,
- * rounded to the MAX77812 5 mV step. The second profile is explicitly opt-in.
+/* Conservative non-SLT 460.8/768/1228.8 MHz CVB envelopes, covering -40..105 C,
+ * rounded to the MAX77812 5 mV step. Non-default profiles are opt-in.
  */
 uint32_t tg_gpu_clock_required_uv(uint32_t gpu_speedo, uint32_t target_khz);
 

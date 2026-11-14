@@ -45,11 +45,20 @@ function Check-File([string]$Path,$Expected) {
     $file=Get-Item -LiteralPath $Path
     if($file.Length -ne $Expected.Length -or (File-Hash $Path) -ne $Expected.Sha256) { throw ('File mismatch: '+$Path) }
 }
+function Kernel-BaselineHash($Manifest) {
+    switch($Manifest.kmd_variant) {
+        'shader-output-bit14' {'46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088';return}
+        'shader-output-bit14-native-boot' {'46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088';return}
+        'shader-output-bit14-gpu460' {'c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53';return}
+        default {throw 'Unexpected kernel variant'}
+    }
+}
 function Check-Package {
     $m=Read-Json (Join-Path $script:TrialRoot 'trial-components.json')
     if($m.kmd_version -ne '0.1.0.158' -or $m.umd_name -ne 'TegraGpuD3DVk.dll') { throw 'Unexpected trial component identity' }
-    if($m.kmd_variant -and ($m.kmd_variant -notin @('shader-output-bit14','shader-output-bit14-native-boot') -or
-       $m.baseline_kmd.'tegragpurender.sys'.Sha256 -ne '46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088')) { throw 'Unexpected kernel variant or recovery baseline' }
+    if($m.kmd_variant -and $m.baseline_kmd.'tegragpurender.sys'.Sha256 -ne (Kernel-BaselineHash $m)) { throw 'Unexpected kernel recovery baseline' }
+    if($m.kmd_variant -eq 'shader-output-bit14-gpu460' -and
+       ($m.startup_mode -notin @('logon-default','native-boot') -or $m.kmd_gpu_khz -ne 460800)) { throw 'Clock control requires the reviewed 460.8 MHz package' }
     foreach($entry in $m.files.PSObject.Properties) { Check-File (Package-Path $entry.Name) $entry.Value }
     foreach($file in Get-ChildItem -LiteralPath $script:TrialRoot -Filter '*.ps1') {
         $tokens=$null;$errors=$null
@@ -65,7 +74,10 @@ function Check-Baseline {
         # retained .158 miniport is installed but native GPU work is disabled.
         $hashes=@('46D1757674FF156028CE5B729BA53671981FFAB09948FCAF125751C46BB10088')
         $manifest=Read-Json (Join-Path $script:TrialRoot 'trial-components.json')
-        if($manifest.kmd_variant -in @('shader-output-bit14','shader-output-bit14-native-boot') -and $manifest.baseline_kmd.'tegragpurender.sys'.Sha256 -eq $hashes[0]) {
+        if($manifest.kmd_variant) {
+            $expected=Kernel-BaselineHash $manifest
+            if($manifest.baseline_kmd.'tegragpurender.sys'.Sha256 -ne $expected){throw 'Kernel recovery baseline differs'}
+            $hashes=@($expected)
             $hashes+=([string]$manifest.kmd.'tegragpurender.sys'.Sha256)
             if($manifest.kmd_variant -eq 'shader-output-bit14-native-boot'){$hashes+='2e4ae8081687537f777d72636ff1fab0640559215a703f6ccfab2127f95f0572'}
         }

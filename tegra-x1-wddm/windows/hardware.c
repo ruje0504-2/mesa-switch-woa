@@ -18,7 +18,7 @@ NTSTATUS TgGpuStartHardware(TG_GPU_HARDWARE *h,TG_GPU_CONTEXT_ENGINE *e,
     RtlZeroMemory(h,sizeof(*h));h->Engine=e;h->Io=*io;
     e->HardwareOwner=h;e->UserdBar1Ready=FALSE;
     KeReleaseSpinLock(&e->Lock,irql);
-    h->Status.version=TG_GPU_CONTROL_VERSION;h->Status.target_khz=TG_GPU_FIXED_KHZ;
+    h->Status.version=TG_GPU_CONTROL_VERSION;h->Status.target_khz=TG_GPU_RENDER_KHZ;
     h->Status.clock_result=h->Status.execution_result=UINT32_MAX;
     /* Bootstrap never executes these reports; distinct sentinels are required
      * by the shared arena builder and cannot count as completed work.
@@ -33,7 +33,7 @@ NTSTATUS TgGpuStartHardware(TG_GPU_HARDWARE *h,TG_GPU_CONTEXT_ENGINE *e,
     h->Status.stage=100+h->Power.stage;
     if(h->Status.power_result!=TG_GPU_POWER_OK)return STATUS_DEVICE_NOT_READY;
     if(tg_gpu_frontend_start(io,&h->Power,&h->Status.frontend)!=TG_GPU_FE_OK)return STATUS_DEVICE_DATA_ERROR;
-    h->Status.clock_result=tg_gpu_clock_start(io,&h->Power,TG_GPU_FIXED_KHZ,&h->Clock);
+    h->Status.clock_result=tg_gpu_clock_start(io,&h->Power,TG_GPU_RENDER_KHZ,&h->Clock);
     h->Status.stage=200+h->Clock.stage;
     h->Status.measured_khz=h->Clock.measured_khz;h->Status.rail_uv=h->Clock.rail_uv;
     if(h->Status.clock_result!=TG_GPU_CLOCK_OK)return STATUS_DEVICE_DATA_ERROR;

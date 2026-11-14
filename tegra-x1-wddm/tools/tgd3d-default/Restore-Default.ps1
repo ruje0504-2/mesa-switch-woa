@@ -19,7 +19,7 @@ if($manifest.kmd_variant){
     if(Test-Path $permit){Remove-Item $permit -Force}
     if((Device-Property 'ProblemCode') -ne 43){
         Save-Json (Join-Path $dir 'restore-staged.json') @{Utc=[DateTime]::UtcNow.ToString('o');NativeStartupDisabled=$true;ManualRestartRequired=$true;OsRebootRequested=$false}
-        'Native startup is disabled. Restart Windows, then run RESTORE again to restore the original .158 kernel.'
+        'Native startup is disabled. Restart Windows, then run RESTORE again to restore the package baseline .158 kernel.'
         return
     }
     & (Join-Path $dir 'Switch-Kmd.ps1') -Direction Baseline
@@ -32,7 +32,7 @@ if($manifest.kmd_variant){
         $key.DeleteValue('VulkanDriverName',$false)
     }finally{$key.Dispose()}
     Save-Json (Join-Path $dir 'restore-result.json') @{Utc=[DateTime]::UtcNow.ToString('o');Version=(Device-Property 'DriverVersion');Problem=(Device-Property 'ProblemCode');KernelHash=(File-Hash "$env:windir\System32\drivers\tegragpurender.sys");OsRebootRequested=$false}
-    'RESTORED: original .158 kernel, native gate closed; no .59 installation or reboot requested.'
+    'RESTORED: package baseline .158 kernel, native gate closed; no .59 installation or reboot requested.'
     return
 }
 & (Join-Path $dir 'Restore-AfterBoot.ps1')

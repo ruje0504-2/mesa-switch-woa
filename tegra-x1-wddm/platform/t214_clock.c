@@ -67,8 +67,13 @@ uint32_t tg_gpu_clock_required_uv(uint32_t speedo, uint32_t target)
 {
     int32_t base, peak = 0, t, c0, c1, c2, c4, c5;
     if (!speedo || speedo > 5000 ||
-        (target != TG_GPU_FIXED_KHZ && target != TG_GPU_OVERCLOCK_KHZ))
+        (target != TG_GPU_FIXED_KHZ && target != TG_GPU_LOW_POWER_KHZ &&
+         target != TG_GPU_OVERCLOCK_KHZ))
         return UINT32_MAX;
+    /* The non-SLT 460.8 MHz CVB entry is 610 mV, independent of speedo and
+     * temperature. Keep the same 800 mV fixed-profile floor as above it.
+     */
+    if (target == TG_GPU_LOW_POWER_KHZ) return 800000u;
     /* GPUB01_NA_CVB_TABLE at 768000: c0=891575,c1=-4409,c2=-584,
      * c3=0,c4=-2849,c5=39, speedo_scale=100, thermal_scale=10.
      * 729.6 MHz uses the next higher characterized frequency envelope.
@@ -96,7 +101,8 @@ enum tg_gpu_clock_result tg_gpu_clock_start(const struct tg_gpu_power_io *io,
     struct tg_gpu_identity id;
     if (!io || !power || !c || !io->read32 || !io->write32 ||
         !io->read_pmic || !io->write_pmic || !io->delay_us || !power->ready || c->owned ||
-        (target != TG_GPU_FIXED_KHZ && target != TG_GPU_OVERCLOCK_KHZ) ||
+        (target != TG_GPU_FIXED_KHZ && target != TG_GPU_LOW_POWER_KHZ &&
+         target != TG_GPU_OVERCLOCK_KHZ) ||
         !tg_gpu_identify(clk_read(io, 0), &id) || id.chipset != TG_GPU_CHIP_GM20B_B)
         return TG_GPU_CLOCK_BAD_STATE;
     c->stage = 0;
@@ -192,9 +198,15 @@ enum tg_gpu_clock_result tg_gpu_clock_start(const struct tg_gpu_power_io *io,
     clk_update(io, DVFS2, 0x7f, (uint32_t)c->external_calibration);
     io->delay_us(io->context, 1);
     clk_update(io, DVFS1, 0x0fff0000, 0x0e010000);
-    /* Effective N=38 or 64, SDM=-4096 (top byte f0), M=1, P=1. */
+    /* SDM=-4096 (top byte f0) makes effective N equal integer N. C1's
+     * VCO must stay in 1.3..2.6 GHz: 460.8 MHz therefore uses N=48, P=2,
+     * VCO=1843.2 MHz, not N=24/P=1 with an out-of-range 921.6 MHz VCO.
+     * The original 729.6/1228.8 MHz profiles retain N=38/64, P=1.
+     * P is the divisor itself (clk_gm20b.h nvgpu_pl_to_div, 1ae0167d).
+     */
     clk_update(io, CFG2, 0xff, 0xf0);
-    coeff = 0x00010001 | ((target / 19200u) << 8);
+    coeff = target == TG_GPU_LOW_POWER_KHZ ? 0x00023001u :
+        0x00010001u | ((target / 19200u) << 8);
     clk_update(io, COEFF, 0x3fffff, coeff);
     clk_update(io, CFG, ENABLE, ENABLE);
     io->delay_us(io->context, 40); /* NA mode has no usable LOCK bit. */

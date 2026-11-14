@@ -4,8 +4,7 @@ param([ValidateSet('Candidate','Baseline')][string]$Direction='Candidate')
 . (Join-Path $PSScriptRoot 'Common.ps1')
 Require-Administrator
 $m=Read-Json (Join-Path $PSScriptRoot 'trial-components.json')
-if($m.kmd_variant -notin @('shader-output-bit14','shader-output-bit14-native-boot') -or
-   $m.baseline_kmd.'tegragpurender.sys'.Sha256 -ne '46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088') {
+if($m.baseline_kmd.'tegragpurender.sys'.Sha256 -ne (Kernel-BaselineHash $m)) {
     throw 'Expected the reviewed .158 bit14 package and frozen recovery image'
 }
 if($Direction -eq 'Candidate'){$m=Check-Package;$records=$m.kmd;$folder='package'}

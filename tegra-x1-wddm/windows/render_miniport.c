@@ -18,6 +18,12 @@ static NTSTATUS start_device(PVOID context,DXGK_START_INFO *start,
     DXGKRNL_INTERFACE *dxgk,ULONG *sources,ULONG *children)
 {
     TG_GPU_ADAPTER *a=context;
+    /* Startup samples only. A closed gate or failed start must not leave an
+     * old successful measurement looking like this activation's result.
+     */
+    record_status(L"BootGpuTargetKhz",(NTSTATUS)TG_GPU_RENDER_KHZ);
+    record_status(L"BootGpuMeasuredKhz",0);
+    record_status(L"BootGpuRailUv",0);
 #ifdef TG_GPU_NATIVE_TEST_VERSION
     record_status(L"HardwareStatus",(NTSTATUS)MAXULONG);
     record_status(L"PanelStatus",(NTSTATUS)MAXULONG);
@@ -40,6 +46,10 @@ static NTSTATUS start_device(PVOID context,DXGK_START_INFO *start,
 #endif
     status=TgGpuStartPlatformAdapter(a);
     record_status(L"HardwareStatus",status);
+    if(NT_SUCCESS(status)) {
+        record_status(L"BootGpuMeasuredKhz",(NTSTATUS)a->Hardware.Clock.measured_khz);
+        record_status(L"BootGpuRailUv",(NTSTATUS)a->Hardware.Clock.rail_uv);
+    }
 #ifdef TG_GPU_PANEL_WDDM
     if (!NT_SUCCESS(status)) return status;
     status=TgGpuPanelStart(a);

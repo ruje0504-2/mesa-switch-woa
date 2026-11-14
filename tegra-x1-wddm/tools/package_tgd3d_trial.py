@@ -29,7 +29,7 @@ def main():
     parser.add_argument("--default-start", action="store_true",
                         help="package automatic enablement after logon, with manual recovery")
     parser.add_argument("--candidate-kmd", type=Path,
-                        help="reviewed bit14 artifact directory with manifest.json and signed-package")
+                        help="reviewed bit14 or GPU clock-control artifact with manifest.json and signed-package")
     parser.add_argument("--native-boot", action="store_true",
                         help="arm .158 for direct driver startup before logon; no PnP restart task")
     args = parser.parse_args()
@@ -60,16 +60,30 @@ def main():
         candidate = json.loads((args.candidate_kmd / "manifest.json").read_text())
         changed = {"tegra-x1-wddm/platform/t214_gr_context.c",
                    "tegra-x1-wddm/tests/test_gr_context.c"}
-        native = candidate["variant"] == "shader-output-bit14-native-boot"
+        clock_control = candidate["variant"] == "shader-output-bit14-gpu460"
+        native = candidate["variant"] in ("shader-output-bit14-native-boot", "shader-output-bit14-gpu460")
         if native:
             changed |= {"tegra-x1-wddm/windows/native_start_test.c",
                         "tegra-x1-wddm/tests/test_native_start_windows.c"}
+        if clock_control:
+            changed |= {"tegra-x1-wddm/platform/t214_clock.c", "tegra-x1-wddm/platform/t214_clock.h",
+                        "tegra-x1-wddm/tests/test_clock.c", "tegra-x1-wddm/tests/test_hardware_windows.c",
+                        "tegra-x1-wddm/tools/build.py", "tegra-x1-wddm/windows/hardware.c",
+                        "tegra-x1-wddm/windows/render_miniport.c"}
+            if (candidate.get("target_khz") != 460800 or
+                candidate["baseline_signed_files"]["tegragpurender.sys"]["Sha256"] !=
+                    "c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53"):
+                raise ValueError("Clock control must restore the retained bit14/native-capable .158")
         if (candidate["base"] != frozen["kmd_source"] or
-            candidate["variant"] not in ("shader-output-bit14", "shader-output-bit14-native-boot") or
+            candidate["variant"] not in ("shader-output-bit14", "shader-output-bit14-native-boot", "shader-output-bit14-gpu460") or
             not candidate.get("windows_signature_verified") or
             set(candidate["changed_files"]) != changed):
             raise ValueError("Unreviewed kernel variant or unsigned artifact")
         manifest["baseline_kmd"] = frozen["kmd"]
+        if clock_control:
+            manifest["baseline_kmd"] = candidate["baseline_signed_files"]
+            manifest["kmd_gpu_khz"] = 460800
+            manifest["kmd_clock_patch_commit"] = candidate["clock_patch_commit"]
         manifest["kmd_variant"] = candidate["variant"]
         manifest["kmd_patch_commit"] = candidate["patch_commit"]
         if native:
@@ -78,11 +92,13 @@ def main():
             manifest["kmd_package_identity"] = candidate["inf_identity"]
         manifest["kmd"] = candidate["signed_files"]
         manifest["scope"] = ".158 bit14 fix with automatic tgd3d enablement after logon; manual testing"
+        if clock_control:
+            manifest["scope"] = ".158 bit14 GPU384 control; restore the retained 729.6 MHz kernel; logon start only"
         kernel = args.candidate_kmd / "signed-package"
-        for name, record in frozen["kmd"].items():
+        for name, record in manifest["baseline_kmd"].items():
             checked_copy(args.kmd / name, args.out / "baseline-kmd" / name, record)
     if args.native_boot:
-        if manifest.get("kmd_variant") != "shader-output-bit14-native-boot":
+        if manifest.get("kmd_variant") not in ("shader-output-bit14-native-boot", "shader-output-bit14-gpu460"):
             raise ValueError("Direct boot requires persistent native-start kernel support")
         manifest["startup_mode"] = "native-boot"
         manifest["scope"] = ".158 direct native startup before logon; owner-operated restart and application tests"

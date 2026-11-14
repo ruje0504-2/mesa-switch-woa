@@ -134,8 +134,8 @@ enum tg_gpu_frontend_result tg_gpu_frontend_start(const struct tg_gpu_power_io *
 enum tg_gpu_clock_result tg_gpu_clock_start(const struct tg_gpu_power_io *i,
     const struct tg_gpu_power *p,uint32_t khz,struct tg_gpu_clock *c)
 {
-    CHECK(i->context==&model && p->ready && khz==729600 && level==PASSIVE_LEVEL);
-    c->owned=true;c->running=model.fail_stage!=FailClock;c->measured_khz=729600;c->rail_uv=800000;
+    CHECK(i->context==&model && p->ready && khz==TG_GPU_RENDER_KHZ && level==PASSIVE_LEVEL);
+    c->owned=true;c->running=model.fail_stage!=FailClock;c->measured_khz=khz;c->rail_uv=800000;
     model.clock_started=TRUE;return c->running?TG_GPU_CLOCK_OK:TG_GPU_CLOCK_COUNTER_ERROR;
 }
 enum tg_gpu_clock_result tg_gpu_clock_stop(const struct tg_gpu_power_io *i,struct tg_gpu_clock *c)

@@ -35,11 +35,15 @@ parser.add_argument("--keep-fan", action="store_true", help="with --probe, prese
 parser.add_argument("--windows-tests", action="store_true", help="build the real-WDK paging test executable for ARM64 Windows")
 parser.add_argument("--native-test-version", type=int, metavar="N",
                     help="with --display, build gated native submission as package 0.1.0.N")
+parser.add_argument("--render-gpu-khz", type=int, choices=(460800, 729600), default=729600,
+                    help="fixed GPU clock; 460800 is an opt-in display power control")
 args = parser.parse_args()
 if args.native_test_version is not None and (not args.display or not 1 <= args.native_test_version <= 65535):
     parser.error("--native-test-version requires --display and a version from 1 to 65535")
 if args.keep_fan and not args.probe:
     parser.error("--keep-fan requires --probe")
+if args.render_gpu_khz != 729600 and not args.display:
+    parser.error("the low-power render clock requires --display")
 build_miniport = args.render or args.display
 gr_names=("NETB_img.bin", "fecs.bin", "gpccs.bin")
 if (args.probe or build_miniport) and (not args.gr_firmware or
@@ -179,6 +183,7 @@ flags = ["--target=aarch64-pc-windows-msvc", "/nologo", "/c", "/kernel",
          "-Wno-ignored-pragma-intrinsic", "-Wno-nonportable-include-path",
          "/D_ARM64_", "/DARM64", "/D_WIN64", "/D_WIN32_WINNT=0x0A00",
          "/DNTDDI_VERSION=0x0A00000C", "/DNDEBUG",
+         f"/DTG_GPU_RENDER_KHZ={args.render_gpu_khz}",
          "/DDXGKDDI_INTERFACE_VERSION=DXGKDDI_INTERFACE_VERSION_WDDM2_6",
          f"/I{windows_abi}", *[f"/I{p}" for p in mesa_includes],
          *[f"/imsvc{p}" for p in includes]]

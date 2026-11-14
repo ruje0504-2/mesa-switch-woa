@@ -30,13 +30,18 @@ static void write_reg(void *ctx, uint32_t address, uint32_t value)
         registers[0x137018 / 4] |= 20u << 24;
     }
     if (address == 0x57134124 && value == 0x00110320) {
+        uint32_t coeff = registers[0x137004 / 4];
+        uint32_t m = coeff & 0xff, n = (coeff >> 8) & 0xff, p = (coeff >> 16) & 0x3f;
+        assert(m == 1 && p);
+        uint32_t vco = 38400u * n / m;
         /* Counter observes GPCCLK (half the PLL), not GPC2CLK. */
         assert(!(registers[0x20160 / 4] & 0x003f0000));
-        assert((registers[0x137004 / 4] & 0x3fffff) == (0x10001u | ((target_khz / 19200u) << 8)));
+        assert(vco >= 1300000 && vco <= 2600000);
+        assert(vco / p / 2 == target_khz);
         assert((registers[0x13700c / 4] & 0xff) == 0xf0);
         assert((registers[0x137014 / 4] & 0x2fff0000) == 0x2e010000);
         assert((registers[0x132820 / 4] & 0x7f) == 20);
-        registers[0x134128 / 4] = counter_bad ? 3200 : target_khz / 48;
+        registers[0x134128 / 4] = counter_bad ? 3200 : vco / p / 2 / 48;
     }
 }
 static bool read_pmic(void *ctx, uint8_t address, uint8_t reg, uint8_t *value)
@@ -71,6 +76,9 @@ int main(void)
     assert(tg_gpu_clock_required_uv(5001, TG_GPU_FIXED_KHZ) == UINT32_MAX);
     assert(tg_gpu_clock_required_uv(1400, TG_GPU_FIXED_KHZ) == 800000);
     assert(tg_gpu_clock_required_uv(100, TG_GPU_FIXED_KHZ) > 800000);
+    assert(tg_gpu_clock_required_uv(1659, TG_GPU_FIXED_KHZ) == 800000);
+    assert(tg_gpu_clock_required_uv(1659, TG_GPU_LOW_POWER_KHZ) == 800000);
+    assert(tg_gpu_clock_required_uv(0, TG_GPU_LOW_POWER_KHZ) == UINT32_MAX);
     reset();
     assert(tg_gpu_clock_start(&io, &p, target_khz, &c) == TG_GPU_CLOCK_OK);
     assert(c.measured_khz == TG_GPU_FIXED_KHZ && c.counter == 15200);
@@ -109,6 +117,17 @@ int main(void)
     assert(rail == (c.rail_uv - 250000) / 5000);
     assert(tg_gpu_clock_stop(&io, &c) == TG_GPU_CLOCK_OK);
     assert(tg_gpu_clock_start(&io, &p, 1234567, &c) == TG_GPU_CLOCK_BAD_STATE);
+    reset(); memset(&c, 0, sizeof(c)); target_khz = TG_GPU_LOW_POWER_KHZ;
+    assert(tg_gpu_clock_start(&io, &p, target_khz, &c) == TG_GPU_CLOCK_OK);
+    assert((registers[0x137004 / 4] & 0x3fffff) == 0x23001u);
+    assert(c.target_khz == 460800 && c.measured_khz == 460800 && c.counter == 9600);
+    assert(c.rail_uv == 800000 && rail == 110);
+    assert(tg_gpu_clock_stop(&io, &c) == TG_GPU_CLOCK_OK);
+    assert((registers[0x137004 / 4] & 0x3fffff) == 0);
+    reset(); memset(&c, 0, sizeof(c)); target_khz = TG_GPU_LOW_POWER_KHZ; counter_bad = true;
+    assert(tg_gpu_clock_start(&io, &p, target_khz, &c) == TG_GPU_CLOCK_COUNTER_ERROR);
+    assert(c.measured_khz != c.target_khz && c.owned);
+    assert(tg_gpu_clock_stop(&io, &c) == TG_GPU_CLOCK_OK);
     puts("T214 C1 NA clock ordering, counter and unwind tests passed (host model).");
     return 0;
 }
