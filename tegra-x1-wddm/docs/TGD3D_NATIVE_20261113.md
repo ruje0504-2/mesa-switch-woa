@@ -1256,3 +1256,11 @@ Windows启动前的旧扇区快照。实卡完成状态以新的还原回执为�
 一次性登录引导，在当前已确认 EnableLUA=0 的配置下注册标准计划任务；不修改
 UAC，也不构造私有 TaskCache。首次登录执行引导，后续登录使用持久任务。
 是否成功触发、Code0和DWM加载仍需恢复后的真实Windows检查。
+
+登录后启用恢复包已写实卡并核对（UTC 2026-11-14T01:58:52.486404+00:00）。UMD还原ad5e3309…；
+SYSTEM仅删除AllowNativeBoot，SOFTWARE仅删除Deferred Init Run值并增加一次性
+LogonSetup RunOnce。401段45088768字节读回一致；备份SHA256
+`ded9e5a1c2d7b1cf2c6965d609d93f118b93e1d9062f20b93755cf9f14e217c8`。
+SD安全弹出后，用户确认能进入桌面并持续操作约30秒；SSH尚未恢复，计划任务
+实际注册/执行、Code0和DWM加载仍待核对。详见新交接报告
+[TGD3D_COLD_BOOT_HANDOFF_20261113.md](TGD3D_COLD_BOOT_HANDOFF_20261113.md)。
