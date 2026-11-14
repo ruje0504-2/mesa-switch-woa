@@ -1,9 +1,75 @@
 # tgd3d 电源、Speedo 与候选频率
 
-更新：2026-11-13（本机时区；SSH采样为2026-11-14 UTC）。最初审查仅读取、计算和提出
+更新：2026-11-14（本机时区；SSH采样为2026-11-14 UTC）。最初审查仅读取、计算和提出
 方案；随后用户指定GPU460.8MHz、内存1600MHz、CPU不变，安装状态见文末。
 当前组件与登录后启用流程
 见 [冷启动交接](TGD3D_COLD_BOOT_HANDOFF_20261113.md)。
+
+最新：已从用户这台Noble只读取回实际DVFS表、DFLL、SoC、regulator、电池和充电数据，
+冻结包为OUT的`noble-dvfs-reference-20261114.zip`，清单见同名目录`DATA_READY.json`。
+用户明确选择移植**AggressiveSLT／HighOPT**，由Antigravity CLI Gemini4 Carbon High
+在独立mesa和WindowsDrivers工作树开发；并未因此在实机应用新的Windows频率或电压。
+Windows显示旋转工作由父任务单独负责，与DVFS不混在同轮组件试验中。
+
+## Noble实读DVFS参考（2026-11-14）
+
+运行Ubuntu24.04.3、4.9.140-l4t，内核构建2024-09-26 #5、BSP R32.3.1，源码准确提交
+尚未认证。内核当前启动输出直接确认CPU/GPU/SoC Speedo为1630/1659/1675，IDDQ为
+360/545/332，与Hekate照片相符；Process ID0/1/1。启动覆盖CPU/GPU/SoC Speedo ID
+从0/1/0改为2/3/2，不得把覆盖后的分档ID误当物理熔丝值。
+
+实读表族：CPU `FCPU Table - p4v3-AggressiveSLT`；SoC p4v3-AggressiveSLT，
+SOC_IO及SOC_EMC p4v2-AggressiveSLT；GPU `NAPLL En - p4v2-AggressiveHighOPT`。
+CPU有23个OPP（204–2397MHz），GPU导出11档（76.8–844.8MHz）及6个温度区间；
+完整表和热上限/下限保存在数据包。当前Console策略CPU上限1963.5MHz、GPU844.8MHz。
+GPU的低温..20°C行800mV，其他区间和EMC电压依赖不能丢弃。CPU DFLL目标不是PLLX
+可直接使用的电压，debug表非DFLL行1460/1610mV也不是授权写入的工作电压。
+
+| 项目 | 实读值／配置 | 含义 |
+|---|---|---|
+| EMC | 2500MHz | 当前Linux频率；Windows仍1600MHz |
+| vdd-core | 775mV | regulator报告的设定回读 |
+| vdd-ddr / vddio-ddr | 1175 / 640mV | 当前Linux内存电压轨设定 |
+| GPU | 快照76.8MHz，电压请求630mV时rail可为OFF | 不能当作该电压下GPU负载稳定证据 |
+| USB PD | 日志12V/1670mA，operating1200mA | 协商能力/请求，不是实测电流 |
+| 充电输入限制 | 1200mA | BQ2419x sysfs配置 |
+| 充电输出配置 | 1664mA | BQ2419x sysfs配置；支持表512–4544mA、步进64mA |
+| MAX77812峰值限制属性 | 各m1/m2/m3/m4节点7200000µA | DT属性；不是每轨负载电流测量 |
+| 电池快照 | 4.18125V，current_now +525876µA、power_now2198819µW | 电池计量API；不能替代GPU电流或USB输入功率 |
+
+电池和频率另保留5次顺序采样，采样期间是桌面及APT维护负载，没有跑压力或逐档扫描。
+CPU读数会随DVFS变化，不把顺序读取的频率、电压强行配成同一瞬时工作点。
+未暴露独立CPU/GPU rail电流计；OPP `u_amp=0`代表未提供，不能解释为0A。
+当前启动日志保留34秒时的充电Input Fault/断开及498秒重连，原因未确定，不据此判定
+Windows重启根因。未改频率、电压、面板、风扇或电源模式，也未读取熔丝密钥。
+
+同轮按用户要求修复APT：IPv6访问L4T源TLS失败，IPv4对照成功，因此只让APT使用IPv4；
+devkitPro源IPv4/IPv6均403，备份后注释该条目，原有安装包保留。Ubuntu、Box64与L4T
+源均保留，Switchroot图形驱动版本限制未改。`apt-get update`、`apt-get check`、
+`dpkg --audit`均退出0；升级模拟退出0，538可升级、0新安装、0删除、4保留。
+没有执行这538个包的实际升级。恢复脚本在Ubuntu
+`/var/backups/switchwoa/apt-20261114T095808Z/restore.sh`，原配置和结果已留档。
+
+## Noble睡眠配置与Windows托盘委派
+
+只读结果：`/sys/power/state`为`freeze mem`，systemd的`nv-sleep.conf`选择
+`SuspendState=mem`，设备树`nvidia,suspend-mode=0`。固定参考内核
+`CTCaer/switch-l4t-kernel-4.9@2d0059fd3167a8df756de2aa0489d4aa70a9fc15`
+在Tegra210将0映射至SC7（LP0类）；当前启动suspend success/fail均为0。
+结论是配置使用SC7，未执行睡眠/唤醒验收，不宣称磁盘休眠或Windows已具备SC7。
+独立补充清单为`SUSPEND_ADDENDUM.json`，未改写冻结DVFS包。
+
+用户追加委派Power Mode、Charging Limit两个Windows托盘菜单、登录自启动及静止5秒
+隐藏鼠标。Antigravity CLI Gemini4 Carbon High沿原DVFS会话继续，源码在其独立
+WindowsDrivers/Mesa工作树；父任务负责审查、整合、设备安装。Ubuntu实际安装的
+`nvpmodel_indicator.py`、`nvpmodel.py`、helper、自启动文件和配置已取回并交付参考，
+另给出固定版本BQ2419x、charger-gauge内核源码及已有DVFS/DFLL/NAPLL参考。
+脚本原版权保留在OUT私有参考目录，不将受限NVIDIA Python原文重新授权发布。
+
+Charging Limit不是输入电流；该参考内核以配置值±5作为电量调节区间，所以55对应
+50–60%、85对应80–90%。其中超上界的HIZ主动放电行为不作为Windows默认移植项；
+优先实现充电停止/恢复并保留外接供电，UI需如实显示行为差异。现有设备频率、电压、
+风扇、Windows登录后启用方式未因此改变；工具/驱动尚未完成Windows实机验收。
 
 ## 实际芯片校准值
 
