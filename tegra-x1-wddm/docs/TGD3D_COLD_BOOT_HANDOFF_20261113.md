@@ -5,18 +5,23 @@
 
 ## 当前设备授权（2026-11-14 UTC）
 
-**最新状态：用户已自行切回Windows，并要求先接入着色器缓存。缓存专用UMD已安装，
-11:11:32 UTC读回`.158 / Code0`，DWM实际加载新UMD，磁盘已有真实桌面shader binary。
-登录后5秒触发启用、双向GPU Fence及频率设置保持；未安装J轮GPU预旋转候选。**
-当前SSH为`ruje@192.168.124.5`，不是Ubuntu用户。I轮54dc5597横屏物理黑屏后已恢复
-竖屏；本次只更新其UMD缓存，KMD/ICD不变。完整哈希、验证范围及本轮恢复入口见
-文末“缓存接入与Windows安装”。当前运行组合不能再写成“未含shader cache”。
+**最新状态：J轮缓存＋GPU预旋转候选已经安装并测试，横屏期间自动重启，记为失败。
+12:02:50 UTC已恢复本轮更新前的缓存组合：KMD 1a86a02b…、UMD 0cd34833…、ICD
+dee3d580…，读回`.158 / Code0`，DWM820实际加载恢复后的UMD。12:11:30确认当前及
+保存方向均为720×1280竖屏。恢复过程没有追加系统重启，不回退`.59`。**
+登录后5秒启用、双向GPU Fence、CPU1497600/GPU460800/RAM1600000kHz、风扇13及
+512MiB GPU预算保持。完整哈希、失败范围和恢复记录见文末“J轮实机失败与恢复”。
+当前SSH为`ruje@192.168.124.5`，不是Ubuntu用户；后续两次握手被远端关闭，未据此
+重新启用、安装或重启。当前物理稳定性不能由恢复回执替代。
 
 用户此前要求保持Ubuntu期间，没有自行切回Windows。Noble显示、DVFS、充电和SC7
-配置已取回，APT源修复完成。Antigravity CLI Gemini4 Carbon High仍在独立工作树
-处理DVFS、Windows电源/充电托盘和5秒鼠标隐藏工具，禁止操作实机。组合B保留为
-此前选定的KMD恢复/开发基线；本轮缓存恢复仅回到更新前的I轮UMD，不更换KMD。
-GPU预旋转实现与构建状态见文末，仍未完成物理横屏验收。
+配置已取回，APT源修复完成。Antigravity CLI Gemini4 Carbon High的独立任务已于
+12:09:03 UTC退出0，交付DVFS、Windows电源/充电托盘和5秒鼠标隐藏的报告及diff；
+尚未由本窗口验收、合入或部署，不能把代理报告中的测试声明当作实机通过。
+用户澄清“Zink都不可用”指此前的硬件旋转架构，不能扩大为Zink整个渲染路径不可用。
+旧架构没有横屏成功证据，不能作为本轮成功对照；源码差异只作线索，不能据此判定
+tgd3d错误或照搬实现。当前优先审查屏障、Present完成及统一内存地址链，
+红色主表面对照尚未实施；不重复安装未修改的J失败候选。
 
 **选定基线：用户在组合B测试后明确要求“现在这个驱动直接作为基线”，后续在此基础上
 修横屏上屏。** 组合为`.158 / Code0`，SYS
@@ -1182,3 +1187,79 @@ SignTool验证全部13个包成员通过。源码、构建和签名回执分别�
 KMD，不再默认退回较早69aa…组合。打包清单同时保留UMD缓存配置及冻结提交链。
 现有Switch缓存包及其旧UMD备份继续保留，下一步按当前组合准备安装与恢复流程。
 截至本节，未安装旋转KMD/UMD、未改变方向或追加重启；物理横屏和GPU已知像素仍未验收。
+
+## J轮实机失败与恢复（2026-11-14 11:40–12:14 UTC）
+
+本节取代上一节“未安装”的历史状态。实际安装组合为上述J轮SYS `346528ee…`、
+缓存UMD `cef5daa8…`、原ICD `dee3d580…`；未包含Query提交b6b17521或DVFS改动。
+完整包`tgd3d-gpu-prerotation-cache-logon.zip`为7302391字节、69个文件，SHA256
+`8937bedd218d1e8d5c755df861d9dd81ba949c305f3977b3f4d3dd73e2507159`。
+11:36:31的目录校验和ARM64 context控制通过，但该控制使用替身，不执行GPU。
+
+- 11:43:03发出安装所需的一次门控重启，启动时间11:43:25.970；确认Code43后安装。
+  首次SSH安装请求握手失败，检查任务和安装记录均不存在后才提交实际安装任务。
+  11:50:38读回Code0，DWM840加载cef5daa8…，测试LUID `00000000000e9ae9`。
+- 11:52:38启动直接横屏测试；约11:52:52切至DEVMODE 1280×720/orientation1。
+  CCD source与物理target均为720×1280，path rotation2。严格SDC验证1610，工具使用
+  SDC_ALLOW_CHANGES完成切换；这只证明系统接受调整后的配置，不能证明原请求完全匹配。
+- 11:52:49切换前：source_visible1、target_active1、DC options `0x40000000`，
+  address/displayed_address `0xfbf09000`，displayed_present79，pending0。
+  11:52:58、11:52:59、11:53:01三个切换后快照均为source_visible0、target_active1、
+  options0；地址仍是`0xfbf09000`，displayed_present80，pending0。
+  pitch2880、720×1280、offset0及四个旧桌面像素均未变。不能把这些旧像素当作新
+  旋转帧，也不能宣称GPU已经完成旋转、仅漏发一次Flip完成通知。
+- 用户报告自动重启，新启动时间11:53:35.7470770。彩色工具虽保存ready/geometry，
+  没有完整截图或物理上屏确认；本轮记为横屏失败，停止扩大测试，没有重试同一候选。
+- 12:02:50恢复缓存接入节中的原组合：SYS `1a86a02b…`、UMD `0cd34833…`、ICD
+  `dee3d580…`，Code0，DWM820实际加载恢复UMD。恢复没有请求系统重启。
+  12:11:30核对当前及保存方向均为720×1280/orientation0；工具changed=false，
+  没有再切一次显示模式。默认登录任务和原频率设置恢复，未使用`.59`。
+
+记录位于OUT `gpu-prerotation-cache/`的安装、失败、恢复回执及`evidence/`。
+已取回3346行UMD实时trace及3145728字节ETL；可解析窗口约11:52:51–11:53:04，
+最后的TraceState报告丢失计数0，但硬重启前尾段缺失，没有TraceEnd，不是完整故障轨迹。
+窗口内77次DWM SetDisplayMode返回S_OK，Blt返回事件0；Blt事件位于函数返回处，
+内部旋转shader也没有ShaderPhase事件，因此“没有返回事件”不能证明未进入旋转或
+shader编译。早期Fence完成值有推进，同样不能证明最后一笔工作已完成。
+文件传输成功；此前文件长度快照中一个pattern.log为0，取回时已写成112字节。
+后续远端SHA256复核两次SSH握手被关闭，全部文件的远端哈希复核仍待完成，未将其
+写成已校验。已结束的安装/恢复临时任务最后为Ready/0，删除确认同样待连接恢复。
+
+## 屏障、完成通知与UMA地址审查（2026-11-14，源码审查）
+
+按用户“先查屏障与Present后的Fence”执行，没有安装新候选或实施红色主表面对照。
+逐文件比对确认：本节所查runtime/resource、KMD allocation/paging/scanout/缓存代码
+与J轮冻结输入相同；NVK内存、屏障代码与实际ICD来源d3423d26相同。提交worker采用
+冻结KMD版本审查，未把HEAD后来增加的诊断字段误作实机已有行为。
+
+| 环节 | 实际实现与结论 |
+|---|---|
+| CPU、GPU及DC地址 | `tgd3d_runtime.cpp::owner_map_gpu`用runtime allocation handle及4KiB页偏移映射GPU VA，核对范围并等待paging fence。`runtime_bind_image`绑定同一owner；没有把CPU指针或用户态句柄直接传给DC。KMD扫描主表面来自16MiB物理连续扫描段，限制在4GiB以下；`TgGpuResolveScanoutAddress`检查地址及帧长度落在段内。PTE解析另按SegmentId和页偏移取得backing，不能混用两种接口的地址单位。 |
+| 图像布局 | runtime图像使用LINEAR，明确给ICD row pitch，随后核对GetImageSubresourceLayout的pitch和offset0；扫描面固定720×1280/pitch2880/identity。拒绝的描述符不能伪装成创建成功。 |
+| 缓存属性 | 私有扫描段/页表通过NON_CACHED分配；GPU页表使用VOL/uncached，未宣称CacheCoherent；普通共享CPU可见section使用SEC_WRITECOMBINE。Windows NVK不暴露HOST_CACHED内存类型。这些是源码策略，不能代替对故障时实际PTE及CPU映射属性的核实。 |
+| 旋转屏障 | 90/180/270度由采样源图＋颜色附件绘制完成，不是vkCmdBlitImage。cmd_begin已有ALL_COMMANDS全局读写屏障，首次image_use作PREINITIALIZED/UNDEFINED→GENERAL转换。GENERAL布局允许这条绘制路径；不能机械改为只适用于传输的TRANSFER布局。 |
+| 写回与提交完成 | flush末尾有GPU写→HOST_READ依赖。冻结KMD在观察实际GPU完成标记后执行FB/L2 dirty writeback及clean invalidate，再quiesce并核对CPU可见完成字，满足条件才通知DMA_COMPLETED。不存在“CPU看到提交成功就直接报GPU完成”的正常路径。仍不能凭函数存在保证失败那一笔已执行到这里。 |
+| 显示完成 | `panel_scanout.c`在真实VBlank读取实际锁存地址，更新Displayed；按启用类型发送经典CRTC_VSYNC地址或MPO2 PresentId，并QueueDpc。渲染Fence和扫描锁存是两条完成链，已有通知实现不能证明某帧确实进入、锁存并通知。 |
+
+审查结论：目前没有定位到“完全没有缓存处理”“直接把GPU VA当物理扫描地址”或
+“根本没实现Flip通知”。统一DRAM不保证跨CPU/GPU/DC的自动一致性，仍需匹配布局、
+地址、可见性和执行顺序。现有失败快照首先指向显示源关闭及主表面交接没有继续，
+不是已证明的缓存一致性根因；后续应核对该交接处的callback输入、实际backing和
+锁存，避免盲加屏障、强制开启SourceVisible或伪造完成。
+
+另有源码差异：d3d10umd的SetDisplayMode调用RuntimeResourceFinish；tgd3d调用
+flush(true)，后者只保证提交/队列门控/有限回压，不是最后一笔的完整CPU等待。
+这是待核实的模式切换同步差异，尚无契约或实机证据证明必须照搬前者。用户明确旧
+硬件旋转架构也不可用，因此不得把该旧路径当作已通过的横屏对照。
+
+本次实际参考：Microsoft [GPU虚拟内存](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/gpu-virtual-memory-in-wddm-2-0)、
+[GPU segments](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/gpu-segments)、
+[allocation usage/Lock2](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/allocation-usage-tracking)，适用于本分支GpuMmu路径，不采用IoMmu的CPU/GPU同指针假设；
+[SetVidPnSourceAddress](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_setvidpnsourceaddress)
+（2022-11-04）、[primary描述](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/dxgiddi/ns-dxgiddi-dxgi_ddi_primary_desc)
+（2024-02-22）、[旋转契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/supporting-rotation-in-a-display-miniport-driver)；
+Khronos [同步规范](https://docs.vulkan.org/spec/latest/chapters/synchronization.html)及
+[Synchronization2示例](https://docs.vulkan.org/guide/latest/synchronization_examples.html)
+（2026-11-14访问的latest页面）。同布局全局memory barrier可以覆盖图像；布局改变或
+ownership transfer另有要求。微软display-only样例不能直接替代本分支完整GPU驱动的
+资源驻留、调度和呈现实现。
