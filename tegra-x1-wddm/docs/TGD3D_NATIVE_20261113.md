@@ -1249,3 +1249,10 @@ a7a60d29引入的改动，保留此前修复及本轮记录。实卡还原目标
 及旧清单，删除本轮桌面就绪程序和其专用Run值；KMD/bit14/ICD、原生启动和
 既有ETW/WER不变。还原使用当前SD的新COW预演和文件/注册表操作，不回写
 Windows启动前的旧扇区快照。实卡完成状态以新的还原回执为准。
+
+用户随后将恢复目标改为“进入系统后5秒启用tgd3d”，因此覆盖上一条保留直接
+原生启动的安排：撤销 AllowNativeBoot，保留相同 .158/bit14 SYS、ICD 和旧UMD，
+复用 Default-Start.ps1 与 Tgd3dDefaultEnable 的 AtLogOn/PT5S 任务。离线仅放置
+一次性登录引导，在当前已确认 EnableLUA=0 的配置下注册标准计划任务；不修改
+UAC，也不构造私有 TaskCache。首次登录执行引导，后续登录使用持久任务。
+是否成功触发、Code0和DWM加载仍需恢复后的真实Windows检查。
