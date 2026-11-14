@@ -50,7 +50,12 @@ function Kernel-BaselineHash($Manifest) {
         'shader-output-bit14' {'46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088';return}
         'shader-output-bit14-native-boot' {'46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088';return}
         'shader-output-bit14-gpu460' {'c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53';return}
-        'shader-output-bit14-gpu460-vidpn' {'59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81';return}
+        'shader-output-bit14-gpu460-vidpn' {
+            $hash=[string]$Manifest.baseline_kmd.'tegragpurender.sys'.Sha256
+            if($hash -in @('59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81',
+                          '69aa6036da81870efb439e8e09530ae662e810dccf887b603bdfeb6ba8a4a11a')){$hash;return}
+            throw 'Unexpected reviewed .158 display baseline'
+        }
         default {throw 'Unexpected kernel variant'}
     }
 }

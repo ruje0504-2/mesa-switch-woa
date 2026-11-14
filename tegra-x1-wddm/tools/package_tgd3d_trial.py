@@ -80,11 +80,15 @@ def main():
                     if candidate.get("source_visibility_patch_commit"):
                         changed |= {"tegra-x1-wddm/windows/panel.c",
                                     "tegra-x1-wddm/windows/panel.h"}
-            baseline_hash = ("59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81" if vidpn_fix else
-                             "c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53")
+            baseline_hashes = ({
+                "59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81",
+                "69aa6036da81870efb439e8e09530ae662e810dccf887b603bdfeb6ba8a4a11a",
+            } if vidpn_fix else {
+                "c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53",
+            })
             if (candidate.get("target_khz") != 460800 or
-                candidate["baseline_signed_files"]["tegragpurender.sys"]["Sha256"] !=
-                    baseline_hash):
+                candidate["baseline_signed_files"]["tegragpurender.sys"]["Sha256"] not in
+                    baseline_hashes):
                 raise ValueError("Candidate must restore its reviewed .158 clock baseline")
         if (candidate["base"] != frozen["kmd_source"] or
             candidate["variant"] not in ("shader-output-bit14", "shader-output-bit14-native-boot", "shader-output-bit14-gpu460", "shader-output-bit14-gpu460-vidpn") or
