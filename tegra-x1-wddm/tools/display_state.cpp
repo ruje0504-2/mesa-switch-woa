@@ -191,7 +191,8 @@ static LONG wake_screensaver(const snapshot &state)
    return ERROR_TIMEOUT;
 }
 
-static void print_state(const snapshot &s, const WCHAR *operation, bool changed, LONG status)
+static void print_state(const snapshot &s, const WCHAR *operation, bool changed, LONG status,
+                        UINT32 adjustment = 0, LONG strict_status = ERROR_SUCCESS)
 {
    const auto context = read_desktop();
    std::printf("{\"operation\":"); json_string(operation);
@@ -200,7 +201,9 @@ static void print_state(const snapshot &s, const WCHAR *operation, bool changed,
    json_string(context.desktop);
    std::printf(",\"input_desktop\":"); json_string(context.input);
    std::printf(",\"input_desktop_error\":%lu", context.input_error);
-   std::printf(",\"changed\":%s,\"status\":%ld,\"source_name\":", changed ? "true" : "false", status);
+   std::printf(",\"changed\":%s,\"status\":%ld,\"sdc_adjustment\":%u,"
+               "\"strict_validation_status\":%ld,\"source_name\":",
+               changed ? "true" : "false", status, adjustment, strict_status);
    json_string(s.source_name);
    std::printf(",\"monitor_path\":"); json_string(s.monitor_path);
    std::printf(",\"adapter_device_id\":"); json_string(s.adapter_device_id);
@@ -246,6 +249,35 @@ static LONG configure(const snapshot &current, const snapshot &saved, UINT32 fla
    return SetDisplayConfig(1, &path, 2, modes, flags | SDC_USE_SUPPLIED_DISPLAY_CONFIG);
 }
 
+static LONG validate_configuration(const snapshot &current, const snapshot &desired,
+                                   UINT32 &adjustment, LONG &strict_status)
+{
+   adjustment = 0;
+   strict_status = configure(current, desired, SDC_VALIDATE);
+   if (strict_status != ERROR_BAD_CONFIGURATION)
+      return strict_status;
+   /* CCD can reject even its current source/target pair when best-mode
+    * selection needs to reconcile details not represented by CCD. The API
+    * documents ALLOW_CHANGES for this case. Applying still requires exact
+    * geometry, orientation and panel timing checks below. */
+   adjustment = SDC_ALLOW_CHANGES;
+   return configure(current, desired, SDC_VALIDATE | adjustment);
+}
+
+static bool same_signal(const DISPLAYCONFIG_VIDEO_SIGNAL_INFO &a,
+                        const DISPLAYCONFIG_VIDEO_SIGNAL_INFO &b)
+{
+   return a.pixelRate == b.pixelRate && a.activeSize.cx == b.activeSize.cx &&
+      a.activeSize.cy == b.activeSize.cy && a.totalSize.cx == b.totalSize.cx &&
+      a.totalSize.cy == b.totalSize.cy && a.scanLineOrdering == b.scanLineOrdering &&
+      a.hSyncFreq.Denominator && b.hSyncFreq.Denominator &&
+      a.vSyncFreq.Denominator && b.vSyncFreq.Denominator &&
+      (UINT64)a.hSyncFreq.Numerator * b.hSyncFreq.Denominator ==
+         (UINT64)b.hSyncFreq.Numerator * a.hSyncFreq.Denominator &&
+      (UINT64)a.vSyncFreq.Numerator * b.vSyncFreq.Denominator ==
+         (UINT64)b.vSyncFreq.Numerator * a.vSyncFreq.Denominator;
+}
+
 static int orient(const snapshot &current, const WCHAR *operation, const WCHAR *angle)
 {
    unsigned quarter;
@@ -260,18 +292,25 @@ static int orient(const snapshot &current, const WCHAR *operation, const WCHAR *
    }
    snapshot desired = current;
    const auto &native = current.target.targetVideoSignalInfo.activeSize;
-   desired.source.width = quarter & 1 ? native.cy : native.cx;
-   desired.source.height = quarter & 1 ? native.cx : native.cy;
+   /* This fixed-panel KMD enumerates the unrotated source. Windows exposes
+    * the oriented desktop through DEVMODE, while CCD keeps that source's
+    * native extent. Check those two coordinate spaces independently. */
+   desired.source.width = native.cx;
+   desired.source.height = native.cy;
+   const DWORD desktop_width = quarter & 1 ? native.cy : native.cx;
+   const DWORD desktop_height = quarter & 1 ? native.cx : native.cy;
    desired.path.targetInfo.rotation = static_cast<DISPLAYCONFIG_ROTATION>(quarter + 1);
    desired.path.targetInfo.scaling = DISPLAYCONFIG_SCALING_IDENTITY;
    const bool test = !std::wcscmp(operation, L"rotation-test");
    const bool save = !std::wcscmp(operation, L"rotation-save");
    /* CCD rotation is clockwise. Keep the physical target timing and adapter
-    * identity; validation must not silently substitute a different mode. */
-   LONG result = configure(current, desired, SDC_VALIDATE);
+    * identity, and verify the selected geometry after any mode adjustment. */
+   UINT32 adjustment;
+   LONG strict_status;
+   LONG result = validate_configuration(current, desired, adjustment, strict_status);
    bool changed = false;
    if (!result && !test) {
-      result = configure(current, desired, SDC_APPLY | (save ? SDC_SAVE_TO_DATABASE : 0));
+      result = configure(current, desired, SDC_APPLY | adjustment | (save ? SDC_SAVE_TO_DATABASE : 0));
       changed = !result && (current.source.width != desired.source.width ||
          current.source.height != desired.source.height ||
          current.path.targetInfo.rotation != desired.path.targetInfo.rotation);
@@ -282,11 +321,17 @@ static int orient(const snapshot &current, const WCHAR *operation, const WCHAR *
    const snapshot &expected = test ? current : desired;
    if (!result && (after.source.width != expected.source.width ||
        after.source.height != expected.source.height ||
+       after.current.dmPelsWidth != (test ? current.current.dmPelsWidth : desktop_width) ||
+       after.current.dmPelsHeight != (test ? current.current.dmPelsHeight : desktop_height) ||
+       after.current.dmBitsPerPel != current.current.dmBitsPerPel ||
+       after.current.dmDisplayFrequency != current.current.dmDisplayFrequency ||
+       after.source.pixelFormat != expected.source.pixelFormat ||
+       after.source.position.x != expected.source.position.x ||
+       after.source.position.y != expected.source.position.y ||
        after.path.targetInfo.rotation != expected.path.targetInfo.rotation ||
-       after.target.targetVideoSignalInfo.activeSize.cx != native.cx ||
-       after.target.targetVideoSignalInfo.activeSize.cy != native.cy))
+       !same_signal(after.target.targetVideoSignalInfo, current.target.targetVideoSignalInfo)))
       result = ERROR_INVALID_DATA;
-   print_state(read_result ? current : after, operation, changed, result);
+   print_state(read_result ? current : after, operation, changed, result, adjustment, strict_status);
    return result ? 1 : 0;
 }
 
@@ -365,15 +410,20 @@ int wmain(int argc, WCHAR **argv)
       print_state(current, argv[1], false, ERROR_ACCESS_DENIED);
       return 1;
    }
-   result = configure(current, saved, SDC_VALIDATE);
+   UINT32 adjustment;
+   LONG strict_status;
+   result = validate_configuration(current, saved, adjustment, strict_status);
    if (result != ERROR_SUCCESS) {
-      print_state(current, argv[1], false, result);
+      print_state(current, argv[1], false, result, adjustment, strict_status);
       return 1;
    }
    bool changed = false;
    if (!std::wcscmp(argv[1], L"restore") && !matches) {
-      result = configure(current, saved, SDC_APPLY | SDC_SAVE_TO_DATABASE);
-      if (result != ERROR_SUCCESS) { print_state(current, argv[1], false, result); return 1; }
+      result = configure(current, saved, SDC_APPLY | SDC_SAVE_TO_DATABASE | adjustment);
+      if (result != ERROR_SUCCESS) {
+         print_state(current, argv[1], false, result, adjustment, strict_status);
+         return 1;
+      }
       changed = true;
    }
    const snapshot &expected = !std::wcscmp(argv[1], L"test") ? current : saved;
@@ -382,6 +432,6 @@ int wmain(int argc, WCHAR **argv)
    if (!result && (!same_mode(expected.current, after.current) ||
        expected.path.targetInfo.rotation != after.path.targetInfo.rotation))
       result = ERROR_INVALID_DATA;
-   print_state(after, argv[1], changed, result);
+   print_state(after, argv[1], changed, result, adjustment, strict_status);
    return result ? 1 : 0;
 }

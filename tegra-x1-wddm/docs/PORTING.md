@@ -219,10 +219,13 @@ For a rotation trial, `rotation-test <degrees>` validates the requested mode
 without applying it. `rotation <degrees>` applies it temporarily; only
 `rotation-save <degrees>` persists it. Accepted angles are 0/90/180/270 in
 the [CCD clockwise convention](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ne-wingdi-displayconfig_rotation).
-The helper keeps the current target timing/identity, derives source dimensions
-from the native signal, validates the complete configuration, then checks the
-returned source size, target size and rotation. It does not allow Windows to
-silently choose another mode. These commands require an active input desktop.
+For this fixed-panel KMD, the helper keeps the native CCD source extent and
+checks the separately oriented DEVMODE desktop extent. It first validates
+strictly; error 1610 permits a second validation with `SDC_ALLOW_CHANGES`.
+The same flags are used for apply, followed by checks of source size, position,
+format, desktop size, rotation and the complete target timing. JSON records
+both the strict result and the adjustment flags. These commands require an
+active input desktop. API acceptance does not verify the physical scanout.
 [Validation, temporary apply and persistence flags](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setdisplayconfig)
 
 The added rotation commands compile for Windows ARM64 with warnings treated as
@@ -234,6 +237,20 @@ the native driver accepts that configuration; physical application remains
 pending. The `.148` portrait trial used the previous, hash-verified helper.
 Keep the saved baseline snapshot for recovery and persist the final landscape
 mode only after the requested physical orientation is verified.
+
+`tools/rotation_pattern.cpp` draws four distinct corner colors, numbered
+direction labels, an arrow and a one-pixel border through GDI/DWM. It does not
+change display settings or rotate a bitmap. Run `rotation-pattern.exe 60
+ready.json` in the interactive session; the window closes after 60 seconds,
+or with Escape. Its ready/output records describe a logical desktop window,
+not physical acceptance. Capture comparison and physical orientation/cursor
+checks must be recorded separately.
+
+```sh
+"$ARM64_MINGW_CXX" -std=c++17 -O2 -static -municode \
+  -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 \
+  tegra-x1-wddm/tools/rotation_pattern.cpp -luser32 -lgdi32 -o rotation-pattern.exe
+```
 
 Before a native trial, save `display-state.exe save user-display.bin` from
 the user's preferred baseline. Check `display-state.exe visible` before

@@ -259,7 +259,7 @@ GDI普通模式列表为空，raw/rotated列表只有800×600占位模式，不�
 `609ce9d9e119aace6a29cb04b7ada290aa0cffacc4f9db898f433b5c24d7a4c4`。
 主机构建和模型通过；同一新VidPN断言链接旧实现退出170、修正后退出0，扫描/布局
 控制退出0。Inf2Cat无错误/警告，13个签名目录成员经Windows验证通过。
-这些检查不执行真实GPU；候选尚未安装，横屏协商及画面结果仍待实机验证。
+这些检查不执行真实GPU；后续安装及失败结果见下一节。
 恢复包保留当前`59dd5ea7…`的460.8MHz KMD，不回到729.6MHz或`.59`。
 
 本轮实际参考：微软[旋转契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/supporting-rotation-in-a-display-miniport-driver)、
@@ -271,3 +271,43 @@ Windows-driver-samples/KMDOD的main文件于同日核对，仅参考模式接口
 不作为GPU实现移植来源。Switchroot固定`3c40adf1081096bc61a7c1280434c163e7e79b48`
 的window.c用于核对列扫描、反向起点和VBlank更新规则，未复制Linux代码。
 控制与原始查询保存在仓库外 `rotation-bidirectional-20261113/`。
+
+## 临时横屏失败及恢复（2026-11-14 UTC）
+
+04:23:33 候选 `609ce9d9…` 启用为 Code0，UMD仍 `14d51a55…`、ICD仍
+`dee3d580…`，双向Fence开启。原生LUID `00000000000dc272`，Win11 22631.2861。
+KMT由两个方向变为四个方向，`SDC_ALLOW_CHANGES`下0/90/180/270均能校验；
+严格CCD仍返回1610。04:32:54起竖屏图案控制运行约30秒，逻辑截图四块色样及完整
+白边共5020个RGB像素、容差0、差异0，程序退出0。没有物理画面验收。
+
+04:34:54的第一次90°请求实际上已被Windows接受，但工具把CCD源尺寸与逻辑桌面
+尺寸混为一谈，错误地返回13；该轮立即恢复竖屏成功。这是工具误判，不能算GPU失败。
+工具改为分别核对native CCD源720×1280、横屏DEVMODE1280×720及原始DSI时序。
+
+04:37:57 第二次临时90°应用返回0，读回DEVMODE1280×720、CCD源/目标720×1280、
+path rotation=2，注册表仍portrait。用户随后报告自动重启；新启动时间为04:38:20。
+最后落盘阶段为TemporaryLandscape，没有彩色图案完成记录，**本轮实机失败**。
+不能据此确定DC已正确旋转、GPU已经完成，也不能确定根因是Fence、供电或扫描布局。
+未保存永久横屏，未执行五分钟横屏或vkcube。
+
+04:43:02请求一次恢复所需的重启，关闭测试启动许可；04:45:04核对Code43门控关闭。
+恢复到原GPU460.8 KMD `59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81`，
+保留双向Fence UMD `14d51a5526dccd00737e15bef0f3bd7a40b38535a47c9083184d62ad7d1eb6c4`
+及ICD `dee3d5805af80696f87d094ec1c5f557d662f435336207992baf588e2dc1cee0`。
+04:46:50恢复Code0和登录后5秒启用流程；DWM PID780及Explorer加载tgd3d，
+GPU读回460800kHz/800000µV，HardwareStatus/PanelStatus均0。
+没有回退`.59`、没有恢复高GPU频率、没有关闭双向Fence。
+04:48:13–04:49:15恢复后的60秒竖屏图案控制退出0，5020个逻辑RGB像素全部匹配，
+前后Code0。用户当时离开，实屏仍未验收。
+
+继续静态核对固定Switchroot `3c40adf1` 的dc_config.c/window.c/ext/dev.c：
+T210 Display A Window A声明列扫描及packed rotation支持；列扫描尺寸交换、末字节
+反向偏移及VBlank几何更新与当前实现相符。这不能证明Windows上的实际寄存器锁存。
+微软SetVidPnSourceAddress及旋转契约也已核对，未据此擅自改动供电、Fence或多项KMD路径。
+
+后续发现UMD创建/打开路径不一致：创建主表面及KMD分配描述支持四方向，
+无UMD资源payload的OpenResource却硬编码identity/720×1280/2880。
+契约测试已在旧 `14d51a55…` 对应对象上复现失败；修正按分配描述验证旋转、尺寸、
+pitch，保持系统标准shared primary/shadow的未旋转契约，不重新分配或旋转像素。
+冻结源码只叠加该修正；x64/ARM64构建和x64 CPU契约通过。
+这是一处确定的源码不一致，尚无证据证明失败的90°轮实际经过该拒绝分支；不写作已修复重启。
