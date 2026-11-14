@@ -31,6 +31,12 @@ LUID `00000000000f27a0`仅属于该轮，不能作为未来重启后的固定值
 `baseline_signed_files`和`--kmd`均使用`rotation-timings-state/signed-package`；
 完整当前组合快照保存在OUT的`tgd3d-current-baseline.json`。
 
+**09:09最新实机：为定位交接边界，当前运行组合B加09c1046e只读快照的候选，SYS
+`1a86a02b479b716b2b695ade0bd6860076d4d5f61a29d95b804cb655ce0bf164`，目录
+`C:\ProgramData\SwitchWOA\GpuUpdate\tgd3d-cffa4713-20261114-165948`。** UMD/ICD、双向Fence
+及频率设置保持；Code0、竖屏和默认启用任务Ready。用户选定的恢复基线仍是上述69aa…
+组合B，未将读取候选另行宣称为横屏通过基线。H轮结果见文末。
+
 **用户已在目录打包授权问题中明确回复“解除保持，打包后继续安装测试”。** 先读取
 设备实际状态、完成CAT生成/签名校验后部署测试；不再受此前只读限制。用户随后要求
 “两个一起更新”，因此本轮直接使用包含33e3621e目标激活门控及a5d80906方向状态修正
@@ -810,3 +816,37 @@ segment上下界及停止状态检查，并确认只临时更改READ_MUX、不�
 `1a86a02b479b716b2b695ade0bd6860076d4d5f61a29d95b804cb655ce0bf164`。
 产物在OUT的`rotation-scanout-boundary/`，截至本条仅准备CAT与原生控制，尚未安装。
 后续候选以组合B为恢复输入；UMD/ICD和双向Fence保持。
+
+## H轮：显示源关闭，尚未进入DC列扫描（2026-11-14 UTC）
+
+只读候选及13个包文件的Windows原生签名校验通过，ARM64控制通过。旧B内核对新查询
+返回STATUS_NOT_SUPPORTED（预期），证明客户端没有把不支持冒充有效读回。08:56:56
+发出一次正常门控重启，随后安装读取版；09:00:48启用Code0。没有重复发出重启。
+
+09:03:48逻辑切至1280×720、path_rotation=2；逻辑图案5020个RGB像素容差0、差异0，
+用户反馈仍未上屏。09:03:54.532、55.954、57.313三次真实读回一致：
+
+* SourceVisible=0、TargetActive=1、WIN_OPTIONS=0（窗口关闭，列扫描未启用）。
+* pitch2880、identity、720×1280，active地址`0xfbef3000`，Pending为空，PresentId停在329。
+* 四个固定像素仍为旧竖屏桌面`ffc0d6e1/ff2194fe/ff0a3fc9/ff112d98`，不是四色图案。
+* ACT_REQ前后均0；underflow始终4，与切换前相同，没有观察到本次新增欠载。
+
+09:04:25自动恢复竖屏。09:09读回SourceVisible=1、WIN_ENABLE=1、PresentId416，
+Code0及DWM832/Explorer5196启动时间均保持；已删除结束的安装/测试任务。H轮为
+**物理横屏失败**，软件退出0只表示控制流程完成。本轮电源状态记录为Offline。
+结果在OUT的`rotation-scanout-boundary/evidence/`、`physical-result.json`和
+`after-restore.json`。这里只证明三个采样时点未进入列扫描，不用历史欠载或逻辑截图
+推出GPU/DC整体正确；下一步优先检查primary创建和模式切换完成到显示源重新启用。
+不能强行绕过Windows的Visible=FALSE来掩盖这条未完成的路径。
+
+用户明确要求直接横屏、不要重复竖屏开窗。收到跳过请求时H控制器已在LandscapePattern，
+因此没有另起一轮或重复切换；后续横屏轮只做必要状态读回，不再机械重复竖屏静置/开窗。
+该偏好已计入AGENTS.md。
+
+另发现独立的UMD输出契约遗漏：成功创建可扫描primary后未填写DriverFlags。
+预置NO_SCANOUT的真实DDI控制在旧冻结实现退出1，修正成功路径输出为0后退出0；覆盖
+mandatory/optional、四方向、ARGB/XRGB，同时保留原有OOM/设备移除及资源清理检查。
+实机候选按原9de42c82+7f5f416b+42ad5d1b+a537121f+cffa4713冻结配方重建，只改
+resource.cpp和对应控制；没有带入shader-cache分支。ARM64候选UMD SHA256为
+`cefc41cffaed8dd4005ad820c27369ad0f66dbce72bdf228a1e5c790d94f864c`，尚未部署。
+该缺陷是否H轮根因仍待直接横屏验证，不主动启用未实现的DXGI旋转copy回退。
