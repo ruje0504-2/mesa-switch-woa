@@ -490,6 +490,9 @@ void query_pass_end(Device *dev, VkCommandBuffer cmd);
 void dxgi_fill_table(DXGI1_1_DDI_BASE_FUNCTIONS *table, bool has_resolve);
 HRESULT rotated_blit(Device *dev, const DXGI_DDI_ARG_BLT *args);
 void blit_destroy(Device *dev);
+#ifdef TGD3D_RED_PRIMARY_CONTROL
+HRESULT red_primary_clear(Device *dev, Resource *res, UINT subresource);
+#endif
 
 /* tgd3d_runtime.cpp: runtime-owned WDDM allocations */
 struct RuntimeSharedDescription {

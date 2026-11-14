@@ -65,6 +65,14 @@ ARM64构建、12项CPU控制和14条实时/离线ETW传输通过；超时/设备
 
 ## 构建
 
+`--red-primary-control`是独立的短时红屏诊断构建，默认不启用。它将旋转Blt替换为
+720×1280 BGRA目标的纯红clear，并在SetDisplayMode交出同一个runtime allocation
+前执行clear、提交及真实Fence等待；不创建旋转shader或采样源图。继续使用GPU
+bridge，不能与`--cpu-sync-control`合用。测试后使用原有恢复流程还原正常UMD。
+ETW事件19的phase0只表示clear录制；phase1表示其等待结果，后续SetDisplayMode、
+Present及DC锁存要分别核对。红屏成功只证明本轮简化路径可用；黑屏时若尚未清屏
+完成或交出地址，不能直接认定KMD失败。它不构成旋转、60Hz或稳定性验收。
+
 需要 Meson/Ninja、LLVM-MinGW、Windows SDK/WDK 10.0.26100.0。
 `build_tgd3d.py` 将所需 WDK 头复制到独立输出目录，生成五个文件：
 

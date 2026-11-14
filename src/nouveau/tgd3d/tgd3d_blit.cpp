@@ -123,6 +123,47 @@ static HRESULT blit_view(Device *dev, Resource *res, UINT subresource, bool samp
    return S_OK;
 }
 
+#ifdef TGD3D_RED_PRIMARY_CONTROL
+/* Diagnostic only: keep the runtime's backing and presentation callbacks,
+ * but replace rotation with a full portrait clear. No source sampling,
+ * rotation shaders, descriptors or draw commands participate in this copy. */
+HRESULT red_primary_clear(Device *dev, Resource *res, UINT subresource)
+{
+   if (FAILED(dev->lost)) return dev->lost;
+   if (res->dev != dev || res->kind != ResKind::Image ||
+       res->imageType != VK_IMAGE_TYPE_2D || !res->storage.image || subresource ||
+       res->width != 720 || res->height != 1280 || res->mips != 1 || res->arraySize != 1 ||
+       !(res->bind & D3D10_DDI_BIND_RENDER_TARGET))
+      return DXGI_ERROR_UNSUPPORTED;
+   const VkFormat format = blit_format(res);
+   if (format != VK_FORMAT_B8G8R8A8_UNORM)
+      return DXGI_ERROR_UNSUPPORTED;
+   const uint64_t allocation = runtime_allocation(res->storage.runtime);
+   const uint64_t extent = uint64_t(res->width) << 32 | res->height;
+   trace(TGD3D_TRACE_RED_PRIMARY, E_PENDING, allocation, extent);
+   VkImageView view = VK_NULL_HANDLE;
+   HRESULT hr = blit_view(dev, res, 0, false, format, &view);
+   if (FAILED(hr)) return hr;
+   if (!cmd_begin(dev)) return FAILED(dev->lost) ? dev->lost : E_OUTOFMEMORY;
+   image_use(dev, res->storage, true);
+   VkRenderingAttachmentInfo attachment = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+   attachment.imageView = view;
+   attachment.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+   attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+   attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+   attachment.clearValue.color.float32[0] = attachment.clearValue.color.float32[3] = 1.0f;
+   VkRenderingInfo render = {VK_STRUCTURE_TYPE_RENDERING_INFO};
+   render.renderArea = {{0, 0}, {720, 1280}};
+   render.layerCount = render.colorAttachmentCount = 1;
+   render.pColorAttachments = &attachment;
+   dev->vk.CmdBeginRendering(dev->cmd, &render);
+   dev->vk.CmdEndRendering(dev->cmd);
+   dev->stats.renderPasses++;
+   trace(TGD3D_TRACE_RED_PRIMARY, S_OK, allocation, extent); // Recorded, not completed.
+   return S_OK;
+}
+#endif
+
 HRESULT rotated_blit(Device *dev, const DXGI_DDI_ARG_BLT *args)
 {
    Resource *src = reinterpret_cast<Resource *>(args->hSrcResource);
@@ -134,6 +175,9 @@ HRESULT rotated_blit(Device *dev, const DXGI_DDI_ARG_BLT *args)
                       D3D10_DDI_BIND_SHADER_RESOURCE)) ||
        !(dst->bind & D3D10_DDI_BIND_RENDER_TARGET))
       return DXGI_ERROR_UNSUPPORTED;
+#ifdef TGD3D_RED_PRIMARY_CONTROL
+   return red_primary_clear(dev, dst, args->DstSubresource);
+#endif
    const VkFormat source_format = blit_format(src), target_format = blit_format(dst);
    if (source_format == VK_FORMAT_UNDEFINED || target_format == VK_FORMAT_UNDEFINED ||
        /* Float/display conversion needs DXGI's implicit gamma conversion. It

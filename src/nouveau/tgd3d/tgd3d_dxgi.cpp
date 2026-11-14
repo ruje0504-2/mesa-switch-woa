@@ -96,7 +96,18 @@ static HRESULT APIENTRY SetDisplayMode(DXGI_DDI_ARG_SETDISPLAYMODE *args)
       return E_INVALIDARG;
    Device *dev = DD(args->hDevice);
    Resource *res = DR(args->hResource);
+#ifdef TGD3D_RED_PRIMARY_CONTROL
+   /* The modeset test must execute even when DXGI never reaches rotated Blt.
+    * Wait for the real clear before handing this same allocation to runtime;
+    * this diagnostic wait is not a replacement for production GPU fences. */
+   HRESULT hr = red_primary_clear(dev, res, args->SubResourceIndex);
+   if (SUCCEEDED(hr)) hr = flush(dev, false);
+   if (SUCCEEDED(hr)) hr = wait_sequence(dev, dev->submitted, TGD3D_WAIT_SYNC_CONTROL);
+   trace(TGD3D_TRACE_RED_PRIMARY, hr,
+         UINT64_C(1) << 32 | runtime_allocation(res->storage.runtime), dev->submitted);
+#else
    HRESULT hr = flush(dev, true);
+#endif
    if (SUCCEEDED(hr))
       hr = runtime_set_display_mode(res->storage.runtime, dev, args->SubResourceIndex);
    trace(TGD3D_TRACE_SET_DISPLAY_MODE, hr, runtime_allocation(res->storage.runtime),

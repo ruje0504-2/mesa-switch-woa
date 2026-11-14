@@ -52,7 +52,7 @@ def main():
                 "sync_mode": umd.get("sync_mode", "gpu-bridge"),
                 "tools_source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
                 "kmd": frozen["kmd"], "app": {}, "helpers": {}, "files": {}}
-    for key in ("shader_cache", "umd_frozen_base", "umd_patch_commits"):
+    for key in ("shader_cache", "umd_frozen_base", "umd_patch_commits", "red_primary_control"):
         if key in umd:
             manifest[key] = umd[key]
     if args.default_start:

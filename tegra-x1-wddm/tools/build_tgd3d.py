@@ -17,7 +17,11 @@ def main():
     parser.add_argument("--wdk-include", type=Path, required=True)
     parser.add_argument("--cpu-sync-control", action="store_true",
                         help="diagnostic only: replace cross-context fences with synchronous Flush/Present")
+    parser.add_argument("--red-primary-control", action="store_true",
+                        help="diagnostic only: replace presentation rotation with a red 720x1280 primary")
     args = parser.parse_args()
+    if args.cpu_sync_control and args.red_primary_control:
+        parser.error("red-primary control retains GPU bridge; do not combine diagnostic changes")
     source = Path(__file__).resolve().parents[2]
     out = args.out.resolve()
     headers = out / "headers"
@@ -37,6 +41,8 @@ def main():
     cpp_args = ["-I" + str(headers)]
     if args.cpu_sync_control:
         cpp_args.append("-DTGD3D_CPU_SYNC_CONTROL")
+    if args.red_primary_control:
+        cpp_args.append("-DTGD3D_RED_PRIMARY_CONTROL")
     command = [
         "meson", "setup", *reconfigure, str(build), str(source),
         "--cross-file", str(args.cross_file.resolve()),
@@ -67,6 +73,7 @@ def main():
             ["git", "rev-parse", "HEAD"], cwd=source, text=True).strip(),
         "source_dirty": bool(source_status), "source_status": source_status,
         "sync_mode": "cpu-control" if args.cpu_sync_control else "gpu-bridge",
+        "red_primary_control": args.red_primary_control,
         "configure": command, "files": hashes,
         "validation": "cross-built only; native rendering and display acceptance pending",
     }, indent=2) + "\n")

@@ -638,6 +638,67 @@ static void sampled_shader_contract(const char *source, const char *outputPath)
 
 static void presentation_rotation_contract()
 {
+#ifdef TGD3D_RED_PRIMARY_CONTROL
+   Adapter adapter; reset(); Device dev = make_device(&adapter);
+   static unsigned clears, redViews;
+   clears = redViews = 0;
+   dev.vk.CreateShadersEXT = [](VkDevice, UINT, const VkShaderCreateInfoEXT *,
+                               const VkAllocationCallbacks *, VkShaderEXT *) {
+      CHECK(false); return VK_ERROR_UNKNOWN;
+   };
+   dev.vk.CmdDraw = [](VkCommandBuffer, UINT, UINT, UINT, UINT) { CHECK(false); };
+   dev.vk.UpdateDescriptorSets = [](VkDevice, UINT, const VkWriteDescriptorSet *,
+                                    UINT, const VkCopyDescriptorSet *) { CHECK(false); };
+   dev.vk.CreateImageView = [](VkDevice, const VkImageViewCreateInfo *info,
+                               const VkAllocationCallbacks *, VkImageView *view) {
+      CHECK(info->image == handle<VkImage>(0x200) && info->format == VK_FORMAT_B8G8R8A8_UNORM);
+      CHECK(!info->subresourceRange.baseMipLevel && !info->subresourceRange.baseArrayLayer &&
+            info->subresourceRange.levelCount == 1 && info->subresourceRange.layerCount == 1);
+      ++redViews; *view = handle<VkImageView>(0x400); return VK_SUCCESS;
+   };
+   dev.vk.CmdBeginRendering = [](VkCommandBuffer, const VkRenderingInfo *info) {
+      CHECK(info->colorAttachmentCount == 1 && info->layerCount == 1);
+      CHECK(!info->renderArea.offset.x && !info->renderArea.offset.y &&
+            info->renderArea.extent.width == 720 && info->renderArea.extent.height == 1280);
+      const auto &a = info->pColorAttachments[0];
+      CHECK(a.imageLayout == VK_IMAGE_LAYOUT_GENERAL && a.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR &&
+            a.storeOp == VK_ATTACHMENT_STORE_OP_STORE);
+      CHECK(a.clearValue.color.float32[0] == 1 && a.clearValue.color.float32[1] == 0 &&
+            a.clearValue.color.float32[2] == 0 && a.clearValue.color.float32[3] == 1);
+      ++clears;
+   };
+   Resource src, dst;
+   src.dev = dst.dev = &dev; src.kind = dst.kind = ResKind::Image;
+   src.bind = dst.bind = D3D10_DDI_BIND_RENDER_TARGET | D3D10_DDI_BIND_PRESENT;
+   src.format = dst.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+   src.width = dst.height = 1280; src.height = dst.width = 720;
+   src.storage.image = handle<VkImage>(0x100); dst.storage.image = handle<VkImage>(0x200);
+   src.aspects = dst.aspects = src.storage.aspects = dst.storage.aspects = VK_IMAGE_ASPECT_COLOR_BIT;
+   DXGI1_1_DDI_BASE_FUNCTIONS table = {}; dxgi_fill_table(&table, true);
+   DXGI_DDI_ARG_BLT args = {};
+   args.hDevice = (DXGI_DDI_HDEVICE)&dev; args.hSrcResource = (DXGI_DDI_HRESOURCE)&src;
+   args.hDstResource = (DXGI_DDI_HRESOURCE)&dst; args.DstRight = 720; args.DstBottom = 1280;
+   for (UINT angle : {1u, 2u, 3u}) {
+      args.Rotate = (DXGI_DDI_MODE_ROTATION)(DXGI_DDI_MODE_ROTATION_IDENTITY + angle);
+      CHECK(table.pfnBlt(&args) == S_OK && clears == angle);
+   }
+   CHECK(redViews == 1 && !src.storage.lastUse && dst.storage.lastUse == dev.recordingSeq());
+   CHECK(!cpuWaits && !cpuSignals && !submissions && !descriptorSets);
+   DXGI_DDI_ARG_SETDISPLAYMODE mode = {};
+   mode.hDevice = args.hDevice; mode.hResource = args.hDstResource;
+   /* No runtime owner in this fixture: only the final callback rejects it.
+    * The clear must still be submitted and actually waited before that call. */
+   CHECK(table.pfnSetDisplayMode(&mode) == DXGI_ERROR_UNSUPPORTED);
+   CHECK(clears == 4 && submissions == 1 && cpuWaits == 1 && completedValue == 1 && !cpuSignals);
+   dst.width = 1280;
+   CHECK(red_primary_clear(&dev, &dst, 0) == DXGI_ERROR_UNSUPPORTED && clears == 4);
+   dst.width = 720;
+   CHECK(red_primary_clear(&dev, &dst, 1) == DXGI_ERROR_UNSUPPORTED && clears == 4);
+   dev.lost = D3DDDIERR_DEVICEREMOVED;
+   CHECK(red_primary_clear(&dev, &dst, 0) == dev.lost && clears == 4);
+   storage_destroy(&dev, dst.storage, true); cmd_destroy(&dev);
+   std::puts("PASS: diagnostic portrait red clear, no rotation shader/source sampling/draw, real wait before modeset (CPU control; not display acceptance)");
+#else
    Adapter adapter; reset(); Device dev = make_device(&adapter);
    for (UINT i = 0; i < SET_COUNT; ++i) dev.setLayouts[i] = handle<VkDescriptorSetLayout>(0x10+i);
    dev.pipelineLayout = handle<VkPipelineLayout>(0x20);
@@ -754,6 +815,7 @@ static void presentation_rotation_contract()
    args.Rotate = DXGI_DDI_MODE_ROTATION_ROTATE90;
    CHECK(table.pfnBlt(&args) == E_OUTOFMEMORY && setErrorCalls == 1 && !dev.cmdHasWork);
    std::puts("PASS: GPU rotated-Blt command/state, nonzero rectangle, subresources, sRGB/XRGB views, caching, OOM and in-flight retirement (CPU control; no pixels rendered)");
+#endif
 }
 
 void runtime_contracts();
