@@ -381,3 +381,25 @@ D轮只取回既有轮次状态及恢复回执；图案ready/log/state文件不�
 像素、进程/启动连续性和恢复由本窗口自动执行；无法自动验证的物理显示项目如实
 保留未验收状态，不能将截图或Code0当作实屏通过。恢复后停止重复同一失败组合，
 继续依据具体源码缺陷形成独立修改，再运行相应控制和实机测试。
+
+## 模式切换锁存修正（构建/控制阶段）
+
+审查 `panel_scanout.c` 发现ModeChange与普通异步翻转共用立即返回路径：回调返回
+SUCCESS时，旧主表面仍可能在active寄存器组，新表面只在pending中。旧pending未完成
+时又会直接返回DEVICE_BUSY。新的候选只调整这条模式切换路径：在PASSIVE调用中先等
+前一笔pending翻转完成，再排队新主表面，并通过既有完整布局读回确认后才返回成功；
+不把“已排队”当成“已锁存”。模式切换仍用VBlank，普通帧翻转和双向GPU Fence不变。
+50ms内未确认则返回IO_TIMEOUT，保留pending状态，不能伪造完成。
+
+实际参考微软[SetVidPnSourceAddress调用契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_setvidpnsourceaddress)
+及[其参数中的模式切换/ContextCount说明](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgkarg_setvidpnsourceaddress)，
+结合当前代码没有独立模式切换锁存等待的事实。这里加强的是旧扫描面可安全退休的
+实现条件，**不声称微软页面明确要求所有模式切换必须采用这一等待算法**，也尚未
+证实它就是两次实机重启的根因。
+
+固定609ce9d9…源码只替换panel_scanout.c及其控制测试；完整主机构建通过。
+同一组新测试在Switch上链接旧实现退出226（成功返回后仍有pending），链接新实现
+退出0。覆盖反复0/90/0/90/0、上一笔MPO仍pending、错误IRQL、无锁存超时和后续恢复；
+没有执行GPU。第一轮新控制曾因测试读取未模拟的全局active镜像退出228，已改为读取
+模型实际维护的REG_ACT_CONTROL寄存器；该工具问题与GPU失败分别记录。
+源码/构建/控制位于 `rotation-modeset-latch-candidate/`，候选尚未安装。

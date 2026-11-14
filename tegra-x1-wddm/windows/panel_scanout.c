@@ -75,9 +75,14 @@ static BOOLEAN confirm_flip(PVOID context)
     return TRUE;
 }
 
-static NTSTATUS flip(TG_GPU_ADAPTER *adapter, TG_GPU_PANEL_FLIP scanout)
+static NTSTATUS flip(TG_GPU_ADAPTER *adapter, TG_GPU_PANEL_FLIP scanout, BOOLEAN mode_change)
 {
     FLIP_ACTION action = {&adapter->Panel, scanout, STATUS_UNSUCCESSFUL};
+    /* A modeset has no scheduled flip receipt to retire the previous primary.
+     * Keep the PASSIVE-level call alive until its address and layout are active.
+     * Ordinary MMIO flips retain their asynchronous VSync notification path. */
+    if (mode_change && KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return STATUS_INVALID_PARAMETER;
     /* DxgKrnl calls the fast flip path in the interrupt synchronization
      * class. Legacy modeset and pre-present calls can arrive at lower IRQL.
      */
@@ -87,20 +92,32 @@ static NTSTATUS flip(TG_GPU_ADAPTER *adapter, TG_GPU_PANEL_FLIP scanout)
     }
     NTSTATUS status = TgGpuPanelSynchronize(adapter, program_flip, &action);
     if (!NT_SUCCESS(status))return status;
-    if (!scanout.Immediate || action.Status!=STATUS_PENDING)return action.Status;
+    if (!mode_change && (!scanout.Immediate || action.Status!=STATUS_PENDING))
+        return action.Status;
+    BOOLEAN queued = action.Status == STATUS_SUCCESS || action.Status == STATUS_PENDING;
+    if (!queued && (!mode_change || action.Status != STATUS_DEVICE_BUSY))
+        return action.Status;
     /* Immediate MPO requests are recalled at PASSIVE before queuing. Keep
      * their DDI lifetime until the active bank confirms completion. Address
-     * changes usually take one scanline; layout/visibility changes require VBlank. */
+     * changes usually take one scanline; layout/visibility changes require VBlank.
+     * A modeset also drains a previously queued flip before replacing it. Its
+     * Immediate bit remains clear, so even address-only modesets use VBlank. */
     const ULONGLONG deadline=KeQueryInterruptTime()+500000;
     LARGE_INTEGER interval={.QuadPart=-10000};
     for (UINT i=0;KeQueryInterruptTime()<deadline;++i) {
         if(i<100)KeStallExecutionProcessor(1);
         else (VOID)KeDelayExecutionThread(KernelMode,FALSE,&interval);
-        status=TgGpuPanelSynchronize(adapter,confirm_flip,&action);
+        status=TgGpuPanelSynchronize(adapter,queued ? confirm_flip : program_flip,&action);
         if(!NT_SUCCESS(status))return status;
-        if(action.Status==STATUS_SUCCESS)return STATUS_SUCCESS;
+        if (queued) {
+            if(action.Status==STATUS_SUCCESS)return STATUS_SUCCESS;
+        } else if (action.Status == STATUS_SUCCESS || action.Status == STATUS_PENDING) {
+            queued = TRUE; /* Queuing is not a latch/completion receipt. */
+        } else if (action.Status != STATUS_DEVICE_BUSY) {
+            return action.Status;
+        }
     }
-    return STATUS_INVALID_PARAMETER;
+    return mode_change ? STATUS_IO_TIMEOUT : STATUS_INVALID_PARAMETER;
 }
 
 static bool allocation_rotation(UINT rotation, enum tg_t214_dc_rotation *physical)
@@ -150,7 +167,7 @@ static NTSTATUS APIENTRY set_primary(HANDLE context, const DXGKARG_SETVIDPNSOURC
     } else if (!args->Flags.ModeChange) {
         return STATUS_INVALID_PARAMETER;
     }
-    return flip(adapter, scanout);
+    return flip(adapter, scanout, args->Flags.ModeChange != 0);
 }
 
 static bool full_surface(const RECT *rect, UINT width, UINT height)
@@ -226,7 +243,7 @@ static NTSTATUS APIENTRY set_primary_mpo(HANDLE context,
         if (!NT_SUCCESS(status))
             return status;
     }
-    NTSTATUS status=flip(adapter, scanout);
+    NTSTATUS status=flip(adapter, scanout, FALSE);
     return status==STATUS_DEVICE_BUSY?STATUS_RETRY:status;
 }
 

@@ -212,13 +212,48 @@ void start(void)
     active_is(TG_T214_DC_IDENTITY,T214_GPU_POST_FB_BASE,FALSE);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
     active_is(TG_T214_DC_IDENTITY,T214_GPU_POST_FB_BASE,TRUE);
+
+    /* Unlike a scheduled flip, a modeset returns only after the new primary
+     * is active. Reuse the same two slots across repeated quarter turns. */
+    const UINT orientations[] = {0,1,0,1,0};
+    DXGKARG_SETVIDPNSOURCEADDRESS modeset = {
+        .PrimarySegment=TG_GPU_SCANOUT_SEGMENT,.Flags={.ModeChange=1}};
+    for (UINT i=0;i<sizeof(orientations)/sizeof(orientations[0]);++i) {
+        UINT r=orientations[i];
+        modeset.hAllocation=&allocations[r];
+        modeset.PrimaryAddress.QuadPart=0x98000000+r*0x400000;
+        CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&modeset)==STATUS_SUCCESS);
+        CHECK(!adapter.Panel.Pending.Address);
+        active_is((enum tg_t214_dc_rotation)r,(UINT64)modeset.PrimaryAddress.QuadPart,TRUE);
+        CHECK(!(model.assembly[T214_DC_REG_ACT_CONTROL]&T214_DC_WIN_A_HCOUNTER));
+    }
+    /* Drain an older queued MPO flip instead of returning DEVICE_BUSY to the
+     * synchronous mode change, then confirm the replacement's full layout. */
+    plane.PresentId=204;
+    CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
+    CHECK(adapter.Panel.Pending.Address);
+    CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&modeset)==STATUS_SUCCESS);
+    CHECK(!adapter.Panel.Pending.Address);
+    active_is(TG_T214_DC_IDENTITY,0x98000000,TRUE);
+
+    writes=model.writes;level=DISPATCH_LEVEL;
+    CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&modeset)==STATUS_INVALID_PARAMETER && model.writes==writes);
+    level=PASSIVE_LEVEL;auto_latch=FALSE;
+    modeset.hAllocation=&allocations[1];modeset.PrimaryAddress.QuadPart=0x98400000;
+    CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&modeset)==STATUS_IO_TIMEOUT);
+    CHECK(adapter.Panel.Pending.Address==0x98400000 && adapter.Panel.Displayed.Address==0x98000000);
+    auto_latch=TRUE;modeset.hAllocation=&allocations[0];modeset.PrimaryAddress.QuadPart=0x98000000;
+    CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&modeset)==STATUS_SUCCESS);
+    CHECK(!adapter.Panel.Pending.Address);
+    active_is(TG_T214_DC_IDENTITY,0x98000000,TRUE);
+
     const struct tg_t214_dc_scanout rotated_post={T214_GPU_POST_FB_BASE,TG_T214_DC_CCW90,true};
     CHECK(tg_t214_dc_queue_surface(&adapter.Panel.Dc,&rotated_post,false)==TG_T214_DC_OK);
     latch(&model,true);
     CHECK(TgGpuPanelStop(&adapter)==STATUS_SUCCESS && !adapter.Panel.Dc.owned);
     CHECK(model.active[T214_DC_WIN_A_STRIDE]==2880 && !(model.active[T214_DC_WIN_A_OPTIONS]&0x15));
     CHECK(notifications && level==PASSIVE_LEVEL);
-    const char text[]="PASS: WDDM legacy/MPO rotation, full-layout latch, PresentId, immediate retry and rotated POST recovery (model only)\r\n";
+    const char text[]="PASS: WDDM legacy/MPO rotation, modeset retirement, full-layout latch, PresentId, immediate retry and rotated POST recovery (model only)\r\n";
     ULONG written;WriteFile(GetStdHandle((ULONG)-11),text,sizeof(text)-1,&written,NULL);
     ExitProcess(0);
 }
