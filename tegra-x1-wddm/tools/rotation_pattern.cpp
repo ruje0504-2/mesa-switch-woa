@@ -38,7 +38,8 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM w, LPARAM 
          DeleteObject(brush);
          SetTextColor(dc, i == 2 ? RGB(255,255,255) : RGB(0,0,0));
          SetBkMode(dc, TRANSPARENT);
-         RECT text = {cell.left + 32, cell.top + 32, cell.right - 32, cell.top + 80};
+         const int label_top = i < 2 ? 32 : height - 80;
+         RECT text = {cell.left + 32, label_top, cell.right - 32, label_top + 48};
          DrawTextW(dc, labels[i], -1, &text, DT_LEFT | DT_SINGLELINE);
       }
       /* One desktop pixel at each edge, with no nonclient frame. */
