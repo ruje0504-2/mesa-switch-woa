@@ -195,7 +195,7 @@ static void test_rotation(TG_GPU_ADAPTER *adapter,const DRIVER_INITIALIZATION_DA
     support=updated_path.ContentTransformation.RotationSupport;
     CHECK(support.Rotate90 && !support.Identity && !support.Rotate180 && !support.Rotate270 && !support.Offset0);
     DXGKARG_QUERYVIDPNHWCAPABILITY caps={.hFunctionalVidPn=VIDPN,.TargetId=7};
-    CHECK(d->DxgkDdiQueryVidPnHWCapability(adapter,&caps)==STATUS_SUCCESS && !caps.VidPnHWCaps.DriverRotation);
+    CHECK(d->DxgkDdiQueryVidPnHWCapability(adapter,&caps)==STATUS_SUCCESS && caps.VidPnHWCaps.DriverRotation);
     enumerate.EnumPivotType=0;
     for(UINT r=1;r<=4;++r) {
         D3DKMDT_GRAPHICS_RENDERING_FORMAT *g=&source_mode.Format.Graphics;

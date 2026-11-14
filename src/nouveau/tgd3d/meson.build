@@ -11,6 +11,7 @@ dxbc_spv = subproject(
 dep_dxbc_spv = dxbc_spv.get_variable('dxbc_spv_dep')
 
 tgd3d_files = files(
+  'tgd3d_blit.cpp',
   'tgd3d_cmd.cpp',
   'tgd3d_device.cpp',
   'tgd3d_draw.cpp',

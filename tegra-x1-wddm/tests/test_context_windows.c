@@ -767,6 +767,10 @@ __declspec(noinline) static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU
         primary.Rotation=rotation;
         primary.Width=quarter?1280:720;primary.Height=quarter?720:1280;
         primary.Pitch=primary.Width*4;
+        if(rotation!=D3DDDI_ROTATION_IDENTITY) {
+            CHECK(ddi->DxgkDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER && !e->AllocationBytes);
+            continue;
+        }
         CHECK(NT_SUCCESS(ddi->DxgkDdiCreateAllocation(e,&create)));
         describe.hAllocation=info[0].hAllocation;
         CHECK(NT_SUCCESS(ddi->DxgkDdiDescribeAllocation(e,&describe)) &&

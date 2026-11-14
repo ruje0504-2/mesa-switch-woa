@@ -464,18 +464,14 @@ HRESULT runtime_shared_open(Device *dev, const D3D10DDIARG_OPENRESOURCE *args,
       tg_gpu_primary_allocation_request a;
       memcpy(&a, info.pPrivateDriverData, sizeof(a));
       const bool primary = a.Buffer.flags & TG_GPU_ALLOCATION_DISPLAY_PRIMARY;
-      /* Standard shared primaries/shadows remain unrotated. A primary made
-       * by runtime_primary_create can carry another storage orientation;
-       * opening it must preserve that extent and pitch without rotating its
-       * pixels or allocating replacement backing. */
-      const bool quarter = a.Rotation == D3DDDI_ROTATION_90 || a.Rotation == D3DDDI_ROTATION_270;
-      const UINT width = quarter ? 1280 : 720, height = quarter ? 720 : 1280;
+      /* Shared primaries/shadows are the portrait destination of the GPU
+       * presentation copy. Opening them must not apply another rotation. */
+      const UINT width = 720, height = 1280;
       if (a.Buffer.version != TG_GPU_ALLOCATION_ABI ||
           a.Buffer.flags != (TG_GPU_ALLOCATION_CPU_VISIBLE |
                              (primary ? TG_GPU_ALLOCATION_DISPLAY_PRIMARY : 0)) ||
           (a.Format != D3DDDIFMT_A8R8G8B8 && a.Format != D3DDDIFMT_X8R8G8B8) ||
-          a.Rotation < D3DDDI_ROTATION_IDENTITY || a.Rotation > D3DDDI_ROTATION_270 ||
-          (!primary && a.Rotation != D3DDDI_ROTATION_IDENTITY) || a.Reserved ||
+          a.Rotation != D3DDDI_ROTATION_IDENTITY || a.Reserved ||
           a.Width != width || a.Height != height || a.Pitch != width * 4 ||
           a.Buffer.bytes != UINT64_C(720) * 1280 * 4)
          return DXGI_ERROR_UNSUPPORTED;
@@ -553,14 +549,17 @@ HRESULT runtime_primary_create(Device *dev, const D3D10DDIARG_CREATERESOURCE *de
    const auto &primary = *desc->pPrimaryDesc;
    const UINT mode_rotation = primary.ModeDesc.Rotation == DXGI_DDI_MODE_ROTATION_UNSPECIFIED ?
       DXGI_DDI_MODE_ROTATION_IDENTITY : primary.ModeDesc.Rotation;
-   /* NONPREROTATED leaves orientation to the application: keep identity
-    * storage instead of applying the mode's rotation a second time. */
-   const UINT rotation = primary.Flags & DXGI_DDI_PRIMARY_NONPREROTATED ?
-      DXGI_DDI_MODE_ROTATION_IDENTITY : mode_rotation;
-   const bool quarter = rotation == DXGI_DDI_MODE_ROTATION_ROTATE90 ||
-                        rotation == DXGI_DDI_MODE_ROTATION_ROTATE270;
-   /* The fixed panel: 720x1280 identity storage, 1280x720 for quarter turns. */
-   const UINT width = quarter ? 1280 : 720, height = quarter ? 720 : 1280;
+   if (mode_rotation > DXGI_DDI_MODE_ROTATION_ROTATE270)
+      return E_INVALIDARG;
+   /* Opt out through the documented DXGI DDI error, allowing the runtime to
+    * request a rotated Blt into its fixed-size primary. NONPREROTATED already
+    * contains panel-oriented pixels and must not be transformed twice. */
+   if (mode_rotation != DXGI_DDI_MODE_ROTATION_IDENTITY &&
+       !(primary.Flags & DXGI_DDI_PRIMARY_NONPREROTATED)) {
+      desc->pPrimaryDesc->DriverFlags = DXGI_DDI_PRIMARY_DRIVER_FLAG_NO_SCANOUT;
+      return DXGI_DDI_ERR_UNSUPPORTED;
+   }
+   const UINT width = 720, height = 1280;
    if (desc->ResourceDimension != D3D10DDIRESOURCE_TEXTURE2D ||
        (desc->Format != DXGI_FORMAT_B8G8R8A8_UNORM &&
         desc->Format != DXGI_FORMAT_B8G8R8X8_UNORM) || desc->MipLevels != 1 ||
@@ -586,7 +585,7 @@ HRESULT runtime_primary_create(Device *dev, const D3D10DDIARG_CREATERESOURCE *de
        (uint64_t)pitch * height},
       desc->Format == DXGI_FORMAT_B8G8R8X8_UNORM ? D3DDDIFMT_X8R8G8B8 : D3DDDIFMT_A8R8G8B8,
       {primary.ModeDesc.RefreshRate.Numerator, primary.ModeDesc.RefreshRate.Denominator},
-      rotation, width, height, pitch, 0};
+      D3DDDI_ROTATION_IDENTITY, width, height, pitch, 0};
    D3DDDI_ALLOCATIONINFO2 info = {};
    info.pPrivateDriverData = &request;
    info.PrivateDriverDataSize = sizeof(request);

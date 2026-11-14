@@ -116,6 +116,12 @@ struct ImageStorage {
    bool preinitialized = false;          /* imported contents must survive the first use */
    uint64_t lastUse = 0;                 /* submit sequence of the last GPU use */
    uint64_t writeSerial = 0;             /* barrier bookkeeping */
+   struct BlitView {
+      VkImageView handle = VK_NULL_HANDLE;
+      VkFormat format = VK_FORMAT_UNDEFINED;
+      UINT mip = 0, layer = 0;
+      bool sampled = false;
+   } blitViews[4];                        /* follows backing across identity rotation */
 };
 
 struct SubLayout {
@@ -355,6 +361,8 @@ struct Device {
    std::vector<VkDescriptorPool> framePools, freePools;
    VkDescriptorSetLayout setLayouts[SET_COUNT] = {};
    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+   VkShaderEXT blitVertex[4] = {}, blitFragment = VK_NULL_HANDLE;
+   VkSampler blitPointSampler = VK_NULL_HANDLE;
 
    /* Queue fence. `submitted` is the value the last vkQueueSubmit2 signals;
     * `gated` is the last value queued as a GPU wait on the runtime context. */
@@ -471,6 +479,7 @@ VkResult create_shader_cached(Device *dev, const VkShaderCreateInfoEXT &info, Vk
 void draw_fill_table(D3D10DDI_DEVICEFUNCS *table);
 HRESULT device_layouts_create(Device *dev);
 void device_layouts_destroy(Device *dev);
+VkDescriptorSet descriptor_set_alloc(Device *dev, uint32_t set);
 
 /* tgd3d_query.cpp */
 void query_fill_table(D3D10DDI_DEVICEFUNCS *table);
@@ -479,6 +488,8 @@ void query_pass_end(Device *dev, VkCommandBuffer cmd);
 
 /* tgd3d_dxgi.cpp */
 void dxgi_fill_table(DXGI1_1_DDI_BASE_FUNCTIONS *table, bool has_resolve);
+HRESULT rotated_blit(Device *dev, const DXGI_DDI_ARG_BLT *args);
+void blit_destroy(Device *dev);
 
 /* tgd3d_runtime.cpp: runtime-owned WDDM allocations */
 struct RuntimeSharedDescription {

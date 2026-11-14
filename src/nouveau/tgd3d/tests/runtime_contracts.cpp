@@ -153,10 +153,9 @@ static void primary_creation_contract()
       init(&dev, &adapter, 0);
       primaryError = S_OK;
       primaryFormat = alpha ? D3DDDIFMT_A8R8G8B8 : D3DDDIFMT_X8R8G8B8;
-      primaryRotation = rotation;
-      const bool quarter = rotation == D3DDDI_ROTATION_90 || rotation == D3DDDI_ROTATION_270;
-      primaryWidth = quarter ? 1280 : 720;
-      primaryHeight = quarter ? 720 : 1280;
+      primaryRotation = D3DDDI_ROTATION_IDENTITY;
+      primaryWidth = 720;
+      primaryHeight = 1280;
       primaryPitch = primaryWidth * 4;
       primaryImages = primaryModes = 0;
       primaryAllocations = primaryResidents = 0;
@@ -233,7 +232,8 @@ static void primary_creation_contract()
       dev.vk.DestroyImage = [](VkDevice, VkImage image, const VkAllocationCallbacks *) { CHECK(image == (VkImage)0x22); --primaryImages; };
       D3D10DDI_MIPINFO mip = {primaryWidth, primaryHeight, 1, primaryWidth, primaryHeight, 1};
       DXGI_DDI_PRIMARY_DESC primary = {};
-      primary.Flags = optional ? DXGI_DDI_PRIMARY_OPTIONAL : 0;
+      primary.Flags = (optional ? DXGI_DDI_PRIMARY_OPTIONAL : 0) |
+         (rotation == D3DDDI_ROTATION_IDENTITY ? 0 : DXGI_DDI_PRIMARY_NONPREROTATED);
       /* DriverFlags is an output, including when the caller reuses a
        * descriptor that previously requested copy-style presentation. */
       primary.DriverFlags = DXGI_DDI_PRIMARY_DRIVER_FLAG_NO_SCANOUT;
@@ -250,7 +250,7 @@ static void primary_creation_contract()
       D3D10DDI_DEVICEFUNCS table = {}; resource_fill_table(&table);
       tg_gpu_primary_allocation_request standard = {
          {TG_GPU_ALLOCATION_ABI, TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_DISPLAY_PRIMARY, 3686400},
-         primaryFormat, {60, 1}, rotation, primaryWidth, primaryHeight, primaryPitch, 0};
+         primaryFormat, {60, 1}, D3DDDI_ROTATION_IDENTITY, primaryWidth, primaryHeight, primaryPitch, 0};
       D3DDDI_OPENALLOCATIONINFO allocation = {};
       allocation.hAllocation = 0x60; allocation.pPrivateDriverData = &standard;
       allocation.PrivateDriverDataSize = sizeof(standard);
@@ -282,9 +282,43 @@ static void primary_creation_contract()
       CHECK(!primaryImages && !owners[0] && primaryError == S_OK);
       runtime_device_destroy(&dev);
    }
-   std::puts("PASS: ARGB/XRGB primary Create/OpenResource DDI at all four rotations, exact pitch/extent, imported GPU VA and teardown (CPU control)");
+   std::puts("PASS: ARGB/XRGB fixed-portrait primary Create/OpenResource and NONPREROTATED modes, exact pitch/extent, imported GPU VA and teardown (CPU control)");
    std::puts("PASS: accepted optional/mandatory primaries publish direct-scanout DriverFlags without stale NO_SCANOUT (CPU control)");
    std::puts("PASS: primary Create/OpenResource propagate image/import/bind OOM and runtime removal after releasing partial ownership (CPU control)");
+
+   /* DXGI must receive its DDI opt-out, before any scanout allocation exists.
+    * Returning a normal DXGI API error or S_OK here prevents rotated Blt. */
+   for (UINT rotation = DXGI_DDI_MODE_ROTATION_ROTATE90;
+        rotation <= DXGI_DDI_MODE_ROTATION_ROTATE270; ++rotation)
+   for (UINT optional : {0u, (UINT)DXGI_DDI_PRIMARY_OPTIONAL}) {
+      Adapter adapter; Device dev; init(&dev, &adapter, 0);
+      primaryError = S_OK;
+      dev.um.pfnSetErrorCb = [](D3D10DDI_HRTCORELAYER, HRESULT hr) { primaryError = hr; };
+      dev.kt.pfnAllocateCb = [](HANDLE, D3DDDICB_ALLOCATE *) -> HRESULT { CHECK(false); return E_FAIL; };
+      dev.vk.CreateImage = [](VkDevice, const VkImageCreateInfo *, const VkAllocationCallbacks *, VkImage *) {
+         CHECK(false); return VK_ERROR_DEVICE_LOST;
+      };
+      const bool quarter = rotation != DXGI_DDI_MODE_ROTATION_ROTATE180;
+      D3D10DDI_MIPINFO mip = {quarter ? 1280u : 720u, quarter ? 720u : 1280u, 1, 0, 0, 1};
+      DXGI_DDI_PRIMARY_DESC primary = {};
+      primary.Flags = optional;
+      primary.ModeDesc.Rotation = (DXGI_DDI_MODE_ROTATION)rotation;
+      primary.ModeDesc.Width = 720; primary.ModeDesc.Height = 1280;
+      primary.ModeDesc.RefreshRate = {60, 1};
+      D3D10DDIARG_CREATERESOURCE desc = {};
+      desc.pMipInfoList = &mip; desc.pPrimaryDesc = &primary;
+      desc.ResourceDimension = D3D10DDIRESOURCE_TEXTURE2D;
+      desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+      desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+      desc.BindFlags = D3D10_DDI_BIND_RENDER_TARGET | D3D10_DDI_BIND_PRESENT;
+      alignas(Resource) unsigned char storage[sizeof(Resource)];
+      D3D10DDI_DEVICEFUNCS table = {}; resource_fill_table(&table);
+      table.pfnCreateResource({&dev}, &desc, {storage}, {rt_resource(0)});
+      CHECK(primaryError == DXGI_DDI_ERR_UNSUPPORTED && SUCCEEDED(dev.lost));
+      CHECK(primary.DriverFlags == DXGI_DDI_PRIMARY_DRIVER_FLAG_NO_SCANOUT);
+      runtime_device_destroy(&dev);
+   }
+   std::puts("PASS: rotated primary creation requests DXGI's GPU-copy fallback before allocation (CPU control)");
 }
 
 void runtime_contracts()
@@ -350,10 +384,8 @@ void runtime_contracts()
          /* A new angle cannot reinterpret the producer's old storage. */
          CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
          standard.Width = 1280; standard.Height = 720; standard.Pitch = 5120;
-         if (!primary) {
-            /* The standard shadow contract remains unrotated. */
-            CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
-         }
+         /* Neither primaries nor shadows may request DC rotation. */
+         CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
          standard.Pitch += 4;
          CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
          standard.Pitch -= 4;

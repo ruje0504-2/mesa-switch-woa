@@ -28,28 +28,6 @@ static void activate(const struct tg_t214_dc_io *io, uint32_t group)
     (void)read_reg(io, T214_DC_STATE_CONTROL);
 }
 
-bool tg_t214_dc_get_layout(enum tg_t214_dc_rotation rotation, struct tg_t214_dc_layout *layout)
-{
-    if (!layout || rotation < TG_T214_DC_IDENTITY || rotation > TG_T214_DC_CCW270)
-        return false;
-    const bool column = rotation == TG_T214_DC_CCW90 || rotation == TG_T214_DC_CCW270;
-    const bool reverse_x = rotation == TG_T214_DC_CCW90 || rotation == TG_T214_DC_CCW180;
-    const bool reverse_y = rotation == TG_T214_DC_CCW180 || rotation == TG_T214_DC_CCW270;
-    /* Column scan exchanges source axes before prescaling. For these full-panel
-     * layouts, the output-axis prescaled size and unit DDA stay unchanged. */
-    const uint32_t width = column ? T214_DC_PANEL_HEIGHT : T214_DC_PANEL_WIDTH;
-    const uint32_t height = column ? T214_DC_PANEL_WIDTH : T214_DC_PANEL_HEIGHT;
-    *layout = (struct tg_t214_dc_layout){
-        .width = width, .height = height, .pitch = width * 4u,
-        .options = (column ? T214_DC_WIN_SCAN_COLUMN : 0) |
-            (reverse_x ? T214_DC_WIN_H_DECREMENT : 0) |
-            (reverse_y ? T214_DC_WIN_V_DECREMENT : 0),
-        .h_offset = reverse_x ? width * 4u - 1 : 0,
-        .v_offset = reverse_y ? height - 1 : 0,
-    };
-    return true;
-}
-
 bool tg_t214_dc_has_boot_mode(const struct tg_t214_dc_io *io)
 {
     return !activation_pending(io) &&
@@ -178,24 +156,17 @@ bool tg_t214_dc_latched_surface(const struct tg_t214_dc *dc, struct tg_t214_dc_s
     const uint32_t v_offset = read_reg(io, T214_DC_WIN_A_V_OFFSET);
     write_reg(io, T214_DC_STATE_ACCESS, access);
     (void)read_reg(io, T214_DC_STATE_ACCESS);
-    for (unsigned r = TG_T214_DC_IDENTITY; r <= TG_T214_DC_CCW270; ++r) {
-        struct tg_t214_dc_layout layout;
-        (void)tg_t214_dc_get_layout((enum tg_t214_dc_rotation)r, &layout);
-        if ((options & T214_DC_WIN_ROTATION_MASK) == layout.options && pitch == layout.pitch &&
-            h_offset == layout.h_offset && v_offset == layout.v_offset) {
-            *scanout = (struct tg_t214_dc_scanout){address, (enum tg_t214_dc_rotation)r,
-                (options & T214_DC_WIN_ENABLE) != 0};
-            return true;
-        }
-    }
-    return false;
+    if ((options & T214_DC_WIN_TRANSFORM_BITS) || pitch != T214_DC_PANEL_PITCH ||
+        h_offset || v_offset)
+        return false;
+    *scanout = (struct tg_t214_dc_scanout){address, (options & T214_DC_WIN_ENABLE) != 0};
+    return true;
 }
 
 enum tg_t214_dc_result tg_t214_dc_queue_surface(struct tg_t214_dc *dc,
     const struct tg_t214_dc_scanout *scanout, bool immediate)
 {
-    struct tg_t214_dc_layout layout;
-    if (!dc || !dc->owned || !scanout || !tg_t214_dc_get_layout(scanout->rotation, &layout) ||
+    if (!dc || !dc->owned || !scanout ||
         (scanout->address & 0xfffu) || scanout->address < 0x80000000u ||
         scanout->address > (UINT64_C(1) << 32) - T214_GPU_POST_FB_SIZE)
         return TG_T214_DC_INVALID;
@@ -203,10 +174,10 @@ enum tg_t214_dc_result tg_t214_dc_queue_surface(struct tg_t214_dc *dc,
     if (activation_pending(io))
         return TG_T214_DC_BUSY;
     uint32_t options = read_reg(io, T214_DC_WIN_A_OPTIONS);
-    const bool same_layout = (options & T214_DC_WIN_ROTATION_MASK) == layout.options &&
-        (read_reg(io, T214_DC_WIN_A_STRIDE) & 0xffffu) == layout.pitch &&
-        read_reg(io, T214_DC_WIN_A_H_OFFSET) == layout.h_offset &&
-        read_reg(io, T214_DC_WIN_A_V_OFFSET) == layout.v_offset;
+    const bool same_layout = !(options & T214_DC_WIN_TRANSFORM_BITS) &&
+        (read_reg(io, T214_DC_WIN_A_STRIDE) & 0xffffu) == T214_DC_PANEL_PITCH &&
+        read_reg(io, T214_DC_WIN_A_H_OFFSET) == 0 &&
+        read_reg(io, T214_DC_WIN_A_V_OFFSET) == 0;
     const bool hcounter = immediate && same_layout &&
         scanout->visible == ((options & T214_DC_WIN_ENABLE) != 0);
     const uint32_t act = read_reg(io, T214_DC_REG_ACT_CONTROL);
@@ -217,13 +188,13 @@ enum tg_t214_dc_result tg_t214_dc_queue_surface(struct tg_t214_dc *dc,
         group |= T214_DC_GENERAL_ACT_REQ;
     }
     write_reg(io, T214_DC_WIN_A_OPTIONS,
-        (options & ~(T214_DC_WIN_ENABLE | T214_DC_WIN_ROTATION_MASK)) |
-        layout.options | (scanout->visible ? T214_DC_WIN_ENABLE : 0));
+        (options & ~(T214_DC_WIN_ENABLE | T214_DC_WIN_TRANSFORM_BITS)) |
+        (scanout->visible ? T214_DC_WIN_ENABLE : 0));
     if (!same_layout) {
         write_reg(io, T214_DC_WIN_A_STRIDE,
-            (read_reg(io, T214_DC_WIN_A_STRIDE) & 0xffff0000u) | layout.pitch);
-        write_reg(io, T214_DC_WIN_A_H_OFFSET, layout.h_offset);
-        write_reg(io, T214_DC_WIN_A_V_OFFSET, layout.v_offset);
+            (read_reg(io, T214_DC_WIN_A_STRIDE) & 0xffff0000u) | T214_DC_PANEL_PITCH);
+        write_reg(io, T214_DC_WIN_A_H_OFFSET, 0);
+        write_reg(io, T214_DC_WIN_A_V_OFFSET, 0);
     }
     write_reg(io, T214_DC_WIN_A_ADDR, (uint32_t)scanout->address);
     activate(io, group);
@@ -233,7 +204,7 @@ enum tg_t214_dc_result tg_t214_dc_queue_surface(struct tg_t214_dc *dc,
 enum tg_t214_dc_result tg_t214_dc_queue_flip(struct tg_t214_dc *dc, uint64_t address)
 {
     if (!dc || !dc->owned) return TG_T214_DC_INVALID;
-    const struct tg_t214_dc_scanout scanout = {address, TG_T214_DC_IDENTITY,
+    const struct tg_t214_dc_scanout scanout = {address,
         (read_reg(&dc->io, T214_DC_WIN_A_OPTIONS) & T214_DC_WIN_ENABLE) != 0};
     return tg_t214_dc_queue_surface(dc, &scanout, false);
 }
@@ -241,14 +212,14 @@ enum tg_t214_dc_result tg_t214_dc_queue_flip(struct tg_t214_dc *dc, uint64_t add
 enum tg_t214_dc_result tg_t214_dc_queue_scanout(struct tg_t214_dc *dc,
     uint64_t address, bool visible)
 {
-    const struct tg_t214_dc_scanout scanout = {address, TG_T214_DC_IDENTITY, visible};
+    const struct tg_t214_dc_scanout scanout = {address, visible};
     return tg_t214_dc_queue_surface(dc, &scanout, false);
 }
 
 enum tg_t214_dc_result tg_t214_dc_queue_immediate(struct tg_t214_dc *dc,
     uint64_t address,bool visible)
 {
-    const struct tg_t214_dc_scanout scanout = {address, TG_T214_DC_IDENTITY, visible};
+    const struct tg_t214_dc_scanout scanout = {address, visible};
     return tg_t214_dc_queue_surface(dc, &scanout, true);
 }
 
@@ -259,8 +230,7 @@ enum tg_t214_dc_result tg_t214_dc_release(struct tg_t214_dc *dc)
     const struct tg_t214_dc_io *io = &dc->io;
     struct tg_t214_dc_scanout scanout;
     if (activation_pending(io) || !tg_t214_dc_latched_surface(dc, &scanout) ||
-        scanout.address != T214_GPU_POST_FB_BASE || !scanout.visible ||
-        scanout.rotation != TG_T214_DC_IDENTITY)
+        scanout.address != T214_GPU_POST_FB_BASE || !scanout.visible)
         return TG_T214_DC_BUSY;
 
     uint32_t act = read_reg(io, T214_DC_REG_ACT_CONTROL);

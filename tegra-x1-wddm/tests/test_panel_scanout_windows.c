@@ -107,14 +107,13 @@ static void signal_vblank(const DRIVER_INITIALIZATION_DATA *d)
     CHECK(d->DxgkDdiInterruptRoutine(&adapter,0));
     level=old;
 }
-static void active_is(enum tg_t214_dc_rotation rotation,UINT64 address,BOOLEAN visible)
+static void active_is(UINT64 address,BOOLEAN visible)
 {
     struct tg_t214_dc_scanout active;
     CHECK(tg_t214_dc_latched_surface(&adapter.Panel.Dc,&active));
-    CHECK(active.rotation==rotation && active.address==address && active.visible==(visible!=FALSE));
-    const UINT options[]={0,0x11,5,0x14};
-    CHECK((model.active[T214_DC_WIN_A_OPTIONS]&0x15)==options[rotation]);
-    CHECK(model.active[T214_DC_WIN_A_STRIDE]==((rotation&1)?5120u:2880u));
+    CHECK(active.address==address && active.visible==(visible!=FALSE));
+    CHECK(!(model.active[T214_DC_WIN_A_OPTIONS]&0x15));
+    CHECK(model.active[T214_DC_WIN_A_STRIDE]==2880u);
 }
 
 static void snapshot_controls(const DRIVER_INITIALIZATION_DATA *d)
@@ -141,7 +140,7 @@ static void snapshot_controls(const DRIVER_INITIALIZATION_DATA *d)
     adapter.Tables.Scanout=(TG_GPU_PRIVATE_MEMORY){.Handle=&adapter,.CpuAddress=pixels,
         .SystemPhysicalAddress={.QuadPart=0x98c00000},.Bytes=sizeof(pixels)};
     const UINT32 colors[]={0xffff0000,0xff00ff00,0xff0000ff,0xffffff00};
-    for(UINT i=0;i<4;++i)pixels[(i&2?540:180)*1280+(i&1?960:320)]=colors[i];
+    for(UINT i=0;i<4;++i)pixels[(i&2?960:320)*720+(i&1?540:180)]=colors[i];
     model.assembly[T214_DC_INT_STATUS]=T214_DC_VBLANK_INT | (1u<<8);
     model.assembly[T214_DC_WIN_A_UNDERFLOW]=13;
     /* Assembly is not active scanout. The reader must select and restore the
@@ -150,8 +149,8 @@ static void snapshot_controls(const DRIVER_INITIALIZATION_DATA *d)
     model.assembly[T214_DC_WIN_A_ADDR]=0xdead0000;
     const TG_GPU_PANEL_FLIP displayed=adapter.Panel.Displayed;
     CHECK(d->DxgkDdiEscape(&adapter,&request)==STATUS_SUCCESS);
-    CHECK(s.flags==7 && s.address==0x98c00000 && s.rotation==TG_T214_DC_CCW270);
-    CHECK(s.width==1280 && s.height==720 && s.pitch==5120 && s.v_offset==719);
+    CHECK(s.flags==7 && s.address==0x98c00000 && s.rotation==0);
+    CHECK(s.width==720 && s.height==1280 && s.pitch==2880 && !s.v_offset);
     for(UINT i=0;i<4;++i)CHECK(s.pixels[i].bgra==colors[i]);
     CHECK(s.underflow==13 && s.interrupt_status==(T214_DC_VBLANK_INT | (1u<<8)));
     CHECK(model.writes==before+2 && model.assembly[T214_DC_STATE_ACCESS]==0);
@@ -190,22 +189,21 @@ void start(void)
     DRIVER_INITIALIZATION_DATA d={0};TgGpuRegisterPanelScanout(&d);
     CHECK(d.DxgkDdiControlInterrupt(&adapter,DXGK_INTERRUPT_CRTC_VSYNC_WITH_MULTIPLANE_OVERLAY2,TRUE)==STATUS_SUCCESS);
     for(UINT r=0;r<4;++r) {
-        const BOOLEAN quarter=(r&1)!=0;
         allocations[r]=(TG_GPU_PRIMARY_ALLOCATION_REQUEST){
             .Buffer={TG_GPU_ALLOCATION_ABI,TG_GPU_ALLOCATION_CPU_VISIBLE|TG_GPU_ALLOCATION_DISPLAY_PRIMARY,T214_GPU_POST_FB_SIZE},
-            .Format=D3DDDIFMT_A8R8G8B8,.Rotation=r+1,.Width=quarter?1280:720,.Height=quarter?720:1280,
-            .Pitch=quarter?5120:2880};
+            .Format=D3DDDIFMT_A8R8G8B8,.Rotation=D3DDDI_ROTATION_IDENTITY,.Width=720,.Height=1280,
+            .Pitch=2880};
         DXGKARG_SETVIDPNSOURCEADDRESS a={.PrimarySegment=TG_GPU_SCANOUT_SEGMENT,
             .PrimaryAddress={.QuadPart=0x98000000+r*0x400000},.hAllocation=&allocations[r],.ContextCount=1};
         const UINT before=sync_calls;
         level=3;CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&a)==STATUS_SUCCESS);level=PASSIVE_LEVEL;
-        CHECK(sync_calls==before && adapter.Panel.Pending.Rotation==(enum tg_t214_dc_rotation)r);
+        CHECK(sync_calls==before && adapter.Panel.Pending.Address==(UINT64)a.PrimaryAddress.QuadPart);
         CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&a)==STATUS_DEVICE_BUSY);
         latch(&model,false);
         CHECK(adapter.Panel.Pending.Address && model.assembly[T214_DC_STATE_CONTROL]);
         latch(&model,true);signal_vblank(&d);
-        active_is((enum tg_t214_dc_rotation)r,(UINT64)a.PrimaryAddress.QuadPart,TRUE);
-        CHECK(!adapter.Panel.Pending.Address && adapter.Panel.Displayed.Rotation==(enum tg_t214_dc_rotation)r);
+        active_is((UINT64)a.PrimaryAddress.QuadPart,TRUE);
+        CHECK(!adapter.Panel.Pending.Address && adapter.Panel.Displayed.Address==(UINT64)a.PrimaryAddress.QuadPart);
     }
 
     snapshot_controls(&d);
@@ -218,7 +216,6 @@ void start(void)
         .ColorSpaceType=D3DDDI_COLOR_SPACE_RGB_FULL_G22_NONE_P709}};
     DXGK_MULTIPLANE_OVERLAY_PLANE3 *planes[]={&plane};
     DXGKARG_SETVIDPNSOURCEADDRESSWITHMULTIPLANEOVERLAY3 args={.PlaneCount=1,.ppPlanes=planes};
-    const UINT physical[]={0,3,2,1}; /* MPO is clockwise; backend is CCW. */
     for(UINT r=0;r<4;++r) {
         const UINT slot=(r&1)?1:0;
         primary.hAllocation=&allocations[slot];
@@ -230,7 +227,12 @@ void start(void)
         DXGK_MULTIPLANE_OVERLAY_PLANE_WITH_SOURCE2 *check_planes[]={&check_plane};
         DXGKARG_CHECKMULTIPLANEOVERLAYSUPPORT3 check={.PlaneCount=1,.ppPlanes=check_planes};
         UINT writes=model.writes;
-        CHECK(d.DxgkDdiCheckMultiPlaneOverlaySupport3(&adapter,&check)==STATUS_SUCCESS && check.Supported && writes==model.writes);
+        CHECK(d.DxgkDdiCheckMultiPlaneOverlaySupport3(&adapter,&check)==STATUS_SUCCESS && check.Supported==(r==0) && writes==model.writes);
+        if(r) {
+            CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_INVALID_PARAMETER);
+            CHECK(writes==model.writes);
+            continue;
+        }
         CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
         signal_vblank(&d);CHECK(reported_present!=plane.PresentId);
         latch(&model,true);
@@ -238,21 +240,21 @@ void start(void)
         signal_vblank(&d);CHECK(reported_present!=plane.PresentId && adapter.Panel.Pending.Address);
         model.active[T214_DC_WIN_A_STRIDE]^=64;
         signal_vblank(&d);CHECK(reported_present==plane.PresentId && !adapter.Panel.Pending.Address);
-        active_is((enum tg_t214_dc_rotation)physical[r],0x98000000,TRUE);
+        active_is(0x98000000,TRUE);
         check_plane.PlaneAttributes.SrcRect.right--;
         CHECK(d.DxgkDdiCheckMultiPlaneOverlaySupport3(&adapter,&check)==STATUS_SUCCESS && !check.Supported);
     }
-    /* Same address, different quarter turn: address equality is insufficient. */
-    plane.PlaneAttributes.Rotation=D3DDDI_ROTATION_90;plane.PresentId=200;
+    /* Same backing with a new receipt still needs a completed activation. */
+    plane.PlaneAttributes.Rotation=D3DDDI_ROTATION_IDENTITY;plane.PresentId=200;
     CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
     latch(&model,false);signal_vblank(&d);CHECK(reported_present!=200);
     latch(&model,true);signal_vblank(&d);CHECK(reported_present==200);
-    active_is(TG_T214_DC_CCW270,0x98000000,TRUE);
+    active_is(0x98000000,TRUE);
 
     UINT writes=model.writes;
-    allocations[1].Pitch=2880;
-    CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_INVALID_PARAMETER && model.writes==writes);
     allocations[1].Pitch=5120;
+    CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_INVALID_PARAMETER && model.writes==writes);
+    allocations[1].Pitch=2880;
     primary.SegmentAddress.QuadPart=0x98fff000;
     CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_INVALID_ADDRESS && model.writes==writes);
     primary.SegmentAddress.QuadPart=0x98400000;
@@ -262,11 +264,11 @@ void start(void)
     CHECK(model.writes==writes);level=PASSIVE_LEVEL;
     CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS && stalls && !args.OutputFlags.Value);
     CHECK(adapter.Panel.Displayed.PresentId==201 && !adapter.Panel.Pending.Address);
-    active_is(TG_T214_DC_CCW270,0x98400000,TRUE);
+    active_is(0x98400000,TRUE);
 
-    /* No latch means no premature completion, including a rotation at the
+    /* No latch means no premature completion, including a new PresentId at the
      * same address. A later retry can finish after the exact state is active. */
-    auto_latch=FALSE;plane.PresentId=202;plane.PlaneAttributes.Rotation=D3DDDI_ROTATION_270;
+    auto_latch=FALSE;plane.PresentId=202;plane.PlaneAttributes.Rotation=D3DDDI_ROTATION_IDENTITY;
     CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_INVALID_PARAMETER);
     CHECK(adapter.Panel.Displayed.PresentId==201 && adapter.Panel.Pending.PresentId==202);
     auto_latch=TRUE;latch(&model,true);
@@ -278,10 +280,10 @@ void start(void)
     plane.InputFlags.FlipImmediate=0;plane.PresentId=203;
     CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
     CHECK(TgGpuPanelSetVisibility(&adapter,FALSE)==STATUS_SUCCESS && !adapter.Panel.Pending.Address);
-    active_is(TG_T214_DC_CCW90,0x98400000,FALSE);
+    active_is(0x98400000,FALSE);
     signal_vblank(&d);CHECK(reported_present==203);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
-    active_is(TG_T214_DC_CCW90,0x98400000,TRUE);
+    active_is(0x98400000,TRUE);
     signal_vblank(&d);CHECK(reported_present==203);
 
     /* Target timings/power and source visibility are independent gates.
@@ -290,16 +292,16 @@ void start(void)
     CHECK(TgGpuPanelSetTargetActive(&adapter,FALSE)==STATUS_SUCCESS);
     CHECK(TgGpuPanelSetTargetActive(&adapter,TRUE)==STATUS_SUCCESS);
     CHECK(!adapter.Panel.SourceVisible && adapter.Panel.TargetActive);
-    active_is(TG_T214_DC_CCW90,0x98400000,FALSE);
+    active_is(0x98400000,FALSE);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
     CHECK(TgGpuPanelSetTargetActive(&adapter,FALSE)==STATUS_SUCCESS);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
     CHECK(adapter.Panel.SourceVisible && !adapter.Panel.TargetActive);
     CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
     latch(&model,true);signal_vblank(&d);
-    active_is(TG_T214_DC_CCW90,0x98400000,FALSE);
+    active_is(0x98400000,FALSE);
     CHECK(TgGpuPanelSetTargetActive(&adapter,TRUE)==STATUS_SUCCESS);
-    active_is(TG_T214_DC_CCW90,0x98400000,TRUE);
+    active_is(0x98400000,TRUE);
     CHECK(reported_present==203);
 
     /* MPO disable also has no replacement allocation: only its enable bit
@@ -308,9 +310,9 @@ void start(void)
     plane.PresentId=204;
     CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
     latch(&model,true);signal_vblank(&d);
-    active_is(TG_T214_DC_CCW90,0x98400000,FALSE);
+    active_is(0x98400000,FALSE);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
-    active_is(TG_T214_DC_CCW90,0x98400000,TRUE);
+    active_is(0x98400000,TRUE);
     plane.InputFlags.Enabled=1;plane.ContextCount=1;plane.ppContextData=contexts;
 
     /* A replacement primary can be bound while the source is hidden. Keep
@@ -319,9 +321,9 @@ void start(void)
     static DXGKARG_SETVIDPNSOURCEADDRESS hidden={.PrimarySegment=TG_GPU_SCANOUT_SEGMENT,
         .Flags={.ModeChange=1},.PrimaryAddress={.QuadPart=0x98800000},.hAllocation=&allocations[2]};
     CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&hidden)==STATUS_SUCCESS);
-    active_is(TG_T214_DC_CCW180,0x98800000,FALSE);
+    active_is(0x98800000,FALSE);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
-    active_is(TG_T214_DC_CCW180,0x98800000,TRUE);
+    active_is(0x98800000,TRUE);
 
     CHECK(TgGpuPanelSetVisibility(&adapter,FALSE)==STATUS_SUCCESS);
     plane.PresentId=205;
@@ -330,9 +332,9 @@ void start(void)
     const UINT hidden_notifications=notifications;
     signal_vblank(&d);
     CHECK(notifications==hidden_notifications+1 && reported_present==205);
-    active_is(TG_T214_DC_CCW90,0x98400000,FALSE);
+    active_is(0x98400000,FALSE);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
-    active_is(TG_T214_DC_CCW90,0x98400000,TRUE);
+    active_is(0x98400000,TRUE);
 
     /* A blanking timeout does not pretend the old scanout has stopped. */
     auto_latch=FALSE;
@@ -340,12 +342,12 @@ void start(void)
     CHECK(model.active[T214_DC_WIN_A_OPTIONS]&T214_DC_WIN_ENABLE);
     auto_latch=TRUE;latch(&model,true);
     CHECK(TgGpuPanelSetVisibility(&adapter,FALSE)==STATUS_SUCCESS);
-    active_is(TG_T214_DC_CCW90,0x98400000,FALSE);
+    active_is(0x98400000,FALSE);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
-    active_is(TG_T214_DC_CCW90,0x98400000,TRUE);
+    active_is(0x98400000,TRUE);
 
     /* Unlike a scheduled flip, a modeset returns only after the new primary
-     * is active. Reuse the same two slots across repeated quarter turns. */
+     * is active. Reuse the same two portrait slots across mode changes. */
     const UINT orientations[] = {0,1,0,1,0};
     DXGKARG_SETVIDPNSOURCEADDRESS modeset = {
         .PrimarySegment=TG_GPU_SCANOUT_SEGMENT,.Flags={.ModeChange=1}};
@@ -355,7 +357,7 @@ void start(void)
         modeset.PrimaryAddress.QuadPart=0x98000000+r*0x400000;
         CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&modeset)==STATUS_SUCCESS);
         CHECK(!adapter.Panel.Pending.Address);
-        active_is((enum tg_t214_dc_rotation)r,(UINT64)modeset.PrimaryAddress.QuadPart,TRUE);
+        active_is((UINT64)modeset.PrimaryAddress.QuadPart,TRUE);
         CHECK(!(model.assembly[T214_DC_REG_ACT_CONTROL]&T214_DC_WIN_A_HCOUNTER));
     }
     /* Drain an older queued MPO flip instead of returning DEVICE_BUSY to the
@@ -365,7 +367,7 @@ void start(void)
     CHECK(adapter.Panel.Pending.Address);
     CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&modeset)==STATUS_SUCCESS);
     CHECK(!adapter.Panel.Pending.Address);
-    active_is(TG_T214_DC_IDENTITY,0x98000000,TRUE);
+    active_is(0x98000000,TRUE);
 
     writes=model.writes;level=DISPATCH_LEVEL;
     CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&modeset)==STATUS_INVALID_PARAMETER && model.writes==writes);
@@ -376,15 +378,15 @@ void start(void)
     auto_latch=TRUE;modeset.hAllocation=&allocations[0];modeset.PrimaryAddress.QuadPart=0x98000000;
     CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&modeset)==STATUS_SUCCESS);
     CHECK(!adapter.Panel.Pending.Address);
-    active_is(TG_T214_DC_IDENTITY,0x98000000,TRUE);
+    active_is(0x98000000,TRUE);
 
-    const struct tg_t214_dc_scanout rotated_post={T214_GPU_POST_FB_BASE,TG_T214_DC_CCW90,true};
-    CHECK(tg_t214_dc_queue_surface(&adapter.Panel.Dc,&rotated_post,false)==TG_T214_DC_OK);
+    const struct tg_t214_dc_scanout post={T214_GPU_POST_FB_BASE,true};
+    CHECK(tg_t214_dc_queue_surface(&adapter.Panel.Dc,&post,false)==TG_T214_DC_OK);
     latch(&model,true);
     CHECK(TgGpuPanelStop(&adapter)==STATUS_SUCCESS && !adapter.Panel.Dc.owned);
     CHECK(model.active[T214_DC_WIN_A_STRIDE]==2880 && !(model.active[T214_DC_WIN_A_OPTIONS]&0x15));
     CHECK(notifications && level==PASSIVE_LEVEL);
-    const char text[]="PASS: WDDM legacy/MPO rotation, source visibility and hidden rebinding, modeset retirement, full-layout latch and POST recovery (model only)\r\n";
+    const char text[]="PASS: WDDM portrait scanout/MPO transform rejection, source visibility and hidden rebinding, modeset retirement, full-layout latch and POST recovery (model only)\r\n";
     ULONG written;WriteFile(GetStdHandle((ULONG)-11),text,sizeof(text)-1,&written,NULL);
     ExitProcess(0);
 }

@@ -79,7 +79,7 @@ void device_layouts_destroy(Device *dev)
 
 /* ------------------------------------------------------------------ */
 
-static VkDescriptorSet alloc_set(Device *dev, uint32_t set)
+VkDescriptorSet descriptor_set_alloc(Device *dev, uint32_t set)
 {
    for (int attempt = 0; attempt < 2; attempt++) {
       if (!dev->framePools.empty()) {
@@ -181,7 +181,7 @@ static bool bind_textures(Device *dev, VkCommandBuffer cmd)
    buffers.reserve(STAGE_COUNT * D3D_SRV_SLOTS);
 
    if (any && (dev->dirty & DIRTY_TEXTURES)) {
-      VkDescriptorSet set = alloc_set(dev, SET_TEX);
+      VkDescriptorSet set = descriptor_set_alloc(dev, SET_TEX);
       if (!set)
          return false;
       for (uint32_t s = 0; s < STAGE_COUNT; s++) {
@@ -233,7 +233,7 @@ static bool bind_textures(Device *dev, VkCommandBuffer cmd)
    }
 
    if (any_buffers && (dev->dirty & DIRTY_TEXEL_BUFFERS)) {
-      VkDescriptorSet set = alloc_set(dev, SET_TBUF);
+      VkDescriptorSet set = descriptor_set_alloc(dev, SET_TBUF);
       if (!set)
          return false;
       writes.clear();
@@ -285,7 +285,7 @@ static bool bind_constant_buffers(Device *dev, VkCommandBuffer cmd)
    }
    if (!dirty)
       return true;
-   VkDescriptorSet set = alloc_set(dev, SET_CB);
+   VkDescriptorSet set = descriptor_set_alloc(dev, SET_CB);
    if (!set)
       return false;
    VkWriteDescriptorSet writes[STAGE_COUNT * D3D_CB_SLOTS];

@@ -487,6 +487,126 @@ static void sampled_shader_contract(const char *source, const char *outputPath)
    std::puts("PASS: SM4 sampled image, sampler and constant buffer 13 reflection and SPIR-V");
 }
 
+static void presentation_rotation_contract()
+{
+   Adapter adapter; reset(); Device dev = make_device(&adapter);
+   for (UINT i = 0; i < SET_COUNT; ++i) dev.setLayouts[i] = handle<VkDescriptorSetLayout>(0x10+i);
+   dev.pipelineLayout = handle<VkPipelineLayout>(0x20);
+   dev.defaultSampler = handle<VkSampler>(0x30);
+   static struct { UINT shaderCalls, viewCalls, draws, angle, width, height; bool scaled; } observed;
+   observed = {};
+   dev.vk.CreateShadersEXT = [](VkDevice, UINT count, const VkShaderCreateInfoEXT *info,
+                              const VkAllocationCallbacks *, VkShaderEXT *shader) {
+      CHECK(count == 1 && info->codeType == VK_SHADER_CODE_TYPE_SPIRV_EXT &&
+            info->setLayoutCount == SET_COUNT && info->codeSize > 20);
+      ++observed.shaderCalls;
+      if (info->stage == VK_SHADER_STAGE_VERTEX_BIT) {
+         const auto *c = info->pSpecializationInfo;
+         CHECK(c && c->mapEntryCount == 1 && c->dataSize == sizeof(UINT));
+         CHECK(c->pMapEntries[0].constantID == 0 && !c->pMapEntries[0].offset);
+         const UINT angle = *static_cast<const UINT *>(c->pData);
+         CHECK(angle >= 1 && angle <= 3);
+         *shader = handle<VkShaderEXT>(0x1000+angle);
+      } else {
+         CHECK(info->stage == VK_SHADER_STAGE_FRAGMENT_BIT);
+         *shader = handle<VkShaderEXT>(0x2000);
+      }
+      return VK_SUCCESS;
+   };
+   dev.vk.CreateSampler = [](VkDevice, const VkSamplerCreateInfo *info,
+                             const VkAllocationCallbacks *, VkSampler *sampler) {
+      CHECK(info->minFilter == VK_FILTER_NEAREST && info->magFilter == VK_FILTER_NEAREST);
+      *sampler = handle<VkSampler>(0x31); return VK_SUCCESS;
+   };
+   dev.vk.CreateImageView = [](VkDevice, const VkImageViewCreateInfo *info,
+                               const VkAllocationCallbacks *, VkImageView *view) {
+      ++observed.viewCalls;
+      CHECK(info->viewType == VK_IMAGE_VIEW_TYPE_2D && info->subresourceRange.layerCount == 1);
+      if (info->image == handle<VkImage>(0x100)) {
+         CHECK(info->format == VK_FORMAT_B8G8R8A8_UNORM && info->components.a == VK_COMPONENT_SWIZZLE_ONE);
+         CHECK(info->subresourceRange.baseMipLevel == 1 && info->subresourceRange.baseArrayLayer == 1);
+      } else {
+         CHECK(info->image == handle<VkImage>(0x200) && info->format == VK_FORMAT_R8G8B8A8_UNORM);
+         CHECK(!info->subresourceRange.baseMipLevel && !info->subresourceRange.baseArrayLayer);
+      }
+      *view = handle<VkImageView>(0x400+observed.viewCalls); return VK_SUCCESS;
+   };
+   dev.vk.CreateDescriptorPool = [](VkDevice, const VkDescriptorPoolCreateInfo *,
+                                    const VkAllocationCallbacks *, VkDescriptorPool *pool) {
+      *pool = handle<VkDescriptorPool>(0x500); return VK_SUCCESS;
+   };
+   dev.vk.AllocateDescriptorSets = [](VkDevice, const VkDescriptorSetAllocateInfo *, VkDescriptorSet *set) {
+      *set = handle<VkDescriptorSet>(0x600); return VK_SUCCESS;
+   };
+   dev.vk.UpdateDescriptorSets = [](VkDevice, UINT count, const VkWriteDescriptorSet *write,
+                                   UINT, const VkCopyDescriptorSet *) {
+      CHECK(count == 2 && write[0].dstBinding == 288 && write[1].dstBinding == 304);
+      CHECK(write[0].pImageInfo->sampler == handle<VkSampler>(observed.scaled ? 0x30 : 0x31));
+      CHECK(write[1].pImageInfo->imageLayout == VK_IMAGE_LAYOUT_GENERAL);
+   };
+   dev.vk.CmdBeginRendering = [](VkCommandBuffer, const VkRenderingInfo *info) {
+      CHECK(info->colorAttachmentCount == 1 && info->layerCount == 1);
+      CHECK(info->renderArea.offset.x == 7 && info->renderArea.offset.y == 11);
+      CHECK(info->renderArea.extent.width == observed.width && info->renderArea.extent.height == observed.height);
+      CHECK(info->pColorAttachments[0].loadOp == VK_ATTACHMENT_LOAD_OP_LOAD &&
+            info->pColorAttachments[0].storeOp == VK_ATTACHMENT_STORE_OP_STORE);
+   };
+   dev.vk.CmdBindShadersEXT = [](VkCommandBuffer, UINT count, const VkShaderStageFlagBits *stages,
+                                 const VkShaderEXT *shaders) {
+      CHECK(count == 3 && stages[0] == VK_SHADER_STAGE_VERTEX_BIT &&
+            stages[1] == VK_SHADER_STAGE_FRAGMENT_BIT && stages[2] == VK_SHADER_STAGE_GEOMETRY_BIT);
+      CHECK(shaders[0] == handle<VkShaderEXT>(0x1000+observed.angle) &&
+            shaders[1] == handle<VkShaderEXT>(0x2000) && !shaders[2]);
+   };
+   dev.vk.CmdDraw = [](VkCommandBuffer, UINT vertices, UINT instances, UINT first, UINT base) {
+      CHECK(vertices == 3 && instances == 1 && !first && !base); ++observed.draws;
+   };
+   Resource src, dst;
+   src.dev = dst.dev = &dev; src.kind = dst.kind = ResKind::Image;
+   src.bind = D3D10_DDI_BIND_RENDER_TARGET | D3D10_DDI_BIND_PRESENT;
+   dst.bind = D3D10_DDI_BIND_RENDER_TARGET;
+   src.format = DXGI_FORMAT_B8G8R8X8_UNORM; dst.format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+   src.width = 34; src.height = 18; src.mips = src.arraySize = 2;
+   dst.width = dst.height = 64;
+   src.storage.image = handle<VkImage>(0x100); dst.storage.image = handle<VkImage>(0x200);
+   src.storage.memory = handle<VkDeviceMemory>(0x700); dst.storage.memory = handle<VkDeviceMemory>(0x800);
+   src.aspects = dst.aspects = VK_IMAGE_ASPECT_COLOR_BIT;
+   DXGI1_1_DDI_BASE_FUNCTIONS table = {}; dxgi_fill_table(&table, true);
+   DXGI_DDI_ARG_BLT args = {};
+   args.hDevice = (DXGI_DDI_HDEVICE)&dev; args.hSrcResource = (DXGI_DDI_HRESOURCE)&src;
+   args.hDstResource = (DXGI_DDI_HRESOURCE)&dst; args.SrcSubresource = 3;
+   args.DstLeft = 7; args.DstTop = 11;
+   for (UINT angle : {1u, 2u, 3u, 1u}) {
+      observed.angle = angle; observed.scaled = false;
+      observed.width = angle & 1 ? 9 : 17; observed.height = angle & 1 ? 17 : 9;
+      args.DstRight = 7+observed.width; args.DstBottom = 11+observed.height;
+      args.Rotate = (DXGI_DDI_MODE_ROTATION)(DXGI_DDI_MODE_ROTATION_IDENTITY+angle);
+      CHECK(table.pfnBlt(&args) == S_OK && dev.dirty == DIRTY_ALL && !dev.rendering);
+      CHECK(src.storage.lastUse == dev.recordingSeq() && dst.storage.lastUse == dev.recordingSeq());
+   }
+   CHECK(observed.shaderCalls == 4 && observed.viewCalls == 2 && observed.draws == 4);
+   observed.angle = 1; observed.scaled = true; observed.width = 13; observed.height = 7;
+   args.DstRight = 20; args.DstBottom = 18;
+   CHECK(table.pfnBlt(&args) == S_OK && observed.draws == 5);
+   args.Rotate = (DXGI_DDI_MODE_ROTATION)99;
+   CHECK(table.pfnBlt(&args) == E_INVALIDARG && observed.draws == 5);
+   CHECK(!cpuWaits && !cpuSignals && !submissions); // copy only records GPU work
+   storage_destroy(&dev, src.storage, false); storage_destroy(&dev, dst.storage, false);
+   CHECK(!viewsDestroyed);
+   retire(&dev); CHECK(!viewsDestroyed); // unfinished draw keeps its views/backing
+   completedValue = dev.recordingSeq(); retire(&dev);
+   CHECK(viewsDestroyed == 2);
+   blit_destroy(&dev); cmd_destroy(&dev);
+
+   reset(); dev = make_device(&adapter);
+   dev.vk.CreateShadersEXT = [](VkDevice, UINT, const VkShaderCreateInfoEXT *,
+                               const VkAllocationCallbacks *, VkShaderEXT *) { return VK_ERROR_OUT_OF_DEVICE_MEMORY; };
+   src.dev = dst.dev = &dev; src.storage.image = handle<VkImage>(1); dst.storage.image = handle<VkImage>(2);
+   args.Rotate = DXGI_DDI_MODE_ROTATION_ROTATE90;
+   CHECK(table.pfnBlt(&args) == E_OUTOFMEMORY && setErrorCalls == 1 && !dev.cmdHasWork);
+   std::puts("PASS: GPU rotated-Blt command/state, nonzero rectangle, subresources, sRGB/XRGB views, caching, OOM and in-flight retirement (CPU control; no pixels rendered)");
+}
+
 void runtime_contracts();
 void resource_creation_contracts();
 void shader_cache_contracts(bool child);
@@ -560,6 +680,7 @@ int main(int argc, char **argv)
       "float4 sum=0; [loop] for(uint i=0;i<min(taps,16u);++i)"
       "sum+=tex.SampleLevel(samp,uv+step*i,0)*weights[i];"
       "clip(sum.a-threshold); return sum;}", "tgd3d-loop.spv");
+   presentation_rotation_contract();
    runtime_contracts();
    resource_creation_contracts();
    shader_cache_contracts(false);

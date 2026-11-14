@@ -9,7 +9,6 @@
 typedef struct _TG_GPU_PANEL_FLIP {
     UINT64 Address;
     ULONGLONG PresentId;
-    enum tg_t214_dc_rotation Rotation;
     BOOLEAN Visible, Immediate;
 } TG_GPU_PANEL_FLIP;
 

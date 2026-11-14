@@ -93,13 +93,10 @@ static NTSTATUS request(const DXGK_ALLOCATIONINFO *info,TG_GPU_ALLOCATION_DESC *
         primary->Height=T214_DC_PANEL_HEIGHT;
         primary->Pitch=T214_DC_PANEL_PITCH;
     }
-    const BOOLEAN quarter=primary->Rotation==D3DDDI_ROTATION_90 ||
-        primary->Rotation==D3DDDI_ROTATION_270;
     if(!(r->flags&TG_GPU_ALLOCATION_CPU_VISIBLE) || r->bytes!=T214_GPU_POST_FB_SIZE ||
-        primary->Reserved || primary->Rotation<D3DDDI_ROTATION_IDENTITY ||
-        primary->Rotation>D3DDDI_ROTATION_270 ||
-        primary->Width!=(quarter?T214_DC_PANEL_HEIGHT:T214_DC_PANEL_WIDTH) ||
-        primary->Height!=(quarter?T214_DC_PANEL_WIDTH:T214_DC_PANEL_HEIGHT) ||
+        primary->Reserved || primary->Rotation!=D3DDDI_ROTATION_IDENTITY ||
+        primary->Width!=T214_DC_PANEL_WIDTH ||
+        primary->Height!=T214_DC_PANEL_HEIGHT ||
         primary->Pitch!=primary->Width*4 ||
         (primary->Format!=D3DDDIFMT_X8R8G8B8 && primary->Format!=D3DDDIFMT_A8R8G8B8))
         return STATUS_INVALID_PARAMETER;

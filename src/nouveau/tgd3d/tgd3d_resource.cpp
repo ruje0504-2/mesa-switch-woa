@@ -91,7 +91,10 @@ HRESULT image_create(Device *dev, Resource *res)
    ici.samples = VK_SAMPLE_COUNT_1_BIT;
    ici.tiling = VK_IMAGE_TILING_OPTIMAL;
    ici.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-   if (res->bind & D3D10_DDI_BIND_SHADER_RESOURCE)
+   /* DXGI may ask for a rotated presentation copy even when the application's
+    * back buffer has no public SRV binding. The copy samples it internally. */
+   if (res->bind & (D3D10_DDI_BIND_SHADER_RESOURCE | D3D10_DDI_BIND_RENDER_TARGET |
+                    D3D10_DDI_BIND_PRESENT))
       ici.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
    if (res->bind & D3D10_DDI_BIND_RENDER_TARGET)
       ici.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -108,7 +111,7 @@ HRESULT image_create(Device *dev, Resource *res)
    VkImageFormatListCreateInfo list = {VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO};
    const bool reinterpretable = !depth &&
       ((info->flags & FMT_TYPELESS) ||
-       ((res->bind & D3D10_DDI_BIND_RENDER_TARGET) &&
+       ((res->bind & (D3D10_DDI_BIND_RENDER_TARGET | D3D10_DDI_BIND_PRESENT)) &&
         (info->family == 7 || info->family == 19 || info->family == 20)));
    if (reinterpretable && family_formats(dev, res->format, &formats)) {
       ici.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
@@ -196,6 +199,11 @@ void storage_destroy(Device *dev, ImageStorage &storage, bool immediate)
    /* Rotation leaves cached views in other logical resources. Retire all
     * views of this backing before its image, including already-deferred ones. */
    std::vector<uint64_t> views;
+   for (auto &view : storage.blitViews) {
+      if (view.handle)
+         views.push_back((uint64_t)view.handle);
+      view = {};
+   }
    for (View *view : dev->views) {
       for (auto &entry : view->cache) {
          if (entry.view && entry.image == storage.image) {

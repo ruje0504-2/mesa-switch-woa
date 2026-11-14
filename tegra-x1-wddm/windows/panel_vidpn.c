@@ -253,9 +253,8 @@ static NTSTATUS APIENTRY query_hardware_capability(HANDLE context, DXGKARG_QUERY
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE;
     if (args->TargetId != adapter->Panel.Boot.TargetId)
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_TARGET;
-    /* DriverRotation=0 means a dedicated display-pipeline transform. It does
-     * not mean unsupported; the normal rotation bits are reported per path. */
-    args->VidPnHWCaps = (D3DKMDT_VIDPN_HW_CAPABILITY){0};
+    /* The UMD performs a GPU copy before fixed portrait scanout. */
+    args->VidPnHWCaps = (D3DKMDT_VIDPN_HW_CAPABILITY){.DriverRotation = 1};
     return STATUS_SUCCESS;
 }
 

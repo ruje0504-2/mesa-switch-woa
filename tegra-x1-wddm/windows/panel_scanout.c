@@ -12,7 +12,7 @@ typedef struct _FLIP_ACTION {
 
 static bool matches(const TG_GPU_PANEL_FLIP *flip, const struct tg_t214_dc_scanout *active)
 {
-    return flip->Address == active->address && flip->Rotation == active->rotation &&
+    return flip->Address == active->address &&
         (flip->Visible != FALSE) == active->visible;
 }
 
@@ -26,7 +26,7 @@ BOOLEAN TgGpuPanelReadLatched(TG_GPU_PANEL *panel, struct tg_t214_dc_scanout *ac
     } else if (!matches(&panel->Displayed, active)) {
         /* Unknown/external state must not inherit a completed PresentId. */
         panel->Displayed = (TG_GPU_PANEL_FLIP){.Address = active->address,
-            .Rotation = active->rotation, .Visible = active->visible};
+            .Visible = active->visible};
     }
     return TRUE;
 }
@@ -54,7 +54,6 @@ static BOOLEAN program_flip(PVOID context)
             return TRUE;
         }
         flip.Address = active.address;
-        flip.Rotation = active.rotation;
     }
     flip.Visible = flip.Visible && panel->SourceVisible && panel->TargetActive;
     if (flip.Immediate && latched && matches(&flip, &active) &&
@@ -62,8 +61,7 @@ static BOOLEAN program_flip(PVOID context)
         action->Status=STATUS_SUCCESS;
         return TRUE;
     }
-    const struct tg_t214_dc_scanout surface = {flip.Address,
-        flip.Rotation, flip.Visible != FALSE};
+    const struct tg_t214_dc_scanout surface = {flip.Address, flip.Visible != FALSE};
     enum tg_t214_dc_result result = tg_t214_dc_queue_surface(&panel->Dc, &surface,
         flip.Immediate != FALSE);
     if (result == TG_T214_DC_OK) {
@@ -134,26 +132,11 @@ static NTSTATUS flip(TG_GPU_ADAPTER *adapter, TG_GPU_PANEL_FLIP scanout, BOOLEAN
     return mode_change ? STATUS_IO_TIMEOUT : STATUS_INVALID_PARAMETER;
 }
 
-static bool allocation_rotation(UINT rotation, enum tg_t214_dc_rotation *physical)
+static bool storage_matches(const TG_GPU_PRIMARY_ALLOCATION_REQUEST *allocation)
 {
-    /* Legacy primary orientation follows the VidPN/GDI counter-clockwise
-     * convention. NONPREROTATED producers describe identity storage. */
-    switch (rotation) {
-    case D3DDDI_ROTATION_IDENTITY: *physical = TG_T214_DC_IDENTITY; return true;
-    case D3DDDI_ROTATION_90: *physical = TG_T214_DC_CCW90; return true;
-    case D3DDDI_ROTATION_180: *physical = TG_T214_DC_CCW180; return true;
-    case D3DDDI_ROTATION_270: *physical = TG_T214_DC_CCW270; return true;
-    default: return false;
-    }
-}
-
-static bool storage_matches(const TG_GPU_PRIMARY_ALLOCATION_REQUEST *allocation,
-    enum tg_t214_dc_rotation rotation)
-{
-    struct tg_t214_dc_layout layout;
-    return tg_t214_dc_get_layout(rotation, &layout) &&
-        allocation->Width == layout.width && allocation->Height == layout.height &&
-        allocation->Pitch == layout.pitch;
+    return allocation->Rotation == D3DDDI_ROTATION_IDENTITY &&
+        allocation->Width == T214_DC_PANEL_WIDTH && allocation->Height == T214_DC_PANEL_HEIGHT &&
+        allocation->Pitch == T214_DC_PANEL_PITCH;
 }
 
 static NTSTATUS APIENTRY set_primary(HANDLE context, const DXGKARG_SETVIDPNSOURCEADDRESS *args)
@@ -171,8 +154,7 @@ static NTSTATUS APIENTRY set_primary(HANDLE context, const DXGKARG_SETVIDPNSOURC
         NTSTATUS status = TgGpuGetScanoutSurface(&adapter->Engine, args->hAllocation, &allocation);
         if (!NT_SUCCESS(status))
             return status;
-        if (!allocation_rotation(allocation.Rotation, &scanout.Rotation) ||
-            !storage_matches(&allocation, scanout.Rotation))
+        if (!storage_matches(&allocation))
             return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE_MODE;
         status = TgGpuResolveScanoutAddress(&adapter->Tables,
             (UINT64)args->PrimaryAddress.QuadPart, T214_GPU_POST_FB_SIZE, &scanout.Address);
@@ -191,18 +173,11 @@ static bool full_surface(const RECT *rect, UINT width, UINT height)
 }
 
 static bool native_plane(const DXGK_MULTIPLANE_OVERLAY_ATTRIBUTES3 *plane,
-    const TG_GPU_PRIMARY_ALLOCATION_REQUEST *allocation, enum tg_t214_dc_rotation *rotation)
+    const TG_GPU_PRIMARY_ALLOCATION_REQUEST *allocation)
 {
-    /* MPO already supplies the plane's required clockwise transform. Do not
-     * add the VidPN or the allocation's mode orientation a second time. */
-    switch (plane->Rotation) {
-    case D3DDDI_ROTATION_IDENTITY: *rotation = TG_T214_DC_IDENTITY; break;
-    case D3DDDI_ROTATION_90: *rotation = TG_T214_DC_CCW270; break;
-    case D3DDDI_ROTATION_180: *rotation = TG_T214_DC_CCW180; break;
-    case D3DDDI_ROTATION_270: *rotation = TG_T214_DC_CCW90; break;
-    default: return false;
-    }
-    return storage_matches(allocation, *rotation) && !plane->Flags.Value &&
+    /* The UMD has already rotated pixels into portrait storage. */
+    return plane->Rotation == D3DDDI_ROTATION_IDENTITY && storage_matches(allocation) &&
+        !plane->Flags.Value &&
         full_surface(&plane->SrcRect, allocation->Width, allocation->Height) &&
         full_surface(&plane->DstRect, T214_DC_PANEL_WIDTH, T214_DC_PANEL_HEIGHT) &&
         (full_surface(&plane->ClipRect, T214_DC_PANEL_WIDTH, T214_DC_PANEL_HEIGHT) ||
@@ -249,7 +224,7 @@ static NTSTATUS APIENTRY set_primary_mpo(HANDLE context,
         NTSTATUS status = TgGpuGetScanoutSurface(&adapter->Engine, primary->hAllocation, &allocation);
         if (!NT_SUCCESS(status))
             return status;
-        if (!native_plane(&plane->PlaneAttributes, &allocation, &scanout.Rotation))
+        if (!native_plane(&plane->PlaneAttributes, &allocation))
             return STATUS_INVALID_PARAMETER;
         status = TgGpuResolveScanoutAddress(&adapter->Tables,
             (UINT64)primary->SegmentAddress.QuadPart, T214_GPU_POST_FB_SIZE, &scanout.Address);
@@ -277,9 +252,8 @@ static NTSTATUS APIENTRY check_mpo(HANDLE context, DXGKARG_CHECKMULTIPLANEOVERLA
     if (plane && plane->hAllocation && !plane->LayerIndex && !plane->VidPnSourceId) {
         TG_GPU_ADAPTER *adapter = context;
         TG_GPU_PRIMARY_ALLOCATION_REQUEST allocation;
-        enum tg_t214_dc_rotation rotation;
         if (NT_SUCCESS(TgGpuGetScanoutSurface(&adapter->Engine, plane->hAllocation, &allocation)))
-            args->Supported = native_plane(&plane->PlaneAttributes, &allocation, &rotation);
+            args->Supported = native_plane(&plane->PlaneAttributes, &allocation);
     }
     return STATUS_SUCCESS;
 }
@@ -444,18 +418,12 @@ static BOOLEAN snapshot_panel(PVOID context)
     if (!((s->state_control_before | s->state_control_after) &
           (T214_DC_GENERAL_ACT_REQ | T214_DC_WIN_A_ACT_REQ)))
         s->flags |= TG_GPU_PANEL_SNAPSHOT_STABLE;
-    struct tg_t214_dc_layout layout;
-    for (UINT r = TG_T214_DC_IDENTITY; r <= TG_T214_DC_CCW270; ++r) {
-        (void)tg_t214_dc_get_layout((enum tg_t214_dc_rotation)r, &layout);
-        if ((s->options & T214_DC_WIN_ROTATION_MASK) == layout.options &&
-            s->pitch == layout.pitch && s->h_offset == layout.h_offset &&
-            s->v_offset == layout.v_offset && !s->surface_kind) {
-            s->rotation = r;
-            s->width = layout.width;
-            s->height = layout.height;
-            s->flags |= TG_GPU_PANEL_SNAPSHOT_LAYOUT;
-            break;
-        }
+    if (!(s->options & T214_DC_WIN_TRANSFORM_BITS) && s->pitch == T214_DC_PANEL_PITCH &&
+        !s->h_offset && !s->v_offset && !s->surface_kind) {
+        s->rotation = 0; /* fixed native portrait scanout */
+        s->width = T214_DC_PANEL_WIDTH;
+        s->height = T214_DC_PANEL_HEIGHT;
+        s->flags |= TG_GPU_PANEL_SNAPSHOT_LAYOUT;
     }
     const TG_GPU_PRIVATE_MEMORY *memory = &adapter->Tables.Scanout;
     const UINT64 base = (UINT64)memory->SystemPhysicalAddress.QuadPart;

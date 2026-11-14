@@ -77,6 +77,7 @@ static void device_teardown(Device *dev)
       }
       /* The device is idle: release everything still deferred. */
       retire(dev, true);
+      blit_destroy(dev);
       device_layouts_destroy(dev);
       cmd_destroy(dev);
       upload_destroy(dev);

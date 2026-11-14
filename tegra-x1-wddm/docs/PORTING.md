@@ -292,7 +292,15 @@ All 58 downloaded records (506,317 bytes) match device-side lengths and
 SHA-256 values. The 1,192-byte user snapshot has SHA-256
 `af56a3943261198dac51fe1631d33c7481b641171f9ed14fd79298dd39e93d48`.
 
-The final orientation requirement is **hardware rotation and a 1280x720
+**2026-11-14 supersedes the DC-rotation experiment below:** the user selected
+tgd3d GPU prerotation into an ordinary 720x1280 portrait primary. DC column
+scan and decrement transforms have been removed. The logical desktop target
+remains 1280x720. CPU controls and ARM64 builds pass; physical output has not
+been tested. See `TGD3D_COLD_BOOT_HANDOFF_20261113.md` for the current path,
+frozen build provenance and Noble comparison. The following paragraphs
+describe the earlier hardware-rotation experiment, not the active plan.
+
+The final orientation requirement was **hardware rotation and a 1280x720
 landscape desktop**, with the controls in the normal left/right handheld
 position. Leave Windows in that landscape mode after validation. Until the
 hardware path passes, the saved portrait snapshot remains the experiment's

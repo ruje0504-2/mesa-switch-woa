@@ -222,11 +222,18 @@ static HRESULT APIENTRY Blt(DXGI_DDI_ARG_BLT *args)
    else if (args->Flags.Resolve || args->Flags.Reserved)
       hr = DXGI_ERROR_UNSUPPORTED;
    else if (args->Rotate != DXGI_DDI_MODE_ROTATION_IDENTITY &&
-            args->Rotate != DXGI_DDI_MODE_ROTATION_UNSPECIFIED)
-      hr = DXGI_ERROR_UNSUPPORTED;      /* rotated blits are not implemented */
+            args->Rotate != DXGI_DDI_MODE_ROTATION_UNSPECIFIED &&
+            (args->Rotate < DXGI_DDI_MODE_ROTATION_ROTATE90 ||
+             args->Rotate > DXGI_DDI_MODE_ROTATION_ROTATE270))
+      hr = E_INVALIDARG;
    else if ((src->aspects | dst->aspects) != VK_IMAGE_ASPECT_COLOR_BIT)
       hr = DXGI_ERROR_UNSUPPORTED;
    if (SUCCEEDED(hr)) {
+      if (args->Rotate >= DXGI_DDI_MODE_ROTATION_ROTATE90) {
+         hr = rotated_blit(dev, args);
+         trace(TGD3D_TRACE_BLT, hr, args->Flags.Value, args->Rotate);
+         return hr;
+      }
       const UINT src_mip = args->SrcSubresource % src->mips;
       const UINT dst_mip = args->DstSubresource % dst->mips;
       const int32_t sw = (int32_t)src->mipWidth(src_mip), sh = (int32_t)src->mipHeight(src_mip);

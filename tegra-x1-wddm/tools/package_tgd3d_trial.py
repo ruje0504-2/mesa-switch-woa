@@ -83,6 +83,16 @@ def main():
                         if candidate.get("scanout_snapshot_patch_commit"):
                             changed |= {"tegra-x1-wddm/windows/panel_snapshot.h",
                                         "tegra-x1-wddm/platform/t214_dc.h"}
+                if candidate.get("gpu_prerotation_patch_commit"):
+                    changed |= {"tegra-x1-wddm/platform/t214_dc.c",
+                                "tegra-x1-wddm/platform/t214_dc.h",
+                                "tegra-x1-wddm/windows/allocation.c",
+                                "tegra-x1-wddm/tests/test_context_windows.c",
+                                "tegra-x1-wddm/tests/test_dc_rotation.c",
+                                "tegra-x1-wddm/tests/test_dc_portrait.c"}
+                    if (umd.get("gpu_prerotation_patch_commit") != candidate["gpu_prerotation_patch_commit"] or
+                        umd.get("sync_mode") != "gpu-bridge"):
+                        raise ValueError("Portrait-only scanout requires its matching GPU-prerotation UMD")
             baseline_hashes = ({
                 "59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81",
                 "69aa6036da81870efb439e8e09530ae662e810dccf887b603bdfeb6ba8a4a11a",
@@ -119,6 +129,8 @@ def main():
             manifest["kmd_additional_patch_commits"] = candidate["additional_patch_commits"]
         if candidate.get("scanout_snapshot_patch_commit"):
             manifest["kmd_scanout_snapshot_patch_commit"] = candidate["scanout_snapshot_patch_commit"]
+        if candidate.get("gpu_prerotation_patch_commit"):
+            manifest["gpu_prerotation_patch_commit"] = candidate["gpu_prerotation_patch_commit"]
         manifest["kmd"] = candidate["signed_files"]
         manifest["scope"] = ".158 bit14 fix with automatic tgd3d enablement after logon; manual testing"
         if clock_control:
@@ -128,6 +140,8 @@ def main():
                 manifest["scope"] = ".158 GPU460.8 VidPN with synchronous modeset latch; restore the retained GPU460.8 kernel"
             if manifest.get("kmd_source_visibility_patch_commit"):
                 manifest["scope"] = ".158 GPU460.8 source visibility preserves primary binding; restore the retained GPU460.8 kernel"
+            if manifest.get("gpu_prerotation_patch_commit"):
+                manifest["scope"] = ".158 GPU460.8 tgd3d GPU prerotation into portrait scanout; logon start; physical acceptance pending"
         kernel = args.candidate_kmd / "signed-package"
         for name, record in manifest["baseline_kmd"].items():
             checked_copy(args.kmd / name, args.out / "baseline-kmd" / name, record)

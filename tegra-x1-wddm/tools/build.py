@@ -95,9 +95,9 @@ clock_test = args.out / "test-t214-clock"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                 str(clock), str(root / "tests/test_clock.c"), "-o", str(clock_test)], check=True)
 subprocess.run([str(clock_test.resolve())], check=True)
-dc_test = args.out / "test-dc-rotation"
+dc_test = args.out / "test-dc-portrait"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
-                str(root / "platform/t214_dc.c"), str(root / "tests/test_dc_rotation.c"),
+                str(root / "platform/t214_dc.c"), str(root / "tests/test_dc_portrait.c"),
                 "-o", str(dc_test)], check=True)
 subprocess.run([str(dc_test.resolve())], check=True)
 frontend_test = args.out / "test-t214-frontend"

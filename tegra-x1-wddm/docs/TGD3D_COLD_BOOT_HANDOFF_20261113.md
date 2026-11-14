@@ -1,12 +1,21 @@
 # tgd3d 冷启动重启：探索记录与后续交接
 
-更新：2026-11-13（本机时区；交付回执使用 UTC）。包含原生桌面、冷启动探索、旋转
+更新：2026-11-14（本机时区；交付回执使用 UTC）。包含原生桌面、冷启动探索、旋转
 候选及后续审查；较早交接状态按时间保留，当前设备约束以本节为准。
 
 ## 当前设备授权（2026-11-14 UTC）
 
-**最新基线：用户在组合B测试后明确要求“现在这个驱动直接作为基线”，后续在此基础上
-修横屏上屏。** 当前保留`.158 / Code0`，SYS
+**最新状态：I轮54dc5597仍物理黑屏，已恢复竖屏。设备目前运行Ubuntu24.04.3、
+4.9.140-l4t，SSH为switch@192.168.124.5。用户随后明确要求取消DC列扫描旋转、改为
+tgd3d GPU预旋转；该实现已完成控制测试与ARM64构建，尚未安装或验证实屏。**
+应用中的持续目标仍为用户暂停状态；当前工作依据后续明确任务进行，没有自行重启
+Ubuntu或重新开展Windows实机试验。Noble显示、DVFS、充电和SC7配置已取回；APT源修复
+完成。Antigravity CLI Gemini4 Carbon High在独立工作树继续DVFS、Windows电源/充电托盘
+和5秒鼠标隐藏工具，禁止操作实机。以下组合B是用户指定的Windows恢复/开发基线，
+不是当前系统。GPU预旋转实现与构建状态见文末。
+
+**选定基线：用户在组合B测试后明确要求“现在这个驱动直接作为基线”，后续在此基础上
+修横屏上屏。** 组合为`.158 / Code0`，SYS
 `69aa6036da81870efb439e8e09530ae662e810dccf887b603bdfeb6ba8a4a11a`，UMD
 `34e35bcfbb17ea12eaf973502fbe96b95d6a9ab5cb6964e8002e338b826caeb6`，ICD
 `dee3d5805af80696f87d094ec1c5f557d662f435336207992baf588e2dc1cee0`。安装目录
@@ -850,3 +859,160 @@ mandatory/optional、四方向、ARGB/XRGB，同时保留原有OOM/设备移除�
 resource.cpp和对应控制；没有带入shader-cache分支。ARM64候选UMD SHA256为
 `cefc41cffaed8dd4005ad820c27369ad0f66dbce72bdf228a1e5c790d94f864c`，尚未部署。
 该缺陷是否H轮根因仍待直接横屏验证，不主动启用未实现的DXGI旋转copy回退。
+
+## 用户补充屏幕信息与本轮停止条件（2026-11-14 UTC）
+
+用户确认这台Lite改装了第三方OLED；HOS、Linux、Android横屏正常（用户报告）。后续
+应以这块实际改装屏在Jammy上的运行配置核对像素时钟、DSI与DC时序、porch及扫描布局，
+不能把原装Lite面板的假设直接当作该屏验收依据。H轮三个采样仍显示源关闭、列扫描未启用，
+现有证据尚不能将Windows黑屏归因于时序。
+
+用户明确要求：完成54dc5597的本轮直接横屏测试后，若仍不上屏就停止，等待其安排启动
+Ubuntu Jammy并提供SSH连接。该条件满足后，只完成必要恢复、记录和清理，不再追加
+候选或测试；暂停持续目标，后续由用户恢复。记录本条时正在进行该单项UMD修正的安装准备，
+不改变KMD/ICD、双向Fence或频率设置。
+
+## I轮最终结果：DriverFlags修正未解决横屏黑屏（2026-11-14 UTC）
+
+09:26:04安装完成，核对DWM788实际加载新目录中的UMD
+`cefc41cffaed8dd4005ad820c27369ad0f66dbce72bdf228a1e5c790d94f864c`。
+KMD保持H轮`1a86a02b479b716b2b695ade0bd6860076d4d5f61a29d95b804cb655ce0bf164`，
+ICD保持`dee3d5805af80696f87d094ec1c5f557d662f435336207992baf588e2dc1cee0`。
+安装目录为`C:\ProgramData\SwitchWOA\GpuUpdate\tgd3d-54dc5597-20261114-172511`。
+本轮仅在09:20:11为清除旧UMD上下文执行过一次计划重启，随后没有重复重启或重装。
+
+09:31:22直接切至1280×720横屏，没有重复竖屏静置/开窗。用户反馈“黑屏状态”，因此
+**物理横屏失败**。三次09:31:28.556/29.916/31.291读回仍是SourceVisible=0、
+WIN_OPTIONS=0、pitch2880、identity、720×1280，地址`0xfbb88000`、PresentId79不变，
+Pending为空、ACT_REQ为0；四个采样像素全0。切换前/横屏/恢复后的underflow均为6。
+逻辑图案5020像素差异0，只证明软件捕获流程，不改变失败结论。本轮电源Online，
+原生LUID`00000000000ce280`，Windows22631.2861。
+
+09:31:58恢复竖屏；09:32:50核对Code0、SourceVisible=1、WIN_ENABLE=1、PresentId98，
+默认登录启用任务Ready，DWM788/Explorer5164及启动时间保持。安装/测试任务已移除，
+恢复定时器已解除。未把I候选提升为选定基线，也未为移除读取代码再重启设备。
+完整结果在OUT的`primary-scanout-flags-frozen/evidence/`、`physical-result.json`及
+`after-restore.json`。软件结果退出0早于用户反馈，物理结果单独明确记为失败。
+
+Carbon High在09:31:03结束H轮补充审查，报告v3、diff为空。其“从未有横屏flip”与
+“严格只剩三个原因”的措辞超过离散采样证据；保留为候选方向，不将其视为完整因果证明。
+没有继续委派、应用新diff或追加Windows候选；用户已暂停持续目标。
+
+## Noble实际显示数据与第三方OLED对照（2026-11-14）
+
+用户随后提供Ubuntu SSH并要求“获取数据看看是不是因为第三方oled”。本次仅使用
+既有sysfs/debugfs读取接口、xrandr查询及现有启动信息；未改Linux方向、时序、驱动、
+时钟、电源或面板命令，未重启，也未安装工具。数据保存在OUT的
+`noble-oled-reference-20261114/`：`inventory.json`、`capture.json`、`link-capture.json`、
+`comparison.json`及展开后的DC/DSI/xrandr/时钟文本。采集程序只保存在Mac，未上传执行文件。
+
+实际系统是Ubuntu24.04.3、Linux4.9.140-l4t，构建标记
+`#5 SMP PREEMPT Thu Sep 26 11:18:43 EDT 2024`；BSP标记R32.3.1。
+它不是已核对的上游7d95822a源码版本的二进制认证。启动ID
+`d6ee9e10-e244-4c71-9b0d-5df61a3ad8cf`在读取期间保持。设备树为Nintendo Switch Lite，
+active-panel引用`panel-i-720p-5-5`（phandle219）。该节点是软件选择，不能据此识别
+第三方OLED的真实控制板厂商、型号或保护阈值。
+
+| 项目 | Noble实际读回 | Windows I轮或对应KMD契约 |
+|---|---|---|
+| 逻辑桌面 | 1280×720，Xrandr `left` | 1280×720，orientation1 |
+| 面板有效/总尺寸 | DC active720×1280，总1000×1300 | 接管时严格检查同一active/porch，声明总1000×1300 |
+| H同步/后沿/前沿 | 72 / 72 / 136 | 接管常量相同，旋转函数不改这些寄存器 |
+| V同步/后沿/前沿 | 1 / 9 / 10 | 接管常量相同，旋转函数不改这些寄存器 |
+| 显示窗口 | WIN_OPTIONS=`0x40010000`，WIN_ENABLE=1 | WIN_OPTIONS=0，SourceVisible=0 |
+| DC旋转/步长 | SCAN_COLUMN=0、H/V反向位0，pitch2880 | 三次均SCAN_COLUMN=0、pitch2880 |
+| 地址/布局 | WindowA `0xff400000`，输出720×1280，H/V offset0 | `0xfbb88000`，输出720×1280，H/V offset0 |
+| DSI/时钟 | DSI视频通路启用；4 lanes；disp1/DSIA234MHz，DC分频3 | 本轮无完整DSI/PLL读回，不能宣称逐寄存器一致 |
+
+**需要纠正此前从上游推断这台机器使用DC硬件旋转的说法。** 这份实际Noble虽有
+`panel_rotation=270`，但两次active-bank读回的SCAN_COLUMN及反向位均为0；WindowA
+已启用、B/C关闭。正常横屏图像在进入DC扫描前已经完成方向变换，不能把它当成
+当前Windows拟采用的DC列扫描路径的实机通过样本。具体预旋转由GPU/VIC/其他上游
+环节执行，本次寄存器读取没有单独区分；不称其为CPU旋转。
+
+时钟须区分三个来源：设备树clock-frequency为78000000，Xrandr modeline为78.003MHz，
+debugfs `mode.pclk`却为3333000。现有启动日志明确记录
+`nominal-pclk:3333000 parent:234000000 div:3.0 pclk:78000000`；时钟树及
+`DC_DISP_DISP_CLOCK_CONTROL=4`与此一致。因此按分频推导像素时钟为78MHz、配置刷新率
+为60Hz，不能把3333000误读为正在以3.333MHz送屏。五次debugfs timestamp均返回
+时间戳0、frame_no0，无可用VBlank节拍，故本次不声称完成物理60Hz时序测量。
+
+DSI_CONTROL=`0x00103032`、STATUS=0、TO_TALLY=0、POWER_CONTROL=1；采样时没有置位
+DSI FIFO溢出/欠载或超时计数。PHY_TIMING0/1/2为`06070603/040a0e05/00030172`，
+BTA_TIMING=`00190a14`，SOL_DELAY=24，完整包序列、包长及原始寄存器已保存。
+该T210B01的0x53–0x55是PAD_CONTROL5/6/7；旧debug输出把它们标作GANGED寄存器，
+不能据`0x77777`误判双DSI拼接。参考头文件将B01 GANGED移到0x56–0x58。
+Linux统计已启用，软件underflows=0，WindowA原始UFLOW在两次读取均为11；后者是
+已有状态，不等于本次新发生11次故障。Flips completed由6625增至6667、skipped=0。
+Noble读回EMC2500MHz，Windows配置1600MHz，二者不是相同内存频率的性能对照。
+
+结论：**本次没有建立“第三方OLED自我保护导致Windows黑屏”的证据。** 相同行场
+几何可在这块屏上工作，而Windows黑屏已有显示源关闭、最终primary交接未完成的直接
+证据，应优先沿该边界定位。时钟源/DSI完整配置尚缺同轮Windows对照，也没有示波器
+或逻辑分析仪测量，不能彻底排除电气时序差异，更不能认定微秒级阈值或面板保护机制。
+本次数据采集结束；Windows补丁/测试仍按用户要求暂停。
+
+本次实际参考[官方Noble指南](https://wiki.switchroot.org/wiki/linux/l4t-ubuntu-noble-installation-guide)
+与维护者固定源码[DC读取接口](https://github.com/theofficialgman/switch-l4t-kernel-nvidia/blob/7d95822acda1f6dab3f3d1d099b43ff9e0d0e626/drivers/video/tegra/dc/dc.c)、
+[DSI寄存器](https://github.com/theofficialgman/switch-l4t-kernel-nvidia/blob/7d95822acda1f6dab3f3d1d099b43ff9e0d0e626/drivers/video/tegra/dc/dsi_regs.h)、
+[像素分频](https://github.com/theofficialgman/switch-l4t-kernel-nvidia/blob/7d95822acda1f6dab3f3d1d099b43ff9e0d0e626/drivers/video/tegra/dc/mode.c)。
+源码仅用于接口/位域解释，实际状态取自本机读回；不将固定上游提交冒充运行内核哈希。
+
+
+## J候选：tgd3d GPU预旋转（2026-11-14，未部署）
+
+用户根据Noble对照明确取消DC列扫描路线，要求把逻辑1280×720转换成物理720×1280
+再交给显示控制器。本地支线及main的`d3d10umd/DxgiFns.cpp::_Blt`均只是
+`LOG_UNSUPPORTED_ENTRYPOINT()`后返回S_OK，没有可以原封不动移植的GPU旋转实现。
+因此在tgd3d实现了实际Vulkan绘制拷贝；没有导入main整批代码。
+
+实现：
+
+- 删除KMD的列扫描、反向扫描角度和横屏stride/offset计算。DC仅接收720×1280、
+  pitch2880、identity allocation，MPO非identity变换明确拒绝；仍保留Windows逻辑
+  VidPN旋转枚举。`DriverRotation=1`表示驱动在图形引擎执行预旋转。
+- 按微软DXGI契约，对需要旋转而未标记NONPREROTATED的primary创建返回
+  `DXGI_DDI_ERR_UNSUPPORTED`，请求runtime使用rotated Blt进入固定竖屏primary。
+  已预旋转的像素保持identity存储，不再二次旋转。
+- 新增`src/nouveau/tgd3d/tgd3d_blit.cpp`及MIT原创fullscreen-triangle shaders，
+  支持90/180/270度逆时针拷贝，GPU shader object按设备/角度缓存，图像view随backing
+  退休并随资源identity轮换。比例不变用nearest，缩放用linear；非零目标矩形和
+  mip/array子资源都按真实参数处理。BGRA/RGBA、XRGB alpha-one、sRGB编码值保留；
+  float/display隐式gamma互转目前明确拒绝，没有伪称实现。
+- 拷贝记录到既有图形队列，与既有双向GPU Fence、完成值和在途对象退休相衔接。
+  没有新增Present前CPU等待，没有CPU整屏旋转，也没有强行打开SourceVisible。
+
+Noble的DC行场/PLL目标与既有Windows路径相符，本轮不修改DSI或PLL时序。
+Noble `WIN_OPTIONS=0x40010000`中的0x10000是CP_ENABLE，属于其颜色处理配置，
+不是旋转开关；不连同Linux LUT状态一并验证就不能只抄这一位。Linux的IOVA也不能
+作为Windows主表面地址。真正采用的是其固定竖屏fetch几何、无column/decrement，
+地址仍取Windows allocation并等待有效锁存。
+
+参考：Microsoft Learn `DXGI1_2_DDI_BASE_FUNCTIONS`/`DXGI_DDI_PRIMARY_DESC`、
+`D3DKMDT_VIDPN_HW_CAPABILITY`，以及Khronos `vkCmdDraw` shader-object动态状态契约；
+2026-11-14查阅，Windows头文件10.0.26100.0。本路径仅改变tgd3d旋转，未把Noble
+桌面的预旋转执行器未经分析就断言为GPU或VIC。
+
+构建刻意保留已部署组件的源码谱系：UMD以冻结9de42c82及其已应用的XRGB、错误传播、
+flush、standard primary、DriverFlags补丁为基础，再加本轮旋转；没有夹带HEAD中的
+shader binary disk-cache改动。KMD以H轮冻结源码加本轮显示补丁，仍`.158 + bit14 +
+GPU460.8`；ICD未改。初次冻结构建误带HEAD版context测试的新诊断字段，编译失败；
+改为对冻结文件应用本轮窄diff后，最终全量ARM64构建通过，没有为通过编译去更改
+内核诊断ABI。
+
+已完成：shader glslang/spirv-val；HEAD和冻结UMD x64 CPU contracts；ARM64 UMD和KMD
+交叉构建；KMD host models；真实WDK头文件编译的x64 scanout/timing controls在Wine
+通过。测试覆盖GPU命令/状态恢复、角度specialization、view缓存、OOM传播、未完成
+GPU对象不提前退休、rotated primary fallback、fixed portrait allocation、MPO变换
+拒绝及VBlank锁存。它们不执行Switch GPU，不构成像素、物理横屏或稳定性验收。
+
+候选输出：OUT `gpu-prerotation/`，包括冻结源码、差异、构建命令和控制结果。
+ARM64 UMD SHA256 `75df9fcb4a23a0fb326d63463a264354b54162a30fc58de04c7e5787d5bf580c`；
+SYS签名后SHA256 `49d21c47cb0937d4b57b68af689709a1f896ef5a05fd74ca371ea547f6d37718`。
+SYS已有本地签名，CAT尚需Windows原生Inf2Cat生成并验证；不能称为已安装的完整驱动包。
+打包工具要求此portrait-only KMD与同一补丁的GPU预旋转UMD成对，恢复仍指向组合B。
+
+下一步在Windows环境补齐CAT和原生工具检查后，直接验证逻辑横屏、物理竖屏backing
+的方向/边框/像素与显示锁存，保留约60Hz请求及实际节拍的区分。设备仍在Ubuntu，
+未重启、未写SD、未改变频率/充电或Windows启动方式；Gemini的DVFS/托盘候选不会
+混入本轮旋转组件验收。
