@@ -55,7 +55,7 @@ static BOOLEAN program_flip(PVOID context)
         flip.Address = active.address;
         flip.Rotation = active.rotation;
     }
-    flip.Visible = flip.Visible && panel->SourceVisible;
+    flip.Visible = flip.Visible && panel->SourceVisible && panel->TargetActive;
     if (flip.Immediate && latched && matches(&flip, &active) &&
         panel->Displayed.PresentId==flip.PresentId) {
         action->Status=STATUS_SUCCESS;

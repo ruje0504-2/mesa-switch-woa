@@ -18,6 +18,15 @@ UMD34e35bcf…、ICDdee3d580…、gpu-bridge、logon-default。没有恢复59dd�
 用户要求结合Switchroot、微软文档和当前WDK复核，并让Gemini独立审查。Antigravity
 CLI的Carbon High审查已在独立目录启动，只允许本地报告/diff，不允许操作实机。
 
+用户随后明确指出：先前的四色横屏截图是正确的，实屏却黑屏。已重新查看保存的
+`landscape90c-pattern-capture.png`：1280×720、四色/方向箭头/白边正确，对应控制记录
+5020个RGB像素、容差0、差异0。截图由`Graphics.CopyFromScreen`取得逻辑桌面，并未
+读取DC实际扫描的backing。该PNG属于较早的609ce9d9…/34e35bcf…组合，不能改标为
+当前cb0aef82…的实屏证据。当前F轮另有逻辑像素匹配及用户黑屏反馈。
+这将排查优先级收敛到最终primary交接、扫描地址/布局/启用及锁存、DC取数/输出路径；
+尚不能区分“最终primary没有正确更新”和“DC没有扫描正确primary”，也不凭截图
+宣判所有shader/Fence路径无误。仍不重复部署或旋转来代替定位。
+
 ## 冷启动交接时的结论与恢复状态（历史）
 
 **GPU460.8MHz＋RAM1600MHz 的直接 tgd3d 冷启动仍自动重启，按用户反馈记为失败。**
@@ -567,3 +576,57 @@ framebuffer改为中间横屏buffer加VIC合成，并不是从本驱动这条DC 
 Gemini审计目录为 `delegation-rotation-carbon/`，目标为报告和统一diff，使用
 `gemini-4-carbon-high`及本会话自动工具许可。CLI提示auto执行模式未开放，已回到默认
 执行模式；自动工具许可仍明确生效，静默认证成功。当前审计在途，尚无可验收结论。
+
+## 用户要求补查winx与Ubuntu Jammy/Noble（2026-11-14 UTC）
+
+先前只检查了固定3c40adf1的通用DC代码，没有追到Ubuntu发行维护者的面板旋转适配。
+该固定提交属于Switchroot的lineage-19.1分支背景，不能代替Jammy/Noble实现。
+[Noble官方指南的Sources](https://wiki.switchroot.org/wiki/linux/l4t-ubuntu-noble-installation-guide)
+链接到theofficialgman的内核构建脚本；固定脚本
+`1fb0e92e10eaf452b71cbdf7fc7b06c27f6de121`克隆其`switch-l4t-kernel-nvidia/linux-dev`。
+本次将该分支固定为`7d95822acda1f6dab3f3d1d099b43ff9e0d0e626`后核对，未将滚动分支
+HEAD冒充所有已发布镜像的二进制来源。
+
+* [官方问题说明](https://wiki.switchroot.org/wiki/common-issues)明确：Jammy/Noble通过
+  Tegra DC接口的内核硬件旋转绕过NVIDIA Xorg用户态旋转的帧节拍问题。
+* 维护者[ext/dev.c](https://github.com/theofficialgman/switch-l4t-kernel-nvidia/blob/7d95822acda1f6dab3f3d1d099b43ff9e0d0e626/drivers/video/tegra/dc/ext/dev.c)
+  的`tegra_dc_rotation_to_win_flags`把90映射为SCAN_COLUMN+INVERT_H、270映射为
+  SCAN_COLUMN+INVERT_V；set_windowattr按物理面板方向覆盖生产者的这些标志，必要时
+  将输出宽高换回物理竖屏。fb.c同时转换逻辑模式宽高和blanking。主画面没有因此
+  增加CPU整帧旋转或3D shader预旋转；cursor.c对小型cursor位图另做CPU旋转。
+* 另查的l4t-community `linux-6.0.0`固定54e79a48采用组合生产者/面板变换，其行为与
+  上述维护者分支的强制覆盖不同，不能混写成同一个实现。Windows显式MPO变换仍须按
+  自身契约转换，不能把Linux固定面板角度再叠加一遍。
+* winx本地固定`e3b30076a4c9a66e2ddb1e8deaffe0101d88ef06`中的KMDOD改编使用CPU
+  BltBits/GetPitches/GetRowStart，把像素写进原生framebuffer；SWITCH_HEKATE配置为
+  0xF5A00000、720×1280、pitch2880。SimpleFbDxe在启动OS loader前交回原生模式。
+  该fork README记录其Lite自定义display-only安装曾撤回，不能仅据源码存在就认定
+  用户此前正常的软件横屏一定由这份SampleDisplay实现；用户实际正常横屏作为对照
+  保留，代码用于像素地址/可见性契约参考。
+
+对应来源、SHA256及只读副本保存在`rotation-black-static-review/references/`，未复制
+Linux GPL实现进本驱动。曾考虑新增DC查询接口，用户要求先对照成功实现后已停止该
+方向，本轮没有新增诊断接口。
+
+## 源可见性与目标激活分离：仅本地修正
+
+winx/KMDOD在模式切换中保留SourceNotVisible，Present另检查目标/监视器状态。
+当前KMD却让CommitVidPn和SetTimingsFromVidPn调用同一个SetVisibility，直接覆盖OS
+最近一次SourceVisible请求。可复现的问题是：先隐藏源，再启用目标/提交模式，源被
+意外显示；反过来，源启用也会覆盖目标停用状态。这是源码契约混用，不是已证明的
+本轮实屏黑屏根因。
+
+本次只增加TargetActive独立状态：源可见性DDI只改SourceVisible，模式/目标激活只改
+TargetActive，所有新flip和显示恢复使用两者的有效组合。继续保留primary地址、布局、
+PresentId和真实锁存等待；不改变旋转方向、Fence、UMD、ICD或功耗设置。
+
+x64 real-WDK/Wine控制退出0，覆盖两种回调顺序、隐藏源中的模式切换、停用目标期间
+的MPO更新及随后恢复。同一个新时序控制链接旧panel_vidpn实现退出63，对应第319行
+“提交模式不能取消源隐藏”断言；新实现退出0。冻结cb0aef82源码只叠加本项6文件后，
+完整host控制和ARM64 KMD/控制程序构建退出0。结果在`rotation-target-gate/`。
+**没有上机、没有新实屏验收；设备仍为用户要求保持的cb0aef82候选。**
+
+Gemini初次审计于07:11:29主动中断，以在原会话补入用户的“正确逻辑截图/物理黑屏”
+及winx对照要求；不是因SSH或观察超时判定终止。07:11:51同一Carbon High会话接续，
+自动工具许可仍为always-proceed。Noble源码已复制到审计参考目录，后续追加说明待
+当前审计回合结束后发送；尚未把未收到的报告或diff记作验收完成。

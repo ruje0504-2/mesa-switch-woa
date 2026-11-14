@@ -24,7 +24,21 @@ NTSTATUS TgGpuPanelSetVisibility(TG_GPU_ADAPTER *adapter, BOOLEAN enabled)
 {
     CHECK(adapter && adapter->Panel.Dc.owned);
     ++visibility_calls;
-    if (NT_SUCCESS(visibility_status)) visible = enabled;
+    if (NT_SUCCESS(visibility_status)) {
+        adapter->Panel.SourceVisible = enabled;
+        visible = adapter->Panel.SourceVisible && adapter->Panel.TargetActive;
+    }
+    return visibility_status;
+}
+
+NTSTATUS TgGpuPanelSetTargetActive(TG_GPU_ADAPTER *adapter, BOOLEAN enabled)
+{
+    CHECK(adapter && adapter->Panel.Dc.owned);
+    ++visibility_calls;
+    if (NT_SUCCESS(visibility_status)) {
+        adapter->Panel.TargetActive = enabled;
+        visible = adapter->Panel.SourceVisible && adapter->Panel.TargetActive;
+    }
     return visibility_status;
 }
 
@@ -256,6 +270,7 @@ void start(void)
     DRIVER_INITIALIZATION_DATA d = {0};
     TgGpuRegisterPanelVidPn(&d);
     adapter.Panel.Dc.owned = true;
+    adapter.Panel.SourceVisible = adapter.Panel.TargetActive = TRUE;
     adapter.Panel.Boot.TargetId = 7;
     DXGK_SET_TIMING_PATH_INFO path = {.VidPnTargetId = 7,
         .Input = {.Active = 1, .PreserveInherited = 1, .VidPnPathUpdates = 1}};
@@ -293,5 +308,27 @@ void start(void)
     CHECK(d.DxgkDdiSetTimingsFromVidPn(&adapter, &args) == STATUS_SUCCESS && !results.Value);
     CHECK(visibility_calls == 4);
     test_rotation(&adapter,&d);
+
+    /* A mode/path change must not undo a prior source-visibility request.
+     * Conversely, source visibility cannot power an inactive path back on. */
+    test_path.ContentTransformation.Rotation = D3DKMDT_VPPR_IDENTITY;
+    DXGKARG_SETVIDPNSOURCEVISIBILITY source = {.VidPnSourceId = 0, .Visible = FALSE};
+    CHECK(d.DxgkDdiSetVidPnSourceVisibility(&adapter, &source) == STATUS_SUCCESS);
+    DXGKARG_COMMITVIDPN commit = {.hFunctionalVidPn = VIDPN};
+    CHECK(d.DxgkDdiCommitVidPn(&adapter, &commit) == STATUS_SUCCESS);
+    CHECK(!adapter.Panel.SourceVisible && adapter.Panel.TargetActive && !visible);
+    path.VidPnTargetId = adapter.Panel.Boot.TargetId;
+    path.Input.Active = 1;
+    args.PathCount = 1;
+    args.pSetTimingPathInfo = &path;
+    CHECK(d.DxgkDdiSetTimingsFromVidPn(&adapter, &args) == STATUS_SUCCESS);
+    CHECK(!adapter.Panel.SourceVisible && adapter.Panel.TargetActive && !visible);
+    commit.Flags.PathPoweredOff = 1;
+    CHECK(d.DxgkDdiCommitVidPn(&adapter, &commit) == STATUS_SUCCESS);
+    source.Visible = TRUE;
+    CHECK(d.DxgkDdiSetVidPnSourceVisibility(&adapter, &source) == STATUS_SUCCESS);
+    CHECK(adapter.Panel.SourceVisible && !adapter.Panel.TargetActive && !visible);
+    commit.Flags.PathPoweredOff = 0;
+    CHECK(d.DxgkDdiCommitVidPn(&adapter, &commit) == STATUS_SUCCESS && visible);
     ExitProcess(0);
 }

@@ -26,7 +26,7 @@ static void write_register(void *registers, uint32_t word, uint32_t value)
 typedef struct _PANEL_ACTION {
     TG_GPU_ADAPTER *Adapter;
     enum tg_t214_dc_result Result;
-    BOOLEAN Visible;
+    BOOLEAN Visible, TargetGate;
 } PANEL_ACTION;
 
 NTSTATUS TgGpuPanelSynchronize(TG_GPU_ADAPTER *adapter, PKSYNCHRONIZE_ROUTINE routine,
@@ -87,6 +87,7 @@ NTSTATUS TgGpuPanelStart(TG_GPU_ADAPTER *adapter)
     adapter->Panel.Boot = boot;
     adapter->Panel.PathRotation = D3DKMDT_VPPR_IDENTITY;
     adapter->Panel.SourceVisible = TRUE;
+    adapter->Panel.TargetActive = TRUE;
     adapter->Panel.Displayed = (TG_GPU_PANEL_FLIP){
         .Address = (UINT64)boot.PhysicAddress.QuadPart,
         .Visible = TRUE,
@@ -123,12 +124,16 @@ static BOOLEAN set_visibility(PVOID context)
     TG_GPU_PANEL *panel = &action->Adapter->Panel;
     struct tg_t214_dc_scanout active;
     action->Result = TG_T214_DC_BUSY;
-    /* Keep the source gate separate from a plane's requested enable bit.
-     * Address updates while hidden must not turn scanning back on. */
-    panel->SourceVisible = action->Visible != FALSE;
+    /* A modeset/target-power update is not a source-visibility request.
+     * Preserve the other gate across either callback ordering. */
+    if (action->TargetGate)
+        panel->TargetActive = action->Visible != FALSE;
+    else
+        panel->SourceVisible = action->Visible != FALSE;
+    const BOOLEAN visible = panel->SourceVisible && panel->TargetActive;
     if (!TgGpuPanelReadLatched(panel, &active))
         return TRUE;
-    if (active.visible == (action->Visible != FALSE)) {
+    if (active.visible == (visible != FALSE)) {
         action->Result = TG_T214_DC_OK;
         return TRUE;
     }
@@ -136,14 +141,14 @@ static BOOLEAN set_visibility(PVOID context)
      * Disabled Window A performs no fetch. VidMm owns residency and supplies
      * address updates when the primary backing changes, including while hidden.
      * Only the stop/POST-handoff path deliberately replaces this binding. */
-    active.visible = action->Visible != FALSE;
+    active.visible = visible != FALSE;
     enum tg_t214_dc_result result = tg_t214_dc_queue_surface(dc, &active, false);
     if (result == TG_T214_DC_OK) {
         /* This is the same binding and completed PresentId, with only its
          * enable bit changing. Preserve that receipt after the visibility
          * update latches instead of classifying our own update as external. */
         panel->Pending = panel->Displayed;
-        panel->Pending.Visible = action->Visible != FALSE;
+        panel->Pending.Visible = visible;
         panel->Pending.Immediate = FALSE;
     } else {
         action->Result = result;
@@ -185,6 +190,15 @@ NTSTATUS TgGpuPanelSetVisibility(TG_GPU_ADAPTER *adapter, BOOLEAN visible)
     if (!adapter->Panel.Dc.owned)
         return STATUS_DEVICE_NOT_READY;
     PANEL_ACTION action = {.Adapter = adapter, .Visible = visible};
+    return wait_for_panel(&action, set_visibility);
+}
+
+NTSTATUS TgGpuPanelSetTargetActive(TG_GPU_ADAPTER *adapter, BOOLEAN active)
+{
+    PAGED_CODE();
+    if (!adapter->Panel.Dc.owned)
+        return STATUS_DEVICE_NOT_READY;
+    PANEL_ACTION action = {.Adapter = adapter, .Visible = active, .TargetGate = TRUE};
     return wait_for_panel(&action, set_visibility);
 }
 

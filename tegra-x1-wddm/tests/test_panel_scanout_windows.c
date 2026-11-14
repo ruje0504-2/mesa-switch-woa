@@ -117,7 +117,7 @@ void start(void)
     CHECK(tg_t214_dc_acquire(&adapter.Panel.Dc,&io)==TG_T214_DC_OK);
     latch(&model,true);
     adapter.Panel.Boot.TargetId=7;
-    adapter.Panel.SourceVisible=TRUE;
+    adapter.Panel.SourceVisible=adapter.Panel.TargetActive=TRUE;
     adapter.Panel.Displayed=(TG_GPU_PANEL_FLIP){.Address=T214_GPU_POST_FB_BASE,.Visible=TRUE};
     adapter.Engine.Dxgk=(DXGKRNL_INTERFACE){.DeviceHandle=&adapter,
         .DxgkCbSynchronizeExecution=synchronize,.DxgkCbNotifyInterrupt=interrupt,.DxgkCbQueueDpc=queue_dpc};
@@ -215,6 +215,24 @@ void start(void)
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
     active_is(TG_T214_DC_CCW90,0x98400000,TRUE);
     signal_vblank(&d);CHECK(reported_present==203);
+
+    /* Target timings/power and source visibility are independent gates.
+     * Re-enabling a target must preserve the OS's hidden source state. */
+    CHECK(TgGpuPanelSetVisibility(&adapter,FALSE)==STATUS_SUCCESS);
+    CHECK(TgGpuPanelSetTargetActive(&adapter,FALSE)==STATUS_SUCCESS);
+    CHECK(TgGpuPanelSetTargetActive(&adapter,TRUE)==STATUS_SUCCESS);
+    CHECK(!adapter.Panel.SourceVisible && adapter.Panel.TargetActive);
+    active_is(TG_T214_DC_CCW90,0x98400000,FALSE);
+    CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
+    CHECK(TgGpuPanelSetTargetActive(&adapter,FALSE)==STATUS_SUCCESS);
+    CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
+    CHECK(adapter.Panel.SourceVisible && !adapter.Panel.TargetActive);
+    CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
+    latch(&model,true);signal_vblank(&d);
+    active_is(TG_T214_DC_CCW90,0x98400000,FALSE);
+    CHECK(TgGpuPanelSetTargetActive(&adapter,TRUE)==STATUS_SUCCESS);
+    active_is(TG_T214_DC_CCW90,0x98400000,TRUE);
+    CHECK(reported_present==203);
 
     /* MPO disable also has no replacement allocation: only its enable bit
      * changes. Source visibility must still know which primary to show. */

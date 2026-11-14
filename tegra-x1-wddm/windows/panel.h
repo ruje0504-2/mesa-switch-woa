@@ -18,7 +18,7 @@ typedef struct _TG_GPU_PANEL {
     DXGK_DISPLAY_INFORMATION Boot;
     TG_GPU_PANEL_FLIP Pending, Displayed;
     D3DKMDT_VIDPN_PRESENT_PATH_ROTATION PathRotation;
-    BOOLEAN Stopping, NotifyVBlank, NotifyMpoVBlank, SourceVisible;
+    BOOLEAN Stopping, NotifyVBlank, NotifyMpoVBlank, SourceVisible, TargetActive;
 } TG_GPU_PANEL;
 
 struct _TG_GPU_ADAPTER;
@@ -29,6 +29,8 @@ _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS TgGpuPanelStop(struct _TG_GPU_ADAPTER *adapter);
 _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS TgGpuPanelSetVisibility(struct _TG_GPU_ADAPTER *adapter, BOOLEAN visible);
+_IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS TgGpuPanelSetTargetActive(struct _TG_GPU_ADAPTER *adapter, BOOLEAN active);
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS TgGpuPanelSynchronize(struct _TG_GPU_ADAPTER *adapter, PKSYNCHRONIZE_ROUTINE routine,
     PVOID context);

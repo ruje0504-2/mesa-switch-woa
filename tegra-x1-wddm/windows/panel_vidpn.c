@@ -379,7 +379,7 @@ static NTSTATUS APIENTRY commit_vidpn(HANDLE context, const DXGKARG_COMMITVIDPN 
     /* DSI timings do not rotate. SetVidPnSourceAddress programs the bound
      * primary's dimensions/pitch/orientation atomically, before or after this
      * modeset. Never reinterpret a previous primary using the new path angle. */
-    status = TgGpuPanelSetVisibility(adapter, attached && !args->Flags.PathPoweredOff);
+    status = TgGpuPanelSetTargetActive(adapter, attached && !args->Flags.PathPoweredOff);
     if (NT_SUCCESS(status))
         adapter->Panel.PathRotation = rotation;
     return status;
@@ -416,7 +416,7 @@ static NTSTATUS APIENTRY set_timings(HANDLE context, DXGKARG_SETTIMINGSFROMVIDPN
         if (!attached && !path->Input.PreserveInherited)
             return STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
     }
-    NTSTATUS status = TgGpuPanelSetVisibility(adapter, path->Input.Active != 0);
+    NTSTATUS status = TgGpuPanelSetTargetActive(adapter, path->Input.Active != 0);
     if (NT_SUCCESS(status)) {
         path->OutputFlags = 0;
         /* SetTimings completes synchronously. DxgKrnl requires a nonzero
