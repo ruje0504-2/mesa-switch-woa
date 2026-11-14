@@ -1141,3 +1141,36 @@ AllowNativeBoot仍存在。逐键原始值比较仅增加14个SYSTEM跟踪键、
 不能称为双向GPU Fence验证。按用户明确要求，**用户确认问题修复后才关闭本轮
 LogonUI/DWM转储及启动跟踪**，由本窗口清理并核对重启不再自动采集，保留已取回证据。
 恢复脚本与离线删除配置已备妥；不因单轮收证结束自动关闭，不改变原生启动。
+
+### 首轮冷启动捕获：日志已取回，尚不能归因 DLL 或 Fence
+
+用户最初回答“登录前仍自动重启”，随后补充：**加载转圈出现了几帧，尚未显示
+`ruje`字样，随后重启**。不能再把该故障写成固定发生在账户界面出现前或切换瞬间。
+SD已接回Mac，以只读挂载复制18份文件并校验；实卡KMD/UMD/ICD哈希仍与冻结组合一致。
+数据与逐项结论保存于输出目录 `cold-boot-concurrent-20261113/round1/` 的
+`collection.json`、`etl-summary.json`、`findings.json`。
+
+四个session和全部provider的注册表Status均为0。四个ETL的EndTime、BuffersWritten
+都未最终更新，不能按正常关闭文件读取，也不能把头部丢失计数0解释为没有丢事件。
+按完整物理缓冲恢复（不改原始文件）：kernel61个缓冲/13428条记录、graphics5/98、
+loader5/182、tgd3d1/2。后者两条仅为ETL元数据，没有已持久化的自定义UMD事件。
+使用独立工具环境的dissect.etl3.14；适配其EventHeader GUID字节序、event-id查表及
+cstruct4.7字段访问差异。kernel记录均可解码，graphics/CodeIntegrity仅按匹配版本和
+精确payload长度解码，5条缺匹配schema的事件保留原始数据，没有猜测其含义。
+
+恢复的kernel前缀包含17条进程事件、510条模块事件：`tegragpurender.sys`加载，随后
+`csrss.exe`、`wininit.exe`、`winlogon.exe`创建；winlogon PID664的最后可见模块包括
+user32、win32u、gdi32/gdi32full和imm32。没有已持久化的dwm/LogonUI进程记录或
+tgd3d DLL加载记录。**这不证明DWM没有启动**，也不证明最后一条ETL就是崩溃时刻。
+头部墙钟与文件及后续注册表时间存在差异，四路流以相同BootTime/QPC对齐，不能把
+不同来源的墙钟直接拼成精确故障时间线。
+
+两进程转储目录为空；Application/System/Winlogon/CodeIntegrity EVTX和旧DWM WER
+与捕获前哈希相同，因此没有本轮新增的崩溃栈。已解出的图形错误含QueryInterface的
+STATUS_NOT_SUPPORTED和两条早期IOCTL的STATUS_OBJECT_NAME_NOT_FOUND；前者对应
+冻结KMD明确返回不支持的查询入口，后者没有DLL名称，均不能改称缺DLL或Fence超时。
+线程切换数据不含具体Mutex名称；本轮也无已持久化的tgd3d等待序列可证明Fence死锁。
+
+这轮没有替换驱动或改变启动方式。保留捕获设置至用户确认修复，继续对照实际冻结
+代码审查首次设备/显示接管和资源提交，不用不完整的日志前缀排除tgd3d，也不将
+未取得的LogonUI/DWM调用栈、GPU指令栈或锁超时写成已查明。
