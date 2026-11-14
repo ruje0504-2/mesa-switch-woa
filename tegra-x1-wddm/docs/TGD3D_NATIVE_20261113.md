@@ -1174,3 +1174,36 @@ STATUS_NOT_SUPPORTED和两条早期IOCTL的STATUS_OBJECT_NAME_NOT_FOUND；前者
 这轮没有替换驱动或改变启动方式。保留捕获设置至用户确认修复，继续对照实际冻结
 代码审查首次设备/显示接管和资源提交，不用不完整的日志前缀排除tgd3d，也不将
 未取得的LogonUI/DWM调用栈、GPU指令栈或锁超时写成已查明。
+
+### 用这台系统的独立 SM4 程序检查 tgd3d → NVK/NAK
+
+继续静态核对共享owner映射/释放及提交顺序，未发现把runtime句柄直接当物理地址
+使用的代码。队列依赖的抽象顺序未形成简单环，但不据此宣称运行时Fence已验收。
+VPS Claude按用户提供方式尝试只读复核，返回“Not logged in”，没有审计结论，
+未更改其账号配置。Antigravity Carbon High原会话仍未交付report/diff；没有把
+服务端stream超时当作完成或因此重开同一任务。
+
+为检查实际DWM输入，给既有`tgd3d-contracts`增加`--export-dxbc`模式，复用生产
+CreateVertexShader/CreatePixelShader及dxbc-spirv转换；只接受完整SM4.0 VS/PS、
+ISGN/OSGN签名，检查容器/token/签名范围，成功后释放模拟shader。该模式不跑后续
+合成失败注入，也不创建GPU设备。x64、ARM64构建通过，原CPU合约完整运行退出0。
+
+从只读SD的`dwmcore.dll`（SHA256
+`72e4a0545913eed25cc75d59894b6963a44ece1338c9d89658caaf5e433ae301`）与`dcomp.dll`
+（`a1f9c1cd203036f95bb29f5025cfb30b14a9f04da0b5e38c7e04d0a7708178a0`）提取满足条件
+的30个容器，按内容去重为28份：18个VS、10个PS。28份均通过生产DDI到SPIR-V
+转换、Vulkan1.3静态校验和NVK/NAK SM53 CPU编译；最大输出1215条指令、64个GPR。
+新x64编译工具对既有VS基准生成的机器码，与先前真实ARM64控制输出逐字节一致
+（SHA256`aebccad99550c1849e8a46008dc09a28e2be2a6009f7e190c2a6bd97c6b04bea`）。
+
+前端相对冻结9de42c82的差异只有最后的缓存调用；本次导出明确要求SPIR-V输入，
+不接受缓存binary。NAK及`nvk_shader.c`相对实机ICD d3423d26无源码变化。
+为本机编译控制补装匹配Rust1.90.0的x64 Windows标准库，复用现有ARM64构建的
+bindgen设置方式；只构建控制工具，未生成或部署新的实机驱动。
+
+这只证明这些独立程序的CPU编译接受性；运行时链接的库函数、实际崩溃时shader、
+GPU执行和像素结果未覆盖，不能据此排除NAK/着色器问题，也不能称冷启动已修好。
+Windows原始着色器及派生SPIR-V/机器码均仅保存在本机输出目录
+`dwm-shader-audit/`，没有加入Git。输入偏移/哈希、逐shader结果与验证范围见
+`inputs.json`、`frontend-results.json`、`spirv-validation.json`、`nak-results.json`
+及`summary.json`。

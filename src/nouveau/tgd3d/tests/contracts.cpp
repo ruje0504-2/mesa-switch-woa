@@ -369,7 +369,8 @@ static void query_contract()
    std::puts("PASS: nonblocking query polling; all 129 render passes counted across pool rollover");
 }
 
-static void shader_contract(const BYTE *dxbc, bool vertex, const char *outputPath, bool sampled = false)
+static void shader_contract(const BYTE *dxbc, bool vertex, const char *outputPath,
+                            bool sampled = false, bool exportOnly = false)
 {
    reset(); Adapter adapter; Device dev = make_device(&adapter);
    shaderOutput = outputPath;
@@ -406,6 +407,12 @@ static void shader_contract(const BYTE *dxbc, bool vertex, const char *outputPat
    if (sampled) {
       const Shader *shader = reinterpret_cast<Shader *>(storage);
       CHECK(shader->cbMask == (1u << 13) && shader->srvMask[0] == 1 && shader->samplerMask == 1);
+   }
+   if (exportOnly) {
+      table.pfnDestroyShader({&dev}, {storage});
+      retire(&dev, true);
+      std::puts("PASS: supplied SM4 DXBC converted through the production DDI; no GPU execution");
+      return;
    }
    /* A lazily compiled variant can discover removal after base creation.
     * The base handle must not make the device look usable again. */
@@ -484,8 +491,52 @@ void runtime_contracts();
 void resource_creation_contracts();
 void shader_cache_contracts(bool child);
 
+/* Reproduce compiler issues with real application shaders without executing
+ * them or installing a driver. This D3D10 control accepts standalone SM4.0
+ * VS/PS containers with the corresponding D3D10 signature chunks. */
+static void export_dxbc(const char *inputPath, const char *outputPath)
+{
+   FILE *file = std::fopen(inputPath, "rb"); CHECK(file);
+   CHECK(!std::fseek(file, 0, SEEK_END));
+   const long size = std::ftell(file); CHECK(size >= 32);
+   std::rewind(file);
+   std::vector<BYTE> bytes((size_t)size);
+   CHECK(std::fread(bytes.data(), 1, bytes.size(), file) == bytes.size());
+   CHECK(!std::fclose(file));
+   const BYTE *data = bytes.data();
+   CHECK(!std::memcmp(data, "DXBC", 4) && read32(data + 20) == 1);
+   CHECK(read32(data + 24) == bytes.size());
+   const UINT chunks = read32(data + 28);
+   CHECK(chunks && chunks <= (bytes.size() - 32) / 4);
+   unsigned programs = 0, inputs = 0, outputs = 0;
+   UINT stage = ~0u;
+   for (UINT i = 0; i < chunks; ++i) {
+      const UINT offset = read32(data + 32 + 4 * i);
+      CHECK(offset >= 32 + 4 * chunks && offset <= bytes.size() - 8);
+      const BYTE *chunk = data + offset;
+      const UINT length = read32(chunk + 4);
+      CHECK(length <= bytes.size() - offset - 8);
+      if (!std::memcmp(chunk, "SHDR", 4) || !std::memcmp(chunk, "SHEX", 4)) {
+         CHECK(length >= 8 && !(length & 3) && read32(chunk + 12) == length / 4);
+         const UINT version = read32(chunk + 8);
+         CHECK((version & 0xffff) == 0x40 && (version >> 16) <= 1);
+         stage = version >> 16;
+         ++programs;
+      } else if (!std::memcmp(chunk, "ISGN", 4) || !std::memcmp(chunk, "OSGN", 4)) {
+         CHECK(length >= 8 && read32(chunk + 8) <= (length - 8) / 24);
+         (chunk[0] == 'I' ? inputs : outputs)++;
+      }
+   }
+   CHECK(programs == 1 && inputs == 1 && outputs == 1);
+   shader_contract(data, stage == 1, outputPath, false, true);
+}
+
 int main(int argc, char **argv)
 {
+   if (argc == 4 && !strcmp(argv[1], "--export-dxbc")) {
+      export_dxbc(argv[2], argv[3]);
+      return 0;
+   }
    if (argc == 2 && !strcmp(argv[1], "--shader-cache-child")) {
       shader_cache_contracts(true);
       return 0;

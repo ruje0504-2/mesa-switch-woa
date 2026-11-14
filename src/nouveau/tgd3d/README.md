@@ -145,6 +145,17 @@ E_PENDING paging、独立 owner 销毁、忽略导入的 ICD、Present token/sta
 及带纹理采样/常量缓冲 13 的 `tgd3d-sample.spv`、含动态循环/CB 索引/裁剪的 `tgd3d-loop.spv`
 另用 `spirv-val --target-env vulkan1.3` 检查。
 
+也可把本地应用的独立 SM4.0 VS/PS 容器送入相同生产 DDI，导出转换结果：
+
+```text
+tgd3d-contracts.exe --export-dxbc input.dxbc output.spv
+spirv-val --target-env vulkan1.3 output.spv
+```
+
+此入口检查容器、token 长度和 ISGN/OSGN 签名范围，仅导出前端结果，不运行合成
+故障注入用例或加载 GPU 驱动。库函数须先由应用链接为完整程序；ISG1/OSG1、其他
+shader model 及阶段不在该入口范围内。应用着色器及其派生产物留在本地，不随仓库发布。
+
 Windows NVK 构建开启 `build-tests` 后，可构建 `nvk-tgd3d-shader-check`，将这些
 SPIR-V 送进实际 NVK 描述符 lowering 和 NAK SM53 编码器。例如在控制文件目录运行：
 
