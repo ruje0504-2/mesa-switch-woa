@@ -1216,10 +1216,14 @@ Windows原始着色器及派生SPIR-V/机器码均仅保存在本机输出目录
 启用双向桥接。完整语义、限制和参考见 [Deferred Init](TGD3D_DEFERRED_INIT.md)。
 
 冻结组合上的候选 ARM64 UMD SHA256：
-`a92514fbb1b141501b551d241fc392c8c3f9f661743dccd472fa290dcd91ffc4`
-（2932736字节）。全部 tgd3d 对象重新编译；KMD/ICD 不改，不带入磁盘缓存。
+`9f195e43dbd5f5fa19e569c919cf39f67512f9b9b8cba4c432a5c3f3602bbae9`
+（2932224字节）。全部 tgd3d 对象重新编译；KMD/ICD 不改，不带入磁盘缓存。
 ARM64/x64 构建通过；冻结候选、HEAD 延迟构建、普通双向桥接构建的 x64 CPU
 控制均通过。包括非阻塞调用、真实完成后切换、两方向导入失败清理、超时不能
 退休资源、未使用 shader 不调用 NVK、反射和首次编译、布局部分失败后重试。
 硬件冷启动与画面结果待本轮实机验证；没有据此宣布修复或稳定通过。
 本地构建输入/输出/命令见 `deferred-init-candidate/build-manifest.json`。
+
+写卡前补齐双输出完成条件：完成值取本地与 runtime 输出 Fence 的较小值，
+CPU 等待同时覆盖二者。模拟本地先完成的控制证明尚未退休资源。第一版候选
+只进入未提交的 WinPE COW 预演，未写实卡；最终候选及两种 HEAD 控制重新通过。

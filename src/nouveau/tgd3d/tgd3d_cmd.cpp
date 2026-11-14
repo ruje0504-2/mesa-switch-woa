@@ -40,6 +40,16 @@ uint64_t Device::completed()
       TG_ERROR(this, DXGI_ERROR_DEVICE_REMOVED);
       return 0;
    }
+   if (bridgeFence) {
+      uint64_t bridgeValue = 0;
+      if (vk.GetSemaphoreCounterValue(vkdev, bridgeFence, &bridgeValue) != VK_SUCCESS) {
+         TG_ERROR(this, DXGI_ERROR_DEVICE_REMOVED);
+         return 0;
+      }
+      /* Signal operations in the same batch need not complete in array
+       * order. Retirement/destruction must cover both output semaphores. */
+      if (bridgeValue < value) value = bridgeValue;
+   }
    return value;
 }
 
@@ -495,9 +505,11 @@ static HRESULT wait_cpu(Device *dev, uint64_t seq, tgd3d_wait_reason reason)
    trace_timing(TGD3D_TIMING_CPU_WAIT_BEGIN, E_PENDING, dev->submitted,
                 completed, entering, requested);
    VkSemaphoreWaitInfo wait = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-   wait.semaphoreCount = 1;
-   wait.pSemaphores = &dev->fence;
-   wait.pValues = &seq;
+   const VkSemaphore semaphores[2] = {dev->fence, dev->bridgeFence};
+   const uint64_t values[2] = {seq, seq};
+   wait.semaphoreCount = dev->bridgeFence ? 2 : 1;
+   wait.pSemaphores = semaphores;
+   wait.pValues = values; /* flags=0: wait for every output, not ANY */
    VkResult result = VK_TIMEOUT;
    /* The driver sleeps on the fence's kernel event. Exhausting this wait
     * fails the device; it does not establish GPU completion or permit

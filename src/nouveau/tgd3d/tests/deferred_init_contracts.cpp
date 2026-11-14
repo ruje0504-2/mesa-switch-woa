@@ -19,7 +19,7 @@ template<typename R, typename... A> struct Stub<R(VKAPI_PTR *)(A...)> {
 };
 unsigned semCreates, objectCreates, imports, semDestroys, objectDestroys;
 unsigned submits, signals, gates, waits, failImport;
-uint64_t done, initialValue;
+uint64_t done, bridgeDone, initialValue;
 DWORD caller;
 VkResult waitResult;
 HRESULT reported;
@@ -29,7 +29,7 @@ Device make_device(Adapter &adapter)
 {
    semCreates = objectCreates = imports = semDestroys = objectDestroys = 0;
    submits = signals = gates = waits = failImport = 0;
-   done = initialValue = 0;
+   done = bridgeDone = initialValue = 0;
    waitResult = VK_SUCCESS; reported = S_OK; caller = GetCurrentThreadId();
    Device dev;
    dev.adapter = &adapter; dev.caps = &adapter.vk.caps; dev.nvk = true;
@@ -50,12 +50,18 @@ Device make_device(Adapter &adapter)
       CHECK(semaphore); ++semDestroys;
    };
    dev.vk.GetSemaphoreCounterValue = [](VkDevice, VkSemaphore semaphore, uint64_t *value) {
-      CHECK(semaphore == handle<VkSemaphore>(3)); *value = done; return VK_SUCCESS;
+      CHECK(semaphore == handle<VkSemaphore>(3) || semaphore == handle<VkSemaphore>(4));
+      *value = semaphore == handle<VkSemaphore>(3) ? done : bridgeDone; return VK_SUCCESS;
    };
    dev.vk.WaitSemaphores = [](VkDevice, const VkSemaphoreWaitInfo *info, uint64_t) {
-      CHECK(GetCurrentThreadId() == caller && info->semaphoreCount == 1);
+      CHECK(GetCurrentThreadId() == caller && info->semaphoreCount >= 1 && info->semaphoreCount <= 2);
       CHECK(info->pSemaphores[0] == handle<VkSemaphore>(3)); ++waits;
       if (waitResult == VK_SUCCESS) done = info->pValues[0];
+      if (info->semaphoreCount == 2) {
+         CHECK(!info->flags && info->pSemaphores[1] == handle<VkSemaphore>(4));
+         CHECK(info->pValues[0] == info->pValues[1]);
+         if (waitResult == VK_SUCCESS) bridgeDone = info->pValues[1];
+      }
       return waitResult;
    };
    dev.vk.SignalSemaphore = [](VkDevice, const VkSemaphoreSignalInfo *) -> VkResult {
@@ -72,6 +78,7 @@ Device make_device(Adapter &adapter)
       CHECK(GetCurrentThreadId() == caller && info->Info.Type == D3DDDI_MONITORED_FENCE);
       CHECK(info->Info.MonitoredFence.InitialFenceValue == submits && done >= submits);
       initialValue = info->Info.MonitoredFence.InitialFenceValue;
+      bridgeDone = initialValue;
       info->Info.MonitoredFence.FenceValueCPUVirtualAddress = &initialValue;
       info->hSyncObject = 0x20 + objectCreates++; return S_OK;
    };
@@ -138,7 +145,11 @@ void deferred_init_contracts()
    CHECK(dev.submitted == 2 && dev.gated == 2 && initialValue == 2);
    CHECK(cmd_begin(&dev) && SUCCEEDED(flush(&dev, false)));
    CHECK(submits == 3 && signals == 1 && gates == 1 && waits == 2);
-   done = 3; retire(&dev); sync_destroy(&dev);
+   done = 3; retire(&dev);
+   CHECK(dev.completed() == 2 && dev.submittedCommands.size() == 1);
+   CHECK(SUCCEEDED(wait_sequence(&dev, 3, TGD3D_WAIT_DESTROY)));
+   CHECK(waits == 3 && bridgeDone == 3 && dev.submittedCommands.empty());
+   sync_destroy(&dev);
    CHECK(semDestroys == 3 && objectDestroys == 2 && !dev.desktopReadyEvent);
 
    for (unsigned fail : {1u, 2u}) {
@@ -164,7 +175,7 @@ void deferred_init_contracts()
    /* Explicitly complete the simulated GPU before releasing its objects. */
    done = 1; retire(&dev); sync_destroy(&dev);
    CloseHandle(ready);
-   std::puts("PASS: desktop-gated bridge, preserved local timeline, nonblocking polling, partial-import cleanup and timeout ownership");
+   std::puts("PASS: desktop-gated bridge, both outputs completed before retirement, nonblocking polling, partial-import cleanup and timeout ownership");
    for (unsigned fail = 1; fail <= 5; fail++) {
       dev = make_device(adapter);
       layoutStep = layoutDestroyed = 0; failLayoutStep = fail;

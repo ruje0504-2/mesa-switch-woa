@@ -23,6 +23,8 @@
   后续提交仍 wait 原 timeline，保留提交间内存依赖。新 runtime fence 的初值只取
   已确认完成的 N，下一次 signal 为 N+1，不重置序号、不由 CPU 冒充在途 GPU 完成。
   第二只 fence 创建/导入失败时释放临时对象，原 timeline 保持有效，错误上报。
+  两只输出信号不假设完成顺序；完成值取二者较小值，CPU 等待覆盖二者后才能退休
+  对象或销毁设备。控制测试刻意让本地 Fence 先完成，确认对象仍保留。
 
 桌面就绪前使用已有 CPU 同步对照的 Flush/Present 等待行为。
 该启动对照未建立 runtime→NVK 的 GPU ingress；它不构成共享资源异步生产/消费
@@ -52,3 +54,5 @@ monitored fence 与会话内事件，不把 D3D12 应用层行为直接套作 UM
 * [微软 D3D callback 线程规则](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/changes-from-direct3d-10)，页面更新2021-12-15。
 * [D3DDDI_SYNCHRONIZATIONOBJECTINFO2](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dukmdt/ns-d3dukmdt-_d3dddi_synchronizationobjectinfo2)，页面更新2025-03-19；使用 InitialFenceValue 与 NT handle 共享。
 * [Windows kernel object namespaces](https://learn.microsoft.com/en-us/windows/win32/termserv/kernel-object-namespaces)，页面更新2024-05-07；显式使用本会话 Local 事件。
+
+* [Vulkan synchronization — Implicit Synchronization Guarantees](https://docs.vulkan.org/spec/latest/chapters/synchronization.html#synchronization-implicit)，查阅2026-11-13：同一 VkSubmitInfo2 内的多个 semaphore signal 没有相互完成顺序保证。
