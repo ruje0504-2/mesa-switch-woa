@@ -1,9 +1,24 @@
 # tgd3d 冷启动重启：探索记录与后续交接
 
-更新：2026-11-13（本机时区；交付回执使用 UTC）。范围为本聊天最近的原生桌面、
-登录前重启及 Deferred Init 对照。本文供用户后续安排 Claude 审查；本轮未派发给 Claude。
+更新：2026-11-13（本机时区；交付回执使用 UTC）。包含原生桌面、冷启动探索、旋转
+候选及后续审查；较早交接状态按时间保留，当前设备约束以本节为准。
 
-## 当前结论与恢复状态
+## 当前设备保持现场（2026-11-14 06:31 UTC）
+
+**用户在source-vis-f黑屏后要求“保持这个状态”。禁止再次部署、启用、旋转、重启或
+自动回退；只读核对和本地审查继续。** 两项自动任务
+`Tgd3dSourceVisibilitySequence`、`Tgd3dSourceVisibilitySequenceRestore` 已于06:29:53
+核对为Disabled，未启动RecoveryF。06:31:10读回当前仍为本轮候选 `.158 / Code0`：
+SYS `cb0aef8226171d0f6a392e4511c5472517a26264ebee034dd0762fca85c7e59f`，
+安装目录 `C:\ProgramData\SwitchWOA\GpuUpdate\tgd3d-cffa4713-20261114-142334`，
+UMD34e35bcf…、ICDdee3d580…、gpu-bridge、logon-default。没有恢复59dd…/14d…组合。
+当前运行是06:28:33异常重启后的新启动，DWM PID776、Explorer PID5188；并非仍处于
+先前黑屏时的硬件现场，不能用重启后寄存器推定故障前状态。完整本轮结果见文末。
+
+用户要求结合Switchroot、微软文档和当前WDK复核，并让Gemini独立审查。Antigravity
+CLI的Carbon High审查已在独立目录启动，只允许本地报告/diff，不允许操作实机。
+
+## 冷启动交接时的结论与恢复状态（历史）
 
 **GPU460.8MHz＋RAM1600MHz 的直接 tgd3d 冷启动仍自动重启，按用户反馈记为失败。**
 该次失败仍使用 CPU 同步对照 UMD `ad5e3309…`，不能归到本轮随后准备的双向 Fence 版。
@@ -482,3 +497,56 @@ backing变化仍由VidMm通过地址DDI通知。普通翻转、双向GPU Fence�
 
 按用户配置尝试VPS Claude独立只读复核，返回“Not logged in”；未产生审计意见，
 未修改远端登录或模型配置。上述结论来自本窗口的源码、微软契约和控制结果。
+
+## source-vis-f：仍黑屏、二次旋转后重启，按用户要求保持现场
+
+最终候选包含 `6461cb15713816d2b2a7bf32a8ea374f200ae6f5` 和
+`dcd1c64e2b0efb4edd1179cc804407cd45d68b23`，均已推送。SYS为cb0aef82…，
+相对modeset-e保持UMD34e35bcf…/ICDdee3d580…不变。包SHA256：
+`f35244d1f90855d42d2902383528ca1e13a303afe50ce0d39f8a3d9d55f34f66`，
+70个文件及13项Windows签名校验通过。RAM的本轮before/after均固定为1600MHz，
+不会将此前2100MHz的旧备份作为本轮恢复目标。
+
+06:20:15为安装请求一次正常门控重启；06:20:43启动。06:24:41启用结束，
+06:25:27核对Code0和DWM实际模块哈希，CPU/GPU/RAM/风扇设置均保持。F轮原生LUID
+`00000000000d7353`，Win11 22631.2861，开始时电源API为Online。
+
+* 06:26:25第一次临时90°，06:26:26–06:27:00逻辑图案5020像素差异0。
+* 06:27:07–06:28:08窗口自动控制运行60.46秒，11次移动、11次缩放、退出0。
+* 06:28:09脚本恢复竖屏，06:28:12再次临时90°；最后落盘阶段ApplyingLandscape2。
+* 06:28:33发生新的系统启动，用户同时报告横屏没有上屏及自动重启。**本轮实屏黑屏、
+  稳定性失败**；逻辑图案和窗口控制不能抵销失败。五分钟交互未执行。
+
+旋转控制脚本不含系统重启命令，但确实自动进入了第二次旋转。用户要求保持现场后，
+第一条停止请求在SSH连接阶段超时，没有送达；重连后06:29:53已禁用测试和定时恢复。
+没有请求回退或再次系统重启。原有登录启用任务在新启动中自行完成，06:31:10读回
+上述候选Code0。任务调度器此时给旧测试任务显示LastResult=0，也不能视为测试通过：
+系统启动时间已改变，原控制器没有完成记录，且用户实屏明确失败。
+原始材料位于 `rotation-source-visibility-v2/` 与
+`rotation-bidirectional-20261113/source-vis-hold-status-02.json`。
+
+## Switchroot及微软版本对应检查（现场保持期间）
+
+固定Switchroot `3c40adf1081096bc61a7c1280434c163e7e79b48` 的
+[t21x带宽实现](https://gitlab.com/switchroot/kernel/l4t-kernel-nvidia/-/blob/3c40adf1081096bc61a7c1280434c163e7e79b48/drivers/video/tegra/dc/t21x/bandwidth.c)
+会按布局、格式和旋转计算缓冲/延迟条件，并结合EMC与latency allowance；
+dc.c处理Window A underflow计数。当前KMD只处理显示VBlank，尚没有对应underflow
+观测与LA验证。它是明确实现差异，不是已证实黑屏根因；固定源中pitch布局也有独立
+分支，不能据此断言pitch-linear硬件旋转不支持，更不能直接加频率或电压。
+
+Hekate固定 `8e1392df4569ac501a115867056b13c361429e9e` 的
+[di.inl](https://github.com/CTCaer/hekate/blob/8e1392df4569ac501a115867056b13c361429e9e/bdk/display/di.inl)
+包含block-linear列扫描配置，而当前主表面是pitch-linear。其地址偏移、block height
+不能直接移植；还需核对helper实际调用路径。上述源码及SHA256保存于
+`rotation-black-static-review/references/`，未复制Linux实现进MIT驱动。
+
+实机是22631.2861，不是编译SDK的26100。已核对本机WDK26100头文件及源码：
+`build.py`选择WDDM2.6、`query.c`报告2.6，注册legacy source-address和MPO3回调。
+[MPO3文档](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_setvidpnsourceaddresswithmultiplaneoverlay3)
+的中断级/PrePresentNeeded要求仍适用于这条接口；新版页面提到的hardware flip queue
+不能直接套用到本驱动。26100头文件的TargetFlipTime等成员受WDDM2.9条件保护，
+本轮2.6构建不包含它们。这里只证明注册与ABI选择，没有尚未捕获的真实回调路径证据。
+
+Gemini审计目录为 `delegation-rotation-carbon/`，目标为报告和统一diff，使用
+`gemini-4-carbon-high`及本会话自动工具许可。CLI提示auto执行模式未开放，已回到默认
+执行模式；自动工具许可仍明确生效，静默认证成功。当前审计在途，尚无可验收结论。
