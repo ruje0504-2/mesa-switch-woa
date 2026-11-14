@@ -537,7 +537,13 @@ dc.c处理Window A underflow计数。当前KMD只处理显示VBlank，尚没有�
 Hekate固定 `8e1392df4569ac501a115867056b13c361429e9e` 的
 [di.inl](https://github.com/CTCaer/hekate/blob/8e1392df4569ac501a115867056b13c361429e9e/bdk/display/di.inl)
 包含block-linear列扫描配置，而当前主表面是pitch-linear。其地址偏移、block height
-不能直接移植；还需核对helper实际调用路径。上述源码及SHA256保存于
+不能直接移植。继续扫描该固定提交的C调用者，block helper只有定义/声明；
+`nyx/nyx_gui/frontend/gui.c::_nyx_disp_init` 实际使用1280×720 X8R8G8B8、
+VIC_ROTATION_270，等待VIC合成后调用pitch_vic配置；刷新路径也调用vic_compose。
+因此该版本Nyx是VIC预旋转后竖屏pitch扫描，不能当作本驱动DC列扫描已验证的旁证，
+也不证明Windows必须使用VIC。具体来源为
+[固定Nyx调用路径](https://github.com/CTCaer/hekate/blob/8e1392df4569ac501a115867056b13c361429e9e/nyx/nyx_gui/frontend/gui.c)。
+上述源码、完整归档调用者扫描结果及SHA256保存于
 `rotation-black-static-review/references/`，未复制Linux实现进MIT驱动。
 
 实机是22631.2861，不是编译SDK的26100。已核对本机WDK26100头文件及源码：
@@ -546,6 +552,13 @@ Hekate固定 `8e1392df4569ac501a115867056b13c361429e9e` 的
 的中断级/PrePresentNeeded要求仍适用于这条接口；新版页面提到的hardware flip queue
 不能直接套用到本驱动。26100头文件的TargetFlipTime等成员受WDDM2.9条件保护，
 本轮2.6构建不包含它们。这里只证明注册与ABI选择，没有尚未捕获的真实回调路径证据。
+
+另有文档完整性差异：Learn的DescribeAllocation页面将Flags/Rotation称为reserved，
+但本机26100头文件明确注释CheckDisplayMode用于显示模式查询、Rotation为显示模式
+输出。不能只据网页把这些字段清零。还核对了winerror.h：
+`DXGI_DDI_ERR_UNSUPPORTED=0x887B0002` 与 `DXGI_ERROR_UNSUPPORTED=0x887A0004`
+不是别名；primary回退契约必须按实际返回码及NO_SCANOUT标志审核，不能仅凭名称相近
+认定已经进入旋转Blt回退。本轮尚未取得真实失败调用参数，仍不将此项作为黑屏根因。
 
 Gemini审计目录为 `delegation-rotation-carbon/`，目标为报告和统一diff，使用
 `gemini-4-carbon-high`及本会话自动工具许可。CLI提示auto执行模式未开放，已回到默认
