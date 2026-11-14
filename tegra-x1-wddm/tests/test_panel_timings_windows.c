@@ -177,6 +177,12 @@ static void test_rotation(TG_GPU_ADAPTER *adapter,const DRIVER_INITIALIZATION_DA
         .Format.Graphics={.PrimSurfSize={720,1280},.VisibleRegionSize={720,1280},.Stride=2880,
         .PixelFormat=D3DDDIFMT_A8R8G8B8,.PixelValueAccessMode=D3DKMDT_PVAM_DIRECT}};
     target_mode.VideoSignalInfo=TgGpuPanelSignal;
+    DXGK_SET_TIMING_PATH_INFO timing={.VidPnTargetId=7,.Input={.Active=1,.VidPnPathUpdates=2},
+        .SelectedWireFormat={.Rgb=D3DKMDT_BITS_PER_COMPONENT_08},
+        .OutputWireColorSpace=D3DDDI_OUTPUT_WIRE_COLOR_SPACE_G22_P709};
+    DXGK_SET_TIMING_RESULTS timing_results={0};
+    DXGKARG_SETTIMINGSFROMVIDPN timings={.hFunctionalVidPn=VIDPN,
+        .pResultsFlags=&timing_results,.PathCount=1,.pSetTimingPathInfo=&timing};
     DXGKARG_ENUMVIDPNCOFUNCMODALITY enumerate={.hConstrainingVidPn=VIDPN};
     CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_SUCCESS);
     D3DKMDT_VIDPN_PRESENT_PATH_ROTATION_SUPPORT support=updated_path.ContentTransformation.RotationSupport;
@@ -216,14 +222,31 @@ static void test_rotation(TG_GPU_ADAPTER *adapter,const DRIVER_INITIALIZATION_DA
         *g=saved_geometry;g->Stride+=4;
         CHECK(d->DxgkDdiIsSupportedVidPn(adapter,&check)==STATUS_SUCCESS && !check.IsVidPnSupported);
         *g=saved_geometry;
-        CHECK(d->DxgkDdiCommitVidPn(adapter,&commit)==STATUS_SUCCESS && visible && (UINT)adapter->Panel.PathRotation==r);
+        /* SetTimings replaces CommitVidPn on the newer display path. A
+         * successful modeset must accept a subsequent update of that same
+         * path; a failed one must leave the prior orientation intact. */
+        const D3DKMDT_VIDPN_PRESENT_PATH_ROTATION previous=adapter->Panel.PathRotation;
+        visibility_status=STATUS_IO_DEVICE_ERROR;
+        CHECK(d->DxgkDdiSetTimingsFromVidPn(adapter,&timings)==visibility_status);
+        CHECK(adapter->Panel.PathRotation==previous);
+        visibility_status=STATUS_SUCCESS;
+        CHECK(d->DxgkDdiSetTimingsFromVidPn(adapter,&timings)==STATUS_SUCCESS);
         DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH update={.VidPnPresentPathInfo=test_path};
         CHECK(d->DxgkDdiUpdateActiveVidPnPresentPath(adapter,&update)==STATUS_SUCCESS);
+        CHECK((UINT)adapter->Panel.PathRotation==r);
+        CHECK(d->DxgkDdiCommitVidPn(adapter,&commit)==STATUS_SUCCESS && visible && (UINT)adapter->Panel.PathRotation==r);
         update.VidPnPresentPathInfo.ContentTransformation.Rotation=(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION)(r%4+1);
         CHECK(d->DxgkDdiUpdateActiveVidPnPresentPath(adapter,&update)==
             STATUS_GRAPHICS_PATH_CONTENT_GEOMETRY_TRANSFORMATION_NOT_SUPPORTED && (UINT)adapter->Panel.PathRotation==r);
         CHECK(!path_refs && !source_refs && !target_refs && !source_sets && !target_sets);
     }
+    /* Preserving an inherited target without a VidPN does not supply a new
+     * orientation. Do not silently reset the last committed path to identity. */
+    timings.hFunctionalVidPn=NULL;
+    timing.Input.PreserveInherited=1;
+    timing.Input.VidPnPathUpdates=0;
+    CHECK(d->DxgkDdiSetTimingsFromVidPn(adapter,&timings)==STATUS_SUCCESS);
+    CHECK(adapter->Panel.PathRotation==D3DKMDT_VPPR_ROTATE270);
     /* The unrotated source mode remains native for every path orientation.
      * Explicit scanout allocation layouts are covered by the panel test. */
     source_pinned=FALSE;

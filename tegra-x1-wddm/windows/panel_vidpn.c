@@ -401,6 +401,8 @@ static NTSTATUS APIENTRY set_timings(HANDLE context, DXGKARG_SETTIMINGSFROMVIDPN
     if (path->Input.SyncLockGroup || path->Input.SyncLockStyle)
         return STATUS_NOT_SUPPORTED;
 
+    bool attached = false;
+    D3DKMDT_VIDPN_PRESENT_PATH_ROTATION rotation = adapter->Panel.PathRotation;
     if (path->Input.Active) {
         D3DKMDT_WIRE_FORMAT_AND_PREFERENCE selected = path->SelectedWireFormat;
         selected.Preference = 0; /* The OS reserves preference in this callback. */
@@ -408,9 +410,8 @@ static NTSTATUS APIENTRY set_timings(HANDLE context, DXGKARG_SETTIMINGSFROMVIDPN
             path->OutputWireColorSpace != D3DDDI_OUTPUT_WIRE_COLOR_SPACE_G22_P709))
             return STATUS_INVALID_PARAMETER;
 
-        bool attached;
         NTSTATUS status = validate_commit(adapter, args->hFunctionalVidPn,
-            path->Input.PreserveInherited != 0, &attached, NULL);
+            path->Input.PreserveInherited != 0, &attached, &rotation);
         if (!NT_SUCCESS(status))
             return status;
         if (!attached && !path->Input.PreserveInherited)
@@ -418,6 +419,11 @@ static NTSTATUS APIENTRY set_timings(HANDLE context, DXGKARG_SETTIMINGSFROMVIDPN
     }
     NTSTATUS status = TgGpuPanelSetTargetActive(adapter, path->Input.Active != 0);
     if (NT_SUCCESS(status)) {
+        /* This modeset replaces CommitVidPn. Remember the accepted path for
+         * later UpdateActiveVidPnPresentPath calls, without reinterpreting
+         * the current scanout. PreserveInherited may supply no new path. */
+        if (attached)
+            adapter->Panel.PathRotation = rotation;
         path->OutputFlags = 0;
         /* SetTimings completes synchronously. DxgKrnl requires a nonzero
          * change ID and a link-configuration result even when the DDI itself

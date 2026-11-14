@@ -665,3 +665,25 @@ STORE时复制回去，使用NON_PIPELINED copy和flush；tgd3d在结束renderin
 本轮仅源码比较和记录，不新增驱动改动或重复构建。已通过控制与ARM64构建的
 SourceVisible/TargetActive修正仍只在本地候选中；实机保持原cb0aef82组合，横屏实屏
 仍为失败。下一次需要区分最终primary写入与DC扫描，而不是把逻辑截图再次记作上屏。
+
+## SetTimings遗漏已提交方向：仅本地修正（2026-11-14 UTC）
+
+继续核对微软实际DDI发现：本驱动的CommitVidPn保存PathRotation，而注册的新路径
+SetTimingsFromVidPn在验证VidPN时丢弃方向输出，成功后仍保留旧方向。随后对同一新
+路径调用UpdateActiveVidPnPresentPath会被误判为不支持的方向变化。微软
+[SetTimings契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_settimingsfromvidpn)
+明确该DDI替代CommitVidPn；所查页面更新于2021-10-21，接口适用于本轮WDDM2.6，
+不是借用新版hardware flip queue字段。此为可复现的软件状态错误，尚没有证据证明
+黑屏轮次实际走到这条失败序列。
+
+修正只在SetTimings成功且实际附有VidPN路径时保存接受的方向；失败、停用路径或
+PreserveInherited且未提供VidPN时保留原记录。它不改变扫描地址、旋转寄存器或当前
+primary布局，也没有开启smooth rotation。测试覆盖四个方向、失败后保留旧方向、
+继承场景、模式切换后同路径更新，以及未提交的新方向仍被拒绝。
+
+使用最终同一份真实WDK控制测试，链接修改前panel_vidpn对象退出235，精确对应
+第235行“SetTimings后更新同一条路径应成功”；链接修正后对象退出0。完整host控制
+及ARM64驱动/控制程序构建退出0，结果在`rotation-timings-state/`。构建来源为前一
+TargetActive冻结候选再叠加本项源码/测试，两个修正保留独立提交。未签名SYS SHA256：
+`058a07555b08a75ff80d4ec660240ee80ef14a58d0d09352297b06a3e3019ac0`。
+**未安装、未启用、未重启；实机仍保持cb0aef82，物理横屏未通过。**
