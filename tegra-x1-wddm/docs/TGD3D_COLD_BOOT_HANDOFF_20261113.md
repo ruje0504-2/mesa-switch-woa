@@ -15,6 +15,13 @@ GPU门控/初始化错误字段均为0，DWM PID828及Explorer等进程加载了
 并指出插电时似乎正常；恢复启动流程已确认，整体稳定性仍未通过。
 电源与实际Speedo核对见 [电源审查记录](TGD3D_POWER_SPEEDO_20261113.md)。
 
+后续频率试验已按用户选择更新：GPU460.8MHz、RAM1600MHz，CPU1497.6MHz/1120mV
+及风扇13保持。`.158`新增时钟对照提交`68d9502b`，已安装SYS为
+`59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81`；
+UMD/ICD仍为下表恢复组合。03:16 UTC读回GPU460800kHz/800000µV、RAM1600000kHz，
+Code0且DWM加载tgd3d。下表`c629328e…`现在是保留的729.6MHz恢复KMD。
+当前仍登录后启用，用户负责桌面及之后的冷启动测试；不能把频率/安装校验当作稳定性通过。
+
 恢复动作已在实卡读回核对：
 
 * UMD恢复为下表 `ad5e3309…`；移除实验的 `tgd3d-desktop-ready.exe` 和专用 Run 值。
