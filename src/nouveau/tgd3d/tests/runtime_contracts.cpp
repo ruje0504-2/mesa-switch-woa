@@ -142,7 +142,10 @@ static void primary_creation_contract()
       {5, VK_SUCCESS, D3DDDIERR_DEVICEREMOVED, D3DDDIERR_DEVICEREMOVED},
    };
    for (UINT rotation = D3DDDI_ROTATION_IDENTITY; rotation <= D3DDDI_ROTATION_270; rotation++)
-   for (bool alpha : {false, true}) for (bool opened : {false, true}) for (const auto &failure : cases) {
+   for (bool alpha : {false, true}) for (bool opened : {false, true})
+   for (bool optional : {false, true}) for (const auto &failure : cases) {
+      if (opened && optional)
+         continue; /* OpenResource has no primary descriptor output. */
       if (opened && failure.step == 4)
          continue; /* Opening receives its allocation from the runtime. */
       Adapter adapter; Device dev;
@@ -230,6 +233,10 @@ static void primary_creation_contract()
       dev.vk.DestroyImage = [](VkDevice, VkImage image, const VkAllocationCallbacks *) { CHECK(image == (VkImage)0x22); --primaryImages; };
       D3D10DDI_MIPINFO mip = {primaryWidth, primaryHeight, 1, primaryWidth, primaryHeight, 1};
       DXGI_DDI_PRIMARY_DESC primary = {};
+      primary.Flags = optional ? DXGI_DDI_PRIMARY_OPTIONAL : 0;
+      /* DriverFlags is an output, including when the caller reuses a
+       * descriptor that previously requested copy-style presentation. */
+      primary.DriverFlags = DXGI_DDI_PRIMARY_DRIVER_FLAG_NO_SCANOUT;
       primary.ModeDesc.Width = 720; primary.ModeDesc.Height = 1280;
       primary.ModeDesc.Format = alpha ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_B8G8R8X8_UNORM;
       primary.ModeDesc.Rotation = static_cast<DXGI_DDI_MODE_ROTATION>(rotation);
@@ -265,6 +272,8 @@ static void primary_creation_contract()
          continue;
       }
       CHECK(primaryError == S_OK && primaryImages == 1);
+      if (!opened)
+         CHECK(primary.DriverFlags == 0);
       auto *res = reinterpret_cast<Resource *>(storage);
       CHECK(res->format == desc.Format && res->primary && res->pitch == primaryPitch);
       CHECK(res->width == primaryWidth && res->height == primaryHeight);
@@ -274,6 +283,7 @@ static void primary_creation_contract()
       runtime_device_destroy(&dev);
    }
    std::puts("PASS: ARGB/XRGB primary Create/OpenResource DDI at all four rotations, exact pitch/extent, imported GPU VA and teardown (CPU control)");
+   std::puts("PASS: accepted optional/mandatory primaries publish direct-scanout DriverFlags without stale NO_SCANOUT (CPU control)");
    std::puts("PASS: primary Create/OpenResource propagate image/import/bind OOM and runtime removal after releasing partial ownership (CPU control)");
 }
 

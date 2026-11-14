@@ -466,6 +466,12 @@ static HRESULT create_resource(Device *dev, const D3D10DDIARG_CREATERESOURCE *de
       if (up.pSysMem)
          hr = upload_texels(dev, res, sub, nullptr, up.pSysMem, up.SysMemPitch, up.SysMemSlicePitch);
    }
+   /* DriverFlags is output-only. An accepted primary supports direct scanout;
+    * do not retain NO_SCANOUT from a reused descriptor and redirect DXGI to
+    * copy-style presentation. Failed creation still returns its original error.
+    */
+   if (SUCCEEDED(hr) && res->primary)
+      desc->pPrimaryDesc->DriverFlags = 0;
    return hr;
 }
 
