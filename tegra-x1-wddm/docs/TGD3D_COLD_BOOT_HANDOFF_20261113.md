@@ -1,47 +1,60 @@
 # tgd3d 冷启动重启：探索记录与后续交接
 
 更新：2026-11-13（本机时区；交付回执使用 UTC）。范围为本聊天最近的原生桌面、
-登录前重启及 Deferred Init 对照。本文为用户后续交给 fable 准备，尚未派发给 fable。
+登录前重启及 Deferred Init 对照。本文供用户后续安排 Claude 审查；本轮未派发给 Claude。
 
 ## 当前结论与恢复状态
 
-**直接原生冷启动仍未解决；Deferred Init 未取得成功结果，已按用户要求撤回。**
-当前恢复为：保留 `.158 + bit14 + 修复 ICD`，使用实验前的 CPU 同步对照 UMD，
-登录后触发原有 tgd3d 启用流程。用户已反馈能够进入桌面并持续操作约30秒；
-后续 SSH 已核对登录引导 Registered、任务触发延迟 PT5S、启用状态 Enabled，
-GPU门控/初始化错误字段均为0，DWM PID828及Explorer等进程加载了
-`TegraGpuD3DVk.dll`。启用记录为2026-11-14 02:11:31–02:12:06 UTC；
-当前原生LUID与完整加载路径尚未另行采集。用户随后仍反馈天气/浏览器导致重启，
-并指出插电时似乎正常；恢复启动流程已确认，整体稳定性仍未通过。
-电源与实际Speedo核对见 [电源审查记录](TGD3D_POWER_SPEEDO_20261113.md)。
+**GPU460.8MHz＋RAM1600MHz 的直接 tgd3d 冷启动仍自动重启，按用户反馈记为失败。**
+该次失败仍使用 CPU 同步对照 UMD `ad5e3309…`，不能归到本轮随后准备的双向 Fence 版。
+用户要求恢复“进入系统后再启用 tgd3d”，随后追加要求把双向 Fence 也写入，由用户测试。
+SD已于 `2026-11-14T03:45:51.538472+00:00` 完成写入和实卡读回：74个文件哈希通过，
+SYSTEM语义差异仅为删除AllowNativeBoot，SOFTWARE仅增加所需RunOnce。
+后续登录引导、DWM实际加载和实屏稳定性仍待用户启动验证。
 
-后续频率试验已按用户选择更新：GPU460.8MHz、RAM1600MHz，CPU1497.6MHz/1120mV
-及风扇13保持。`.158`新增时钟对照提交`68d9502b`，已安装SYS为
-`59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81`；
-UMD/ICD仍为下表恢复组合。03:16 UTC读回GPU460800kHz/800000µV、RAM1600000kHz，
-Code0且DWM加载tgd3d。下表`c629328e…`现在是保留的729.6MHz恢复KMD。
-03:24 UTC按用户要求切回持久原生冷启动，已禁用登录后启用任务，没有自动重启。
-用户负责桌面及冷启动测试；未收到该组合完整五分钟验收结果，频率/安装及启动模式
-配置校验不等于稳定性通过。测试期间遵守用户要求，暂不连接Switch SSH。
+用户反复观察到：**接外部电源时，桌面天气模块和浏览器相对更稳定，但也会偶发重启；
+电池供电时更容易复现。** 没有同负载、同电量、同观察时长的受控AC/DC比较，不能
+给出改善百分比，也不能认定供电、PMIC、时钟或Fence中的某项已经是根因。
+这条现象及低频冷启动失败一并交给后续审查，不能写成“插电已稳定”。
 
-恢复动作已在实卡读回核对：
+本轮已写入的配置与验收边界：
 
-* UMD恢复为下表 `ad5e3309…`；移除实验的 `tgd3d-desktop-ready.exe` 和专用 Run 值。
-* 删除 `ControlSet001\Services\tegragpurender\AllowNativeBoot`，避免登录前启动原生GPU。
-* 首次登录用 `RunOnce` 引导注册标准 SYSTEM 任务 `Tgd3dDefaultEnable`；后续登录
-  采用 `AtLogOn`、`PT5S`。复用现有 `Default-Start.ps1` 的许可、PnP启用和状态检查。
-* 首次引导执行时间由 Windows 调度，不能承诺恰好登录后第5秒已完成启用。
-  后续任务的5秒是触发延迟，组件校验和GPU初始化另计。
-* KMD/ICD二进制、CPU1497600kHz、风扇13、睡眠设置及512MiB GPU预算未变。
-  当前已有 `EnableLUA=0`；本次未修改UAC或私有TaskCache。
-* 保留已有冷启动ETW/WER；仅在用户确认修复后清理。
+* 保留 `.158 + bit14 + GPU460.8MHz` KMD、`d3423d26` ICD、RAM1600MHz；
+  CPU1497600kHz/1120mV、风扇13、睡眠设置与512MiB GPU预算保持。
+* 删除持久 `AllowNativeBoot`，首次登录由 `!SwitchWOA.Tgd3d.LogonSetup` RunOnce
+  调用已有 `Enable-LogonStart.ps1 -StartThisSession`，注册 SYSTEM 的
+  `Tgd3dDefaultEnable` 登录任务，触发延迟 `PT5S`。首次RunOnce执行时间取决于
+  Windows调度；5秒是触发延迟，不是GPU启用已经完成的承诺。
+* UMD从冻结 `9de42c82` 加 XRGB `7f5f416b`、资源错误传播 `42ad5d1b` 出发，
+  仅追加已审查的 `a537121f` Flush错误传播修正，去掉CPU同步控制宏，启用现有
+  runtime→NVK与NVK→runtime的双向GPU Fence。没有恢复Deferred Init或混入shader缓存。
+* ARM64、x64全部31个tgd3d对象分别重编；x64/Wine控制通过双向提交顺序、失败类别、
+  DONOTWAIT、超时不伪造完成及在途资源不提前退休等检查。它们不执行真实GPU，
+  新组合的物理桌面、五分钟稳定性、冷启动与双向Fence实机结果均未验收。
+* 普通提交使用GPU依赖；两帧队列回压以及显式读回仍可能有CPU等待。不得称为
+  “所有CPU等待均已消除”或“重启根因已修复”。软超时后的无界DeviceWaitIdle仍未解决。
+* 保留原CPU同步UMD、匹配清单和控制程序的离线恢复包
+  `D:\SwitchWOA\gpu460-logon-cpu-sync-backup.zip`；只恢复同步组合时保留登录后启用、
+  GPU460.8和RAM1600。扇区备份对应更早的失败冷启动配置，不作为首选同步回退包。
+* 未连接Switch SSH、未额外收集崩溃日志、未安排Claude/Gemini或新一轮实机自动测试。
+  用户负责此次实机测试；完成交付记录后等待用户安排Claude，暂不推进旋转。
 
+频率的最后运行期读回为2026-11-14 03:16 UTC：GPU460800kHz/800000µV、
+RAM1600000kHz（Ready=1）、CPU1497600kHz/1120mV；Code0且DWM加载tgd3d。
+03:24:35 UTC曾按用户要求设为持久原生冷启动，随后用户报告仍自动重启。
+这些旧读回不能代替本轮双向Fence组合启动后的实际状态。
+电源/Speedo及频率记录见 [电源审查记录](TGD3D_POWER_SPEEDO_20261113.md)。
+
+本次保留已有冷启动ETW/WER，按原约定在用户确认修复后清理。
+既有 `EnableLUA=0`、计划任务私有TaskCache和显示配置不作改动。
 注册语义参考微软 [LogonTrigger.Delay](https://learn.microsoft.com/en-us/windows/win32/taskschd/logontrigger-delay)
 和 [Run/RunOnce](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys)，
-查阅2026-11-13。离线阶段只放置引导，实际任务注册要由恢复后的Windows完成。
+查阅2026-11-13。离线阶段只放置引导，任务重新注册由下一次登录后的Windows完成。
 
-源码撤回提交：`a019010d`。生产代码、Meson选项和 tgd3d 测试已逐文件比对，
-恢复到实验前 `4c8691cb`。登录引导工具提交：`f71cd0bd`。没有合并main。
+此前Deferred Init撤回提交为`a019010d`，生产源码恢复到实验前`4c8691cb`；
+登录引导工具为`f71cd0bd`。上一轮恢复后用户确认约30秒桌面正常，后续天气/浏览器
+仍有重启。该轮02:11:31–02:12:06 UTC启用，SSH曾核对Registered/PT5S/Enabled，
+DWM PID828和Explorer实际加载tgd3d；不能把该旧短时结果移用于本轮。没有合并main。
 
 ## 固定组件与源码边界
 
@@ -50,17 +63,20 @@ Code0且DWM加载tgd3d。下表`c629328e…`现在是保留的729.6MHz恢复KMD�
 
 | 组件 | 源码来源 | 实际 SHA256 |
 |---|---|---|
-| `.158` KMD | 冻结 `6c854e9f394c3d761fab85885bead4bbd4588581`，叠加 bit14 `253bc813e43a878359b9d6227e246cd7d1aa382f`、持久许可能力 `b916f53105f991294d6811718362e90f9af0ba01` | `c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53` |
+| 保留的729.6MHz恢复KMD | 冻结 `6c854e9f394c3d761fab85885bead4bbd4588581`，叠加 bit14 `253bc813e43a878359b9d6227e246cd7d1aa382f`、持久许可能力 `b916f53105f991294d6811718362e90f9af0ba01` | `c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53` |
+| 当前`.158` GPU460.8 KMD | 上述冻结基线、bit14和持久许可能力，加时钟对照 `68d9502b435c5563fa11f32949b045589111b171` | `59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81` |
+| 本轮双向Fence tgd3d UMD | 冻结 `9de42c82` + `7f5f416b` + `42ad5d1b` + `a537121f6b9d8448a18a7bfe1ddc1d1c5332b493`；GPU-bridge构建 | `14d51a5526dccd00737e15bef0f3bd7a40b38535a47c9083184d62ad7d1eb6c4` |
 | NVK ICD | `d3423d269f9e716eadc1237beadbfb6aa6049dbe` | `dee3d5805af80696f87d094ec1c5f557d662f435336207992baf588e2dc1cee0` |
-| 恢复的 tgd3d UMD | 冻结 `9de42c82a03e84674954d8175237dcfd5bb4dc2e`，加 XRGB `7f5f416bc785e0ac9cc687c1ae6369e9355deed1`、资源错误传播 `42ad5d1bfa95c73466b7f76378f28792522742ec`，CPU-sync构建 | `ad5e3309f1d5e8b7e549d70e5a5741da1ee6cf7c4e4f49782e0067c7b858b3f7` |
+| 保留的CPU同步对照UMD | 冻结 `9de42c82a03e84674954d8175237dcfd5bb4dc2e`，加 XRGB `7f5f416bc785e0ac9cc687c1ae6369e9355deed1`、资源错误传播 `42ad5d1bfa95c73466b7f76378f28792522742ec`，CPU-sync构建 | `ad5e3309f1d5e8b7e549d70e5a5741da1ee6cf7c4e4f49782e0067c7b858b3f7` |
 | 已撤回 Deferred Init UMD | 上述冻结组合加 `5e029182`、`a7a60d29`；全部tgd3d对象重编 | `9f195e43dbd5f5fa19e569c919cf39f67512f9b9b8cba4c432a5c3f3602bbae9` |
 
-**硬件包不是整个HEAD快照。** 当前开发源码中已有的 shader binary cache、部分
-Flush改动不在恢复的冻结UMD内。源码默认启用GPU桥；实机工作包是CPU同步诊断模式。
-不能将这个包的结果写成生产双向Fence通过。
+**硬件包不是整个HEAD快照。** 当前开发源码中的 shader binary cache不在本轮冻结UMD内。
+本轮显式带入`a537121f`并构建GPU桥，之前冷启动失败包仍是CPU同步对照。
+仅完成编译和离线安装不能写成生产双向Fence实机通过。
 
 固定源码导出分别位于输出目录的：
-`kmd158-bit14-native-boot/source/tegra-x1-wddm`、
+`kmd158-gpu460/source/tegra-x1-wddm`、
+`gpu460-bidirectional-candidate/source/src/nouveau/tgd3d`、
 `resource-status-candidate/source/src/nouveau/tgd3d`；
 已撤回实验源码位于 `deferred-init-candidate/source/src/nouveau/tgd3d`。
 
@@ -76,9 +92,11 @@ Flush改动不在恢复的冻结UMD内。源码默认启用GPU桥；实机工作
 | 持久原生启动 | 一次性许可不适合持续开机；`b916f531`增加显式持久许可 | 直接开机仍异常重启；许可改动不等于修正电源或绘制流程 |
 | `9de42c82` | 支持标准primary/shadow OpenResource，不强制私有TGSR描述 | 冷启动失败；UMD SHA `6612e45e8059086e9fe8dfb7b1f9c1cd868bed78e19722da0aff9ce90d26fa9c` |
 | `7f5f416b` | 补齐合法XRGB主表面，保留原格式与布局；真实DDI CPU控制旧失败/新通过 | 冷启动失败；UMD SHA `cfeab491db032ed6903a2d5f5bdb0c50dde89e9f7d17241564e52b908b52a6bc` |
-| `42ad5d1b` | 保留OOM/移除类别，正确清理失败对象；资源/上传控制通过 | 冷启动仍失败；这是当前恢复的UMD，不把它叫作已修复冷启动 |
+| `42ad5d1b` | 保留OOM/移除类别，正确清理失败对象；资源/上传控制通过 | 冷启动仍失败；保留为本轮UMD的资源修正基础，不把它叫作已修复冷启动 |
 | 并发冷启动捕获 | 配置DWM、LogonUI局部WER与4路ETW | 未得到可归因的进程Dump；旧流补全发现见下一节 |
 | 实机系统shader的CPU编译复现 | 28份独立SM4程序均通过tgd3d→SPIR-V、Vulkan1.3校验及NVK/NAK SM53编译 | 无GPU执行/像素验收；未覆盖运行时链接库与实际故障shader |
+| GPU460.8＋RAM1600，CPU同步UMD | 频率读回正确，保持CPU1497.6、bit14和修复ICD | 用户反馈直接冷启动仍自动重启，失败；接电相对更稳定但未通过稳定性验收 |
+| 本轮GPU双向Fence＋登录后启用 | 冻结UMD加已审查Flush错误传播修正，完整重编及CPU控制通过 | 等待用户实机测试；不能复用旧组合通过结果 |
 | Deferred Init | 布局/NAK后端延到首次使用；桌面事件后建立GPU桥；双输出完成检查及失败清理控制通过 | 用户反馈仍重启，已撤回。未取得新版实际加载证据，不能据此排除全部初始化/同步问题 |
 
 五分钟通过的精确历史组合：原SYS
@@ -127,7 +145,7 @@ fcc53bf1 UMD `7c7f88ccf83ad1a89f663c3205e6ba2cb6fec587d946efd3622839c9deb2b089`�
 3. **风扇桥接在启动阶段已有路径。** KMD通过 `\Device\SwitchBacklight` 与
    SwitchFan13的内核IOCTL通道做PMIC/时钟等操作；不依赖桌面温度程序先运行。
    历史ETL中switchfan早于GPU驱动加载约4.6秒。尚无负载瞬态电压/转速测量。
-4. **Fence仍有未解决责任。** 当前CPU对照没有完整runtime→NVK ingress；默认GPU桥
+4. **Fence仍有未解决责任。** 保留的CPU对照没有完整runtime→NVK ingress；本轮GPU桥
    必须单独验证。软超时后的无界 `DeviceWaitIdle` 仍未解决，不能直接删除等待并
    释放在途对象。旧全局quarantine方案的VkInstance/ICD/运行时allocation寿命不完整。
 5. **着色器静态编译通过不保证硬件执行正确。** Windows独立SM4测试为18VS、10PS；
@@ -151,9 +169,9 @@ fcc53bf1 UMD `7c7f88ccf83ad1a89f663c3205e6ba2cb6fec587d946efd3622839c9deb2b089`�
 * 当前Mac NTFS只读；实际写入复用Windows WinPE原生NTFS检查和COW预演，逐段备份、
   写回、读回。文件系统检查通过不解释GPU重启。
 
-## 后续给 fable 的检查入口
+## 等待用户安排 Claude 的检查入口
 
-用户另行发起交接时，先提供本报告、冻结源码与交付清单；本窗口仍统一操作设备。
+用户另行安排后再提供本报告、冻结源码与交付清单；当前不派发审查，不并行操作设备。
 请先从实际组合出发，而不是审整个HEAD后默认所有改动已部署：
 
 1. 对比登录后启用与直接冷启动的DWM/LogonUI并发、NVK/runtime上下文、GPU VA及
@@ -173,7 +191,7 @@ Carbon曾返回修订审计，bit14建议经本窗口独立核对后采用；另
 
 ## 硬件旋转接续点
 
-按用户最新顺序，先核对登录后tgd3d已真正启用，再推进正常手持方向1280×720。
+旋转暂不推进，先等待用户的双向Fence测试及Claude安排；以下仅保留后续实现入口。
 冻结 `.158` 已含DC列扫描、H/V取址、几何锁存与VidPN/MPO映射，尚无该组合实屏
 横向验收。tgd3d四分之一转主表面已有1280×720、5120字节pitch处理；
 `tgd3d_dxgi.cpp::Blt` 的非identity旋转仍返回不支持，是需要核查的明确边界。
@@ -195,7 +213,9 @@ Carbon曾返回修订审计，bit14建议经本窗口独立核对后采用；另
 
 | 内容 | 相对输出目录 |
 |---|---|
-| 最新恢复计划、实卡回执、注册表差异和备份 | `deferred-init-rollback/deploy/` |
+| 本轮恢复计划、实卡回执、注册表差异和CPU同步备份 | `kmd158-gpu460/logon-restore/` |
+| 本轮双向Fence源码、完整构建命令/哈希与控制结果 | `gpu460-bidirectional-candidate/` |
+| 上一轮Deferred Init恢复及备份 | `deferred-init-rollback/deploy/` |
 | 用户的延迟初始化失败反馈 | `deferred-init-candidate/physical-result.json` |
 | 撤回实验的源码、命令、对象/二进制哈希及CPU控制 | `deferred-init-candidate/build-manifest.json`、`source/` |
 | 旧冻结资源修正组合 | `resource-status-candidate/build-manifest.json`、`source/` |

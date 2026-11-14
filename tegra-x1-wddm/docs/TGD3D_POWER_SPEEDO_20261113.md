@@ -28,7 +28,7 @@ GPU1584/1695，SoC1598/1709；区间判断为严格小于。GPU Speedo存于CPU_
 分档依据：[speedo-tegra210.c](https://github.com/CTCaer/switch-l4t-kernel-4.9/blob/2d0059fd3167a8df756de2aa0489d4aa70a9fc15/drivers/soc/tegra/fuse/speedo-tegra210.c)。
 Hekate显示依据：[gui_info.c](https://github.com/CTCaer/hekate/blob/8e1392df4569ac501a115867056b13c361429e9e/nyx/nyx_gui/frontend/gui_info.c)。
 
-## 当前Windows状态
+## 降频前的Windows采样
 
 SSH只读记录位于仓库外 `power-review-20261113/live-ac/`；02:30:24 UTC电源API报告
 ACLineStatus=1、电量96%、正在充电。当前没有同负载电池供电对照，也没有电压跌落波形。
@@ -110,7 +110,8 @@ Erista。对未逐机校准的设备，首选低频率，不提高限流或强�
 
 1996.8/2188.8MHz来自当前38.4MHz、M=2的PLLX频率步长；它们不是Ubuntu的
 2014.5/2193MHz DFLL档。高频候选只是研究目标，不能作为可安装的完整设置表。
-当前GPU源码只接受729600和1228800kHz，新增上述档位仍需实现及验证，不能仅改注册表。
+最初审查时GPU源码只接受729600和1228800kHz；后文的460800档已单独实现。
+其他候选仍需实现及验证，不能仅改注册表。
 
 Hekate L4T配置默认VDD2=1100mV、VDDQ=600mV可作Mariko内存电压参考，未取得当前
 实机两条内存电压轨的读数；不更改原有内存设置。保留512MiB预算和风扇13。
@@ -143,7 +144,8 @@ Hekate在卡支持时通过CMD6将UHS功率档切至1.44W；更高档代码被�
 | 内存 | 1600MHz，电压保持 | 实际1866MHz、请求2100MHz | 重启后请求/实际均1600，HandoffStatus=1 |
 | CPU | 保持1497.6MHz、1120mV | 1497.6MHz、1120mV | 重启后读回相同，风扇13 |
 | 风扇／预算 | 驱动13／512MiB | 同左 | 保持 |
-| 启动方式 | 用户要求恢复直接冷启动tgd3d | 登录后5秒触发 | 03:24 UTC已设置持久原生启动，登录任务已禁用；冷启动实测待用户 |
+| 启动方式 | 恢复登录后启用tgd3d | 03:24 UTC设置直接原生启动 | 用户反馈冷启动仍自动重启；本轮离线恢复登录后PT5S引导 |
+| 同步方式 | 用户追加双向GPU Fence测试 | CPU同步对照UMD | 新UMD完整重编、CPU控制及实卡读回通过；实机待用户测试 |
 
 GPU实现提交 `68d9502b435c5563fa11f32949b045589111b171`；使用N=48、P=2，
 使VCO保持1843.2MHz，输出GPC 460.8MHz。默认源码配置仍为729.6MHz，新包显式传
@@ -158,7 +160,7 @@ UMD `ad5e3309…`、ICD `dee3d580…`及固件字节保持不变；原384MHz候�
 安装完成于2026-11-14 03:14:03 UTC，随后03:14:40–03:15:17执行登录后启用。
 03:16:00的校验记录显示`.158 / Code0`、HardwareStatus/PanelStatus均0，DWM PID496
 加载`TegraGpuD3DVk.dll`，CPU/RAM/GPU读回与上表一致。用户确认了前一阶段门控桌面
-可操作；本次原生频率组合的桌面交互稳定性仍等待用户测试，冷启动尚未进行。
+可操作；本次原生频率组合未取得完整五分钟验收，后续冷启动失败见下文。
 03:16:55的只读CCD/KMT查询确认源、目标及原生适配器LUID均为
 `00000000000cfc6d`，matching_kmd/nvk_ready均为1，当前显示仍720×1280。
 冻结查询工具退出4是缺少可选probe导出后的预期结果，两个查询记录成功；没有因此
@@ -173,8 +175,8 @@ UMD `ad5e3309…`、ICD `dee3d580…`及固件字节保持不变；原384MHz候�
 2026-11-14 03:24:35 UTC按用户新指令恢复直接原生启动：`startup_mode=native-boot`、
 `AllowNativeBoot`持久键存在，`Tgd3dDefaultEnable`为Disabled。同次回读CPU1497600kHz、
 RAM1600000kHz、GPU460800kHz，CPU1120mV/GPU800000µV及SYS哈希不变。
-没有请求OS重启或重启GPU，配置完成后断开SSH；用户负责下一次冷启动测试。
-用户尚未提供该组合完整五分钟桌面结果，此次切换不表示桌面或冷启动验收通过。
+该次配置没有请求OS重启或重启GPU，完成后断开SSH。用户随后自行冷启动，
+反馈仍自动重启，记为失败；该频率组合也没有完整五分钟桌面验收结果。
 回执保留在 `kmd158-gpu460/native-boot-switch/path-fix/stdout.json`。
 
 内存配置属于 [winx](https://github.com/ruje0504-2/winx/commit/6bc267b0671b5382acaf8fdde109162c37efeff7)：
@@ -186,3 +188,18 @@ RAM1600000kHz、GPU460800kHz，CPU1120mV/GPU800000µV及SYS哈希不变。
 REG05为0x8A；BAT0只提供两个I2C连接。对应源码仅在第三个PD连接存在时启用USB-C
 协商/限流管理，所以当前Windows的该管理分支没有接通。它不能证明充电芯片或PD
 控制器没有自主工作，也不是已定位的重启原因。本轮未改电池驱动或PD配置。
+
+## 最新用户反馈与交接范围
+
+用户再次要求明确记录：接外部电源时，天气任务栏模块和浏览器操作可以稍微稳定一些，
+但插电也曾偶发重启；电池供电复现更频繁。该现象没有等负载/等电量/等时长的统计，
+不能认定为已修复或确认电流不足。GPU460.8＋RAM1600没有消除直接冷启动自动重启。
+这些观察属于旧CPU同步组合；本轮随后切入的双向Fence版还没有实机结果。
+
+按用户指令离线恢复进入系统后启用，再追加GPU双向Fence UMD：
+`14d51a5526dccd00737e15bef0f3bd7a40b38535a47c9083184d62ad7d1eb6c4`。
+它沿用冻结9de+7f5+42ad，追加已审查的a537 Flush错误传播修正；未修改KMD、ICD、
+CPU/GPU/RAM电压、充电或SD策略。ARM64/x64构建和x64 CPU控制通过，硬件结果待用户。
+离线配置和双向Fence UMD已于 `2026-11-14T03:45:51.538472+00:00` 写入SD并读回核对。
+部署和CPU同步恢复包见 [冷启动交接](TGD3D_COLD_BOOT_HANDOFF_20261113.md)。
+本轮不连接SSH、不新增取证或派发Claude；完成安装记录后等用户安排。
