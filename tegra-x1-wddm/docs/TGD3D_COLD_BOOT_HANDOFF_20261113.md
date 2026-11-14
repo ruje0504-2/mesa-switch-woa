@@ -788,3 +788,25 @@ Carbon High首版报告与diff已于08:38:41UTC完成；父任务复核后未采
 下一项修复应区分最终primary没有有效提交/写入，与DC已经收到正确primary但未能取数。
 现有5020像素逻辑截图不能替代这一边界。当前没有新的、足以解释黑屏的已证实硬件
 补丁，因此本轮没有重复构建或再次部署同一失败组合；基线继续保留组合B。
+
+## 最终scanout边界：按需只读快照候选（2026-11-14 UTC）
+
+08:46:17重新读取实机：仍为69aa6036…/Code0，启动时间08:06:32、DWM768及其启动时间
+未变，CPU1497600、GPU460800、RAM1600000、风扇13、默认登录任务Ready。现有KMD没有
+读取DC active bank和最终primary像素的接口，新增一次性`D3DKMT_ESCAPE_DRIVERPRIVATE`
+快照；不新增ETW、dump或每帧日志，不修改旋转/提交/功耗策略。
+
+该调用要求HardwareAccess第二级串行化与SeDebugPrivilege，只接受固定192字节协议。
+在显示中断同步内读取固定的DC地址、布局、可见性、ACT_REQ、underflow及已有PresentId，
+恢复原READ_MUX；不清中断、不推进Pending、不写UPDATE/ACT_REQ。仅当无待锁存状态、
+布局已识别、整个表面位于驱动仍持有的scanout segment内时，读取四个固定四分区中心
+像素。不接受用户提供的寄存器、物理地址或偏移，不映射任意内存。像素采样不是GPU
+完成栅栏，不能据此单独标记实屏通过。
+
+真实WDK/x64控制通过权限、协议长度、active/assembly区分、未锁存拒绝像素采样、
+segment上下界及停止状态检查，并确认只临时更改READ_MUX、不消费中断或Present回执。
+冻结组合B加本项的完整ARM64构建退出0；ARM64/x64读取工具构建通过。未签名SYS
+`ac66d330fd0399b6249411b315484c3c5e7d71490e315bbfae148e13adb8519c`，签名SYS
+`1a86a02b479b716b2b695ade0bd6860076d4d5f61a29d95b804cb655ce0bf164`。
+产物在OUT的`rotation-scanout-boundary/`，截至本条仅准备CAT与原生控制，尚未安装。
+后续候选以组合B为恢复输入；UMD/ICD和双向Fence保持。

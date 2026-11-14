@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "adapter.h"
 #include "allocation.h"
+#include "panel_snapshot.h"
 #include "../platform/t214_resources.h"
 
 typedef struct _FLIP_ACTION {
@@ -392,6 +393,115 @@ static NTSTATUS APIENTRY set_pointer_shape(HANDLE context, const DXGKARG_SETPOIN
     return STATUS_NOT_IMPLEMENTED;
 }
 
+typedef struct _SNAPSHOT_ACTION {
+    TG_GPU_ADAPTER *Adapter;
+    struct tg_gpu_panel_snapshot Data;
+    NTSTATUS Status;
+} SNAPSHOT_ACTION;
+
+static BOOLEAN snapshot_panel(PVOID context)
+{
+    SNAPSHOT_ACTION *action = context;
+    TG_GPU_ADAPTER *adapter = action->Adapter;
+    TG_GPU_PANEL *panel = &adapter->Panel;
+    struct tg_gpu_panel_snapshot *s = &action->Data;
+    if (!panel->Dc.owned || panel->Stopping) {
+        action->Status = STATUS_DEVICE_NOT_READY;
+        return TRUE;
+    }
+    const struct tg_t214_dc_io *io = &panel->Dc.io;
+    s->luid_low = adapter->Engine.AdapterLuid.LowPart;
+    s->luid_high = adapter->Engine.AdapterLuid.HighPart;
+    s->path_rotation = panel->PathRotation;
+    s->source_visible = panel->SourceVisible;
+    s->target_active = panel->TargetActive;
+    s->pending_address = panel->Pending.Address;
+    s->pending_present = panel->Pending.PresentId;
+    s->displayed_address = panel->Displayed.Address;
+    s->displayed_present = panel->Displayed.PresentId;
+    s->state_control_before = io->read32(io->context, T214_DC_STATE_CONTROL);
+    const UINT access = io->read32(io->context, T214_DC_STATE_ACCESS);
+    io->write32(io->context, T214_DC_STATE_ACCESS, access | T214_DC_READ_ACTIVE);
+    s->address = (UINT64)io->read32(io->context, T214_DC_WIN_A_ADDR) |
+        (UINT64)io->read32(io->context, T214_DC_WIN_A_ADDR_HI) << 32;
+    s->options = io->read32(io->context, T214_DC_WIN_A_OPTIONS);
+    s->pitch = io->read32(io->context, T214_DC_WIN_A_STRIDE) & 0xffffu;
+    s->h_offset = io->read32(io->context, T214_DC_WIN_A_H_OFFSET);
+    s->v_offset = io->read32(io->context, T214_DC_WIN_A_V_OFFSET);
+    s->surface_kind = io->read32(io->context, T214_DC_WIN_A_SURFACE_KIND);
+    s->output_size = io->read32(io->context, T214_DC_WIN_A_SIZE);
+    s->prescaled_size = io->read32(io->context, T214_DC_WIN_A_PRESCALED);
+    s->dda = io->read32(io->context, T214_DC_WIN_A_DDA);
+    s->panel_active = io->read32(io->context, T214_DC_ACTIVE_SIZE);
+    io->write32(io->context, T214_DC_STATE_ACCESS, access);
+    (void)io->read32(io->context, T214_DC_STATE_ACCESS);
+    s->interrupt_status = io->read32(io->context, T214_DC_INT_STATUS);
+    s->underflow = io->read32(io->context, T214_DC_WIN_A_UNDERFLOW);
+    /* Never acknowledge an interrupt, advance Pending or trigger an activation.
+     * The display synchronization lock prevents other CPU writers; ACT_REQ
+     * brackets catch an in-flight hardware bank transition. */
+    s->state_control_after = io->read32(io->context, T214_DC_STATE_CONTROL);
+    if (!((s->state_control_before | s->state_control_after) &
+          (T214_DC_GENERAL_ACT_REQ | T214_DC_WIN_A_ACT_REQ)))
+        s->flags |= TG_GPU_PANEL_SNAPSHOT_STABLE;
+    struct tg_t214_dc_layout layout;
+    for (UINT r = TG_T214_DC_IDENTITY; r <= TG_T214_DC_CCW270; ++r) {
+        (void)tg_t214_dc_get_layout((enum tg_t214_dc_rotation)r, &layout);
+        if ((s->options & T214_DC_WIN_ROTATION_MASK) == layout.options &&
+            s->pitch == layout.pitch && s->h_offset == layout.h_offset &&
+            s->v_offset == layout.v_offset && !s->surface_kind) {
+            s->rotation = r;
+            s->width = layout.width;
+            s->height = layout.height;
+            s->flags |= TG_GPU_PANEL_SNAPSHOT_LAYOUT;
+            break;
+        }
+    }
+    const TG_GPU_PRIVATE_MEMORY *memory = &adapter->Tables.Scanout;
+    const UINT64 base = (UINT64)memory->SystemPhysicalAddress.QuadPart;
+    if ((s->flags & (TG_GPU_PANEL_SNAPSHOT_STABLE | TG_GPU_PANEL_SNAPSHOT_LAYOUT)) ==
+            (TG_GPU_PANEL_SNAPSHOT_STABLE | TG_GPU_PANEL_SNAPSHOT_LAYOUT) &&
+        memory->Handle && memory->CpuAddress && memory->Bytes >= T214_GPU_POST_FB_SIZE &&
+        s->address >= base && !(s->address & (PAGE_SIZE - 1)) &&
+        s->address - base <= memory->Bytes - T214_GPU_POST_FB_SIZE) {
+        const volatile UCHAR *pixels = (volatile UCHAR *)memory->CpuAddress + (s->address - base);
+        for (UINT i = 0; i < 4; ++i) {
+            s->pixels[i].x = s->width * ((i & 1) ? 3 : 1) / 4;
+            s->pixels[i].y = s->height * ((i & 2) ? 3 : 1) / 4;
+            s->pixels[i].bgra = *(const volatile UINT32 *)(pixels +
+                s->pixels[i].y * s->pitch + s->pixels[i].x * 4);
+        }
+        s->flags |= TG_GPU_PANEL_SNAPSHOT_PIXELS;
+    }
+    action->Status = STATUS_SUCCESS;
+    return TRUE;
+}
+
+static NTSTATUS APIENTRY panel_escape(HANDLE context, const DXGKARG_ESCAPE *args)
+{
+    PAGED_CODE();
+    /* HardwareAccess requests WDDM's second-level adapter serialization.
+     * Debug privilege is also required: the active desktop is not necessarily
+     * owned by the caller's process or interactive session. */
+    if (!context || !args || args->Flags.Value != 1 || args->hDevice || args->hContext ||
+        !args->pPrivateDriverData || args->PrivateDriverDataSize != sizeof(struct tg_gpu_panel_snapshot))
+        return STATUS_INVALID_PARAMETER;
+    if (!SeSinglePrivilegeCheck(RtlConvertLongToLuid(SE_DEBUG_PRIVILEGE), ExGetPreviousMode()))
+        return STATUS_PRIVILEGE_NOT_HELD;
+    struct tg_gpu_panel_snapshot request;
+    RtlCopyMemory(&request, args->pPrivateDriverData, sizeof(request));
+    if (request.magic != TG_GPU_PANEL_SNAPSHOT_MAGIC || request.version != TG_GPU_PANEL_SNAPSHOT_VERSION ||
+        request.size != sizeof(request))
+        return STATUS_GRAPHICS_DRIVER_MISMATCH;
+    SNAPSHOT_ACTION action = {.Adapter = context, .Data = {
+        .magic = TG_GPU_PANEL_SNAPSHOT_MAGIC, .version = TG_GPU_PANEL_SNAPSHOT_VERSION,
+        .size = sizeof(struct tg_gpu_panel_snapshot)}, .Status = STATUS_UNSUCCESSFUL};
+    NTSTATUS status = TgGpuPanelSynchronize(context, snapshot_panel, &action);
+    if (NT_SUCCESS(status)) status = action.Status;
+    if (NT_SUCCESS(status)) RtlCopyMemory(args->pPrivateDriverData, &action.Data, sizeof(action.Data));
+    return status;
+}
+
 void TgGpuRegisterPanelScanout(DRIVER_INITIALIZATION_DATA *ddis)
 {
     ddis->DxgkDdiInterruptRoutine = panel_interrupt;
@@ -402,4 +512,5 @@ void TgGpuRegisterPanelScanout(DRIVER_INITIALIZATION_DATA *ddis)
     ddis->DxgkDdiSetVidPnSourceAddress = set_primary;
     ddis->DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3 = set_primary_mpo;
     ddis->DxgkDdiCheckMultiPlaneOverlaySupport3 = check_mpo;
+    ddis->DxgkDdiEscape = panel_escape;
 }

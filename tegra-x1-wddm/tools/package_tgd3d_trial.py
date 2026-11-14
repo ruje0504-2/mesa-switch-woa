@@ -80,6 +80,9 @@ def main():
                     if candidate.get("source_visibility_patch_commit"):
                         changed |= {"tegra-x1-wddm/windows/panel.c",
                                     "tegra-x1-wddm/windows/panel.h"}
+                        if candidate.get("scanout_snapshot_patch_commit"):
+                            changed |= {"tegra-x1-wddm/windows/panel_snapshot.h",
+                                        "tegra-x1-wddm/platform/t214_dc.h"}
             baseline_hashes = ({
                 "59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81",
                 "69aa6036da81870efb439e8e09530ae662e810dccf887b603bdfeb6ba8a4a11a",
@@ -114,6 +117,8 @@ def main():
             manifest["kmd_package_identity"] = candidate["inf_identity"]
         if candidate.get("additional_patch_commits"):
             manifest["kmd_additional_patch_commits"] = candidate["additional_patch_commits"]
+        if candidate.get("scanout_snapshot_patch_commit"):
+            manifest["kmd_scanout_snapshot_patch_commit"] = candidate["scanout_snapshot_patch_commit"]
         manifest["kmd"] = candidate["signed_files"]
         manifest["scope"] = ".158 bit14 fix with automatic tgd3d enablement after logon; manual testing"
         if clock_control:

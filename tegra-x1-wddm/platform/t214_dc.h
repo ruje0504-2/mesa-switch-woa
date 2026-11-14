@@ -36,6 +36,7 @@
 #define T214_DC_WIN_A_ADDR         0xbc0
 #define T214_DC_WIN_A_H_OFFSET     0xbc6
 #define T214_DC_WIN_A_V_OFFSET     0xbc8
+#define T214_DC_WIN_A_UNDERFLOW    0xbca
 #define T214_DC_WIN_A_SURFACE_KIND 0xbcb
 #define T214_DC_WIN_A_ADDR_HI      0xbcd
 

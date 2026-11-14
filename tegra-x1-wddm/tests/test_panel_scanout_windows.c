@@ -4,6 +4,7 @@
  */
 #include "../windows/adapter.h"
 #include "../windows/allocation.h"
+#include "../windows/panel_snapshot.h"
 #include "../platform/t214_resources.h"
 #include <ntimage.h>
 
@@ -28,6 +29,12 @@ static KIRQL level;
 static BOOLEAN auto_latch=TRUE;
 static UINT stalls, notifications, sync_calls;
 static ULONGLONG reported_present;
+static BOOLEAN debug_privilege = TRUE;
+static BOOLEAN NTAPI privilege(LUID value, KPROCESSOR_MODE mode)
+{ CHECK(value.LowPart==SE_DEBUG_PRIVILEGE && !value.HighPart && mode==UserMode);return debug_privilege; }
+static KPROCESSOR_MODE NTAPI previous_mode(VOID) { return UserMode; }
+BOOLEAN (NTAPI *const __imp_SeSinglePrivilegeCheck)(LUID,KPROCESSOR_MODE)=privilege;
+KPROCESSOR_MODE (NTAPI *const __imp_ExGetPreviousMode)(VOID)=previous_mode;
 
 static KIRQL NTAPI current_irql(VOID) { return level; }
 KIRQL (NTAPI *const __imp_KeGetCurrentIrql)(VOID)=current_irql;
@@ -110,6 +117,65 @@ static void active_is(enum tg_t214_dc_rotation rotation,UINT64 address,BOOLEAN v
     CHECK(model.active[T214_DC_WIN_A_STRIDE]==((rotation&1)?5120u:2880u));
 }
 
+static void snapshot_controls(const DRIVER_INITIALIZATION_DATA *d)
+{
+    static UINT32 pixels[T214_GPU_POST_FB_SIZE/4];
+    struct tg_gpu_panel_snapshot s={.magic=TG_GPU_PANEL_SNAPSHOT_MAGIC,
+        .version=TG_GPU_PANEL_SNAPSHOT_VERSION,.size=sizeof(s)};
+    CHECK(sizeof(s)==192);
+    DXGKARG_ESCAPE request={.Flags={.HardwareAccess=1},.pPrivateDriverData=&s,
+        .PrivateDriverDataSize=sizeof(s)};
+    const UINT before=model.writes;
+    debug_privilege=FALSE;
+    CHECK(d->DxgkDdiEscape(&adapter,&request)==STATUS_PRIVILEGE_NOT_HELD && model.writes==before);
+    debug_privilege=TRUE;
+    request.Flags.HardwareAccess=0;
+    CHECK(d->DxgkDdiEscape(&adapter,&request)==STATUS_INVALID_PARAMETER && model.writes==before);
+    request.Flags.HardwareAccess=1;
+    --request.PrivateDriverDataSize;
+    CHECK(d->DxgkDdiEscape(&adapter,&request)==STATUS_INVALID_PARAMETER && model.writes==before);
+    ++request.PrivateDriverDataSize;
+    ++s.version;
+    CHECK(d->DxgkDdiEscape(&adapter,&request)==STATUS_GRAPHICS_DRIVER_MISMATCH && model.writes==before);
+    --s.version;
+    adapter.Tables.Scanout=(TG_GPU_PRIVATE_MEMORY){.Handle=&adapter,.CpuAddress=pixels,
+        .SystemPhysicalAddress={.QuadPart=0x98c00000},.Bytes=sizeof(pixels)};
+    const UINT32 colors[]={0xffff0000,0xff00ff00,0xff0000ff,0xffffff00};
+    for(UINT i=0;i<4;++i)pixels[(i&2?540:180)*1280+(i&1?960:320)]=colors[i];
+    model.assembly[T214_DC_INT_STATUS]=T214_DC_VBLANK_INT | (1u<<8);
+    model.assembly[T214_DC_WIN_A_UNDERFLOW]=13;
+    /* Assembly is not active scanout. The reader must select and restore the
+     * active bank without copying it to armed/active or consuming an IRQ. */
+    UINT saved=model.assembly[T214_DC_WIN_A_ADDR];
+    model.assembly[T214_DC_WIN_A_ADDR]=0xdead0000;
+    const TG_GPU_PANEL_FLIP displayed=adapter.Panel.Displayed;
+    CHECK(d->DxgkDdiEscape(&adapter,&request)==STATUS_SUCCESS);
+    CHECK(s.flags==7 && s.address==0x98c00000 && s.rotation==TG_T214_DC_CCW270);
+    CHECK(s.width==1280 && s.height==720 && s.pitch==5120 && s.v_offset==719);
+    for(UINT i=0;i<4;++i)CHECK(s.pixels[i].bgra==colors[i]);
+    CHECK(s.underflow==13 && s.interrupt_status==(T214_DC_VBLANK_INT | (1u<<8)));
+    CHECK(model.writes==before+2 && model.assembly[T214_DC_STATE_ACCESS]==0);
+    CHECK(model.assembly[T214_DC_WIN_A_ADDR]==0xdead0000 &&
+        model.assembly[T214_DC_INT_STATUS]==s.interrupt_status &&
+        adapter.Panel.Displayed.PresentId==displayed.PresentId && !adapter.Panel.Pending.Address);
+    model.assembly[T214_DC_STATE_CONTROL]=T214_DC_WIN_A_ACT_REQ;
+    CHECK(d->DxgkDdiEscape(&adapter,&request)==STATUS_SUCCESS &&
+        s.flags==TG_GPU_PANEL_SNAPSHOT_LAYOUT && !s.pixels[0].bgra);
+    model.assembly[T214_DC_STATE_CONTROL]=0;
+    ++adapter.Tables.Scanout.SystemPhysicalAddress.QuadPart;
+    CHECK(d->DxgkDdiEscape(&adapter,&request)==STATUS_SUCCESS && s.flags==3 && !s.pixels[0].bgra);
+    --adapter.Tables.Scanout.SystemPhysicalAddress.QuadPart;
+    --adapter.Tables.Scanout.Bytes;
+    CHECK(d->DxgkDdiEscape(&adapter,&request)==STATUS_SUCCESS && s.flags==3);
+    adapter.Tables.Scanout=(TG_GPU_PRIVATE_MEMORY){0};
+    model.assembly[T214_DC_WIN_A_ADDR]=saved;
+    model.assembly[T214_DC_INT_STATUS]=0;
+    const UINT stopped_writes=model.writes;
+    adapter.Panel.Stopping=TRUE;
+    CHECK(d->DxgkDdiEscape(&adapter,&request)==STATUS_DEVICE_NOT_READY && model.writes==stopped_writes);
+    adapter.Panel.Stopping=FALSE;
+}
+
 void start(void)
 {
     initialize(&model);
@@ -141,6 +207,8 @@ void start(void)
         active_is((enum tg_t214_dc_rotation)r,(UINT64)a.PrimaryAddress.QuadPart,TRUE);
         CHECK(!adapter.Panel.Pending.Address && adapter.Panel.Displayed.Rotation==(enum tg_t214_dc_rotation)r);
     }
+
+    snapshot_controls(&d);
 
     DXGK_PRIMARYCONTEXTDATA primary={.hAllocation=&allocations[1],.SegmentId=TG_GPU_SCANOUT_SEGMENT,
         .SegmentAddress={.QuadPart=0x98000000}};
