@@ -166,7 +166,7 @@ static void test_rotation(TG_GPU_ADAPTER *adapter,const DRIVER_INITIALIZATION_DA
     DXGKARG_ENUMVIDPNCOFUNCMODALITY enumerate={.hConstrainingVidPn=VIDPN};
     CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_SUCCESS);
     D3DKMDT_VIDPN_PRESENT_PATH_ROTATION_SUPPORT support=updated_path.ContentTransformation.RotationSupport;
-    CHECK(support.Identity && !support.Rotate90 && support.Rotate180 && !support.Rotate270 &&
+    CHECK(support.Identity && support.Rotate90 && support.Rotate180 && support.Rotate270 &&
         support.Offset0 && !support.Offset90 && !support.Offset180 && !support.Offset270);
     /* A rotation pivot's support must remain untouched. */
     enumerate.EnumPivotType=D3DKMDT_EPT_ROTATION;enumerate.EnumPivot.VidPnTargetId=7;
@@ -178,20 +178,24 @@ static void test_rotation(TG_GPU_ADAPTER *adapter,const DRIVER_INITIALIZATION_DA
     CHECK(d->DxgkDdiQueryVidPnHWCapability(adapter,&caps)==STATUS_SUCCESS && !caps.VidPnHWCaps.DriverRotation);
     enumerate.EnumPivotType=0;
     for(UINT r=1;r<=4;++r) {
-        const BOOLEAN quarter=r==2 || r==4;
         D3DKMDT_GRAPHICS_RENDERING_FORMAT *g=&source_mode.Format.Graphics;
-        g->PrimSurfSize=(D3DKMDT_2DREGION){quarter?1280:720,quarter?720:1280};
+        g->PrimSurfSize=(D3DKMDT_2DREGION){720,1280};
         g->VisibleRegionSize=g->PrimSurfSize;g->Stride=g->PrimSurfSize.cx*4;
         test_path.ContentTransformation.Rotation=(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION)r;
+        test_path.ContentTransformation.RotationSupport=
+            (D3DKMDT_VIDPN_PRESENT_PATH_ROTATION_SUPPORT){.Identity=r==1,
+                .Rotate90=r==2,.Rotate180=r==3,.Rotate270=r==4,.Offset0=1};
         DXGKARG_ISSUPPORTEDVIDPN check={.hDesiredVidPn=VIDPN};
         CHECK(d->DxgkDdiIsSupportedVidPn(adapter,&check)==STATUS_SUCCESS && check.IsVidPnSupported);
         DXGKARG_COMMITVIDPN commit={.hFunctionalVidPn=VIDPN};
         CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_SUCCESS);
         support=updated_path.ContentTransformation.RotationSupport;
-        CHECK(support.Identity==!quarter && support.Rotate180==!quarter &&
-            support.Rotate90==quarter && support.Rotate270==quarter);
+        /* A pinned transformation is a constraint, not an output to replace. */
+        CHECK(support.Identity==(r==1) && support.Rotate90==(r==2) &&
+            support.Rotate180==(r==3) && support.Rotate270==(r==4) && support.Offset0);
         const D3DKMDT_GRAPHICS_RENDERING_FORMAT saved_geometry=*g;
-        g->PrimSurfSize=(D3DKMDT_2DREGION){quarter?720:1280,quarter?1280:720};
+        /* A rotated DXGI allocation is not a second physical source mode. */
+        g->PrimSurfSize=(D3DKMDT_2DREGION){1280,720};
         g->VisibleRegionSize=g->PrimSurfSize;g->Stride=g->PrimSurfSize.cx*4;
         CHECK(d->DxgkDdiIsSupportedVidPn(adapter,&check)==STATUS_SUCCESS && !check.IsVidPnSupported);
         CHECK(d->DxgkDdiCommitVidPn(adapter,&commit)==STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY);
@@ -206,25 +210,26 @@ static void test_rotation(TG_GPU_ADAPTER *adapter,const DRIVER_INITIALIZATION_DA
             STATUS_GRAPHICS_PATH_CONTENT_GEOMETRY_TRANSFORMATION_NOT_SUPPORTED && (UINT)adapter->Panel.PathRotation==r);
         CHECK(!path_refs && !source_refs && !target_refs && !source_sets && !target_sets);
     }
-    /* An unconstrained source advertises both shapes. A pinned rotation
-     * admits only the shape that reaches the unchanged portrait target. */
+    /* The unrotated source mode remains native for every path orientation.
+     * Explicit scanout allocation layouts are covered by the panel test. */
     source_pinned=FALSE;
     test_path.ContentTransformation.Rotation=D3DKMDT_VPPR_UNPINNED;
-    CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_SUCCESS && enumerated_count==2);
+    CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_SUCCESS && enumerated_count==1);
     CHECK(enumerated[0].Format.Graphics.PrimSurfSize.cx==720 && enumerated[0].Format.Graphics.Stride==2880);
-    CHECK(enumerated[1].Format.Graphics.PrimSurfSize.cx==1280 && enumerated[1].Format.Graphics.PrimSurfSize.cy==720 && enumerated[1].Format.Graphics.Stride==5120);
     support=updated_path.ContentTransformation.RotationSupport;
     CHECK(support.Identity && support.Rotate90 && support.Rotate180 && support.Rotate270);
     for(UINT r=1;r<=4;++r){
         test_path.ContentTransformation.Rotation=(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION)r;
         CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_SUCCESS && enumerated_count==1);
-        CHECK(enumerated[0].Format.Graphics.PrimSurfSize.cx==((r==2 || r==4)?1280u:720u));
+        CHECK(enumerated[0].Format.Graphics.PrimSurfSize.cx==720 &&
+            enumerated[0].Format.Graphics.PrimSurfSize.cy==1280 &&
+            enumerated[0].Format.Graphics.Stride==2880);
     }
     test_path.ContentTransformation.Rotation=D3DKMDT_VPPR_UNPINNED;
     const UINT assigned=assigned_sets;
     enumerate.EnumPivotType=D3DKMDT_EPT_VIDPNSOURCE;
     CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_SUCCESS && assigned_sets==assigned);
-    enumerate.EnumPivotType=0;fail_add=1;
+    enumerate.EnumPivotType=0;fail_add=0;
     CHECK(d->DxgkDdiEnumVidPnCofuncModality(adapter,&enumerate)==STATUS_NO_MEMORY && assigned_sets==assigned);
     CHECK(!new_set_refs && !new_mode_refs && !source_sets && !source_refs && !path_refs);
     fail_add=UINT32_MAX;source_pinned=TRUE;

@@ -37,7 +37,7 @@ SYSTEM语义差异仅为删除AllowNativeBoot，SOFTWARE仅增加所需RunOnce�
   `D:\SwitchWOA\gpu460-logon-cpu-sync-backup.zip`；只恢复同步组合时保留登录后启用、
   GPU460.8和RAM1600。扇区备份对应更早的失败冷启动配置，不作为首选同步回退包。
 * 未连接Switch SSH、未额外收集崩溃日志、未安排Claude/Gemini或新一轮实机自动测试。
-  用户负责此次实机测试；完成交付记录后等待用户安排Claude，暂不推进旋转。
+  该交付时由用户测试并等待Claude安排；后续用户已授权继续硬件旋转和SSH自主测试，见文末。
 
 频率的最后运行期读回为2026-11-14 03:16 UTC：GPU460800kHz/800000µV、
 RAM1600000kHz（Ready=1）、CPU1497600kHz/1120mV；Code0且DWM加载tgd3d。
@@ -191,7 +191,7 @@ Carbon曾返回修订审计，bit14建议经本窗口独立核对后采用；另
 
 ## 硬件旋转接续点
 
-旋转暂不推进，先等待用户的双向Fence测试及Claude安排；以下仅保留后续实现入口。
+用户后续已授权继续旋转并恢复SSH，要求尽量自主完成测试；本轮进度见文末。
 冻结 `.158` 已含DC列扫描、H/V取址、几何锁存与VidPN/MPO映射，尚无该组合实屏
 横向验收。tgd3d四分之一转主表面已有1280×720、5120字节pitch处理；
 `tgd3d_dxgi.cpp::Blt` 的非identity旋转仍返回不支持，是需要核查的明确边界。
@@ -224,3 +224,50 @@ Carbon曾返回修订审计，bit14建议经本窗口独立核对后采用；另
 | 真实Windows独立shader的编译控制 | `dwm-shader-audit/summary.json`及逐shader结果 |
 
 Windows原始shader及派生代码留在本机，未加入Git；后续交接按实际需要传递材料。
+
+## 双向Fence之后的横屏模式协商续查
+
+用户随后要求推进硬件旋转，并明确允许连接SSH测试。2026-11-14 03:54:22 UTC
+读回当前UMD `14d51a55…`、KMD `59dd5ea7…`，启动模式logon-default，状态Enabled，
+HardwareStatus/PanelStatus均0、GPU460800kHz/800000µV；DWM PID840、Explorer PID1568
+和系统UI进程均加载tgd3d。后续PnP查询为Code0。活动源、目标、原生KMT的LUID均为
+`0000000000091038`；交互桌面Default/session1，720×1280、60Hz、identity。
+03:57 UTC电源API为AC=1、电量99%。这些是当前运行状态，仍不构成长期稳定性验收。
+
+现有包内display-state是旧工具，rotation-test首次退出2，只表示命令不支持，未改模式。
+从当前源码重新编译工具后，90°严格CCD校验返回1610。随后只读对照确认：
+
+| 请求角度 | 严格CCD | 允许调整模式细节 | 省略目标模式 | 源/目标均由OS选择 | GDI CDS_TEST |
+|---|---:|---:|---:|---:|---:|
+| 0° | 1610 | 0 | 1610 | 0 | -2 |
+| 90° | 1610 | 1610 | 1610 | 1610 | -2 |
+| 180° | 1610 | 0 | 1610 | 0 | -2 |
+| 270° | 1610 | 1610 | 1610 | 1610 | -2 |
+
+整个查询前后都保持原720×1280，没有强行应用失败配置或请求重启。
+KMT真实模式列表仅两项：720×1280/XRGB/60Hz，orientation=1和3；
+ValidatedAgainstMonitorCaps=1，ModePruningReason=7。**7在这里是驱动推荐、面板接受的
+原因，不是模式被裁掉的错误码。** 推荐目标也为720×1280、78MHz、total1000×1300。
+GDI普通模式列表为空，raw/rotated列表只有800×600占位模式，不能据此说面板只支持800×600。
+
+本轮候选仅修正KMD模式枚举：保持未旋转源模式720×1280/2880 pitch，允许该模式
+对应四个旋转角度，并保留已固定的旋转支持约束；移除将它与CCD横屏桌面尺寸混为
+一谈、排除90°/270°的条件。实际DXGI主表面仍通过48字节描述明确提交自身
+1280×720/5120 pitch等布局，allocation和扫描控制代码未变。
+
+固定`.158+bit14+GPU460.8`源码上仅叠加panel_vidpn.c及匹配控制测试，候选SYS SHA256：
+`609ce9d9e119aace6a29cb04b7ada290aa0cffacc4f9db898f433b5c24d7a4c4`。
+主机构建和模型通过；同一新VidPN断言链接旧实现退出170、修正后退出0，扫描/布局
+控制退出0。Inf2Cat无错误/警告，13个签名目录成员经Windows验证通过。
+这些检查不执行真实GPU；候选尚未安装，横屏协商及画面结果仍待实机验证。
+恢复包保留当前`59dd5ea7…`的460.8MHz KMD，不回到729.6MHz或`.59`。
+
+本轮实际参考：微软[旋转契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/supporting-rotation-in-a-display-miniport-driver)、
+[模式协商约束](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/enumerating-cofunctional-vidpn-source-and-target-modes)、
+[SetDisplayConfig及ALLOW_CHANGES](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setdisplayconfig)、
+[模式支持原因](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/ne-d3dkmthk-_d3dkmdt_mode_pruning_reason)，
+查阅2026-11-13；WDK/SDK为10.0.26100.0，实机仍22631.2861。
+Windows-driver-samples/KMDOD的main文件于同日核对，仅参考模式接口；其CPU显示实现
+不作为GPU实现移植来源。Switchroot固定`3c40adf1081096bc61a7c1280434c163e7e79b48`
+的window.c用于核对列扫描、反向起点和VBlank更新规则，未复制Linux代码。
+控制与原始查询保存在仓库外 `rotation-bidirectional-20261113/`。

@@ -50,6 +50,7 @@ function Kernel-BaselineHash($Manifest) {
         'shader-output-bit14' {'46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088';return}
         'shader-output-bit14-native-boot' {'46d1757674ff156028ce5b729ba53671981ffab09948fcaf125751c46bb10088';return}
         'shader-output-bit14-gpu460' {'c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53';return}
+        'shader-output-bit14-gpu460-vidpn' {'59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81';return}
         default {throw 'Unexpected kernel variant'}
     }
 }
@@ -57,7 +58,7 @@ function Check-Package {
     $m=Read-Json (Join-Path $script:TrialRoot 'trial-components.json')
     if($m.kmd_version -ne '0.1.0.158' -or $m.umd_name -ne 'TegraGpuD3DVk.dll') { throw 'Unexpected trial component identity' }
     if($m.kmd_variant -and $m.baseline_kmd.'tegragpurender.sys'.Sha256 -ne (Kernel-BaselineHash $m)) { throw 'Unexpected kernel recovery baseline' }
-    if($m.kmd_variant -eq 'shader-output-bit14-gpu460' -and
+    if($m.kmd_variant -in @('shader-output-bit14-gpu460','shader-output-bit14-gpu460-vidpn') -and
        ($m.startup_mode -notin @('logon-default','native-boot') -or $m.kmd_gpu_khz -ne 460800)) { throw 'Clock control requires the reviewed 460.8 MHz package' }
     foreach($entry in $m.files.PSObject.Properties) { Check-File (Package-Path $entry.Name) $entry.Value }
     foreach($file in Get-ChildItem -LiteralPath $script:TrialRoot -Filter '*.ps1') {

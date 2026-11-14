@@ -4,7 +4,7 @@
 . (Join-Path $PSScriptRoot 'Common.ps1')
 Require-Administrator
 $m=Check-Package
-if($m.startup_mode -ne 'native-boot' -or $m.kmd_variant -notin @('shader-output-bit14-native-boot','shader-output-bit14-gpu460')){
+if($m.startup_mode -ne 'native-boot' -or $m.kmd_variant -notin @('shader-output-bit14-native-boot','shader-output-bit14-gpu460','shader-output-bit14-gpu460-vidpn')){
     throw 'Direct boot requires the kernel with persistent native-start support'
 }
 # This only grants startup on a later boot; it does not hot-switch a running

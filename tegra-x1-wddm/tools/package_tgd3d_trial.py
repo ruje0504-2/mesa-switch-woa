@@ -60,8 +60,9 @@ def main():
         candidate = json.loads((args.candidate_kmd / "manifest.json").read_text())
         changed = {"tegra-x1-wddm/platform/t214_gr_context.c",
                    "tegra-x1-wddm/tests/test_gr_context.c"}
-        clock_control = candidate["variant"] == "shader-output-bit14-gpu460"
-        native = candidate["variant"] in ("shader-output-bit14-native-boot", "shader-output-bit14-gpu460")
+        vidpn_fix = candidate["variant"] == "shader-output-bit14-gpu460-vidpn"
+        clock_control = candidate["variant"] in ("shader-output-bit14-gpu460", "shader-output-bit14-gpu460-vidpn")
+        native = candidate["variant"] == "shader-output-bit14-native-boot" or clock_control
         if native:
             changed |= {"tegra-x1-wddm/windows/native_start_test.c",
                         "tegra-x1-wddm/tests/test_native_start_windows.c"}
@@ -70,12 +71,17 @@ def main():
                         "tegra-x1-wddm/tests/test_clock.c", "tegra-x1-wddm/tests/test_hardware_windows.c",
                         "tegra-x1-wddm/tools/build.py", "tegra-x1-wddm/windows/hardware.c",
                         "tegra-x1-wddm/windows/render_miniport.c"}
+            if vidpn_fix:
+                changed |= {"tegra-x1-wddm/windows/panel_vidpn.c",
+                            "tegra-x1-wddm/tests/test_panel_timings_windows.c"}
+            baseline_hash = ("59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81" if vidpn_fix else
+                             "c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53")
             if (candidate.get("target_khz") != 460800 or
                 candidate["baseline_signed_files"]["tegragpurender.sys"]["Sha256"] !=
-                    "c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53"):
-                raise ValueError("Clock control must restore the retained bit14/native-capable .158")
+                    baseline_hash):
+                raise ValueError("Candidate must restore its reviewed .158 clock baseline")
         if (candidate["base"] != frozen["kmd_source"] or
-            candidate["variant"] not in ("shader-output-bit14", "shader-output-bit14-native-boot", "shader-output-bit14-gpu460") or
+            candidate["variant"] not in ("shader-output-bit14", "shader-output-bit14-native-boot", "shader-output-bit14-gpu460", "shader-output-bit14-gpu460-vidpn") or
             not candidate.get("windows_signature_verified") or
             set(candidate["changed_files"]) != changed):
             raise ValueError("Unreviewed kernel variant or unsigned artifact")
@@ -84,6 +90,8 @@ def main():
             manifest["baseline_kmd"] = candidate["baseline_signed_files"]
             manifest["kmd_gpu_khz"] = 460800
             manifest["kmd_clock_patch_commit"] = candidate["clock_patch_commit"]
+            if vidpn_fix:
+                manifest["kmd_vidpn_patch_commit"] = candidate["vidpn_patch_commit"]
         manifest["kmd_variant"] = candidate["variant"]
         manifest["kmd_patch_commit"] = candidate["patch_commit"]
         if native:
@@ -93,12 +101,13 @@ def main():
         manifest["kmd"] = candidate["signed_files"]
         manifest["scope"] = ".158 bit14 fix with automatic tgd3d enablement after logon; manual testing"
         if clock_control:
-            manifest["scope"] = ".158 bit14 GPU384 control; restore the retained 729.6 MHz kernel; logon start only"
+            manifest["scope"] = (".158 GPU460.8 VidPN source-mode correction; restore the retained GPU460.8 kernel" if vidpn_fix else
+                                 ".158 bit14 GPU460.8 control; restore the retained 729.6 MHz kernel; logon start")
         kernel = args.candidate_kmd / "signed-package"
         for name, record in manifest["baseline_kmd"].items():
             checked_copy(args.kmd / name, args.out / "baseline-kmd" / name, record)
     if args.native_boot:
-        if manifest.get("kmd_variant") not in ("shader-output-bit14-native-boot", "shader-output-bit14-gpu460"):
+        if manifest.get("kmd_variant") not in ("shader-output-bit14-native-boot", "shader-output-bit14-gpu460", "shader-output-bit14-gpu460-vidpn"):
             raise ValueError("Direct boot requires persistent native-start kernel support")
         manifest["startup_mode"] = "native-boot"
         manifest["scope"] = ".158 direct native startup before logon; owner-operated restart and application tests"

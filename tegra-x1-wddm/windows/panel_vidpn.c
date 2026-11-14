@@ -9,7 +9,7 @@ typedef struct _PANEL_PATH {
 } PANEL_PATH;
 
 enum panel_mode_state {
-    PanelModeUnpinned, PanelModeNative, PanelModeLandscape, PanelModeUnsupported
+    PanelModeUnpinned, PanelModeNative, PanelModeUnsupported
 };
 
 /* The WDK exposes DXGK_CONNECTION_STATUS values only to C++ sources. */
@@ -72,23 +72,13 @@ static bool fixed_rotation(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION rotation)
     return rotation >= D3DKMDT_VPPR_IDENTITY && rotation <= D3DKMDT_VPPR_ROTATE270;
 }
 
-static bool quarter_turn(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION rotation)
-{
-    return rotation == D3DKMDT_VPPR_ROTATE90 || rotation == D3DKMDT_VPPR_ROTATE270;
-}
-
-static bool source_fits(enum panel_mode_state source, D3DKMDT_VIDPN_PRESENT_PATH_ROTATION rotation)
-{
-    if (source == PanelModeUnsupported)
-        return false;
-    return source == PanelModeUnpinned || !fixed_rotation(rotation) ||
-        (source == PanelModeLandscape) == quarter_turn(rotation);
-}
-
 static enum panel_mode_state source_layout(const D3DKMDT_VIDPN_SOURCE_MODE *mode)
 {
-    /* VidPN source geometry is the desktop extent before the path transform,
-     * not the fixed target signal or a pre-oriented primary allocation. */
+    /* VidPN mode enumeration describes the unrotated source surface. CCD's
+     * rotated desktop extent is not a second monitor/source mode. Requiring
+     * a landscape source for quarter turns removes 90/270 from the OS mode
+     * list. A DXGI primary independently supplies its actual storage layout
+     * to allocation.c and panel_scanout.c; do not change that allocation here. */
     const D3DKMDT_GRAPHICS_RENDERING_FORMAT *g = &mode->Format.Graphics;
     if (mode->Type != D3DKMDT_RMT_GRAPHICS ||
         !same_size(g->PrimSurfSize, g->VisibleRegionSize) ||
@@ -98,9 +88,6 @@ static enum panel_mode_state source_layout(const D3DKMDT_VIDPN_SOURCE_MODE *mode
     if (g->PrimSurfSize.cx == T214_DC_PANEL_WIDTH && g->PrimSurfSize.cy == T214_DC_PANEL_HEIGHT &&
         g->Stride == T214_DC_PANEL_PITCH)
         return PanelModeNative;
-    if (g->PrimSurfSize.cx == T214_DC_PANEL_HEIGHT && g->PrimSurfSize.cy == T214_DC_PANEL_WIDTH &&
-        g->Stride == T214_DC_PANEL_HEIGHT * 4)
-        return PanelModeLandscape;
     return PanelModeUnsupported;
 }
 
@@ -157,37 +144,28 @@ static NTSTATUS pinned_target(const DXGK_VIDPN_INTERFACE *api, D3DKMDT_HVIDPN vi
 }
 
 static NTSTATUS add_source(const DXGK_VIDPN_INTERFACE *api, D3DKMDT_HVIDPN vidpn,
-    D3DDDIFORMAT format, D3DKMDT_VIDPN_PRESENT_PATH_ROTATION rotation)
+    D3DDDIFORMAT format)
 {
     const DXGK_VIDPNSOURCEMODESET_INTERFACE *modes;
     D3DKMDT_HVIDPNSOURCEMODESET set;
     NTSTATUS status = api->pfnCreateNewSourceModeSet(vidpn, 0, &set, &modes);
     if (!NT_SUCCESS(status))
         return status;
-    for (UINT landscape = 0; landscape < 2; ++landscape) {
-        const enum panel_mode_state layout = landscape ? PanelModeLandscape : PanelModeNative;
-        if (!source_fits(layout, rotation))
-            continue;
-        D3DKMDT_VIDPN_SOURCE_MODE *mode;
-        status = modes->pfnCreateNewModeInfo(set, &mode);
-        if (!NT_SUCCESS(status))
-            break;
-        const UINT width = landscape ? T214_DC_PANEL_HEIGHT : T214_DC_PANEL_WIDTH;
-        const UINT height = landscape ? T214_DC_PANEL_WIDTH : T214_DC_PANEL_HEIGHT;
+    D3DKMDT_VIDPN_SOURCE_MODE *mode;
+    status = modes->pfnCreateNewModeInfo(set, &mode);
+    if (NT_SUCCESS(status)) {
         mode->Type = D3DKMDT_RMT_GRAPHICS;
         mode->Format.Graphics = (D3DKMDT_GRAPHICS_RENDERING_FORMAT){
-            .PrimSurfSize = {width, height},
-            .VisibleRegionSize = {width, height},
-            .Stride = width * 4,
+            .PrimSurfSize = TgGpuPanelSignal.ActiveSize,
+            .VisibleRegionSize = TgGpuPanelSignal.ActiveSize,
+            .Stride = T214_DC_PANEL_PITCH,
             .PixelFormat = format,
             .ColorBasis = D3DKMDT_CB_SRGB,
             .PixelValueAccessMode = D3DKMDT_PVAM_DIRECT,
         };
         status = modes->pfnAddMode(set, mode);
-        if (!NT_SUCCESS(status)) {
+        if (!NT_SUCCESS(status))
             (VOID)modes->pfnReleaseModeInfo(set, mode);
-            break;
-        }
     }
     if (NT_SUCCESS(status)) {
         status = api->pfnAssignSourceModeSet(vidpn, 0, set);
@@ -256,7 +234,7 @@ static NTSTATUS APIENTRY is_supported(HANDLE context, DXGKARG_ISSUPPORTEDVIDPN *
         if (NT_SUCCESS(status))
             status = pinned_target(path.VidPn, args->hDesiredVidPn, path.Path->VidPnTargetId, &target);
         if (NT_SUCCESS(status))
-            args->IsVidPnSupported = source_fits(source, path.Path->ContentTransformation.Rotation) &&
+            args->IsVidPnSupported = source != PanelModeUnsupported &&
                 target != PanelModeUnsupported;
     }
     NTSTATUS release = path.Topology->pfnReleasePathInfo(path.Handle, path.Path);
@@ -307,7 +285,7 @@ static NTSTATUS APIENTRY enumerate_modes(HANDLE context, const DXGKARG_ENUMVIDPN
     if (!NT_SUCCESS(status))
         goto done;
     const D3DKMDT_VIDPN_PRESENT_PATH_ROTATION rotation = path.Path->ContentTransformation.Rotation;
-    if (!source_fits(source_mode, rotation) || target_mode == PanelModeUnsupported) {
+    if (source_mode == PanelModeUnsupported || target_mode == PanelModeUnsupported) {
         status = STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
         goto done;
     }
@@ -317,7 +295,7 @@ static NTSTATUS APIENTRY enumerate_modes(HANDLE context, const DXGKARG_ENUMVIDPN
     const bool target_pivot = args->EnumPivotType == D3DKMDT_EPT_VIDPNTARGET &&
         args->EnumPivot.VidPnTargetId == target;
     if (source_mode == PanelModeUnpinned && !source_pivot)
-        status = add_source(path.VidPn, vidpn, adapter->Panel.Boot.ColorFormat, rotation);
+        status = add_source(path.VidPn, vidpn, adapter->Panel.Boot.ColorFormat);
     if (NT_SUCCESS(status) && target_mode == PanelModeUnpinned && !target_pivot)
         status = add_target(path.VidPn, vidpn, target);
     if (!NT_SUCCESS(status))
@@ -330,15 +308,11 @@ static NTSTATUS APIENTRY enumerate_modes(HANDLE context, const DXGKARG_ENUMVIDPN
     if (args->EnumPivotType != D3DKMDT_EPT_SCALING || !path_pivot)
         update.ContentTransformation.ScalingSupport =
             (D3DKMDT_VIDPN_PRESENT_PATH_SCALING_SUPPORT){.Identity = 1};
-    if (args->EnumPivotType != D3DKMDT_EPT_ROTATION || !path_pivot) {
-        enum panel_mode_state constraint = source_mode;
-        if (constraint == PanelModeUnpinned && fixed_rotation(rotation))
-            constraint = quarter_turn(rotation) ? PanelModeLandscape : PanelModeNative;
-        const bool portrait = constraint != PanelModeLandscape;
-        const bool landscape = constraint != PanelModeNative;
+    if (!fixed_rotation(rotation) &&
+        (args->EnumPivotType != D3DKMDT_EPT_ROTATION || !path_pivot)) {
         update.ContentTransformation.RotationSupport =
-            (D3DKMDT_VIDPN_PRESENT_PATH_ROTATION_SUPPORT){.Identity = portrait,
-                .Rotate90 = landscape, .Rotate180 = portrait, .Rotate270 = landscape, .Offset0 = 1};
+            (D3DKMDT_VIDPN_PRESENT_PATH_ROTATION_SUPPORT){.Identity = 1,
+                .Rotate90 = 1, .Rotate180 = 1, .Rotate270 = 1, .Offset0 = 1};
     }
     status = path.Topology->pfnUpdatePathSupportInfo(path.Handle, &update);
 done:
@@ -368,7 +342,7 @@ static NTSTATUS validate_commit(TG_GPU_ADAPTER *adapter, D3DKMDT_HVIDPN vidpn,
         status = pinned_source(path.VidPn, vidpn, &source);
         if (NT_SUCCESS(status))
             status = pinned_target(path.VidPn, vidpn, path.Path->VidPnTargetId, &target);
-        if (NT_SUCCESS(status) && (!source_fits(source, path_rotation(path.Path)) ||
+        if (NT_SUCCESS(status) && (source == PanelModeUnsupported ||
             target == PanelModeUnsupported ||
             (!inherited && (source == PanelModeUnpinned || target != PanelModeNative))))
             status = STATUS_GRAPHICS_INVALID_VIDPN_TOPOLOGY;
