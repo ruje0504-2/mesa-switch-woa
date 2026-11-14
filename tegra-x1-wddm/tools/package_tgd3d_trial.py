@@ -77,6 +77,9 @@ def main():
                 if candidate.get("modeset_latch_patch_commit"):
                     changed |= {"tegra-x1-wddm/windows/panel_scanout.c",
                                 "tegra-x1-wddm/tests/test_panel_scanout_windows.c"}
+                    if candidate.get("source_visibility_patch_commit"):
+                        changed |= {"tegra-x1-wddm/windows/panel.c",
+                                    "tegra-x1-wddm/windows/panel.h"}
             baseline_hash = ("59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81" if vidpn_fix else
                              "c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53")
             if (candidate.get("target_khz") != 460800 or
@@ -97,6 +100,8 @@ def main():
                 manifest["kmd_vidpn_patch_commit"] = candidate["vidpn_patch_commit"]
                 if candidate.get("modeset_latch_patch_commit"):
                     manifest["kmd_modeset_latch_patch_commit"] = candidate["modeset_latch_patch_commit"]
+                    if candidate.get("source_visibility_patch_commit"):
+                        manifest["kmd_source_visibility_patch_commit"] = candidate["source_visibility_patch_commit"]
         manifest["kmd_variant"] = candidate["variant"]
         manifest["kmd_patch_commit"] = candidate["patch_commit"]
         if native:
@@ -110,6 +115,8 @@ def main():
                                  ".158 bit14 GPU460.8 control; restore the retained 729.6 MHz kernel; logon start")
             if manifest.get("kmd_modeset_latch_patch_commit"):
                 manifest["scope"] = ".158 GPU460.8 VidPN with synchronous modeset latch; restore the retained GPU460.8 kernel"
+            if manifest.get("kmd_source_visibility_patch_commit"):
+                manifest["scope"] = ".158 GPU460.8 source visibility preserves primary binding; restore the retained GPU460.8 kernel"
         kernel = args.candidate_kmd / "signed-package"
         for name, record in manifest["baseline_kmd"].items():
             checked_copy(args.kmd / name, args.out / "baseline-kmd" / name, record)

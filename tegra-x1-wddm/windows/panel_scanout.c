@@ -44,18 +44,31 @@ static BOOLEAN program_flip(PVOID context)
         action->Status = STATUS_DEVICE_BUSY;
         return TRUE;
     }
-    if (action->Flip.Immediate && latched && matches(&action->Flip, &active) &&
-        panel->Displayed.PresentId==action->Flip.PresentId) {
+    TG_GPU_PANEL_FLIP flip = action->Flip;
+    if (!flip.Address) {
+        /* A disabled MPO plane supplies no allocation. Preserve its binding
+         * so source visibility can re-enable the primary without another flip. */
+        if (flip.Visible || !latched) {
+            action->Status = STATUS_INVALID_PARAMETER;
+            return TRUE;
+        }
+        flip.Address = active.address;
+        flip.Rotation = active.rotation;
+    }
+    flip.Visible = flip.Visible && panel->SourceVisible;
+    if (flip.Immediate && latched && matches(&flip, &active) &&
+        panel->Displayed.PresentId==flip.PresentId) {
         action->Status=STATUS_SUCCESS;
         return TRUE;
     }
-    const struct tg_t214_dc_scanout surface = {action->Flip.Address,
-        action->Flip.Rotation, action->Flip.Visible != FALSE};
+    const struct tg_t214_dc_scanout surface = {flip.Address,
+        flip.Rotation, flip.Visible != FALSE};
     enum tg_t214_dc_result result = tg_t214_dc_queue_surface(&panel->Dc, &surface,
-        action->Flip.Immediate != FALSE);
+        flip.Immediate != FALSE);
     if (result == TG_T214_DC_OK) {
-        panel->Pending = action->Flip;
-        action->Status = action->Flip.Immediate ? STATUS_PENDING : STATUS_SUCCESS;
+        panel->Pending = flip;
+        action->Flip = flip; /* Confirm the effective visibility after queuing. */
+        action->Status = flip.Immediate ? STATUS_PENDING : STATUS_SUCCESS;
     } else {
         action->Status = result == TG_T214_DC_BUSY ? STATUS_DEVICE_BUSY : STATUS_INVALID_PARAMETER;
     }
@@ -216,7 +229,6 @@ static NTSTATUS APIENTRY set_primary_mpo(HANDLE context,
     if (plane->LayerIndex != 0 || plane->InputFlags.FlipImmediateNoTearing)
         return STATUS_INVALID_PARAMETER;
     TG_GPU_PANEL_FLIP scanout = {
-        .Address = T214_GPU_POST_FB_BASE,
         .PresentId = plane->PresentId,
         .Visible = plane->InputFlags.Enabled != 0,
         .Immediate = plane->InputFlags.FlipImmediate != 0,

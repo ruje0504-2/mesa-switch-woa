@@ -18,7 +18,7 @@ typedef struct _TG_GPU_PANEL {
     DXGK_DISPLAY_INFORMATION Boot;
     TG_GPU_PANEL_FLIP Pending, Displayed;
     D3DKMDT_VIDPN_PRESENT_PATH_ROTATION PathRotation;
-    BOOLEAN Stopping, NotifyVBlank, NotifyMpoVBlank;
+    BOOLEAN Stopping, NotifyVBlank, NotifyMpoVBlank, SourceVisible;
 } TG_GPU_PANEL;
 
 struct _TG_GPU_ADAPTER;

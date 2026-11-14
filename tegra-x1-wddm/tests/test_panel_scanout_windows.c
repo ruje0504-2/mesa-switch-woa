@@ -117,6 +117,7 @@ void start(void)
     CHECK(tg_t214_dc_acquire(&adapter.Panel.Dc,&io)==TG_T214_DC_OK);
     latch(&model,true);
     adapter.Panel.Boot.TargetId=7;
+    adapter.Panel.SourceVisible=TRUE;
     adapter.Panel.Displayed=(TG_GPU_PANEL_FLIP){.Address=T214_GPU_POST_FB_BASE,.Visible=TRUE};
     adapter.Engine.Dxgk=(DXGKRNL_INTERFACE){.DeviceHandle=&adapter,
         .DxgkCbSynchronizeExecution=synchronize,.DxgkCbNotifyInterrupt=interrupt,.DxgkCbQueueDpc=queue_dpc};
@@ -204,14 +205,56 @@ void start(void)
     CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
     CHECK(adapter.Panel.Displayed.PresentId==202 && !adapter.Panel.Pending.Address);
 
-    /* Blanking detaches a still-pending primary and clears its stale receipt.
-     * Unblank must retain POST's original portrait layout. */
+    /* Visibility changes stop/start the assigned primary. They do not replace
+     * it with POST: no new flip is required to recover the same surface. */
     plane.InputFlags.FlipImmediate=0;plane.PresentId=203;
     CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
     CHECK(TgGpuPanelSetVisibility(&adapter,FALSE)==STATUS_SUCCESS && !adapter.Panel.Pending.Address);
-    active_is(TG_T214_DC_IDENTITY,T214_GPU_POST_FB_BASE,FALSE);
+    active_is(TG_T214_DC_CCW90,0x98400000,FALSE);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
-    active_is(TG_T214_DC_IDENTITY,T214_GPU_POST_FB_BASE,TRUE);
+    active_is(TG_T214_DC_CCW90,0x98400000,TRUE);
+
+    /* MPO disable also has no replacement allocation: only its enable bit
+     * changes. Source visibility must still know which primary to show. */
+    plane.InputFlags.Enabled=0;plane.ContextCount=0;plane.ppContextData=NULL;
+    plane.PresentId=204;
+    CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
+    latch(&model,true);signal_vblank(&d);
+    active_is(TG_T214_DC_CCW90,0x98400000,FALSE);
+    CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
+    active_is(TG_T214_DC_CCW90,0x98400000,TRUE);
+    plane.InputFlags.Enabled=1;plane.ContextCount=1;plane.ppContextData=contexts;
+
+    /* A replacement primary can be bound while the source is hidden. Keep
+     * fetch disabled until the separate source-visibility DDI enables it. */
+    CHECK(TgGpuPanelSetVisibility(&adapter,FALSE)==STATUS_SUCCESS);
+    static DXGKARG_SETVIDPNSOURCEADDRESS hidden={.PrimarySegment=TG_GPU_SCANOUT_SEGMENT,
+        .Flags={.ModeChange=1},.PrimaryAddress={.QuadPart=0x98800000},.hAllocation=&allocations[2]};
+    CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&hidden)==STATUS_SUCCESS);
+    active_is(TG_T214_DC_CCW180,0x98800000,FALSE);
+    CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
+    active_is(TG_T214_DC_CCW180,0x98800000,TRUE);
+
+    CHECK(TgGpuPanelSetVisibility(&adapter,FALSE)==STATUS_SUCCESS);
+    plane.PresentId=205;
+    CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
+    latch(&model,true);
+    const UINT hidden_notifications=notifications;
+    signal_vblank(&d);
+    CHECK(notifications==hidden_notifications+1 && reported_present==205);
+    active_is(TG_T214_DC_CCW90,0x98400000,FALSE);
+    CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
+    active_is(TG_T214_DC_CCW90,0x98400000,TRUE);
+
+    /* A blanking timeout does not pretend the old scanout has stopped. */
+    auto_latch=FALSE;
+    CHECK(TgGpuPanelSetVisibility(&adapter,FALSE)==STATUS_IO_TIMEOUT);
+    CHECK(model.active[T214_DC_WIN_A_OPTIONS]&T214_DC_WIN_ENABLE);
+    auto_latch=TRUE;latch(&model,true);
+    CHECK(TgGpuPanelSetVisibility(&adapter,FALSE)==STATUS_SUCCESS);
+    active_is(TG_T214_DC_CCW90,0x98400000,FALSE);
+    CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
+    active_is(TG_T214_DC_CCW90,0x98400000,TRUE);
 
     /* Unlike a scheduled flip, a modeset returns only after the new primary
      * is active. Reuse the same two slots across repeated quarter turns. */
@@ -229,7 +272,7 @@ void start(void)
     }
     /* Drain an older queued MPO flip instead of returning DEVICE_BUSY to the
      * synchronous mode change, then confirm the replacement's full layout. */
-    plane.PresentId=204;
+    plane.PresentId=206;
     CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
     CHECK(adapter.Panel.Pending.Address);
     CHECK(d.DxgkDdiSetVidPnSourceAddress(&adapter,&modeset)==STATUS_SUCCESS);
@@ -253,7 +296,7 @@ void start(void)
     CHECK(TgGpuPanelStop(&adapter)==STATUS_SUCCESS && !adapter.Panel.Dc.owned);
     CHECK(model.active[T214_DC_WIN_A_STRIDE]==2880 && !(model.active[T214_DC_WIN_A_OPTIONS]&0x15));
     CHECK(notifications && level==PASSIVE_LEVEL);
-    const char text[]="PASS: WDDM legacy/MPO rotation, modeset retirement, full-layout latch, PresentId, immediate retry and rotated POST recovery (model only)\r\n";
+    const char text[]="PASS: WDDM legacy/MPO rotation, source visibility and hidden rebinding, modeset retirement, full-layout latch and POST recovery (model only)\r\n";
     ULONG written;WriteFile(GetStdHandle((ULONG)-11),text,sizeof(text)-1,&written,NULL);
     ExitProcess(0);
 }

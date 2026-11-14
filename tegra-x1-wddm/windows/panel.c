@@ -86,6 +86,7 @@ NTSTATUS TgGpuPanelStart(TG_GPU_ADAPTER *adapter)
         boot.TargetId = 0;
     adapter->Panel.Boot = boot;
     adapter->Panel.PathRotation = D3DKMDT_VPPR_IDENTITY;
+    adapter->Panel.SourceVisible = TRUE;
     adapter->Panel.Displayed = (TG_GPU_PANEL_FLIP){
         .Address = (UINT64)boot.PhysicAddress.QuadPart,
         .Visible = TRUE,
@@ -122,20 +123,21 @@ static BOOLEAN set_visibility(PVOID context)
     TG_GPU_PANEL *panel = &action->Adapter->Panel;
     struct tg_t214_dc_scanout active;
     action->Result = TG_T214_DC_BUSY;
+    /* Keep the source gate separate from a plane's requested enable bit.
+     * Address updates while hidden must not turn scanning back on. */
+    panel->SourceVisible = action->Visible != FALSE;
     if (!TgGpuPanelReadLatched(panel, &active))
         return TRUE;
-    /* When blanking a source, detach its primary before VidMm can evict it. */
-    if (active.visible == (action->Visible != FALSE) && (active.visible ||
-        (active.address == T214_GPU_POST_FB_BASE && active.rotation == TG_T214_DC_IDENTITY))) {
-        /* A visibility transition has detached the old allocation. Do not
-         * leave a previous flip pending against an address no longer scanned. */
-        if (!active.visible)
-            panel->Pending = (TG_GPU_PANEL_FLIP){0};
+    if (active.visible == (action->Visible != FALSE)) {
         action->Result = TG_T214_DC_OK;
         return TRUE;
     }
-    enum tg_t214_dc_result result = tg_t214_dc_queue_scanout(dc, T214_GPU_POST_FB_BASE,
-        action->Visible != FALSE);
+    /* Visibility starts/stops the assigned primary; it does not assign POST.
+     * Disabled Window A performs no fetch. VidMm owns residency and supplies
+     * address updates when the primary backing changes, including while hidden.
+     * Only the stop/POST-handoff path deliberately replaces this binding. */
+    active.visible = action->Visible != FALSE;
+    enum tg_t214_dc_result result = tg_t214_dc_queue_surface(dc, &active, false);
     if (result != TG_T214_DC_OK)
         action->Result = result;
     return TRUE;

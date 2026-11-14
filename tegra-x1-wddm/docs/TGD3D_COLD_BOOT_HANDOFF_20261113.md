@@ -445,3 +445,33 @@ DWM PID788加载模块均为上述恢复组合，CPU/GPU/RAM/风扇设置与试�
 现有源码仍缺旋转Blt回退，DC列扫描与pitch/offset需要对照实际绑定的primary确认。
 这些是尚未排除的路径，不能将缺失Blt、Fence、供电或DC带宽直接写作本轮根因。
 NVIDIA TRM下载入口本次要求登录，未取得正文，不声称已据TRM验证硬件限制。
+
+## 源可见性与主表面绑定修正
+
+继续静态审查发现一处可独立复现的显示契约错误：`SetVidPnSourceVisibility(FALSE)`
+会将当前主表面替换成POST启动缓冲区；随后TRUE只显示POST，原地址和旋转布局已经
+丢失。另一方面，legacy/MPO更新主表面都可能在源仍隐藏时重新开启Window A。
+MPO禁用primary plane且不提供allocation时也会将地址替换为POST。
+
+微软[源可见性DDI](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/nc-d3dkmddi-dxgkddi_setvidpnsourcevisibility)
+及[参数契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgkarg_setvidpnsourcevisibility)
+要求开始/停止扫描该源的primary，隐藏期间仍生成VSync；
+[MPO呈现契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/multiplane-overlay-vidpn-presentation)
+要求源隐藏时关闭所有plane，重新显示时只开启primary plane。查阅2026-11-14 UTC，
+控制使用WDK/SDK10.0.26100.0。
+
+修正把源可见性独立保存于显示中断同步域：关闭Window A而保留地址/rotation/pitch；
+源隐藏时，新的legacy/MPO绑定仍保持不扫描；重新显示恢复最近一次已绑定的primary。
+MPO禁用只改enable状态，不凭空选择POST。停止设备或明确的无primary模式切换仍走
+原POST恢复路径。仅保留硬件地址/布局状态，不增加allocation对象或驻留引用；
+backing变化仍由VidMm通过地址DDI通知。普通翻转、双向GPU Fence及供电参数未改。
+
+完整主机构建通过。Switch上的同一组ARM64 CPU控制链接旧实现退出107（隐藏后活动
+地址/布局不是原primary），链接新实现退出0。覆盖隐藏/显示、隐藏期间换绑、MPO禁用、
+隐藏时VSync、锁存超时不冒充完成、重复旋转和POST恢复。首次控制runner曾得到null
+退出码，该条不作控制证据；改用直接持有Process句柄的runner后取得上述明确退出码。
+这证明修正了源码契约错误，**尚不能证明它是实屏黑屏根因或硬件旋转已通过**。
+候选位于 `rotation-source-visibility-candidate/`，此时尚未安装。
+
+按用户配置尝试VPS Claude独立只读复核，返回“Not logged in”；未产生审计意见，
+未修改远端登录或模型配置。上述结论来自本窗口的源码、微软契约和控制结果。
