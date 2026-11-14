@@ -35,6 +35,7 @@ enum tgd3d_trace_event {
    TGD3D_TRACE_SUBMIT_PHASE,       /* arg0 phase (1 runtime signal, 2 Vulkan, 3 runtime wait), arg1 sequence */
    TGD3D_TRACE_RESOURCE_PHASE,     /* arg0 phase (0 DDI, 1 VkImage, 2 memory, 3 bind, 4 runtime bind), arg1 Resource address */
    TGD3D_TRACE_SHADER_CACHE,       /* arg0 0 miss, 1 binary hit, 2 queued write; arg1 binary bytes */
+   TGD3D_TRACE_DEFERRED_INIT,      /* arg0 0 bootstrap, 1 bridge transition, 2 layouts; arg1 Device */
    TGD3D_TRACE_ERROR = 20,         /* tgd3d_trace_error */
    TGD3D_TRACE_MESSAGE = 21,       /* tgd3d_trace_message */
    TGD3D_TRACE_TIMING = 30,        /* tgd3d_trace_timing */
@@ -59,6 +60,7 @@ enum tgd3d_wait_reason {
    TGD3D_WAIT_DESTROY = 3,
    TGD3D_WAIT_QUERY = 4,
    TGD3D_WAIT_SYNC_CONTROL = 5,
+   TGD3D_WAIT_DEFERRED_INIT = 6,
 };
 
 struct tgd3d_trace_data {

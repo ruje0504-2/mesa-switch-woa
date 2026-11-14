@@ -157,12 +157,14 @@ HRESULT APIENTRY CreateDevice(D3D10DDI_HADAPTER hAdapter, D3D10DDIARG_CREATEDEVI
       hr = cmd_create(dev);
       trace(TGD3D_TRACE_DEVICE_STAGE, hr, stage, identity);
    }
+#ifndef TGD3D_DEFERRED_INIT
    if (SUCCEEDED(hr)) {
       stage = 5;
       trace(TGD3D_TRACE_DEVICE_STAGE, E_PENDING, stage, identity);
       hr = device_layouts_create(dev);
       trace(TGD3D_TRACE_DEVICE_STAGE, hr, stage, identity);
    }
+#endif
    if (FAILED(hr)) {
       trace(TGD3D_TRACE_CREATE_DEVICE, hr, args->Interface, stage);
       device_teardown(dev);

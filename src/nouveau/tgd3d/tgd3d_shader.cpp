@@ -12,8 +12,9 @@
  * numeric class and pixel shaders one per render-target numeric class.
  *
  * Each stage is an independent VkShaderEXT created against one fixed
- * pipeline layout, so shaders compile once, at creation, and binding a
- * different pixel shader never recompiles the vertex shader.
+ * pipeline layout. The deferred-init diagnostic validates/translates at
+ * creation but postpones NVK compilation until a variant is first drawn.
+ * Binding a different pixel shader never recompiles the vertex shader.
  */
 #include "tgd3d.h"
 
@@ -203,14 +204,12 @@ void reflect(Shader *shader, const ir::Builder &builder)
    shader->reflected = true;
 }
 
-VkShaderEXT compile(Shader *shader, uint32_t key)
+std::vector<uint32_t> translate(Shader *shader, uint32_t key)
 {
    Device *dev = shader->dev;
    const VulkanCaps &caps = *dev->caps;
-   const uint64_t begin = qpc_now();
    const uint64_t identity = (uintptr_t)shader;
    const uint64_t frontend = (UINT64_C(1) << 32) | shader->stage;
-   const uint64_t backend = (UINT64_C(2) << 32) | shader->stage;
    trace(TGD3D_TRACE_SHADER_PHASE, E_PENDING, frontend, identity);
    TraceLogger logger;
 
@@ -231,7 +230,7 @@ VkShaderEXT compile(Shader *shader, uint32_t key)
    if (!ir) {
       shader->error = E_INVALIDARG;
       trace(TGD3D_TRACE_SHADER_PHASE, shader->error, frontend, identity);
-      return VK_NULL_HANDLE;
+      return {};
    }
    {
       ir::LowerIoPass pass(*ir);
@@ -256,14 +255,36 @@ VkShaderEXT compile(Shader *shader, uint32_t key)
    spv.supportsZeroInfNanPreserveF32 = caps.zeroInfNanPreserve;
    spirv::SpirvBuilder builder(*ir, mapping, spv);
    builder.buildSpirvBinary();
-   const std::vector<uint32_t> code = builder.getSpirvBinary();
+   std::vector<uint32_t> code = builder.getSpirvBinary();
    if (mapping.failed || code.empty()) {
       /* A register this layout cannot address; nothing is remapped silently. */
       shader->error = DXGI_ERROR_UNSUPPORTED;
       trace(TGD3D_TRACE_SHADER_PHASE, shader->error, frontend, identity);
-      return VK_NULL_HANDLE;
+      return {};
    }
    trace(TGD3D_TRACE_SHADER_PHASE, S_OK, frontend, identity);
+   return code;
+}
+
+VkShaderEXT compile(Shader *shader, uint32_t key)
+{
+   Device *dev = shader->dev;
+   const VulkanCaps &caps = *dev->caps;
+   const uint64_t begin = qpc_now();
+   std::vector<uint32_t> code;
+   if (!key && !shader->preparedCode.empty())
+      code.swap(shader->preparedCode);
+   else
+      code = translate(shader, key);
+   if (code.empty())
+      return VK_NULL_HANDLE;
+#ifdef TGD3D_DEFERRED_INIT
+   shader->error = device_layouts_create(dev);
+   if (FAILED(shader->error))
+      return VK_NULL_HANDLE;
+#endif
+   const uint64_t identity = (uintptr_t)shader;
+   const uint64_t backend = (UINT64_C(2) << 32) | shader->stage;
 
    VkShaderCreateInfoEXT info = {VK_STRUCTURE_TYPE_SHADER_CREATE_INFO_EXT};
    switch (shader->stage) {
@@ -346,12 +367,20 @@ void create_shader(D3D10DDI_HDEVICE hDevice, const UINT *code, D3D10DDI_HSHADER 
       shader->outputs.assign(signatures->pOutputSignature,
                              signatures->pOutputSignature + signatures->NumOutputSignatureEntries);
    }
+#ifdef TGD3D_DEFERRED_INIT
+   /* Reflection is needed before prepare_reads and before selecting numeric
+    * variants. Do not defer it along with the NVK/NAK backend compilation. */
+   shader->preparedCode = translate(shader, 0);
+   if (shader->preparedCode.empty())
+      shader_create_failed(shader, FAILED(shader->error) ? shader->error : E_FAIL);
+#else
    VkShaderEXT base = compile(shader, 0);
    if (!base) {
       shader_create_failed(shader, FAILED(shader->error) ? shader->error : E_FAIL);
       return;
    }
    shader->variants.push_back({0, base});
+#endif
 }
 
 void APIENTRY CreateVertexShader(D3D10DDI_HDEVICE hDevice, const UINT *code, D3D10DDI_HSHADER handle,

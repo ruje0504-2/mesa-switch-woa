@@ -1207,3 +1207,19 @@ Windows原始着色器及派生SPIR-V/机器码均仅保存在本机输出目录
 `dwm-shader-audit/`，没有加入Git。输入偏移/哈希、逐shader结果与验证范围见
 `inputs.json`、`frontend-results.json`、`spirv-validation.json`、`nak-results.json`
 及`summary.json`。
+
+## Deferred Init 对照构建（2026-11-13）
+
+按用户要求增加独立诊断开关：设备创建时只留本地 completion timeline，桌面
+就绪事件后在 DDI 线程切入双向桥接；保留原 timeline 和提交序号。shader 在创建
+时保留校验/反射，NVK/NAK 后端与绘制布局延迟到首次使用。普通构建仍默认
+启用双向桥接。完整语义、限制和参考见 [Deferred Init](TGD3D_DEFERRED_INIT.md)。
+
+冻结组合上的候选 ARM64 UMD SHA256：
+`a92514fbb1b141501b551d241fc392c8c3f9f661743dccd472fa290dcd91ffc4`
+（2932736字节）。全部 tgd3d 对象重新编译；KMD/ICD 不改，不带入磁盘缓存。
+ARM64/x64 构建通过；冻结候选、HEAD 延迟构建、普通双向桥接构建的 x64 CPU
+控制均通过。包括非阻塞调用、真实完成后切换、两方向导入失败清理、超时不能
+退休资源、未使用 shader 不调用 NVK、反射和首次编译、布局部分失败后重试。
+硬件冷启动与画面结果待本轮实机验证；没有据此宣布修复或稳定通过。
+本地构建输入/输出/命令见 `deferred-init-candidate/build-manifest.json`。
