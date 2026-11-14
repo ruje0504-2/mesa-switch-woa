@@ -138,8 +138,16 @@ static BOOLEAN set_visibility(PVOID context)
      * Only the stop/POST-handoff path deliberately replaces this binding. */
     active.visible = action->Visible != FALSE;
     enum tg_t214_dc_result result = tg_t214_dc_queue_surface(dc, &active, false);
-    if (result != TG_T214_DC_OK)
+    if (result == TG_T214_DC_OK) {
+        /* This is the same binding and completed PresentId, with only its
+         * enable bit changing. Preserve that receipt after the visibility
+         * update latches instead of classifying our own update as external. */
+        panel->Pending = panel->Displayed;
+        panel->Pending.Visible = action->Visible != FALSE;
+        panel->Pending.Immediate = FALSE;
+    } else {
         action->Result = result;
+    }
     return TRUE;
 }
 

@@ -211,8 +211,10 @@ void start(void)
     CHECK(d.DxgkDdiSetVidPnSourceAddressWithMultiPlaneOverlay3(&adapter,&args)==STATUS_SUCCESS);
     CHECK(TgGpuPanelSetVisibility(&adapter,FALSE)==STATUS_SUCCESS && !adapter.Panel.Pending.Address);
     active_is(TG_T214_DC_CCW90,0x98400000,FALSE);
+    signal_vblank(&d);CHECK(reported_present==203);
     CHECK(TgGpuPanelSetVisibility(&adapter,TRUE)==STATUS_SUCCESS);
     active_is(TG_T214_DC_CCW90,0x98400000,TRUE);
+    signal_vblank(&d);CHECK(reported_present==203);
 
     /* MPO disable also has no replacement allocation: only its enable bit
      * changes. Source visibility must still know which primary to show. */

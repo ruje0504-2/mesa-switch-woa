@@ -473,5 +473,12 @@ backing变化仍由VidMm通过地址DDI通知。普通翻转、双向GPU Fence�
 这证明修正了源码契约错误，**尚不能证明它是实屏黑屏根因或硬件旋转已通过**。
 候选位于 `rotation-source-visibility-candidate/`，此时尚未安装。
 
+安装前继续核对完成通知：仅修改Window A可见性后，原读回代码会把自己写入的状态
+当作外部状态，将已锁存的PresentId清零。补充修正把同一binding及原PresentId作为
+可见性更新的pending状态，仍等硬件锁存后确认，不创建新的完成值。新增“隐藏和
+显示后VSync仍报告原已锁存PresentId”控制：链接首版可见性修正退出214，补充后
+退出0；完整主机构建通过。首版签名包未安装，后续使用
+`rotation-source-visibility-v2/`，避免把首版的控制结果当成最终候选验证。
+
 按用户配置尝试VPS Claude独立只读复核，返回“Not logged in”；未产生审计意见，
 未修改远端登录或模型配置。上述结论来自本窗口的源码、微软契约和控制结果。
