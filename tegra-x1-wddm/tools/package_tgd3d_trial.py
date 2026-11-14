@@ -108,6 +108,8 @@ def main():
             manifest["kmd_startup_patch_commit"] = candidate["startup_patch_commit"]
         if candidate.get("inf_identity"):
             manifest["kmd_package_identity"] = candidate["inf_identity"]
+        if candidate.get("additional_patch_commits"):
+            manifest["kmd_additional_patch_commits"] = candidate["additional_patch_commits"]
         manifest["kmd"] = candidate["signed_files"]
         manifest["scope"] = ".158 bit14 fix with automatic tgd3d enablement after logon; manual testing"
         if clock_control:
