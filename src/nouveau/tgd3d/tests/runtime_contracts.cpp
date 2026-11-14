@@ -19,6 +19,7 @@ static unsigned allocations, deallocations, maps, frees, locks, unlocks, waits, 
 static HRESULT presentStatus;
 static HRESULT primaryError;
 static D3DDDIFORMAT primaryFormat;
+static UINT primaryWidth, primaryHeight, primaryPitch, primaryRotation;
 static unsigned primaryImages, primaryModes;
 static unsigned primaryFailureStep, primaryAllocations, primaryResidents, expectedPrimaryDeallocations;
 static VkResult primaryFailure;
@@ -140,6 +141,7 @@ static void primary_creation_contract()
       {5, VK_SUCCESS, D3DDDIERR_OUTOFVIDEOMEMORY, E_OUTOFMEMORY},
       {5, VK_SUCCESS, D3DDDIERR_DEVICEREMOVED, D3DDDIERR_DEVICEREMOVED},
    };
+   for (UINT rotation = D3DDDI_ROTATION_IDENTITY; rotation <= D3DDDI_ROTATION_270; rotation++)
    for (bool alpha : {false, true}) for (bool opened : {false, true}) for (const auto &failure : cases) {
       if (opened && failure.step == 4)
          continue; /* Opening receives its allocation from the runtime. */
@@ -148,6 +150,11 @@ static void primary_creation_contract()
       init(&dev, &adapter, 0);
       primaryError = S_OK;
       primaryFormat = alpha ? D3DDDIFMT_A8R8G8B8 : D3DDDIFMT_X8R8G8B8;
+      primaryRotation = rotation;
+      const bool quarter = rotation == D3DDDI_ROTATION_90 || rotation == D3DDDI_ROTATION_270;
+      primaryWidth = quarter ? 1280 : 720;
+      primaryHeight = quarter ? 720 : 1280;
+      primaryPitch = primaryWidth * 4;
       primaryImages = primaryModes = 0;
       primaryAllocations = primaryResidents = 0;
       primaryFailureStep = failure.step; primaryFailure = failure.vulkan;
@@ -163,8 +170,8 @@ static void primary_creation_contract()
          CHECK(a->pAllocationInfo2->PrivateDriverDataSize == sizeof(tg_gpu_primary_allocation_request));
          const auto &r = *static_cast<const tg_gpu_primary_allocation_request *>(a->pAllocationInfo2->pPrivateDriverData);
          CHECK(r.Buffer.flags == (TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_DISPLAY_PRIMARY));
-         CHECK(r.Format == primaryFormat && r.Width == 720 && r.Height == 1280);
-         CHECK(r.Pitch == 2880 && r.Buffer.bytes == 3686400 && r.Rotation == D3DDDI_ROTATION_IDENTITY);
+         CHECK(r.Format == primaryFormat && r.Width == primaryWidth && r.Height == primaryHeight);
+         CHECK(r.Pitch == primaryPitch && r.Buffer.bytes == 3686400 && r.Rotation == primaryRotation);
          ++primaryAllocations;
          if (primaryFailureStep == 4)
             return primaryRuntimeFailure;
@@ -190,15 +197,15 @@ static void primary_creation_contract()
       };
       dev.vk.CreateImage = [](VkDevice, const VkImageCreateInfo *a, const VkAllocationCallbacks *, VkImage *image) {
          CHECK(a->format == VK_FORMAT_B8G8R8A8_UNORM && a->tiling == VK_IMAGE_TILING_LINEAR);
-         CHECK(a->extent.width == 720 && a->extent.height == 1280 && a->initialLayout == VK_IMAGE_LAYOUT_PREINITIALIZED);
+         CHECK(a->extent.width == primaryWidth && a->extent.height == primaryHeight && a->initialLayout == VK_IMAGE_LAYOUT_PREINITIALIZED);
          const auto *wsi = static_cast<const wsi_image_create_info *>(a->pNext);
-         CHECK(wsi->sType == VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA && wsi->scanout && wsi->win32_row_pitch == 2880);
+         CHECK(wsi->sType == VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA && wsi->scanout && wsi->win32_row_pitch == primaryPitch);
          if (primaryFailureStep == 1)
             return primaryFailure;
          *image = (VkImage)0x22; ++primaryImages; return VK_SUCCESS;
       };
       dev.vk.GetImageSubresourceLayout = [](VkDevice, VkImage, const VkImageSubresource *, VkSubresourceLayout *out) {
-         *out = {0, 3686400, 2880, 3686400, 3686400};
+         *out = {0, 3686400, primaryPitch, 3686400, 3686400};
       };
       dev.vk.GetImageMemoryRequirements = [](VkDevice, VkImage, VkMemoryRequirements *out) { *out = {3686400, 4096, 1}; };
       dev.vk.AllocateMemory = [](VkDevice, const VkMemoryAllocateInfo *a, const VkAllocationCallbacks *, VkDeviceMemory *out) {
@@ -221,11 +228,11 @@ static void primary_creation_contract()
          owner->release(owner->context); owners[0] = nullptr;
       };
       dev.vk.DestroyImage = [](VkDevice, VkImage image, const VkAllocationCallbacks *) { CHECK(image == (VkImage)0x22); --primaryImages; };
-      D3D10DDI_MIPINFO mip = {720, 1280, 1, 720, 1280, 1};
+      D3D10DDI_MIPINFO mip = {primaryWidth, primaryHeight, 1, primaryWidth, primaryHeight, 1};
       DXGI_DDI_PRIMARY_DESC primary = {};
       primary.ModeDesc.Width = 720; primary.ModeDesc.Height = 1280;
       primary.ModeDesc.Format = alpha ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_B8G8R8X8_UNORM;
-      primary.ModeDesc.Rotation = DXGI_DDI_MODE_ROTATION_IDENTITY;
+      primary.ModeDesc.Rotation = static_cast<DXGI_DDI_MODE_ROTATION>(rotation);
       primary.ModeDesc.RefreshRate = {60, 1};
       D3D10DDIARG_CREATERESOURCE desc = {};
       desc.pMipInfoList = &mip; desc.pPrimaryDesc = &primary;
@@ -236,7 +243,7 @@ static void primary_creation_contract()
       D3D10DDI_DEVICEFUNCS table = {}; resource_fill_table(&table);
       tg_gpu_primary_allocation_request standard = {
          {TG_GPU_ALLOCATION_ABI, TG_GPU_ALLOCATION_CPU_VISIBLE | TG_GPU_ALLOCATION_DISPLAY_PRIMARY, 3686400},
-         primaryFormat, {60, 1}, D3DDDI_ROTATION_IDENTITY, 720, 1280, 2880, 0};
+         primaryFormat, {60, 1}, rotation, primaryWidth, primaryHeight, primaryPitch, 0};
       D3DDDI_OPENALLOCATIONINFO allocation = {};
       allocation.hAllocation = 0x60; allocation.pPrivateDriverData = &standard;
       allocation.PrivateDriverDataSize = sizeof(standard);
@@ -259,13 +266,14 @@ static void primary_creation_contract()
       }
       CHECK(primaryError == S_OK && primaryImages == 1);
       auto *res = reinterpret_cast<Resource *>(storage);
-      CHECK(res->format == desc.Format && res->primary && res->pitch == 2880);
+      CHECK(res->format == desc.Format && res->primary && res->pitch == primaryPitch);
+      CHECK(res->width == primaryWidth && res->height == primaryHeight);
       CHECK(SUCCEEDED(runtime_set_display_mode(res->storage.runtime, &dev, 0)) && primaryModes == 1);
       table.pfnDestroyResource({&dev}, {storage});
       CHECK(!primaryImages && !owners[0] && primaryError == S_OK);
       runtime_device_destroy(&dev);
    }
-   std::puts("PASS: ARGB/XRGB primary CreateResource DDI, native pitch/format, imported GPU VA, display-mode allocation and teardown (CPU control)");
+   std::puts("PASS: ARGB/XRGB primary Create/OpenResource DDI at all four rotations, exact pitch/extent, imported GPU VA and teardown (CPU control)");
    std::puts("PASS: primary Create/OpenResource propagate image/import/bind OOM and runtime removal after releasing partial ownership (CPU control)");
 }
 
@@ -326,6 +334,20 @@ void runtime_contracts()
          standard.Reserved = 1;
          CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
          standard.Reserved = 0; standard.Buffer.bytes += 4096;
+         CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
+         standard.Buffer.bytes -= 4096;
+         standard.Rotation = D3DDDI_ROTATION_90;
+         /* A new angle cannot reinterpret the producer's old storage. */
+         CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
+         standard.Width = 1280; standard.Height = 720; standard.Pitch = 5120;
+         if (!primary) {
+            /* The standard shadow contract remains unrotated. */
+            CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
+         }
+         standard.Pitch += 4;
+         CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
+         standard.Pitch -= 4;
+         standard.Rotation = D3DDDI_ROTATION_270 + 1;
          CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
       }
    }

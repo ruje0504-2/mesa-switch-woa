@@ -452,9 +452,9 @@ HRESULT runtime_shared_open(Device *dev, const D3D10DDIARG_OPENRESOURCE *args,
    *description = {};
    if (args->NumAllocations != 1 || !args->pOpenAllocationInfo)
       return DXGI_ERROR_UNSUPPORTED;
-   /* Standard primary/shadow surfaces are created by VidMm, without a UMD
-    * resource payload. The allocation still carries the KMD's explicit ABI.
-    * In particular, a pre-DWM OpenResource need not carry our TGSR envelope. */
+   /* VidMm's standard primary/shadow and our DXGI primary allocations have
+    * no UMD resource payload. Their layout comes from the KMD's explicit
+    * allocation ABI, not the desktop's current orientation. */
    const auto &info = args->pOpenAllocationInfo[0];
    if (!info.hAllocation || !info.pPrivateDriverData)
       return DXGI_ERROR_UNSUPPORTED;
@@ -464,12 +464,19 @@ HRESULT runtime_shared_open(Device *dev, const D3D10DDIARG_OPENRESOURCE *args,
       tg_gpu_primary_allocation_request a;
       memcpy(&a, info.pPrivateDriverData, sizeof(a));
       const bool primary = a.Buffer.flags & TG_GPU_ALLOCATION_DISPLAY_PRIMARY;
+      /* Standard shared primaries/shadows remain unrotated. A primary made
+       * by runtime_primary_create can carry another storage orientation;
+       * opening it must preserve that extent and pitch without rotating its
+       * pixels or allocating replacement backing. */
+      const bool quarter = a.Rotation == D3DDDI_ROTATION_90 || a.Rotation == D3DDDI_ROTATION_270;
+      const UINT width = quarter ? 1280 : 720, height = quarter ? 720 : 1280;
       if (a.Buffer.version != TG_GPU_ALLOCATION_ABI ||
           a.Buffer.flags != (TG_GPU_ALLOCATION_CPU_VISIBLE |
                              (primary ? TG_GPU_ALLOCATION_DISPLAY_PRIMARY : 0)) ||
           (a.Format != D3DDDIFMT_A8R8G8B8 && a.Format != D3DDDIFMT_X8R8G8B8) ||
-          a.Rotation != D3DDDI_ROTATION_IDENTITY || a.Reserved ||
-          a.Width != 720 || a.Height != 1280 || a.Pitch != 720 * 4 ||
+          a.Rotation < D3DDDI_ROTATION_IDENTITY || a.Rotation > D3DDDI_ROTATION_270 ||
+          (!primary && a.Rotation != D3DDDI_ROTATION_IDENTITY) || a.Reserved ||
+          a.Width != width || a.Height != height || a.Pitch != width * 4 ||
           a.Buffer.bytes != UINT64_C(720) * 1280 * 4)
          return DXGI_ERROR_UNSUPPORTED;
       RuntimeResource *p = nullptr;
