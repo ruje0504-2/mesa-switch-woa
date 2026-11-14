@@ -1,5 +1,8 @@
 # Deferred Init 冷启动对照
 
+**状态：实机冷启动仍自动重启，用户要求回退；以下保留实验设计与验证历史，
+此诊断开关、辅助程序和相应代码已经从当前分支撤回。**
+
 这是按用户要求增加的诊断构建，`-Dtgd3d-deferred-init=true`，默认关闭此诊断选项。
 普通构建仍在创建设备时启用双向 GPU Fence；不能同时定义
 `TGD3D_CPU_SYNC_CONTROL` 与 `TGD3D_DEFERRED_INIT`。

@@ -374,12 +374,10 @@ static void shader_contract(const BYTE *dxbc, bool vertex, const char *outputPat
 {
    reset(); Adapter adapter; Device dev = make_device(&adapter);
    shaderOutput = outputPath;
-   shaderBackendCalls = 0;
    dev.vk.CreateShadersEXT = [](VkDevice, uint32_t count, const VkShaderCreateInfoEXT *info,
                                const VkAllocationCallbacks *, VkShaderEXT *out) {
       CHECK(count == 1 && info->codeSize > 20 && info->codeType == VK_SHADER_CODE_TYPE_SPIRV_EXT);
       CHECK(static_cast<const uint32_t *>(info->pCode)[0] == 0x07230203);
-      ++shaderBackendCalls;
       FILE *file = fopen(shaderOutput, "wb"); CHECK(file);
       CHECK(fwrite(info->pCode, 1, info->codeSize, file) == info->codeSize); CHECK(!fclose(file));
       *out = handle<VkShaderEXT>(1); return VK_SUCCESS;
@@ -405,32 +403,6 @@ static void shader_contract(const BYTE *dxbc, bool vertex, const char *outputPat
    alignas(Shader) BYTE storage[sizeof(Shader)];
    auto create = vertex ? table.pfnCreateVertexShader : table.pfnCreatePixelShader;
    create({&dev}, tokens.data(), {storage}, {}, &sig);
-#ifdef TGD3D_DEFERRED_INIT
-   Shader *lazy = reinterpret_cast<Shader *>(storage);
-   CHECK(SUCCEEDED(lastError) && lazy->reflected && !lazy->preparedCode.empty());
-   CHECK(lazy->variants.empty() && !shaderBackendCalls && !dev.pipelineLayout);
-   if (sampled)
-      CHECK(lazy->cbMask == (1u << 13) && lazy->srvMask[0] == 1 && lazy->samplerMask == 1);
-   table.pfnDestroyShader({&dev}, {storage});
-   CHECK(!shaderBackendCalls && dev.deferred.empty());
-   create({&dev}, tokens.data(), {storage}, {}, &sig);
-   /* Real layout objects are created once, on the first backend compile. */
-   dev.vk.CreateDescriptorSetLayout = [](VkDevice, const VkDescriptorSetLayoutCreateInfo *,
-          const VkAllocationCallbacks *, VkDescriptorSetLayout *out) {
-      *out = handle<VkDescriptorSetLayout>(100 + layouts++); return VK_SUCCESS;
-   };
-   dev.vk.CreatePipelineLayout = [](VkDevice, const VkPipelineLayoutCreateInfo *,
-          const VkAllocationCallbacks *, VkPipelineLayout *out) {
-      *out = handle<VkPipelineLayout>(200); return VK_SUCCESS;
-   };
-   dev.vk.CreateSampler = [](VkDevice, const VkSamplerCreateInfo *,
-          const VkAllocationCallbacks *, VkSampler *out) {
-      *out = handle<VkSampler>(300); return VK_SUCCESS;
-   };
-   CHECK(shader_variant(reinterpret_cast<Shader *>(storage), 0));
-   CHECK(shaderBackendCalls == 1 && layouts == SET_COUNT && dev.defaultSampler);
-   CHECK(shader_variant(reinterpret_cast<Shader *>(storage), 0) && shaderBackendCalls == 1);
-#endif
    CHECK(SUCCEEDED(lastError) && reinterpret_cast<Shader *>(storage)->variants.size() == 1);
    if (sampled) {
       const Shader *shader = reinterpret_cast<Shader *>(storage);
@@ -472,11 +444,7 @@ static void shader_contract(const BYTE *dxbc, bool vertex, const char *outputPat
       return shaderFailure;
    };
    dev.um.pfnSetErrorCb = [](D3D10DDI_HRTCORELAYER, HRESULT hr) {
-#ifdef TGD3D_DEFERRED_INIT
-      CHECK(shaderAllocationFrees == 0); /* the created DDI object is still alive */
-#else
       CHECK(shaderAllocationFrees == 3);
-#endif
       lastError = hr;
    };
    for (VkResult failure : {VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_OUT_OF_DEVICE_MEMORY,
@@ -485,18 +453,12 @@ static void shader_contract(const BYTE *dxbc, bool vertex, const char *outputPat
       shaderAllocationFrees = 0;
       lastError = S_OK;
       create({&dev}, tokens.data(), {storage}, {}, &sig);
-#ifdef TGD3D_DEFERRED_INIT
-      CHECK(!shader_variant(reinterpret_cast<Shader *>(storage), 0));
-      table.pfnDestroyShader({&dev}, {storage});
-      retire(&dev, true);
-#endif
       const HRESULT expected = failure == VK_ERROR_DEVICE_LOST ? D3DDDIERR_DEVICEREMOVED :
          failure == VK_ERROR_UNKNOWN ? E_FAIL : E_OUTOFMEMORY;
       CHECK(lastError == expected && shaderAllocationFrees == 3 && dev.deferred.empty());
       CHECK(FAILED(dev.lost) == (failure == VK_ERROR_DEVICE_LOST));
    }
    failedShader = nullptr;
-   dev.um.pfnSetErrorCb = [](D3D10DDI_HRTCORELAYER, HRESULT hr) { lastError = hr; };
    /* Even an existing cached variant cannot be reused after device loss. */
    Shader cached; cached.dev = &dev; cached.variants.push_back({0, handle<VkShaderEXT>(1)});
    CHECK(shader_variant(&cached, 0) == VK_NULL_HANDLE);
@@ -507,11 +469,7 @@ static void shader_contract(const BYTE *dxbc, bool vertex, const char *outputPat
    };
    create({&dev}, tokens.data(), {storage}, {}, &sig);
    CHECK(lastError == D3DDDIERR_DEVICEREMOVED);
-#ifdef TGD3D_DEFERRED_INIT
-   std::puts("PASS: unused shader skips NVK; first use compiles once, preserves reflection and OOM/device-loss, DestroyShader cleans storage");
-#else
    std::puts("PASS: shader failure preserves OOM/device-loss status and cleans before SetErrorCb");
-#endif
 }
 
 static void sampled_shader_contract(const char *source, const char *outputPath)
@@ -532,7 +490,6 @@ static void sampled_shader_contract(const char *source, const char *outputPath)
 void runtime_contracts();
 void resource_creation_contracts();
 void shader_cache_contracts(bool child);
-void deferred_init_contracts();
 
 /* Reproduce compiler issues with real application shaders without executing
  * them or installing a driver. This D3D10 control accepts standalone SM4.0
@@ -585,7 +542,6 @@ int main(int argc, char **argv)
       return 0;
    }
    submission_contract(); nonblocking_map(); incomplete_fence_keeps_resources();
-   deferred_init_contracts();
    device_error_contract();
    rotated_views(); descriptor_contract();
    query_contract();

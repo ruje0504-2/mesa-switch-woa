@@ -17,7 +17,6 @@
 
 #include "tgd3d_vk.h"
 #include "tgd3d_trace.h"
-#include "tgd3d_deferred.h"
 #include "nouveau/vulkan/nvkmd/windows/adapter_abi.h"
 
 #include <deque>
@@ -31,7 +30,6 @@ struct Resource;
 struct View;
 struct Shader;
 struct RuntimeResource;
-using ShareObjects = LONG(APIENTRY *)(UINT, const D3DKMT_HANDLE *, void *, DWORD, HANDLE *);
 
 /* ------------------------------------------------------------------ */
 /* Adapter                                                             */
@@ -262,7 +260,6 @@ struct Shader {
    uint32_t outputRegisters = 0;    /* PS: o# registers written */
    bool reflected = false;
    bool usesTexelBuffers = false;
-   std::vector<uint32_t> preparedCode; /* deferred base SPIR-V; no VkShader yet */
    std::vector<ShaderVariant> variants;
    HRESULT error = S_OK;
 };
@@ -363,15 +360,11 @@ struct Device {
     * `gated` is the last value queued as a GPU wait on the runtime context. */
    VkSemaphore fence = VK_NULL_HANDLE;
    VkSemaphore ingress = VK_NULL_HANDLE;
-   VkSemaphore bridgeFence = VK_NULL_HANDLE; /* deferred bridge keeps the original timeline */
    D3DKMT_HANDLE runtimeIngress = 0;
    uint64_t submitted = 0;
    uint64_t gated = 0;
    D3DKMT_HANDLE runtimeFence = 0;
    const volatile UINT64 *runtimeFenceValue = nullptr;
-   ShareObjects shareObjects = nullptr;
-   bool bootstrapSync = false;
-   HANDLE desktopReadyEvent = nullptr;
    D3DKMT_HANDLE pagingQueue = 0, pagingFence = 0;
    const volatile UINT64 *pagingFenceValue = nullptr;
 

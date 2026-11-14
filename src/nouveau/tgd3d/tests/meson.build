@@ -3,22 +3,13 @@
 # This executable never creates a real Vulkan or WDDM device.
 tgd3d_contracts = executable(
   'tgd3d-contracts',
-  ['contracts.cpp', 'runtime_contracts.cpp', 'resource_contracts.cpp', 'shader_cache_contracts.cpp', 'deferred_init_contracts.cpp', tgd3d_files],
+  ['contracts.cpp', 'runtime_contracts.cpp', 'resource_contracts.cpp', 'shader_cache_contracts.cpp', tgd3d_files],
   include_directories : tgd3d_inc + [include_directories('..')],
   cpp_args : tgd3d_args,
   dependencies : tgd3d_deps,
   link_args : tgd3d_link_args,
 )
 test('tgd3d-contracts', tgd3d_contracts, suite : ['tgd3d'], timeout : 60)
-
-executable(
-  'tgd3d-desktop-ready',
-  'desktop_ready.c',
-  include_directories : [include_directories('..')],
-  dependencies : [cc.find_library('advapi32'), cc.find_library('user32')],
-  win_subsystem : 'windows',
-  link_args : tgd3d_link_args,
-)
 
 # Explicit native tests only: registration and hardware acceptance belong to
 # the machine owner. This probe checks the actual Windows runtime and LUID.

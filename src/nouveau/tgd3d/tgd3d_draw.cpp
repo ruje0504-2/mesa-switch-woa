@@ -17,12 +17,6 @@ static VkShaderStageFlags stage_flag(uint32_t stage)
 
 HRESULT device_layouts_create(Device *dev)
 {
-   if (dev->defaultSampler)
-      return S_OK;
-   const auto failed = [dev](VkResult result) {
-      device_layouts_destroy(dev);
-      return resource_result(result);
-   };
    const VulkanCaps &caps = *dev->caps;
    std::vector<VkDescriptorSetLayoutBinding> bindings[SET_COUNT];
    for (uint32_t stage = 0; stage < STAGE_COUNT; stage++) {
@@ -48,16 +42,15 @@ HRESULT device_layouts_create(Device *dev)
        * NVK's push descriptor limit is 32, below that DDI requirement. */
       info.bindingCount = (uint32_t)bindings[set].size();
       info.pBindings = bindings[set].data();
-      VkResult result = dev->vk.CreateDescriptorSetLayout(dev->vkdev, &info, nullptr, &dev->setLayouts[set]);
-      if (result != VK_SUCCESS)
-         return failed(result);
+      if (dev->vk.CreateDescriptorSetLayout(dev->vkdev, &info, nullptr, &dev->setLayouts[set]) !=
+          VK_SUCCESS)
+         return E_OUTOFMEMORY;
    }
    VkPipelineLayoutCreateInfo info = {VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
    info.setLayoutCount = SET_COUNT;
    info.pSetLayouts = dev->setLayouts;
-   VkResult result = dev->vk.CreatePipelineLayout(dev->vkdev, &info, nullptr, &dev->pipelineLayout);
-   if (result != VK_SUCCESS)
-      return failed(result);
+   if (dev->vk.CreatePipelineLayout(dev->vkdev, &info, nullptr, &dev->pipelineLayout) != VK_SUCCESS)
+      return E_OUTOFMEMORY;
 
    /* Direct3D 10 default sampler for a slot the application left empty. */
    VkSamplerCreateInfo sampler = {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -68,12 +61,8 @@ HRESULT device_layouts_create(Device *dev)
    sampler.maxAnisotropy = 1.0f;
    sampler.maxLod = VK_LOD_CLAMP_NONE;
    sampler.compareOp = VK_COMPARE_OP_NEVER;
-   result = dev->vk.CreateSampler(dev->vkdev, &sampler, nullptr, &dev->defaultSampler);
-   if (result != VK_SUCCESS)
-      return failed(result);
-#ifdef TGD3D_DEFERRED_INIT
-   trace(TGD3D_TRACE_DEFERRED_INIT, S_OK, 2, (uintptr_t)dev);
-#endif
+   if (dev->vk.CreateSampler(dev->vkdev, &sampler, nullptr, &dev->defaultSampler) != VK_SUCCESS)
+      return E_OUTOFMEMORY;
    return S_OK;
 }
 
@@ -81,15 +70,11 @@ void device_layouts_destroy(Device *dev)
 {
    if (dev->defaultSampler)
       dev->vk.DestroySampler(dev->vkdev, dev->defaultSampler, nullptr);
-   dev->defaultSampler = VK_NULL_HANDLE;
    if (dev->pipelineLayout)
       dev->vk.DestroyPipelineLayout(dev->vkdev, dev->pipelineLayout, nullptr);
-   dev->pipelineLayout = VK_NULL_HANDLE;
-   for (auto &layout : dev->setLayouts) {
+   for (auto &layout : dev->setLayouts)
       if (layout)
          dev->vk.DestroyDescriptorSetLayout(dev->vkdev, layout, nullptr);
-      layout = VK_NULL_HANDLE;
-   }
 }
 
 /* ------------------------------------------------------------------ */

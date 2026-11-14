@@ -16,6 +16,8 @@ namespace tgd3d {
 
 enum { TGD3D_MAX_IN_FLIGHT = 2 };
 
+typedef NTSTATUS(APIENTRY *PFN_ShareObjects)(UINT, const D3DKMT_HANDLE *, void *, DWORD, HANDLE *);
+
 void Device::setError(HRESULT hr, const char *file, int line)
 {
    trace_error(hr, file, (unsigned)line);
@@ -40,16 +42,6 @@ uint64_t Device::completed()
       TG_ERROR(this, DXGI_ERROR_DEVICE_REMOVED);
       return 0;
    }
-   if (bridgeFence) {
-      uint64_t bridgeValue = 0;
-      if (vk.GetSemaphoreCounterValue(vkdev, bridgeFence, &bridgeValue) != VK_SUCCESS) {
-         TG_ERROR(this, DXGI_ERROR_DEVICE_REMOVED);
-         return 0;
-      }
-      /* Signal operations in the same batch need not complete in array
-       * order. Retirement/destruction must cover both output semaphores. */
-      if (bridgeValue < value) value = bridgeValue;
-   }
    return value;
 }
 
@@ -60,60 +52,44 @@ bool sequence_done(Device *dev, uint64_t seq)
 
 /* ------------------------------------------------------------------ */
 
-/* Construct both directions privately. A failed second import must not
- * replace the live local timeline or publish half a bridge. */
-struct PendingBridge {
-   Device *dev;
-   VkSemaphore semaphores[2] = {};
-   D3DKMT_HANDLE objects[2] = {};
-   const volatile UINT64 *cpuValue = nullptr;
-
-   ~PendingBridge()
-   {
-      for (auto semaphore : semaphores)
-         if (semaphore)
-            dev->vk.DestroySemaphore(dev->vkdev, semaphore, nullptr);
-      for (auto object : objects) {
-         if (!object) continue;
-         D3DDDICB_DESTROYSYNCHRONIZATIONOBJECT destroy = {};
-         destroy.hSyncObject = object;
-         dev->kt.pfnDestroySynchronizationObjectCb(dev->hRTDevice.handle, &destroy);
-      }
-   }
-};
-
-static HRESULT bridge_create(Device *dev, bool keepLocal)
+HRESULT sync_create(Device *dev)
 {
-   if (!dev->kt.pfnCreateSynchronizationObject2Cb || !dev->kt.pfnDestroySynchronizationObjectCb ||
-       !dev->kt.pfnWaitForSynchronizationObjectFromGpuCb ||
-       !dev->kt.pfnSignalSynchronizationObjectFromGpuCb ||
-       !dev->vk.ImportSemaphoreWin32HandleKHR)
-      return DXGI_ERROR_UNSUPPORTED;
-   if (!dev->shareObjects) {
-      HMODULE gdi = GetModuleHandleW(L"gdi32.dll");
-      dev->shareObjects = gdi ? reinterpret_cast<ShareObjects>(
-         reinterpret_cast<void *>(GetProcAddress(gdi, "D3DKMTShareObjects"))) : nullptr;
-   }
-   if (!dev->shareObjects)
-      return DXGI_ERROR_UNSUPPORTED;
-   PendingBridge pending = {dev};
    VkSemaphoreTypeCreateInfo type = {VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
    type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
    VkSemaphoreCreateInfo info = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, &type};
+   if (dev->vk.CreateSemaphore(dev->vkdev, &info, nullptr, &dev->fence) != VK_SUCCESS)
+      return E_OUTOFMEMORY;
+
+#ifdef TGD3D_CPU_SYNC_CONTROL
+   /* Diagnostic build: reproduce the old desktop UMD's synchronous Flush /
+    * Present boundary. Keep the local Vulkan completion timeline, but create
+    * neither runtime fence nor Vulkan import of a runtime fence. */
+   return S_OK;
+#endif
+   /* The generic control build has no WDDM queue to synchronize. */
+   if (!dev->nvk)
+      return S_OK;
+   if (!dev->kt.pfnCreateSynchronizationObject2Cb || !dev->kt.pfnDestroySynchronizationObjectCb ||
+       !dev->kt.pfnWaitForSynchronizationObjectFromGpuCb ||
+       !dev->kt.pfnSignalSynchronizationObjectFromGpuCb)
+      return DXGI_ERROR_UNSUPPORTED;
+   if (dev->vk.CreateSemaphore(dev->vkdev, &info, nullptr, &dev->ingress) != VK_SUCCESS)
+      return E_OUTOFMEMORY;
+
+   HMODULE gdi = GetModuleHandleW(L"gdi32.dll");
+   auto share = gdi ? reinterpret_cast<PFN_ShareObjects>(
+      reinterpret_cast<void *>(GetProcAddress(gdi, "D3DKMTShareObjects"))) : nullptr;
+   if (!share)
+      return DXGI_ERROR_UNSUPPORTED;
    for (unsigned i = 0; i < 2; i++) {
-      VkResult result = dev->vk.CreateSemaphore(dev->vkdev, &info, nullptr, &pending.semaphores[i]);
-      if (result != VK_SUCCESS)
-         return resource_result(result);
       D3DDDICB_CREATESYNCHRONIZATIONOBJECT2 create = {};
       create.Info.Type = D3DDDI_MONITORED_FENCE;
       create.Info.Flags.Shared = 1;
       create.Info.Flags.NtSecuritySharing = 1;
       create.Info.MonitoredFence.EngineAffinity = 1;
-      /* Only a completed bootstrap sequence may become the initial value. */
-      create.Info.MonitoredFence.InitialFenceValue = dev->submitted;
       HRESULT hr = dev->kt.pfnCreateSynchronizationObject2Cb(dev->hRTDevice.handle, &create);
-      if (SUCCEEDED(hr)) pending.objects[i] = create.hSyncObject;
-      const D3DKMT_HANDLE object = pending.objects[i];
+      D3DKMT_HANDLE &object = i ? dev->runtimeIngress : dev->runtimeFence;
+      object = create.hSyncObject;
       trace(TGD3D_TRACE_RUNTIME_CONTEXT, hr, 3, object != 0);
       if (FAILED(hr))
          return hr;
@@ -122,71 +98,35 @@ static HRESULT bridge_create(Device *dev, bool keepLocal)
       OBJECT_ATTRIBUTES attributes = {};
       attributes.Length = sizeof(attributes);
       HANDLE handle = nullptr;
-      NTSTATUS status = dev->shareObjects(1, &object, &attributes, D3DDDI_SYNC_OBJECT_ALL_ACCESS, &handle);
+      NTSTATUS status = share(1, &object, &attributes, D3DDDI_SYNC_OBJECT_ALL_ACCESS, &handle);
       if (status < 0 || !handle) {
          if (handle) CloseHandle(handle);
          return status < 0 ? HRESULT_FROM_NT(status) : E_FAIL;
       }
       VkImportSemaphoreWin32HandleInfoKHR import = {
          VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR};
-      import.semaphore = pending.semaphores[i];
+      import.semaphore = i ? dev->ingress : dev->fence;
       import.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT;
       import.handle = handle;
-      result = dev->vk.ImportSemaphoreWin32HandleKHR(dev->vkdev, &import);
+      VkResult result = dev->vk.ImportSemaphoreWin32HandleKHR(dev->vkdev, &import);
       CloseHandle(handle);
       if (result != VK_SUCCESS)
-         return resource_result(result);
+         return E_FAIL;
       if (!i)
-         pending.cpuValue = static_cast<const volatile UINT64 *>(
+         dev->runtimeFenceValue = static_cast<const volatile UINT64 *>(
             create.Info.MonitoredFence.FenceValueCPUVirtualAddress);
    }
-   if (keepLocal) {
-      /* Retain the original semaphore and its memory dependency. Every new
-       * submission signals both it and the runtime's imported output fence. */
-      dev->bridgeFence = pending.semaphores[0];
-   } else {
-      dev->fence = pending.semaphores[0];
-   }
-   dev->ingress = pending.semaphores[1];
-   dev->runtimeFence = pending.objects[0];
-   dev->runtimeIngress = pending.objects[1];
-   dev->runtimeFenceValue = pending.cpuValue;
-   pending.semaphores[0] = pending.semaphores[1] = VK_NULL_HANDLE;
-   pending.objects[0] = pending.objects[1] = 0;
    return S_OK;
-}
-
-HRESULT sync_create(Device *dev)
-{
-#if !defined(TGD3D_CPU_SYNC_CONTROL) && !defined(TGD3D_DEFERRED_INIT)
-   if (dev->nvk)
-      return bridge_create(dev, false);
-#endif
-   VkSemaphoreTypeCreateInfo type = {VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
-   type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-   VkSemaphoreCreateInfo info = {VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, &type};
-   HRESULT hr = resource_result(dev->vk.CreateSemaphore(dev->vkdev, &info, nullptr, &dev->fence));
-#ifdef TGD3D_DEFERRED_INIT
-   dev->bootstrapSync = SUCCEEDED(hr) && dev->nvk;
-   trace(TGD3D_TRACE_DEFERRED_INIT, hr, 0, (uintptr_t)dev);
-#endif
-   return hr;
 }
 
 void sync_destroy(Device *dev)
 {
    /* Close Vulkan imports before their runtime objects. */
-   if (dev->desktopReadyEvent)
-      CloseHandle(dev->desktopReadyEvent);
-   dev->desktopReadyEvent = nullptr;
-   if (dev->bridgeFence)
-      dev->vk.DestroySemaphore(dev->vkdev, dev->bridgeFence, nullptr);
    if (dev->ingress)
       dev->vk.DestroySemaphore(dev->vkdev, dev->ingress, nullptr);
    if (dev->fence)
       dev->vk.DestroySemaphore(dev->vkdev, dev->fence, nullptr);
    dev->ingress = dev->fence = VK_NULL_HANDLE;
-   dev->bridgeFence = VK_NULL_HANDLE;
    dev->runtimeFenceValue = nullptr;
    for (D3DKMT_HANDLE object : {dev->runtimeIngress, dev->runtimeFence}) {
       if (object && dev->kt.pfnDestroySynchronizationObjectCb) {
@@ -505,11 +445,9 @@ static HRESULT wait_cpu(Device *dev, uint64_t seq, tgd3d_wait_reason reason)
    trace_timing(TGD3D_TIMING_CPU_WAIT_BEGIN, E_PENDING, dev->submitted,
                 completed, entering, requested);
    VkSemaphoreWaitInfo wait = {VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
-   const VkSemaphore semaphores[2] = {dev->fence, dev->bridgeFence};
-   const uint64_t values[2] = {seq, seq};
-   wait.semaphoreCount = dev->bridgeFence ? 2 : 1;
-   wait.pSemaphores = semaphores;
-   wait.pValues = values; /* flags=0: wait for every output, not ANY */
+   wait.semaphoreCount = 1;
+   wait.pSemaphores = &dev->fence;
+   wait.pValues = &seq;
    VkResult result = VK_TIMEOUT;
    /* The driver sleeps on the fence's kernel event. Exhausting this wait
     * fails the device; it does not establish GPU completion or permit
@@ -562,53 +500,10 @@ static HRESULT gate_runtime(Device *dev)
    return S_OK;
 }
 
-static HRESULT activate_desktop_bridge(Device *dev)
-{
-   if (!dev->bootstrapSync)
-      return S_OK;
-   if (!dev->desktopReadyEvent) {
-      dev->desktopReadyEvent = OpenEventW(SYNCHRONIZE, FALSE, TGD3D_DESKTOP_READY_EVENT);
-      if (!dev->desktopReadyEvent) {
-         const DWORD error = GetLastError();
-         return error == ERROR_FILE_NOT_FOUND ? S_OK : HRESULT_FROM_WIN32(error);
-      }
-   }
-   const DWORD ready = WaitForSingleObject(dev->desktopReadyEvent, 0);
-   if (ready == WAIT_TIMEOUT)
-      return S_OK;
-   if (ready != WAIT_OBJECT_0)
-      return HRESULT_FROM_WIN32(GetLastError());
-
-   trace(TGD3D_TRACE_DEFERRED_INIT, E_PENDING, 1, (uintptr_t)dev);
-   HRESULT hr = wait_cpu(dev, dev->submitted, TGD3D_WAIT_DEFERRED_INIT);
-   if (SUCCEEDED(hr) && FAILED(dev->lost)) hr = dev->lost;
-   if (SUCCEEDED(hr)) hr = bridge_create(dev, true);
-   if (SUCCEEDED(hr)) {
-      /* The initial value represents already completed work, never a CPU
-       * signal of an outstanding submission. New work starts at N + 1. */
-      dev->gated = dev->submitted;
-      dev->bootstrapSync = false;
-      CloseHandle(dev->desktopReadyEvent);
-      dev->desktopReadyEvent = nullptr;
-   }
-   trace(TGD3D_TRACE_DEFERRED_INIT, hr, 1, (uintptr_t)dev);
-   return hr;
-}
-
 HRESULT flush(Device *dev, bool waitForSpace)
 {
    if (FAILED(dev->lost))
       return dev->lost;
-   /* Only an ordinary Flush/Present may drain the bootstrap timeline.
-    * Query polling, DONOTWAIT and destruction must not activate the bridge.
-    * This runs on the runtime's DDI caller, never the logon helper thread. */
-   if (waitForSpace) {
-      const HRESULT hr = activate_desktop_bridge(dev);
-      if (FAILED(hr)) {
-         TG_ERROR(dev, hr);
-         return hr;
-      }
-   }
    flush_pending_clears(dev, nullptr);
    if (dev->cmd && dev->cmdHasWork) {
       end_rendering(dev);
@@ -658,14 +553,10 @@ HRESULT flush(Device *dev, bool waitForSpace)
          wait.value = value;
          wait.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
       }
-      VkSemaphoreSubmitInfo signals[2] = {};
-      const uint32_t signalCount = dev->bridgeFence ? 2 : 1;
-      for (uint32_t i = 0; i < signalCount; i++) {
-         signals[i] = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
-         signals[i].semaphore = i ? dev->bridgeFence : dev->fence;
-         signals[i].value = value;
-         signals[i].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-      }
+      VkSemaphoreSubmitInfo signal = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+      signal.semaphore = dev->fence;
+      signal.value = value;
+      signal.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
       VkCommandBufferSubmitInfo buffer = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
       buffer.commandBuffer = dev->cmd;
       VkSubmitInfo2 submit = {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
@@ -673,8 +564,8 @@ HRESULT flush(Device *dev, bool waitForSpace)
       submit.pWaitSemaphoreInfos = waits;
       submit.commandBufferInfoCount = 1;
       submit.pCommandBufferInfos = &buffer;
-      submit.signalSemaphoreInfoCount = signalCount;
-      submit.pSignalSemaphoreInfos = signals;
+      submit.signalSemaphoreInfoCount = 1;
+      submit.pSignalSemaphoreInfos = &signal;
       trace(TGD3D_TRACE_SUBMIT_PHASE, E_PENDING, 2, value);
       VkResult result = dev->vk.QueueSubmit2(dev->queue, 1, &submit, VK_NULL_HANDLE);
       trace(TGD3D_TRACE_SUBMIT_PHASE, result == VK_SUCCESS ? S_OK : E_FAIL, 2, value);
@@ -710,21 +601,21 @@ HRESULT flush(Device *dev, bool waitForSpace)
       return dev->lost;
    }
    retire(dev);
-   bool waitAll = false;
-#if defined(TGD3D_CPU_SYNC_CONTROL) || defined(TGD3D_DEFERRED_INIT)
+#ifdef TGD3D_CPU_SYNC_CONTROL
    /* Ordinary Flush, Present and shared-resource release must complete the
     * rendering before the runtime can signal its own context. Polling calls
     * still submit without waiting, preserving DONOTWAIT / QueryGetData. */
-   waitAll = !dev->runtimeFence;
-#endif
-   if (waitForSpace && SUCCEEDED(hr) && waitAll) {
+   if (waitForSpace && SUCCEEDED(hr)) {
       hr = wait_cpu(dev, dev->submitted, TGD3D_WAIT_SYNC_CONTROL);
       retire(dev);
-   } else if (waitForSpace && SUCCEEDED(hr) && dev->submitted > TGD3D_MAX_IN_FLIGHT &&
+   }
+#else
+   if (waitForSpace && SUCCEEDED(hr) && dev->submitted > TGD3D_MAX_IN_FLIGHT &&
        dev->completed() < dev->submitted - TGD3D_MAX_IN_FLIGHT) {
       hr = wait_cpu(dev, dev->submitted - TGD3D_MAX_IN_FLIGHT, TGD3D_WAIT_BACKPRESSURE);
       retire(dev);
    }
+#endif
    return hr;
 }
 

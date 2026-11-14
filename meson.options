@@ -160,13 +160,6 @@ option(
 )
 
 option(
-  'tgd3d-deferred-init',
-  type : 'boolean',
-  value : false,
-  description : 'Diagnostic tgd3d build: compile shaders on first use and enable the GPU fence bridge after the desktop-ready event.',
-)
-
-option(
   'gallium-rusticl',
   type : 'boolean',
   value : false,
