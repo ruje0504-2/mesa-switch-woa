@@ -53,7 +53,8 @@ function Kernel-BaselineHash($Manifest) {
         'shader-output-bit14-gpu460-vidpn' {
             $hash=[string]$Manifest.baseline_kmd.'tegragpurender.sys'.Sha256
             if($hash -in @('59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81',
-                          '69aa6036da81870efb439e8e09530ae662e810dccf887b603bdfeb6ba8a4a11a')){$hash;return}
+                          '69aa6036da81870efb439e8e09530ae662e810dccf887b603bdfeb6ba8a4a11a',
+                          '1a86a02b479b716b2b695ade0bd6860076d4d5f61a29d95b804cb655ce0bf164')){$hash;return}
             throw 'Unexpected reviewed .158 display baseline'
         }
         default {throw 'Unexpected kernel variant'}

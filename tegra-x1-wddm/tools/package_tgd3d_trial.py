@@ -52,6 +52,9 @@ def main():
                 "sync_mode": umd.get("sync_mode", "gpu-bridge"),
                 "tools_source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip(),
                 "kmd": frozen["kmd"], "app": {}, "helpers": {}, "files": {}}
+    for key in ("shader_cache", "umd_frozen_base", "umd_patch_commits"):
+        if key in umd:
+            manifest[key] = umd[key]
     if args.default_start:
         manifest["scope"] = "frozen .158 with automatic tgd3d enablement after logon; manual testing"
         manifest["startup_mode"] = "logon-default"
@@ -97,6 +100,7 @@ def main():
             baseline_hashes = ({
                 "59dd5ea77415a9ef474e8d8bc5a8cae86e74713d3c0ab534ae0ad683dacf6e81",
                 "69aa6036da81870efb439e8e09530ae662e810dccf887b603bdfeb6ba8a4a11a",
+                "1a86a02b479b716b2b695ade0bd6860076d4d5f61a29d95b804cb655ce0bf164",
             } if vidpn_fix else {
                 "c629328e7309381aa1b9923576ab57a4e664102a393d385ecf5643113641dd53",
             })

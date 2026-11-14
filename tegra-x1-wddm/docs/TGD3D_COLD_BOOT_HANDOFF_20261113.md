@@ -1161,3 +1161,24 @@ Begin重用/End时间戳/第129个pass扩展OOM、GetQueryPoolResults未就绪/�
 DONOTWAIT、双向Fence和缓存控制继续通过。这些测试替换Vulkan/runtime调用，不执行
 GPU，不构成开窗、横屏、实屏稳定性或历史重启根因的验收。
 结果及可独立审查的构建产物在OUT `query-contract-fix/`。
+
+## J候选加入缓存及完成原生目录签名
+
+以刚部署的缓存冻结源码为起点，仅追加01e5aa3e的GPU预旋转，保留shader cache和
+双向Fence。该候选**未包含上述Query修正**，以便分别验证。冻结控制文件的历史上下文
+不同，原旋转diff的一个测试hunk不能直接应用；生产hunk全部直接应用，测试仅取回
+相同的presentation_rotation_contract并保留缓存控制入口，没有复制整个HEAD。
+
+新ARM64 UMD为`cef5daa8c189f6cc0ceecb660d73c0b830a380993b638c8926030704a67737ef`，
+代替旧75df9…旋转UMD。x64/ARM64构建、x64/Wine和11:27:10 UTC的ARM64 CPU控制
+通过。保留J候选SYS
+`346528eeb5e456069b8503eec3fb82ad4f9faaeb5620f0318365c1632cd16ef4`，原生Inf2Cat
+成功且无错误/警告，签名CAT为
+`d5e31a90c95f8ee3d19c78d122ef561f8b604da11698c5959ccce074a8470d43`；Windows
+SignTool验证全部13个包成员通过。源码、构建和签名回执分别在OUT
+`gpu-prerotation-cache/`和`gpu-prerotation/windows-signature-verification.json`。
+
+打包器和恢复工具现在接受已核对的1a86a02b…恢复KMD，后续旋转候选恢复到当前I轮
+KMD，不再默认退回较早69aa…组合。打包清单同时保留UMD缓存配置及冻结提交链。
+现有Switch缓存包及其旧UMD备份继续保留，下一步按当前组合准备安装与恢复流程。
+截至本节，未安装旋转KMD/UMD、未改变方向或追加重启；物理横屏和GPU已知像素仍未验收。
