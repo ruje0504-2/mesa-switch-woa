@@ -15,8 +15,8 @@
 
 14:28:45交互会话只读核对：当前与保存方向均720×1280/orientation0，DWM的UMD和ICD
 实际路径/哈希均为原缓存组合。14:31:17确认两轮红屏临时任务、测试/签名/安装目录及
-上传工具已清理，ETW此前已停止；本地证据保留。诊断专用源码/构建开关尚未移除，
-按用户要求在正式修复确认后删除，不能把强开探针留作日常启动驱动。
+上传工具已清理，ETW此前已停止；本地证据保留。用户随后明确要求删除强开代码，
+KMD强开分支及构建/打包开关已移除；纯红UMD控制仍默认关闭，候选使用正常UMD。
 
 本轮探针按用户要求：结束测试后清理实机临时任务、ETW会话和探针文件；确认修复后
 移除诊断专用代码/构建开关，保留取回结果。Gemini4 Carbon High的SC7续作已通过
@@ -1389,3 +1389,32 @@ target门控；普通`program_flip`在新地址到来时继续服从已有Source
 解决。尚未证明实际缺了某次TRUE回调，或哪个上游失败阻止它到达。当前WDK没有用户
 提出的NotifyFlipCompleted入口，已有VBlank/MPO通知不能替代进一步核对这轮的模式
 和主表面生命周期。没有在这轮诊断结果上继续安装未经审查的第二个行为补丁。
+
+### 正规中断通知与NO_SCANOUT复核：MPO mask候选
+
+按用户要求直接检查`render_miniport.c`以及最后注册的显示DDI：文件中的空interrupt
+是无显示后端入口；显示构建随后通过`TgGpuRegisterPanelLifecycle`和
+`TgGpuRegisterPanelScanout`替换为`panel_interrupt`，不能仅看到前者就认定没通知。
+后者在真实VBlank读取锁存状态，发送经典CRTC_VSYNC或MPO2 PresentId，再QueueDpc；
+`context.c`的DPC调用NotifyDpc。GPU渲染完成仍由已验证的DMA完成路径报告。
+
+查到明确遗漏：MPO2通知填写`PhysicalAdapterMask=1`却没有置
+`Flags.ValidPhysicalAdapterMask`，与微软字段契约不符；本轮补上该有效位，并在真实
+WDK模型中核对mask=1、Flags仅含有效位，仍只报告已锁存PresentId。未把这个契约
+修正提前宣布为横屏黑屏根因。冻结候选相对J轮KMD只多这3行通知修正及2行控制断言。
+KMD强开源代码、测试分支、CLI和打包开关同时移除，正常source/target显隐行为恢复。
+
+实际参考WDK10.0.26100.0的shared/d3dkmddi.h，构建DDI为WDDM2.6，以及微软
+[中断数据](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgkargcb_notify_interrupt_data)
+和[平面输出标志](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_plane_specific_output_flags)
+（2026-11-14访问）。`HsyncFlipCompletion`不是所有Flip都必须设置的完成暗号；即时
+翻转可以使用HSync完成，普通VSync通知也能完成异步即时翻转。当前同步即时路径在
+PASSIVE级等实际锁存才返回，常规路径由真实VBlank通知，不能统一伪标成HSync事件。
+
+`NO_SCANOUT`复核：`tgd3d_resource.cpp`成功创建primary后明确将DriverFlags清零，
+已有runtime控制覆盖复用旧NO_SCANOUT描述符后的清零。只有不能直接扫描的旋转
+primary会设置NO_SCANOUT并返回DXGI_DDI_ERR_UNSUPPORTED，请求runtime代理面/Blt。
+这符合[DXGI资源创建契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/passing-dxgi-information-at-resource-creation-time)，
+该标志控制直接Flip资格，不是完全禁止拷贝后上屏。本轮没有找到已接受primary误留
+NO_SCANOUT的证据，未作无依据的UMD改动。下一轮用正常GPU预旋转UMD cef5daa8…及
+原ICD dee3d580…，保持频率/双向Fence，只测这次MPO通知修正。

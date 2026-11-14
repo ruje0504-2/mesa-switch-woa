@@ -116,25 +116,6 @@ static BOOLEAN restore_dc(PVOID context)
     return TRUE;
 }
 
-BOOLEAN TgGpuPanelEffectiveVisibility(TG_GPU_ADAPTER *adapter, UINT64 address, BOOLEAN requested)
-{
-    const TG_GPU_PANEL *panel = &adapter->Panel;
-#ifdef TG_GPU_TEST_FORCE_RED_SCANOUT
-    UINT64 resolved;
-    /* Short red-primary diagnostic only. The dedicated scanout segment stays
-     * allocated until PanelStop has restored/latch-confirmed POST. Never force
-     * an external/POST address, a disabled plane, target power-off or teardown.
-     * Keep SourceVisible unchanged so the snapshot still reports the OS request. */
-    if (requested && panel->TargetActive && !panel->Stopping && address != T214_GPU_POST_FB_BASE &&
-        NT_SUCCESS(TgGpuResolveScanoutAddress(&adapter->Tables, address,
-            T214_GPU_POST_FB_SIZE, &resolved)))
-        return TRUE;
-#else
-    UNREFERENCED_PARAMETER(address);
-#endif
-    return requested && panel->SourceVisible && panel->TargetActive;
-}
-
 static BOOLEAN set_visibility(PVOID context)
 {
     PANEL_ACTION *action = context;
@@ -148,9 +129,9 @@ static BOOLEAN set_visibility(PVOID context)
         panel->TargetActive = action->Visible != FALSE;
     else
         panel->SourceVisible = action->Visible != FALSE;
+    const BOOLEAN visible = panel->SourceVisible && panel->TargetActive;
     if (!TgGpuPanelReadLatched(panel, &active))
         return TRUE;
-    const BOOLEAN visible = TgGpuPanelEffectiveVisibility(action->Adapter, active.address, TRUE);
     if (active.visible == (visible != FALSE)) {
         action->Result = TG_T214_DC_OK;
         return TRUE;

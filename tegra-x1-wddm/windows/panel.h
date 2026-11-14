@@ -36,7 +36,6 @@ NTSTATUS TgGpuPanelSynchronize(struct _TG_GPU_ADAPTER *adapter, PKSYNCHRONIZE_RO
 /* Caller holds display interrupt synchronization. A completed flip must match
  * the full active fetch layout, not just its physical address. */
 BOOLEAN TgGpuPanelReadLatched(TG_GPU_PANEL *, struct tg_t214_dc_scanout *);
-BOOLEAN TgGpuPanelEffectiveVisibility(struct _TG_GPU_ADAPTER *, UINT64, BOOLEAN);
 void TgGpuRegisterPanelLifecycle(DRIVER_INITIALIZATION_DATA *ddis);
 void TgGpuRegisterPanelVidPn(DRIVER_INITIALIZATION_DATA *ddis);
 void TgGpuRegisterPanelScanout(DRIVER_INITIALIZATION_DATA *ddis);
