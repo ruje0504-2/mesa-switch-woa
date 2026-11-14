@@ -5,7 +5,25 @@
 
 ## 当前设备授权（2026-11-14 UTC）
 
-**最新状态：J轮缓存＋GPU预旋转候选已经安装并测试，横屏期间自动重启，记为失败。
+**14:21最新测试：强开WIN_ENABLE诊断0dd8c544已经安装并完成一次横屏红屏对照。
+三个采样均source_visible0、WIN_ENABLE1，实际锁存地址`0xfbba1000`，12点红色一致；
+用户确认“红色有但在闪烁”。只确认红色到达物理面板，稳定性失败，横屏尚未修复。
+14:21:00恢复竖屏；14:22:44请求一次计划重启，以卸下诊断KMD。14:26:40恢复本轮
+之前的1a86a02b…/0cd34833…/dee3d580…缓存组合，14:26:54读回Code0，DWM460加载
+原缓存UMD，默认启用任务Ready、gpu-bridge。CPU1497600/GPU460800/RAM1600000kHz及
+风扇13核对通过。没有追加重启，也没有回退`.59`。SSH最新地址为`ruje@192.168.8.6`。**
+
+14:28:45交互会话只读核对：当前与保存方向均720×1280/orientation0，DWM的UMD和ICD
+实际路径/哈希均为原缓存组合。14:31:17确认两轮红屏临时任务、测试/签名/安装目录及
+上传工具已清理，ETW此前已停止；本地证据保留。诊断专用源码/构建开关尚未移除，
+按用户要求在正式修复确认后删除，不能把强开探针留作日常启动驱动。
+
+本轮探针按用户要求：结束测试后清理实机临时任务、ETW会话和探针文件；确认修复后
+移除诊断专用代码/构建开关，保留取回结果。Gemini4 Carbon High的SC7续作已通过
+Antigravity CLI在独立mesa/windows-drivers/winx工作树启动，只做本地实现和构建，
+不得操作实机；DVFS/托盘及SC7交付均未合入或部署。
+
+**以下为J轮恢复后的历史状态：J轮缓存＋GPU预旋转候选已经安装并测试，横屏期间自动重启，记为失败。
 12:02:50 UTC已恢复本轮更新前的缓存组合：KMD 1a86a02b…、UMD 0cd34833…、ICD
 dee3d580…，读回`.158 / Code0`，DWM820实际加载恢复后的UMD。12:11:30确认当前及
 保存方向均为720×1280竖屏。恢复过程没有追加系统重启，不回退`.59`。**
@@ -1263,3 +1281,111 @@ Khronos [同步规范](https://docs.vulkan.org/spec/latest/chapters/synchronizat
 （2026-11-14访问的latest页面）。同布局全局memory barrier可以覆盖图像；布局改变或
 ownership transfer另有要求。微软display-only样例不能直接替代本分支完整GPU驱动的
 资源驻留、调度和呈现实现。
+
+## 红屏最小对照与强开探针（2026-11-14）
+
+用户要求按此前方案绕过旋转，先把720×1280主表面清红。源码befb7959增加默认关闭的
+`TGD3D_RED_PRIMARY_CONTROL`：使用runtime创建的原生主表面，不复制句柄或伪造地址；
+替换旋转Blt，并在SetDisplayMode前记录纯红clear、提交及真实Fence等待。未改变正常版
+GPU桥接策略；诊断等待不能写成生产模式已修改。测试UMD SHA256
+`71d548335b9e3c3a953ed8d969f739c9f3278af452ed0f5234bd67d7bd781338`；保持J轮SYS
+`346528ee…`和原ICD `dee3d580…`。x64/ARM64构建、正常版及诊断版CPU控制、Windows
+原生ARM64控制通过，未执行新增离屏像素探针。
+
+13:30:06请求一次安装门控重启，13:30:47新启动；安装请求第一次SSH握手超时，核对
+任务不存在且没有install记录后才实际提交。13:38:19已Code0，DWM780实际加载上述
+诊断UMD。测试任务13:39:06开始，13:39:34结束，启动时间持续一致，没有本轮异常重启。
+本轮LUID `00000000000e5c96`；Windows仍22631，外接电源Online。
+
+- 切换前13:39:16：source_visible1、target_active1、WIN_ENABLE1，地址`0xfb067000`，
+  displayed_present56，四点为旧桌面像素。
+- 13:39:20、13:39:23、13:39:25：逻辑横屏，source_visible0、target_active1、
+  WIN_ENABLE0，地址仍`0xfb067000`，displayed_present57，pending0。三次共12点均为
+  `0xffff0000`，容差0、差异0；pitch2880、720×1280、offset0，underflow6未增加。
+- 同一DWM在切换后有59组clear录制、真实Fence等待成功及随后SetDisplayMode成功。
+  当前DC地址对应的backing从桌面像素变红；这排除了这块缓冲区“清屏没有执行/写入
+  完全不可见”的解释，但不证明所有新primary地址交接正确，也不证明物理OLED亮红。
+  本轮显示启用检查失败；下一步查SourceVisibility调用顺序及主表面交接。
+- 工具13:39:32恢复720×1280/orientation0。22个文件共8324300字节已取回并逐个核对
+  远端SHA256/长度；实时trace有TraceEnd，invalid及丢失计数0。结果在OUT
+  `red-primary-control/evidence/`及`returned-files.json`。SFTP第一次误用相对盘符路径
+  未传回文件，修正为`/C:/...`后传输和哈希校验通过；属于工具错误，不是GPU失败。
+
+13:45:34发出计划恢复重启，13:46:14启动。恢复任务退出1、未产生恢复state：检查发现
+控制器目录有正确ACL，而Restore-PreviousCache.ps1文件DACL为空，SYSTEM也不能读。
+这是本轮`icacls /inheritance:r /grant ... /T`对文件的错误处理。13:56:24恢复文件继承，
+读回SYSTEM/Administrators Full、Users Read/Execute及正确脚本哈希；本地控制器也已
+改为只保护目录并启用文件继承。没有把这一恢复工具故障归因于GPU。
+
+用户随后明确授权寄存器强开测试。设备停在Code43门控，原恢复任务Disabled，先不
+启用旧组合来重复桌面测试。0dd8c544增加默认关闭的`--force-red-scanout` KMD诊断：
+保留OS的SourceVisible记录，对已验证位于自有扫描段的主表面使用真实本轮地址和
+既有DC寄存器提交/锁存流程强开窗口；不硬编码上轮地址，不伪造Flip完成。目标关闭、
+禁用平面、停止和POST交接仍按原路径处理。正常/强开两个真实WDK模型和原生ARM64
+模型通过，包含“先隐藏、后换地址”、范围拒绝、目标断电和停止恢复。签名SYS为
+`a5755760fb75669c1ea067c18f5fc0af62e2d8b7c7adee801647720398fdb4e9`；Windows
+Inf2Cat和13个成员签名验证通过，实机强开结果仍待测试，不能当作正式修复。
+
+已核对[SourceVisibility契约](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgkarg_setvidpnsourcevisibility)
+和[MPO呈现](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/multiplane-overlay-vidpn-presentation)：
+Visible=FALSE本应停止扫描，仍保留VSync。当前WDK 10.0.26100及接口表没有
+`DxgkCbNotifyFlipCompleted`入口；经典MMIO flip通过实际VBlank地址通知，MPO通过
+锁存的PresentId通知。强开只回答红色backing能否通过DC输出，不把忽略Visible=FALSE
+作为生产修复，也不能由一次红屏宣布所有时序、同步及资源生命周期均正确。
+
+### 强开实机结果：红色上屏但闪烁（14:20–14:21 UTC）
+
+14:14:05在既有Code43门控中恢复I核及原缓存注册，仅用于准备候选，没有启动GPU或
+追加重启。14:15:21提交强开版安装任务，14:16:29原生启用完成，DWM780加载红屏UMD；
+安装任务退出0。SYS为上述a5755760…，UMD仍71d54833…，ICD仍dee3d580…。
+目录`C:\ProgramData\SwitchWOA\GpuUpdate\tgd3d-befb7959-20261114-221530`，
+LUID `000000000014cd30`，Windows10.0.22631.2861，外接电源Online。
+
+14:20:34开始一次强开横屏测试，14:21:03结束；期间启动时间保持13:46:14，未发生
+测试中的自动重启。14:20:43切换前source_visible1、WIN_ENABLE1、PresentId42，
+地址`0xfbba1000`、四点为原桌面颜色。14:20:48.172、50.594、52.891三个采样均为：
+
+- path_rotation2，source_visible0，target_active1，options0x40000000；强开确实生效。
+- DC地址与Displayed地址均为`0xfbba1000`，PresentId43，pending0；固定720×1280、
+  pitch2880、offset0，underflow4在采样中未增加。
+- 每次四点均`0xffff0000`，共12点、容差0、差异0；工具的清屏录制、真实Fence等待、
+  随后SetDisplayMode检查通过。最终完整trace有80次清屏/等待、79次SetDisplayMode
+  成功返回，仅1次Present返回，Blt返回0；其中有回收trace时继续发生的调用，不能与
+  测试脚本较早读取时的64次SetDisplayMode配对数混用。
+
+用户本轮物理观察原话为“红色有但在闪烁”。本轮总体记录为**稳定性失败**，不能用
+软件工具退出0掩盖闪烁。与不强开的最小红屏对照相比，强开使红色扫描面到达物理
+面板；这削弱“这条固定720×1280时序完全无法驱动OLED”的解释。尚不能断言闪烁是
+OLED、GPU写扫描面、地址切换还是可见性切换所致，三个间隔采样无法排除间隙变化。
+反复创建主表面和SetDisplayMode而未恢复持续Present，是接下来审查模式交接的依据。
+
+14:21:00工具恢复当前及保存方向720×1280/orientation0，ETW及短时恢复任务已停止。
+39个本轮文件共2559061字节取回，逐个SHA256/长度匹配；实时trace7019行，有TraceEnd，
+invalid及events/log/realtime lost均0。结果在OUT `force-red-scanout/evidence/`，
+物理反馈在`physical-observation.json`，总体结论在`test-summary.json`。
+14:22:44发出一次计划恢复重启，用于卸下诊断KMD；恢复目标是原缓存组合而非`.59`。
+
+14:23:35为计划重启后的新启动；SSH恢复前仅重连/读取，没有重复启动或追加重启。
+恢复任务14:25:49开始、14:26:40结束，退出0；14:26:54核对SYS
+`1a86a02b479b716b2b695ade0bd6860076d4d5f61a29d95b804cb655ce0bf164`、Code0，
+DWM460加载`0cd34833bbeff8dff4b6a7f6db5f1b681ca7f5df38a44190b03085a229c7b2e8`。
+恢复ICD仍为`dee3d5805af80696f87d094ec1c5f557d662f435336207992baf588e2dc1cee0`，
+默认启用Ready、gpu-bridge、CPU1497600/GPU460800/RAM1600000kHz、风扇13。恢复成功
+仅表示上述组件与设置复原，不代表本轮闪烁或完整桌面稳定性已经修好。
+
+14:28:45从交互会话只读查询显示配置及模块：当前和注册方向均720×1280/60Hz/
+orientation0，DWM实际加载原缓存目录下的UMD及ICD，完整哈希匹配。此前SSH会话0
+直接运行显示工具退出1/error87，不支持查询交互桌面；改用一次只读交互任务完成，
+没有再次旋转或测试画面。14份恢复回执均已取回并校验。
+清理只针对已结束的两轮红屏探针：6个临时任务、7个目录及17个上传包/脚本，另移除
+清理脚本自身；不删除当前缓存包、不改变频率和启动设置。清理命令因Windows命令行
+长度限制第一次未执行，改为上传脚本后执行；SSH等待50秒超时，14:31:17只读检查确认
+上述任务与路径均不存在，原清理进程已退出，没有重复执行删除。原缓存注册仍有效。
+源码诊断开关保留到正式修复验收后移除，交付报告和冻结构建保留在本地OUT。
+
+源码核对：`source_visibility`确实转交Visible值，`set_visibility`分别保留source与
+target门控；普通`program_flip`在新地址到来时继续服从已有SourceVisible。因此
+“先FALSE、后地址”会使新绑定保持关闭，这是现有契约行为，不能靠永久忽略FALSE
+解决。尚未证明实际缺了某次TRUE回调，或哪个上游失败阻止它到达。当前WDK没有用户
+提出的NotifyFlipCompleted入口，已有VBlank/MPO通知不能替代进一步核对这轮的模式
+和主表面生命周期。没有在这轮诊断结果上继续安装未经审查的第二个行为补丁。
