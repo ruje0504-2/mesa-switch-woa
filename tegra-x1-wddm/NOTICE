@@ -131,3 +131,12 @@ Copyright 2012 Red Hat Inc. The MIT license text above applies.
 core/fault.c follows the same Switchroot GM20B interrupt classification and
 W1C order in gm20b/fifo_gm20b.c and gk20a/fifo_gk20a.c.
 Copyright (c) 2014-2018 NVIDIA CORPORATION. The MIT license text above applies.
+
+core/present_halfturn.c is an altered, restricted adaptation of deko3d's
+source/maxwell/gpu_transfer.cpp (Blit2DEngine/setupTransfer) and the FlipX/FlipY
+pixel-centre convention in source/dk_image.cpp at revision
+373bfd43d8b2d805fa2eb7d406dbb823032df958. Copyright (C) 2018-2020 fincs,
+Zlib license, retained verbatim in LICENSES/Zlib.txt. Only linear BGRA/XRGB
+180-degree copies are supported by this bounded WDDM command encoder; it
+does not import the Horizon memory, synchronization, or queue ABI. Mesa's
+nvc0_surface.c was also consulted for the 902D linear surface layout.

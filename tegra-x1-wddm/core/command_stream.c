@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "command_stream.h"
 #include "copy_stream.h"
+#include "present_halfturn.h"
 #include "gm20b_mmu.h"
 #include "nvk_mme_programs.h"
 #include "submission.h"
@@ -96,6 +97,17 @@ static bool checked_word_span(const struct tg_gpu_checked_ranges *ranges, uint32
     const uint64_t base = ((uint64_t)hi << 32) | lo;
     return word_span(ranges->va, hi, lo, bytes, alignment, ranges->max_end) &&
            (!ranges->check || ranges->check(ranges->data, base, base + bytes, access));
+}
+
+static bool halfturn(const uint32_t *words, size_t count, const struct tg_gpu_checked_ranges *ranges)
+{
+    struct tg_gpu_present_halfturn b;
+    uint64_t source, destination;
+    return tg_gpu_decode_present_halfturn(words, count, &source, &destination, &b) &&
+        checked_word_span(ranges, (uint32_t)(source >> 32), (uint32_t)source,
+            (uint64_t)b.source.pitch * b.source.height, 256, TG_GPU_PITCH_READ) &&
+        checked_word_span(ranges, (uint32_t)(destination >> 32), (uint32_t)destination,
+            (uint64_t)b.destination.pitch * b.destination.height, 256, TG_GPU_PITCH_WRITE);
 }
 
 static bool host_acquire(const uint32_t *args, const struct tg_gpu_command_va *va,
@@ -832,6 +844,11 @@ static bool inspect(const uint32_t *words, uint32_t *staging, size_t bytes,
         uint32_t count=NVVAL_GET(header,NVB06F,DMA_INCR,COUNT),last;
         if(header==NVB06F_DMA_NOP)continue;
         uint32_t subchannel=NVVAL_GET(header,NVB06F,DMA_INCR,SUBCHANNEL);
+        if (subchannel == 3) {
+            if (!halfturn(words + start, word_count - start, &ranges)) return false;
+            n = start + TG_GPU_PRESENT_HALFTURN_WORDS;
+            continue;
+        }
         if((header&(1u<<12)) || !nvk_class[subchannel])return false;
         if(op==NVB06F_DMA_IMMD_OPCODE_VALUE) {
             if(!method_allowed(method) || method==NVB06F_SET_OBJECT ||
@@ -1199,6 +1216,11 @@ bool tg_gpu_check_command_mappings(const uint32_t *words, size_t bytes,
         const uint32_t count = NVVAL_GET(header, NVB06F, DMA_INCR, COUNT);
         const bool immediate = op == NVB06F_DMA_IMMD_OPCODE_VALUE;
         const uint32_t subchannel = NVVAL_GET(header, NVB06F, DMA_INCR, SUBCHANNEL);
+        if (subchannel == 3) {
+            if (!halfturn(words + n - 1, word_count - n + 1, &ranges)) return false;
+            n += TG_GPU_PRESENT_HALFTURN_WORDS - 1;
+            continue;
+        }
         uint32_t last = method;
         if (!immediate && (!count || count > word_count - n ||
             (op != NVB06F_DMA_INCR_OPCODE_VALUE && op != NVB06F_DMA_NONINCR_OPCODE_VALUE &&

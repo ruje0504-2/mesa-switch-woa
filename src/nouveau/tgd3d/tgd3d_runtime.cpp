@@ -464,15 +464,16 @@ HRESULT runtime_shared_open(Device *dev, const D3D10DDIARG_OPENRESOURCE *args,
       tg_gpu_primary_allocation_request a;
       memcpy(&a, info.pPrivateDriverData, sizeof(a));
       const bool primary = a.Buffer.flags & TG_GPU_ALLOCATION_DISPLAY_PRIMARY;
-      /* Shared primaries/shadows are the portrait destination of the GPU
-       * presentation copy. Opening them must not apply another rotation. */
-      const UINT width = 720, height = 1280;
+      /* Scanout remains portrait. A standard shadow can be the logical
+       * landscape source of a kernel Rotate Blt; import its actual layout. */
+      const bool valid_extent = (a.Width == 720 && a.Height == 1280) ||
+         (!primary && a.Width == 1280 && a.Height == 720);
       if (a.Buffer.version != TG_GPU_ALLOCATION_ABI ||
           a.Buffer.flags != (TG_GPU_ALLOCATION_CPU_VISIBLE |
                              (primary ? TG_GPU_ALLOCATION_DISPLAY_PRIMARY : 0)) ||
           (a.Format != D3DDDIFMT_A8R8G8B8 && a.Format != D3DDDIFMT_X8R8G8B8) ||
           a.Rotation != D3DDDI_ROTATION_IDENTITY || a.Reserved ||
-          a.Width != width || a.Height != height || a.Pitch != width * 4 ||
+          !valid_extent || a.Pitch != a.Width * 4 ||
           a.Buffer.bytes != UINT64_C(720) * 1280 * 4)
          return DXGI_ERROR_UNSUPPORTED;
       RuntimeResource *p = nullptr;

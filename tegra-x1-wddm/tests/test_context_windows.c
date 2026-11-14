@@ -7,12 +7,14 @@
 #include "../windows/paging_dispatch.h"
 #include "../windows/submit_ddi.h"
 #include "../windows/present.h"
+#include "../core/present_blit.h"
 #include "../platform/t214_resources.h"
 #include "../core/nvk_mme_programs.h"
 #include "nouveau/headers/nvidia/classes/clb197.h"
 #include "nouveau/vulkan/nvk_mme_slots.h"
 #include <ntimage.h>
 static NTSTATUS SubmitModel(TG_GPU_CONTEXT_ENGINE *,const DXGKARG_SUBMITCOMMANDVIRTUAL *);
+static void TestGraphicsTemplate(TG_GPU_CONTEXT_ENGINE *);
 
 static ULONG_PTR image_cookie=0x00002b992ddfa232ULL;
 const IMAGE_LOAD_CONFIG_DIRECTORY64 _load_config_used={
@@ -303,26 +305,25 @@ __declspec(noinline) static void TestMmioPresent(TG_GPU_DEVICE *device)
     CHECK(TgGpuDdiPresent(&context,&a)==STATUS_NOT_SUPPORTED && command==0x12345678);
 }
 
-__declspec(noinline) static void TestGdiPresent(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_DEVICE *device,BOOLEAN opaque,BOOLEAN source_landscape,BOOLEAN destination_landscape)
+__declspec(noinline) static void TestGdiPresent(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_DEVICE *device,BOOLEAN opaque,BOOLEAN source_landscape,BOOLEAN destination_landscape,UINT rotation)
 {
     UINT before=PoolsInUse();
     const UINT sw=source_landscape?1280:720,sh=source_landscape?720:1280;
     const UINT dw=destination_landscape?1280:720,dh=destination_landscape?720:1280;
     const LONG width=(LONG)(sw<dw?sw:dw),height=(LONG)(sh<dh?sh:dh);
     TG_GPU_PRIMARY_ALLOCATION_REQUEST desc[2]={
-        {{TG_GPU_ALLOCATION_ABI,TG_GPU_ALLOCATION_CPU_VISIBLE,T214_GPU_POST_FB_SIZE},D3DDDIFMT_A8R8G8B8,{0},source_landscape?D3DDDI_ROTATION_90:D3DDDI_ROTATION_IDENTITY,sw,sh,sw*4,0},
+        {{TG_GPU_ALLOCATION_ABI,TG_GPU_ALLOCATION_CPU_VISIBLE,T214_GPU_POST_FB_SIZE},D3DDDIFMT_A8R8G8B8,{0},D3DDDI_ROTATION_IDENTITY,sw,sh,sw*4,0},
         {{TG_GPU_ALLOCATION_ABI,TG_GPU_ALLOCATION_CPU_VISIBLE|TG_GPU_ALLOCATION_DISPLAY_PRIMARY,T214_GPU_POST_FB_SIZE},D3DDDIFMT_A8R8G8B8,{60,1},destination_landscape?D3DDDI_ROTATION_90:D3DDDI_ROTATION_IDENTITY,dw,dh,dw*4,0}
     };
     if(opaque)desc[0].Format=D3DDDIFMT_X8R8G8B8;
-    const UINT shift=opaque?4:0,packet_bytes=(13+shift)*4;
+    const UINT shift=opaque?4:0,packet_words=rotation==180?TG_GPU_PRESENT_HALFTURN_WORDS:13+shift,packet_bytes=packet_words*4;
     DXGK_ALLOCATIONINFO info[2]={{.pPrivateDriverData=&desc[0],.PrivateDriverDataSize=sizeof(desc[0])},
         {.pPrivateDriverData=&desc[1],.PrivateDriverDataSize=sizeof(desc[1])}};
     DXGKARG_CREATEALLOCATION create={.NumAllocations=2,.pAllocationInfo=info};
     e->Tables->Scanout=(TG_GPU_PRIVATE_MEMORY){(HANDLE)8,e->Tables->Memory.CpuAddress,
         {.QuadPart=0x98000000},TG_GPU_SCANOUT_SEGMENT_BYTES};
-    if(source_landscape || destination_landscape) {
-        /* GDI shadow/primary storage is portrait too. Unsupported rotated
-         * descriptors must fail before either allocation becomes owned. */
+    if(destination_landscape) {
+        /* A shadow may be landscape; the physical primary stays portrait. */
         CHECK(TgGpuDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
         CHECK(!info[0].hAllocation && !info[1].hAllocation && !e->AllocationBytes &&
               PoolsInUse()==before && !device->OpenAllocations);
@@ -343,13 +344,54 @@ __declspec(noinline) static void TestGdiPresent(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_
     DXGK_PRESENTALLOCATIONINFO allocations[3]={0};
     allocations[1].hDeviceSpecificAllocation=oi[0].hDeviceSpecificAllocation;allocations[1].AllocationVirtualAddress=0x100000;
     allocations[2].hDeviceSpecificAllocation=oi[1].hDeviceSpecificAllocation;allocations[2].AllocationVirtualAddress=0x500000;
-    static UINT words[32];TG_GPU_QUEUE_ENTRY private_data={0};
+    static UINT words[TG_GPU_PRESENT_HALFTURN_WORDS];TG_GPU_QUEUE_ENTRY private_data={0};
     RECT rects[2]={{10,20,100,40},{0,100,width,120}};
     DXGKARG_PRESENT a={.pDmaBuffer=words,.DmaSize=packet_bytes,.pDmaBufferPrivateData=&private_data,
         .DmaBufferPrivateDataSize=sizeof(private_data),.pAllocationInfo=allocations,
         .SrcRect={0,0,width,height},.DstRect={0,0,width,height},.SubRectCnt=2,.pDstSubRects=rects,
         .Flags={.Blt=1},.DmaBufferGpuVirtualAddress=0x10000};
     DXGKARG_PRESENT original=a;
+    if(rotation) {
+        CHECK(!destination_landscape && (rotation==180 ? !source_landscape : source_landscape));
+        ((TG_GPU_ADAPTER *)e)->Panel.PathRotation=rotation==90?D3DKMDT_VPPR_ROTATE90:rotation==180?D3DKMDT_VPPR_ROTATE180:D3DKMDT_VPPR_ROTATE270;
+        a.Flags.Rotate=1;a.SrcRect=a.DstRect=(RECT){0,0,(LONG)sw,(LONG)sh};
+        rects[1].right=(LONG)sw;original=a;
+        const UINT total=rotation==90?90+1280:rotation==180?2:20+20;
+        for(UINT pass=0;pass<total;++pass) {
+            a=original;a.MultipassOffset=pass;
+            CHECK(TgGpuDdiPresent(c,&a)==(pass+1==total?STATUS_SUCCESS:STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER));
+            CHECK(a.MultipassOffset==pass+1 && a.pDmaBuffer==words+packet_words &&
+                a.pDmaBufferPrivateData==&private_data+1 && a.DmaSize==packet_bytes);
+            if(!pass && rotation==180) {
+                struct tg_gpu_present_halfturn half;uint64_t from,to;
+                CHECK(tg_gpu_decode_present_halfturn(words,packet_words,&from,&to,&half));
+                CHECK(from==0x100000 && to==0x500000 && half.source_x==99 && half.source_y==39 &&
+                    half.destination_x==620 && half.destination_y==1240 && half.width==90 && half.height==20);
+                CHECK(words[12]==(opaque?0xe6u:0xcfu));
+            } else if(!pass) {
+                CHECK(words[4+shift]==0x100000+20*5120+40);
+                CHECK(words[6+shift]==0x500000+(rotation==90?1269*2880+80:10*2880+699*4));
+                CHECK(words[7+shift]==(rotation==90?5120u:4u) &&
+                    words[8+shift]==(rotation==90?4u:2880u) && words[9+shift]==(opaque?1u:4u) &&
+                    words[10+shift]==(rotation==90?20u:90u));
+            }
+            if(!pass || pass+1==total) {
+                DXGKARG_SUBMITCOMMANDVIRTUAL submit_copy={.hContext=c,.DmaBufferSize=packet_bytes,
+                    .DmaBufferVirtualAddress=0x10000,.pDmaBufferPrivateData=&private_data,
+                    .DmaBufferPrivateDataSize=sizeof(private_data),.DmaBufferUmdPrivateDataSize=sizeof(private_data)};
+                TG_GPU_COMMAND_SNAPSHOT *copy_snapshot=NULL;
+                CHECK(TgGpuCapturePresentSnapshot(e,&submit_copy,&copy_snapshot)==STATUS_SUCCESS && copy_snapshot && !c->References);
+                TgGpuFreeCommandSnapshot(copy_snapshot);
+            }
+        }
+        a=original;a.DmaSize=packet_bytes-4;
+        CHECK(TgGpuDdiPresent(c,&a)==STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER && !a.MultipassOffset && a.pDmaBuffer==words);
+        a=original;a.SubRectCnt=0;a.pDstSubRects=NULL;
+        CHECK(TgGpuDdiPresent(c,&a)==(rotation==180?STATUS_SUCCESS:STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER) && a.MultipassOffset==1);
+        a=original;a.MultipassOffset=total;
+        CHECK(TgGpuDdiPresent(c,&a)==STATUS_INVALID_PARAMETER);
+        goto cleanup;
+    }
     CHECK(TgGpuDdiPresent(c,&a)==STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER && a.MultipassOffset==1);
     CHECK(a.pDmaBuffer==words+13+shift && a.DmaSize==original.DmaSize &&
           a.pDmaBufferPrivateData==&private_data+1 &&
@@ -414,6 +456,7 @@ __declspec(noinline) static void TestGdiPresent(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_
     CHECK(TgGpuDdiPresent(c,&a)==STATUS_NOT_SUPPORTED);
     allocations[2].AllocationVirtualAddress=device->Process->Internal.Base;
     CHECK(TgGpuDdiPresent(c,&a)==STATUS_INVALID_PARAMETER);
+cleanup:
     CHECK(TgGpuDdiDestroyContext(c)==STATUS_SUCCESS);
     HANDLE opened[2]={oi[0].hDeviceSpecificAllocation,oi[1].hDeviceSpecificAllocation};
     DXGKARG_CLOSEALLOCATION close={.NumAllocations=2,.pOpenHandleList=opened};
@@ -422,6 +465,30 @@ __declspec(noinline) static void TestGdiPresent(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_
     CHECK(TgGpuDdiDestroyAllocation(e,&destroy)==STATUS_SUCCESS);
     os_allocation[1]=os_allocation[2]=NULL;RtlZeroMemory(&e->Tables->Scanout,sizeof(e->Tables->Scanout));
     CHECK(!e->AllocationBytes && PoolsInUse()==before && !device->OpenAllocations);
+}
+
+static void TestRotatedGdiPresent(const DXGKRNL_INTERFACE *dxgk)
+{
+    /* Use a full adapter because Rotate consumes the committed VidPN angle. */
+    static TG_GPU_ADAPTER adapter;
+    static _Alignas(PAGE_SIZE) UCHAR mapping[TG_GPU_TABLE_BYTES];
+    static TG_GPU_TABLE_SEGMENT tables={.Memory={(HANDLE)99,mapping,{.QuadPart=0x94000000},sizeof(mapping)},.SegmentId=1};
+    TG_GPU_CONTEXT_ENGINE *e=&adapter.Engine;
+    DXGKARG_CREATEPROCESS process={.hDxgkProcess=(HANDLE)100};
+    DXGKARG_CREATEDEVICE device={.hDevice=(HANDLE)101};
+    const UINT before=PoolsInUse();
+    CHECK(TgGpuInitializeContextEngine(e,dxgk,&tables)==STATUS_SUCCESS);TestGraphicsTemplate(e);
+    CHECK(TgGpuDdiCreateProcess(e,&process)==STATUS_SUCCESS);device.hKmdProcess=process.hKmdProcess;
+    CHECK(TgGpuDdiCreateDevice(e,&device)==STATUS_SUCCESS);
+    TestGdiPresent(e,device.hDevice,FALSE,TRUE,FALSE,90);
+    TestGdiPresent(e,device.hDevice,TRUE,TRUE,FALSE,90);
+    TestGdiPresent(e,device.hDevice,FALSE,FALSE,FALSE,180);
+    TestGdiPresent(e,device.hDevice,TRUE,FALSE,FALSE,180);
+    TestGdiPresent(e,device.hDevice,FALSE,TRUE,FALSE,270);
+    TestGdiPresent(e,device.hDevice,TRUE,TRUE,FALSE,270);
+    CHECK(TgGpuDdiDestroyDevice(device.hDevice)==STATUS_SUCCESS);
+    CHECK(TgGpuDdiDestroyProcess(e,process.hKmdProcess)==STATUS_SUCCESS && TgGpuStopContextEngine(e)==STATUS_SUCCESS);
+    CHECK(PoolsInUse()==before);
 }
 
 __declspec(noinline) static void TestLinearAllocations(TG_GPU_CONTEXT_ENGINE *e,
@@ -819,6 +886,14 @@ __declspec(noinline) static void TestAllocations(TG_GPU_CONTEXT_ENGINE *e,TG_GPU
     discard.DiscardContent.hAllocation=info[0].hAllocation;
     CHECK(TgGpuDdiBuildPagingBuffer(e,&discard)==STATUS_SUCCESS);
     CHECK(TgGpuDdiBuildPagingBuffer(other,&discard)==STATUS_INVALID_PARAMETER);
+    CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)) && !e->AllocationBytes);
+    shadow.Width=1280;shadow.Height=720;
+    CHECK(TgGpuDdiGetStandardAllocationDriverData(&surface_adapter,&standard)==STATUS_SUCCESS);
+    CHECK(shadow.Pitch==5120 && primary.Width==1280 && primary.Height==720 &&
+          primary.Pitch==5120 && primary.Rotation==D3DDDI_ROTATION_IDENTITY);
+    CHECK(NT_SUCCESS(ddi->DxgkDdiCreateAllocation(e,&create)));
+    CHECK(!info[0].FlagsWddm2.AccessedPhysically && e->AllocationBytes==T214_GPU_POST_FB_SIZE);
+    CHECK(TgGpuGetScanoutSurface(e,info[0].hAllocation,&scanout)==STATUS_NOT_SUPPORTED);
     CHECK(NT_SUCCESS(ddi->DxgkDdiDestroyAllocation(e,&destroy)) && !e->AllocationBytes);
     info[0].pPrivateDriverData=&desc[0];
     info[0].PrivateDriverDataSize=sizeof(desc[0]);
@@ -1995,6 +2070,7 @@ void start(void)
     CHECK(NT_SUCCESS(TgGpuInitializeContextEngine(&e,&dxgk,&tables)));
     CHECK(NT_SUCCESS(TgGpuInitializeContextEngine(&other,&dxgk,&tables)));
     TestGraphicsTemplate(&e);
+    TestRotatedGdiPresent(&dxgk);
     TgGpuRegisterContextDdis(&ddi);
     TestAdapterQueries(&e,&ddi);
     fail_pool=TRUE;CHECK(ddi.DxgkDdiCreateProcess(&e,&failed)==STATUS_NO_MEMORY && !failed.hKmdProcess);fail_pool=FALSE;
@@ -2015,12 +2091,12 @@ void start(void)
     CHECK(NT_SUCCESS(ddi.DxgkDdiCreateDevice(&e,&device)));
     TestAllocations(&e,&other,&ddi,device.hDevice);
     TestMmioPresent(device.hDevice);
-    TestGdiPresent(&e,device.hDevice,FALSE,FALSE,FALSE);
-    TestGdiPresent(&e,device.hDevice,TRUE,FALSE,FALSE);
-    TestGdiPresent(&e,device.hDevice,FALSE,TRUE,TRUE);
-    TestGdiPresent(&e,device.hDevice,TRUE,TRUE,TRUE);
-    TestGdiPresent(&e,device.hDevice,FALSE,TRUE,FALSE);
-    TestGdiPresent(&e,device.hDevice,TRUE,FALSE,TRUE);
+    TestGdiPresent(&e,device.hDevice,FALSE,FALSE,FALSE,0);
+    TestGdiPresent(&e,device.hDevice,TRUE,FALSE,FALSE,0);
+    TestGdiPresent(&e,device.hDevice,FALSE,TRUE,TRUE,0);
+    TestGdiPresent(&e,device.hDevice,TRUE,TRUE,TRUE,0);
+    TestGdiPresent(&e,device.hDevice,FALSE,TRUE,FALSE,0);
+    TestGdiPresent(&e,device.hDevice,TRUE,FALSE,TRUE,0);
     CHECK(ddi.DxgkDdiDestroyProcess(&e,process.hKmdProcess)==STATUS_DEVICE_BUSY);
     create.Flags.VirtualAddressing=1;
     fail_allocate=TRUE;

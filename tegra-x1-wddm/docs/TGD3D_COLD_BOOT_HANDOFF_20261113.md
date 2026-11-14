@@ -5,6 +5,13 @@
 
 ## 当前设备授权（2026-11-14 UTC）
 
+**最新：MPO有效掩码修正e28f5886已推送，并完成一次正常UMD横屏测试，仍失败。
+14:49轮的source_visible/WIN_ENABLE仍为0，实际扫描面12点为0；逻辑图案5020点正确
+不能替代上屏。该轮没有自动重启，14:49:50恢复竖屏；14:54:21发出计划恢复重启，
+14:58:14已恢复原缓存组合1a86a02b…/0cd34833…/dee3d580…、Code0及原频率。
+15:21:33交互只读确认当前/保存方向720×1280、DWM828加载原缓存UMD/ICD。
+当前按用户新要求实现真正的GDI Rotate Blt及横屏shadow；只做本地构建，尚未安装。**
+
 **14:21最新测试：强开WIN_ENABLE诊断0dd8c544已经安装并完成一次横屏红屏对照。
 三个采样均source_visible0、WIN_ENABLE1，实际锁存地址`0xfbba1000`，12点红色一致；
 用户确认“红色有但在闪烁”。只确认红色到达物理面板，稳定性失败，横屏尚未修复。
@@ -1418,3 +1425,66 @@ primary会设置NO_SCANOUT并返回DXGI_DDI_ERR_UNSUPPORTED，请求runtime代�
 该标志控制直接Flip资格，不是完全禁止拷贝后上屏。本轮没有找到已接受primary误留
 NO_SCANOUT的证据，未作无依据的UMD改动。下一轮用正常GPU预旋转UMD cef5daa8…及
 原ICD dee3d580…，保持频率/双向Fence，只测这次MPO通知修正。
+
+### MPO有效掩码修正实测失败及恢复（14:49–15:21 UTC）
+
+e28f5886939042032f0a1698e8929088a482a54e已通过单次HTTP/1.1 Git传输推送；此前
+两次HTTPS超时没有修改Git配置。签名SYS
+`08ce8cf54a9176936185cdcd236ff75b1b38454e0ed3b832012eb28ddefe4543`，正常UMD
+`cef5daa8c189f6cc0ceecb660d73c0b830a380993b638c8926030704a67737ef`、ICD仍dee3d580…。
+ARM64构建/控制、13个目录成员签名及69文件包核对通过，均不算GPU或上屏通过。
+
+14:43:10请求一次安装门控重启，启动时间14:43:47；SSH恢复后核对原缓存Code43，
+14:46:43启动安装任务，14:47:52原生启用完成。DWM496加载正常UMD，LUID
+`00000000000c73ee`。14:49:02–14:49:53只测一轮横屏；没有新增离屏GPU探针。
+
+- 14:49:11切换前地址`0xfae61000`、PresentId39、source_visible1、WIN_ENABLE1，
+  四点为桌面颜色。
+- 14:49:19.642、21.080、22.595均source_visible0、target_active1、WIN_ENABLE0，
+  地址/Displayed地址仍`0xfae61000`、PresentId40、pending0，12点全0；underflow6
+  未增加，扫描布局仍720×1280/pitch2880/offset0。
+- 逻辑图案1280×720、5020点容差0差异0；它不等于实际扫描面的图案。工具明确
+  退出1：`Portrait scanout activation/layout did not match GPU prerotation`。
+- 最终trace12212行，有TraceEnd，invalid和各丢失计数0。按首个扫描采样的UTC与
+  trace起始QPC时钟对应，之后DWM又有186次SetDisplayMode成功返回，没有Present或
+  Blt完成记录；这是返回事件统计，不能排除曾进入某个尚未返回的调用。
+- 14:49:50恢复当前/保存竖屏，ETW停止、短时恢复任务解除。52文件3293252字节
+  全部取回并逐个SHA256/长度匹配，位于OUT `mpo-vblank-mask/evidence/`。
+
+14:54:21请求一次计划恢复重启，14:55:12启动；恢复任务14:58:14完成，退出0，
+15:01:23读回Code0、默认启用Ready、DWM828加载原缓存UMD。15:21:33交互只读核对
+当前和保存方向均720×1280/orientation0、UMD和ICD路径/完整哈希正确。CPU1497600、
+GPU460800、RAM1600000kHz、风扇13及双向Fence保持，不恢复`.59`。
+
+结论：有效掩码是应修的通知契约遗漏，但本轮证明仅补它不足以恢复横屏。强开KMD
+代码已删除，成功primary的NO_SCANOUT清零也与冻结生产UMD源码相同；不再重复这版
+候选。下一步按用户授权补齐真实Rotate Blt和横屏shadow，仍以实际GPU完成、扫描锁存
+及物理画面验收为准，不用HsyncFlipCompletion伪造已完成的工作。
+
+### 四方向 GDI Rotate Blt 与标准 shadow（构建及控制完成，实机待测）
+
+保留 Windows 设置的0/90/180/270四方向能力。补上标准1280×720、pitch5120的
+非primary shadow，并在tgd3d导入时使用真实宽高/pitch；物理primary仍严格保持
+720×1280、pitch2880。`DXGK_PRESENTFLAGS.Rotate`只在Blt路径按已提交的VidPN角度
+执行，普通Flip不能把未旋转的地址直接报为完成。
+
+- 0°沿用CE矩形复制；90/270°用GM20B B0B5正stride列/行复制，支持裁剪、偏移、
+  XRGB转不透明ARGB和有限DMA缓冲区的MultipassOffset续传，不使用负CE pitch。
+- 180°用902D二维引擎双轴翻转，单个完整命令块；32.32导数均-1，采样起点为
+  末像素中心。参考deko3d固定373bfd43d8b2d805fa2eb7d406dbb823032df958的
+  Blit2DEngine及FlipX/FlipY约定，许可证/来源/改写说明保留在NOTICE和Zlib.txt。
+  没有新增着色器、CPU旋转或整屏scratch分配。
+- 902D准入只接受完整固定状态序列，核验矩形、对齐、源/目标完整跨度、保留VA
+  排除和实际映射读写权限；不开放任意2D命令。源目标重叠仍不支持。
+- 完成顺序沿用GPU全引擎WFI、真实DMA完成和显示控制器地址锁存后的VBlank通知，
+  不新增虚假的HsyncFlipCompletion，不强制WIN_ENABLE。
+
+实际参考WDK10.0.26100.0及微软
+[Present标志](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_presentflags)
+（2026-11-14访问）；`Rotate`是图像搬运责任，不是放行未处理Flip的理由。
+
+本地独立六像素向量、非对齐矩形、padding、alpha、损坏包拒绝及映射权限模型通过；
+ARM64 KMD构建通过，Switch上test-context/test-panel-timings退出0（包括180°、
+四方向能力、multipass、实际WDK结构的Present编码和snapshot捕获）。早先同UMD
+的ARM64 runtime controls已通过并复用。这些均为CPU控制，不是GPU或物理验收。
+设备15:41:33UTC仍原缓存I基线Code0，启动时间14:55:12，DWM828；本候选尚未安装。

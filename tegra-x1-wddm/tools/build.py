@@ -64,10 +64,10 @@ mesa_src = args.mesa / "src"
 mesa_includes = [mesa_src, mesa_src / "nouveau/headers",
                  mesa_src / "nouveau/headers/nvidia/classes"]
 encoder = mesa_src / "nouveau/horizon/nouveau_horizon_gm20b.c"
-command_stream = [root / "core/command_stream.c", root / "core/copy_stream.c"]
+command_stream = [root / "core/command_stream.c", root / "core/copy_stream.c", root / "core/present_halfturn.c"]
 core = [root / "core/gm20b_mmu.c", root / "core/report.c", root / "core/gpfifo.c", root / "core/fault.c",
         root / "core/execute.c", root / "core/submission.c", root / "core/channel.c",
-        *command_stream, root / "core/paging_dma.c",
+        *command_stream, root / "core/paging_dma.c", root / "core/present_blit.c",
         root / "platform/t214_mmu.c", root / "platform/t214_frontend.c",
         root / "platform/t214_gr.c", root / "platform/t214_acr.c", root / "platform/t214_pmu.c",
         root / "core/gr_firmware.c", root / "core/acr_firmware.c", root / "core/gr_image.c",
@@ -85,6 +85,12 @@ subprocess.run([args.cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
                 *[f"-I{p}" for p in mesa_includes],*map(str,command_stream),
                 str(root / "tests/test_command_stream.c"),"-o",str(stream_test)],check=True)
 subprocess.run([str(stream_test.resolve())],check=True)
+present_test=args.out / "test-present-blit"
+subprocess.run([args.cc,"-std=c11","-O2","-Wall","-Wextra","-Werror",
+                *[f"-I{p}" for p in mesa_includes],*map(str,command_stream),
+                str(root / "core/present_blit.c"),str(root / "tests/test_present_blit.c"),
+                "-o",str(present_test)],check=True)
+subprocess.run([str(present_test.resolve())],check=True)
 power = root / "platform/t214_power.c"
 power_test = args.out / "test-t214-power"
 subprocess.run([args.cc, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",

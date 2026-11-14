@@ -4,12 +4,11 @@
  */
 #include "present.h"
 #include "allocation.h"
+#include "adapter.h"
 #include "work_queue.h"
+#include "../core/present_blit.h"
 #include "../platform/t214_resources.h"
 #include "../platform/t214_dc.h"
-#include "nouveau/headers/drf.h"
-#include "nouveau/headers/nvidia/classes/clb06f.h"
-#include "nouveau/headers/nvidia/classes/clb0b5.h"
 
 #define PRESENT_MAGIC 0x50724754u
 #define SNAPSHOT_TAG 0x53674754u
@@ -21,17 +20,9 @@ typedef struct {
 } PRESENT_BUFFER;
 C_ASSERT(sizeof(PRESENT_BUFFER)<=sizeof(TG_GPU_QUEUE_ENTRY));
 
-static UINT header(UINT method,UINT count)
+static struct tg_gpu_blit_rect blit_rect(RECT r)
 {
-    return NVDEF(NVB06F,DMA_INCR,OPCODE,VALUE) |
-        NVVAL(NVB06F,DMA_INCR,SUBCHANNEL,4) |
-        NVVAL(NVB06F,DMA_INCR,ADDRESS,method>>2) |
-        NVVAL(NVB06F,DMA_INCR,COUNT,count);
-}
-static BOOLEAN rectangle(const RECT *r,UINT width,UINT height)
-{
-    return r->left>=0 && r->top>=0 && r->right>r->left && r->bottom>r->top &&
-        r->right<=(LONG)width && r->bottom<=(LONG)height;
+    return (struct tg_gpu_blit_rect){r.left,r.top,r.right,r.bottom};
 }
 static BOOLEAN surface_va(TG_GPU_CONTEXT *c,UINT64 va)
 {
@@ -47,19 +38,18 @@ NTSTATUS APIENTRY TgGpuDdiPresent(HANDLE context,DXGKARG_PRESENT *a)
     if(!c || !a)return STATUS_INVALID_PARAMETER;
     /* NoWait keeps the GPU pipeline running while the scheduler performs
      * the VSync MMIO flip. This no-DMA path emits no GPU wait commands. */
-    /* tgd3d/runtime must prerotate into portrait storage before this flip.
-     * A Rotate request still requires a transform; the portrait-only panel
-     * DDIs cannot fulfill it, so do not return success without doing it. */
+    /* A flip binds already oriented storage. Rotate is a Blt operation and
+     * must execute the copy below, not turn into a no-DMA success receipt. */
     const DXGK_PRESENTFLAGS flips={.Flip=1,.FlipWithNoWait=1,
         .FlipWithMultiPlaneOverlay=1,.RedirectedFlip=1};
     if(a->Flags.Flip && !(a->Flags.Value&~flips.Value) && !a->pDmaBuffer && !a->MultipassOffset)
         return STATUS_SUCCESS; /* Panel DDIs perform the scheduled MMIO flip. */
-    const DXGK_PRESENTFLAGS blt={.Blt=1};
-    if(a->Flags.Value!=blt.Value || !c->Flags.GdiContext || !c->Flags.VirtualAddressing ||
+    const DXGK_PRESENTFLAGS blt={.Blt=1,.Rotate=1};
+    if(!a->Flags.Blt || (a->Flags.Value&~blt.Value) || !c->Flags.GdiContext || !c->Flags.VirtualAddressing ||
        !c->Device->Process)return STATUS_NOT_SUPPORTED;
     if(!a->pAllocationInfo || !a->pDmaBuffer || !a->pDmaBufferPrivateData ||
        ((ULONG_PTR)a->pDmaBuffer&3) || !a->DmaBufferGpuVirtualAddress ||
-       !a->SubRectCnt || !a->pDstSubRects || a->MultipassOffset>=a->SubRectCnt)
+       (a->SubRectCnt && !a->pDstSubRects))
         return STATUS_INVALID_PARAMETER;
     if(a->DmaBufferPrivateDataSize<sizeof(TG_GPU_QUEUE_ENTRY))
         return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
@@ -73,57 +63,70 @@ NTSTATUS APIENTRY TgGpuDdiPresent(HANDLE context,DXGKARG_PRESENT *a)
     if(!NT_SUCCESS(status))return status;
     status=TgGpuGetPresentSurface(c->Device,dst->hDeviceSpecificAllocation,TRUE,&destination);
     if(!NT_SUCCESS(status))return status;
-    if(!rectangle(&a->SrcRect,source.Width,source.Height) ||
-       !rectangle(&a->DstRect,destination.Width,destination.Height) ||
-       a->SrcRect.right-a->SrcRect.left!=a->DstRect.right-a->DstRect.left ||
-       a->SrcRect.bottom-a->SrcRect.top!=a->DstRect.bottom-a->DstRect.top)
+    UINT rotation=0;
+    if(a->Flags.Rotate) {
+        /* WDDM serializes the mode change against this source's presents.
+         * Do not infer rotation merely from mismatching surface dimensions. */
+        const TG_GPU_ADAPTER *adapter=(const TG_GPU_ADAPTER *)c->Device->Engine;
+        switch(adapter->Panel.PathRotation) {
+        case D3DKMDT_VPPR_IDENTITY: break;
+        case D3DKMDT_VPPR_ROTATE90: rotation=90;break;
+        case D3DKMDT_VPPR_ROTATE180: rotation=180;break;
+        case D3DKMDT_VPPR_ROTATE270: rotation=270;break;
+        default: return STATUS_NOT_SUPPORTED;
+        }
+    }
+    struct tg_gpu_present_blit plan;
+    if(!tg_gpu_present_blit_init(&plan,
+        (struct tg_gpu_blit_surface){source.Width,source.Height,source.Pitch},
+        (struct tg_gpu_blit_surface){destination.Width,destination.Height,destination.Pitch},
+        blit_rect(a->SrcRect),blit_rect(a->DstRect),rotation))
         return STATUS_INVALID_PARAMETER;
     if(src->PhysicalAdapterIndex || dst->PhysicalAdapterIndex ||
        !surface_va(c,src->AllocationVirtualAddress) ||
        !surface_va(c,dst->AllocationVirtualAddress))return STATUS_INVALID_PARAMETER;
     const BOOLEAN opaque=source.Format==D3DDDIFMT_X8R8G8B8 && destination.Format==D3DDDIFMT_A8R8G8B8;
-    const UINT packet_words=opaque?17:13;
+    const UINT packet_words=rotation==180?TG_GPU_PRESENT_HALFTURN_WORDS:(opaque?17:13);
     /* Screen-to-screen overlap is not advertised. Shadow/primary ranges are
      * distinct; reject overlap before emitting any commands. */
     if(src->AllocationVirtualAddress<dst->AllocationVirtualAddress+T214_GPU_POST_FB_SIZE &&
        dst->AllocationVirtualAddress<src->AllocationVirtualAddress+T214_GPU_POST_FB_SIZE)return STATUS_NOT_SUPPORTED;
-    UINT *begin=a->pDmaBuffer,*p=begin,available=a->DmaSize/sizeof(UINT);
-    UINT next=a->MultipassOffset;
-    for(;next<a->SubRectCnt;++next) {
-        const RECT *r=&a->pDstSubRects[next];
-        if(!rectangle(r,destination.Width,destination.Height) ||
-           r->left<a->DstRect.left || r->top<a->DstRect.top ||
-           r->right>a->DstRect.right || r->bottom>a->DstRect.bottom)return STATUS_INVALID_PARAMETER;
-        if(available<packet_words)break;
-        const UINT64 from=src->AllocationVirtualAddress+(UINT64)(r->top-a->DstRect.top+a->SrcRect.top)*source.Pitch+
-            (UINT64)(r->left-a->DstRect.left+a->SrcRect.left)*4;
-        const UINT64 to=dst->AllocationVirtualAddress+(UINT64)r->top*destination.Pitch+(UINT64)r->left*4;
-        *p++=header(0,1);*p++=MAXWELL_DMA_COPY_A;
-        if(opaque) {
-            /* GDI supplies XRGB shadows for ARGB primaries. Preserve BGR
-             * bytes and define alpha as 255; X is not a valid alpha value. */
-            *p++=header(NVB0B5_SET_REMAP_CONST_A,3);*p++=0xff;*p++=0;
-            *p++=NVDEF(NVB0B5,SET_REMAP_COMPONENTS,DST_X,SRC_X) |
-                NVDEF(NVB0B5,SET_REMAP_COMPONENTS,DST_Y,SRC_Y) |
-                NVDEF(NVB0B5,SET_REMAP_COMPONENTS,DST_Z,SRC_Z) |
-                NVDEF(NVB0B5,SET_REMAP_COMPONENTS,DST_W,CONST_A) |
-                NVDEF(NVB0B5,SET_REMAP_COMPONENTS,COMPONENT_SIZE,ONE) |
-                NVDEF(NVB0B5,SET_REMAP_COMPONENTS,NUM_SRC_COMPONENTS,FOUR) |
-                NVDEF(NVB0B5,SET_REMAP_COMPONENTS,NUM_DST_COMPONENTS,FOUR);
-        }
-        *p++=header(NVB0B5_OFFSET_IN_UPPER,8);
-        *p++=(UINT)(from>>32);*p++=(UINT)from;*p++=(UINT)(to>>32);*p++=(UINT)to;
-        *p++=source.Pitch;*p++=destination.Pitch;
-        *p++=(UINT)(r->right-r->left)*(opaque?1:4);*p++=(UINT)(r->bottom-r->top);
-        *p++=header(NVB0B5_LAUNCH_DMA,1);
-        *p++=NVDEF(NVB0B5,LAUNCH_DMA,DATA_TRANSFER_TYPE,PIPELINED) |
-            NVDEF(NVB0B5,LAUNCH_DMA,FLUSH_ENABLE,TRUE) |
-            NVDEF(NVB0B5,LAUNCH_DMA,SRC_MEMORY_LAYOUT,PITCH) |
-            NVDEF(NVB0B5,LAUNCH_DMA,DST_MEMORY_LAYOUT,PITCH) |
-            NVDEF(NVB0B5,LAUNCH_DMA,MULTI_LINE_ENABLE,TRUE) |
-            (opaque?NVDEF(NVB0B5,LAUNCH_DMA,REMAP_ENABLE,TRUE):0);
-        available-=packet_words;
+    const UINT rectangles=a->SubRectCnt?a->SubRectCnt:1;
+    UINT64 total=0;
+    for(UINT i=0;i<rectangles;++i) {
+        const RECT r=a->SubRectCnt?a->pDstSubRects[i]:a->DstRect;
+        const UINT stripes=tg_gpu_present_blit_stripes(&plan,blit_rect(r));
+        if(!stripes || total+stripes>UINT32_MAX)return STATUS_INVALID_PARAMETER;
+        total+=stripes;
     }
+    if(a->MultipassOffset>=total)return STATUS_INVALID_PARAMETER;
+    const UINT bytes=a->DmaSize<TG_GPU_COMMAND_CAPTURE_BYTES?a->DmaSize:TG_GPU_COMMAND_CAPTURE_BYTES;
+    UINT *begin=a->pDmaBuffer,*p=begin,available=bytes/sizeof(UINT);
+    UINT skip=a->MultipassOffset,next=a->MultipassOffset;
+    for(UINT i=0;i<rectangles;++i) {
+        const struct tg_gpu_blit_rect r=blit_rect(a->SubRectCnt?a->pDstSubRects[i]:a->DstRect);
+        const UINT stripes=tg_gpu_present_blit_stripes(&plan,r);
+        if(skip>=stripes){skip-=stripes;continue;}
+        for(UINT stripe=skip;stripe<stripes;++stripe) {
+            if(available<packet_words)goto encoded;
+            UINT words;
+            if(rotation==180) {
+                struct tg_gpu_present_halfturn half;
+                if(!tg_gpu_present_blit_halfturn(&plan,r,&half))return STATUS_INVALID_PARAMETER;
+                words=tg_gpu_encode_present_halfturn(p,available,
+                    src->AllocationVirtualAddress,dst->AllocationVirtualAddress,&half,opaque!=FALSE);
+            } else {
+                struct tg_gpu_present_copy copy;
+                if(!tg_gpu_present_blit_copy(&plan,r,stripe,&copy))return STATUS_INVALID_PARAMETER;
+                words=tg_gpu_encode_present_copy(p,available,
+                    src->AllocationVirtualAddress,dst->AllocationVirtualAddress,&copy,opaque!=FALSE);
+            }
+            if(!words)return STATUS_INVALID_PARAMETER;
+            p+=words;available-=words;++next;
+        }
+        skip=0;
+    }
+encoded:
     if(p!=begin) {
         PRESENT_BUFFER *private_data=a->pDmaBufferPrivateData;
         RtlZeroMemory(private_data,sizeof(TG_GPU_QUEUE_ENTRY));
@@ -133,7 +136,7 @@ NTSTATUS APIENTRY TgGpuDdiPresent(HANDLE context,DXGKARG_PRESENT *a)
         a->pDmaBufferPrivateData=(UCHAR *)private_data+sizeof(TG_GPU_QUEUE_ENTRY);
         a->MultipassOffset=next;
     }
-    return next==a->SubRectCnt?STATUS_SUCCESS:STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
+    return next==total?STATUS_SUCCESS:STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
 }
 
 NTSTATUS TgGpuCapturePresentSnapshot(TG_GPU_CONTEXT_ENGINE *e,

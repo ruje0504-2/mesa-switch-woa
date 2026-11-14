@@ -386,6 +386,16 @@ void runtime_contracts()
          standard.Width = 1280; standard.Height = 720; standard.Pitch = 5120;
          /* Neither primaries nor shadows may request DC rotation. */
          CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
+         standard.Rotation = D3DDDI_ROTATION_IDENTITY;
+         const HRESULT landscape = runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description);
+         if (primary) {
+            CHECK(landscape == DXGI_ERROR_UNSUPPORTED && !opened);
+         } else {
+            CHECK(landscape == S_OK && opened && !runtime_is_primary(opened));
+            CHECK(description.width == 1280 && description.height == 720 && description.pitch == 5120);
+            CHECK(allocations == allocated_before_standard && runtime_allocation(opened) == 0x61);
+            CHECK(SUCCEEDED(runtime_destroy(opened)));
+         }
          standard.Pitch += 4;
          CHECK(runtime_shared_open(&consumer, &so, {rt_resource(1)}, &opened, &description) == DXGI_ERROR_UNSUPPORTED && !opened);
          standard.Pitch -= 4;

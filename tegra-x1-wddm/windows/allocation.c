@@ -95,8 +95,9 @@ static NTSTATUS request(const DXGK_ALLOCATIONINFO *info,TG_GPU_ALLOCATION_DESC *
     }
     if(!(r->flags&TG_GPU_ALLOCATION_CPU_VISIBLE) || r->bytes!=T214_GPU_POST_FB_SIZE ||
         primary->Reserved || primary->Rotation!=D3DDDI_ROTATION_IDENTITY ||
-        primary->Width!=T214_DC_PANEL_WIDTH ||
-        primary->Height!=T214_DC_PANEL_HEIGHT ||
+        !((primary->Width==T214_DC_PANEL_WIDTH && primary->Height==T214_DC_PANEL_HEIGHT) ||
+          (!(r->flags&TG_GPU_ALLOCATION_DISPLAY_PRIMARY) &&
+           primary->Width==T214_DC_PANEL_HEIGHT && primary->Height==T214_DC_PANEL_WIDTH)) ||
         primary->Pitch!=primary->Width*4 ||
         (primary->Format!=D3DDDIFMT_X8R8G8B8 && primary->Format!=D3DDDIFMT_A8R8G8B8))
         return STATUS_INVALID_PARAMETER;
@@ -500,7 +501,8 @@ NTSTATUS APIENTRY TgGpuDdiGetStandardAllocationDriverData(HANDLE context,
     const UINT width = primary ? args->pCreateSharedPrimarySurfaceData->Width : args->pCreateShadowSurfaceData->Width;
     const UINT height = primary ? args->pCreateSharedPrimarySurfaceData->Height : args->pCreateShadowSurfaceData->Height;
     const D3DDDIFORMAT format = primary ? args->pCreateSharedPrimarySurfaceData->Format : args->pCreateShadowSurfaceData->Format;
-    if (width != T214_DC_PANEL_WIDTH || height != T214_DC_PANEL_HEIGHT ||
+    if (!((width == T214_DC_PANEL_WIDTH && height == T214_DC_PANEL_HEIGHT) ||
+          (shadow && width == T214_DC_PANEL_HEIGHT && height == T214_DC_PANEL_WIDTH)) ||
         (format != D3DDDIFMT_X8R8G8B8 && format != D3DDDIFMT_A8R8G8B8))
         return STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE_MODE;
     TG_GPU_PRIMARY_ALLOCATION_REQUEST request = {
@@ -517,7 +519,7 @@ NTSTATUS APIENTRY TgGpuDdiGetStandardAllocationDriverData(HANDLE context,
         request.RefreshRate.Numerator = args->pCreateSharedPrimarySurfaceData->RefreshRate.Numerator;
         request.RefreshRate.Denominator = args->pCreateSharedPrimarySurfaceData->RefreshRate.Denominator;
     } else
-        args->pCreateShadowSurfaceData->Pitch = T214_DC_PANEL_WIDTH * sizeof(UINT32);
+        args->pCreateShadowSurfaceData->Pitch = width * sizeof(UINT32);
     args->AllocationPrivateDriverDataSize = sizeof(request);
     args->ResourcePrivateDriverDataSize = 0;
     if (args->pAllocationPrivateDriverData)
