@@ -143,7 +143,7 @@ Hekate在卡支持时通过CMD6将UHS功率档切至1.44W；更高档代码被�
 | 内存 | 1600MHz，电压保持 | 实际1866MHz、请求2100MHz | 重启后请求/实际均1600，HandoffStatus=1 |
 | CPU | 保持1497.6MHz、1120mV | 1497.6MHz、1120mV | 重启后读回相同，风扇13 |
 | 风扇／预算 | 驱动13／512MiB | 同左 | 保持 |
-| 启动方式 | 先登录后tgd3d，再冷启动 | 登录后5秒触发 | 初始测试保留登录后启用 |
+| 启动方式 | 用户要求恢复直接冷启动tgd3d | 登录后5秒触发 | 03:24 UTC已设置持久原生启动，登录任务已禁用；冷启动实测待用户 |
 
 GPU实现提交 `68d9502b435c5563fa11f32949b045589111b171`；使用N=48、P=2，
 使VCO保持1843.2MHz，输出GPC 460.8MHz。默认源码配置仍为729.6MHz，新包显式传
@@ -170,8 +170,12 @@ UMD `ad5e3309…`、ICD `dee3d580…`及固件字节保持不变；原384MHz候�
 原启动INI SHA256 `2c656430ad3da51aea2db87e0337b693d8db2b122ce1144e859a5e736b50aded`；
 新INI `bbf1f989bf52cb81b398e5909480157ae54af928660d5645bfce86fb9e3f9691`。
 本轮只为内存生效重启了一次，KMD在门控状态安装后启用，没有对活动GPU热换驱动。
-源码中的冷启动工具已允许同一KMD在桌面测试后配置下一次原生启动，但本轮尚未设置
-`AllowNativeBoot`；登录后5秒触发任务保留。
+2026-11-14 03:24:35 UTC按用户新指令恢复直接原生启动：`startup_mode=native-boot`、
+`AllowNativeBoot`持久键存在，`Tgd3dDefaultEnable`为Disabled。同次回读CPU1497600kHz、
+RAM1600000kHz、GPU460800kHz，CPU1120mV/GPU800000µV及SYS哈希不变。
+没有请求OS重启或重启GPU，配置完成后断开SSH；用户负责下一次冷启动测试。
+用户尚未提供该组合完整五分钟桌面结果，此次切换不表示桌面或冷启动验收通过。
+回执保留在 `kmd158-gpu460/native-boot-switch/path-fix/stdout.json`。
 
 内存配置属于 [winx](https://github.com/ruje0504-2/winx/commit/6bc267b0671b5382acaf8fdde109162c37efeff7)：
 仅把 `woa-lite-home.ini` 的 `ram_oc=2100000` 改为 `1600000`，原 `cpu_oc=1996800`
