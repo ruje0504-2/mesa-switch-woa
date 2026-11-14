@@ -87,6 +87,7 @@ def main():
                     changed |= {"tegra-x1-wddm/platform/t214_dc.c",
                                 "tegra-x1-wddm/platform/t214_dc.h",
                                 "tegra-x1-wddm/windows/allocation.c",
+                                "tegra-x1-wddm/windows/present.c",
                                 "tegra-x1-wddm/tests/test_context_windows.c",
                                 "tegra-x1-wddm/tests/test_dc_rotation.c",
                                 "tegra-x1-wddm/tests/test_dc_portrait.c"}

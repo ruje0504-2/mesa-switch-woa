@@ -58,8 +58,11 @@ make_layouts(struct nvk_device *dev, VkDescriptorSetLayout sets[3])
 int main(int argc, char **argv)
 {
    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
-   if (argc != 4 || (strcmp(argv[1], "vs") && strcmp(argv[1], "ps"))) {
-      fprintf(stderr, "usage: %s vs|ps input.spv output-prefix\n", argv[0]);
+   if ((argc != 4 && argc != 5) ||
+       (strcmp(argv[1], "vs") && strcmp(argv[1], "ps")) ||
+       (argc == 5 && (strcmp(argv[1], "vs") || strlen(argv[4]) != 1 ||
+                     argv[4][0] < '1' || argv[4][0] > '3'))) {
+      fprintf(stderr, "usage: %s vs|ps input.spv output-prefix [rotation 1|2|3 for vs]\n", argv[0]);
       return 2;
    }
    const mesa_shader_stage stage = !strcmp(argv[1], "vs") ? MESA_SHADER_VERTEX : MESA_SHADER_FRAGMENT;
@@ -126,7 +129,16 @@ int main(int argc, char **argv)
    };
    const struct vk_device_shader_ops *ops = &nvk_device_shader_ops;
    struct spirv_to_nir_options options = ops->get_spirv_options(&physical->vk, stage, &robustness);
-   nir_shader *nir = vk_spirv_to_nir(&dev->vk, words, size, stage, "main", NULL, &options,
+   /* Use the same specialization mechanism as tgd3d's rotated Blt, with the
+    * original SPIR-V bytes. Rewriting/folding the source would not check it. */
+   const uint32_t rotation = argc == 5 ? argv[4][0] - '0' : 0;
+   const VkSpecializationMapEntry map = { .constantID = 0, .size = sizeof(rotation) };
+   const VkSpecializationInfo specialization = {
+      .mapEntryCount = 1, .pMapEntries = &map,
+      .dataSize = sizeof(rotation), .pData = &rotation,
+   };
+   nir_shader *nir = vk_spirv_to_nir(&dev->vk, words, size, stage, "main",
+      argc == 5 ? &specialization : NULL, &options,
       ops->get_nir_options(&physical->vk, stage, &robustness), false, NULL);
    CHECK(nir);
    vk_set_subgroup_size(nir, 32, 32, 32, vk_spirv_version(words, size), NULL, false, false);
@@ -154,6 +166,8 @@ int main(int argc, char **argv)
    CHECK(nvk->asm_str); fputs(nvk->asm_str, output); fclose(output);
    printf("PASS: SM%u %s compiler emitted %u bytes, %u instructions, %u GPRs; no GPU execution\n",
           nvk->info.sm, argv[1], nvk->code_size, nvk->info.num_instrs, nvk->info.num_gprs);
+   if (argc == 5)
+      printf("Specialization constant 0 = %u (DXGI %u degrees counter-clockwise)\n", rotation, rotation * 90);
    vk_shader_destroy(&dev->vk, shader, NULL);
    for (unsigned i = 0; i < 3; i++)
       vk_common_DestroyDescriptorSetLayout(nvk_device_to_handle(dev), sets[i], NULL);

@@ -293,7 +293,7 @@ __declspec(noinline) static void TestMmioPresent(TG_GPU_DEVICE *device)
     a.Flags.FlipWithNoWait=0;
     CHECK(TgGpuDdiPresent(&context,&a)==STATUS_SUCCESS);
     a.Flags.FlipWithNoWait=1;a.Flags.Rotate=1;
-    CHECK(TgGpuDdiPresent(&context,&a)==STATUS_SUCCESS);
+    CHECK(TgGpuDdiPresent(&context,&a)==STATUS_NOT_SUPPORTED);
     a.Flags.Rotate=0;a.Flags.Flip=0;
     CHECK(TgGpuDdiPresent(&context,&a)==STATUS_NOT_SUPPORTED);
     a.Flags.Flip=1;a.MultipassOffset=1;
@@ -320,6 +320,15 @@ __declspec(noinline) static void TestGdiPresent(TG_GPU_CONTEXT_ENGINE *e,TG_GPU_
     DXGKARG_CREATEALLOCATION create={.NumAllocations=2,.pAllocationInfo=info};
     e->Tables->Scanout=(TG_GPU_PRIVATE_MEMORY){(HANDLE)8,e->Tables->Memory.CpuAddress,
         {.QuadPart=0x98000000},TG_GPU_SCANOUT_SEGMENT_BYTES};
+    if(source_landscape || destination_landscape) {
+        /* GDI shadow/primary storage is portrait too. Unsupported rotated
+         * descriptors must fail before either allocation becomes owned. */
+        CHECK(TgGpuDdiCreateAllocation(e,&create)==STATUS_INVALID_PARAMETER);
+        CHECK(!info[0].hAllocation && !info[1].hAllocation && !e->AllocationBytes &&
+              PoolsInUse()==before && !device->OpenAllocations);
+        RtlZeroMemory(&e->Tables->Scanout,sizeof(e->Tables->Scanout));
+        return;
+    }
     CHECK(TgGpuDdiCreateAllocation(e,&create)==STATUS_SUCCESS);
     os_allocation[1]=info[0].hAllocation;os_allocation[2]=info[1].hAllocation;
     DXGK_OPENALLOCATIONINFO oi[2]={{.hAllocation=1},{.hAllocation=2}};
@@ -1199,6 +1208,8 @@ static __declspec(noinline) void TestAdapterLifecycle(const DXGKRNL_INTERFACE *c
     flip.pDmaBuffer=(PVOID)1;
     CHECK(d.DxgkDdiPresent((HANDLE)1,&flip)==STATUS_NOT_SUPPORTED);
     flip.pDmaBuffer=NULL;flip.Flags.Rotate=1;
+    CHECK(d.DxgkDdiPresent((HANDLE)1,&flip)==STATUS_NOT_SUPPORTED);
+    flip.Flags.Rotate=0;
     CHECK(d.DxgkDdiPresent((HANDLE)1,&flip)==STATUS_SUCCESS);
     DXGKARG_PATCH patch={0};
     CHECK(d.DxgkDdiPatch((HANDLE)1,&patch)==STATUS_SUCCESS);

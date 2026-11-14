@@ -8,8 +8,8 @@
 **最新状态：I轮54dc5597仍物理黑屏，已恢复竖屏。设备目前运行Ubuntu24.04.3、
 4.9.140-l4t，SSH为switch@192.168.124.5。用户随后明确要求取消DC列扫描旋转、改为
 tgd3d GPU预旋转；该实现已完成控制测试与ARM64构建，尚未安装或验证实屏。**
-应用中的持续目标仍为用户暂停状态；当前工作依据后续明确任务进行，没有自行重启
-Ubuntu或重新开展Windows实机试验。Noble显示、DVFS、充电和SC7配置已取回；APT源修复
+用户已重新启用持续目标，随后明确选择“先保持Ubuntu，继续本地开发”；因此没有自行
+重启Ubuntu或重新开展Windows实机试验。Noble显示、DVFS、充电和SC7配置已取回；APT源修复
 完成。Antigravity CLI Gemini4 Carbon High在独立工作树继续DVFS、Windows电源/充电托盘
 和5秒鼠标隐藏工具，禁止操作实机。以下组合B是用户指定的Windows恢复/开发基线，
 不是当前系统。GPU预旋转实现与构建状态见文末。
@@ -1016,3 +1016,30 @@ SYS已有本地签名，CAT尚需Windows原生Inf2Cat生成并验证；不能称
 的方向/边框/像素与显示锁存，保留约60Hz请求及实际节拍的区分。设备仍在Ubuntu，
 未重启、未写SD、未改变频率/充电或Windows启动方式；Gemini的DVFS/托盘候选不会
 混入本轮旋转组件验收。
+
+### J后续：Flip旋转契约及SM53编译检查
+
+实际调用链复核发现`TgGpuDdiPresent`仍承认`Flip | Rotate`，注释也仍声称panel执行
+旋转。DC变换已移除，这会把没有执行的工作报为成功。本次从no-DMA Flip允许标志中
+去掉Rotate；普通预旋转后的Flip/NoWait保持支持，需额外旋转的请求返回
+`STATUS_NOT_SUPPORTED`。没有重启、强开source、补CPU拷贝或关闭双向Fence。
+该遗漏属于新预旋转候选，不据此倒推旧版本黑屏/重启根因。
+
+完整冻结KMD的真实WDK context fixture已在x64/Wine执行，通过primary/shared/GDI
+allocation、句柄、512MiB、队列、资源退休及Flip标志检查；GDI旧横屏descriptor用例
+改为验证拒绝及零allocation泄漏，竖屏GDI拷贝和XRGB/ARGB转换用例继续执行。
+首次执行指出测试仍期待旧Rotate成功，更新对应预期后全部通过；没有将失败解释为
+GPU错误。ARM64 SYS及更新后的context测试程序已编译，尚未在Windows实机运行。
+
+复用`nvk-tgd3d-shader-check`，增加可选VS specialization constant0参数，直接读取
+候选内嵌SPIR-V原字节，走生产NVK→NIR→NAK SM53编译。90/180/270度VS分别产生
+192/256/192字节（17/22/17条指令），PS产生192字节（16条指令），均24 GPR，全部
+退出0。核对冻结ICD来源d3423d269f9e716eadc1237beadbfb6aa6049dbe与当前NVK shader、
+NAK、NIR、SPIR-V和descriptor-layout实现无差异。结果与机器码/汇编哈希在
+`gpu-prerotation/nak/`；编译通过不能证明硬件执行或已知像素正确。
+
+当前J候选SYS签名后SHA256更新为
+`346528eeb5e456069b8503eec3fb82ad4f9faaeb5620f0318365c1632cd16ef4`。
+原49d21…候选保存在`gpu-prerotation/superseded-01e5/`，不再用于测试。
+UMD75df9…与ICDdee3…不变；CAT仍待原生Windows生成及验证。用户指定保持Ubuntu，
+本轮不触发Windows安装/启动/显示测试；主目标继续active，本地代码与Gemini交付仍推进。
