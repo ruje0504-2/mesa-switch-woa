@@ -1129,3 +1129,35 @@ CPU1497600kHz/1120mV、GPU启动实测460800kHz/PMIC设定800000µV、RAM1600000
 
 下一步仍按单问题推进：真实GPU热缓存收益尚未测量；Query错误回调单独修复；J候选
 需与缓存版重新组合构建后再进行横屏测试，不能安装旧75df9…旋转UMD而无意撤掉缓存。
+
+## Query契约修正（2026-11-14，源码修正，尚未部署UMD）
+
+本轮针对上述Query审查结果修改生产实现，仍保持Switch当前0cd34833…缓存UMD。
+查阅微软[CreateQuery](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_createquery)、
+[QueryBegin](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_querybegin)、
+[QueryEnd](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_queryend)
+（均更新于2024-02-22）和
+[QueryGetData](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3d10umddi/nc-d3d10umddi-pfnd3d10ddi_querygetdata)
+（2022-08-23）。WDK头文件为10.0.26100.0；这些DDI契约适用于本分支当前D3D10接口，
+文档日期较早不表示可以把DXGI API错误码直接当作DDI回调错误码。
+
+- CreateQuery保留合法的E_OUTOFMEMORY返回，失败对象在SetErrorCb前析构，因为runtime
+  不会再调用DestroyQuery。未实现的查询或缺失后端能力仍失败，记录原始原因并进入
+  device-removed状态；不把它们伪装成内存不足或有效查询。本轮未增加stream-output
+  查询功能，也未提高Feature Level或能力声明。
+- Begin/End、跨render-pass查询池扩展失败只通知D3DDDIERR_DEVICEREMOVED，停止后续
+  录制和提交；旧pool在新pool创建成功前保持所有权，仍按真实完成值退休。
+  fullPools/activeQueries扩容失败同样不让C++异常越过该查询调用边界。
+- QueryGetData轮询Fence发现移除后立即返回，不再被WASSTILLDRAWING覆盖；失败时输出
+  缓冲区不变。固定上限的查询结果暂存改用栈数组，轮询不再为结果临时分配vector。
+- End未先Begin时按微软契约开启并立即结束新的空区间，不复用上次结果。
+  timestamp End经过的命令缓冲分配失败也改用合法的移除通知；原始Vulkan分配错误
+  留在已有trace事件中。这个分配路径也供Draw/Flush使用，二者同样只允许移除错误。
+
+x64/ARM64构建均通过且启用缓存和GPU bridge；x64/Wine及11:27:10 UTC的Switch
+ARM64 CPU控制均通过：初次创建OOM可恢复、未知失败/未实现类型/缺失能力明确失败、
+Begin重用/End时间戳/第129个pass扩展OOM、GetQueryPoolResults未就绪/错误、Fence
+读取失败、命令缓冲分配失败、失败后不再录制/提交及不提前退休。既有129-pass求和、
+DONOTWAIT、双向Fence和缓存控制继续通过。这些测试替换Vulkan/runtime调用，不执行
+GPU，不构成开窗、横屏、实屏稳定性或历史重启根因的验收。
+结果及可独立审查的构建产物在OUT `query-contract-fix/`。

@@ -182,8 +182,12 @@ static VkCommandBuffer ensure_cmd(Device *dev)
       info.commandPool = dev->cmdPool;
       info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
       info.commandBufferCount = 1;
-      if (dev->vk.AllocateCommandBuffers(dev->vkdev, &info, &cmd) != VK_SUCCESS) {
-         TG_ERROR(dev, E_OUTOFMEMORY);
+      VkResult result = dev->vk.AllocateCommandBuffers(dev->vkdev, &info, &cmd);
+      if (result != VK_SUCCESS) {
+         /* QueryEnd (timestamps), Draw and Flush cannot report OOM. The
+          * missing command cannot be skipped while keeping the device valid. */
+         trace_error(resource_result(result), __FILE__, __LINE__);
+         TG_ERROR(dev, D3DDDIERR_DEVICEREMOVED);
          return VK_NULL_HANDLE;
       }
    }

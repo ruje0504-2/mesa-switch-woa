@@ -27,7 +27,25 @@ static const VkQueryPipelineStatisticFlags statistics =
    VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
    VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT;
 
-static bool pool_create(Device *dev, Query *q)
+/* Recording/GetData cannot report allocation errors to the runtime. Once a
+ * query has lost part of its result, the device must stop; neither retrying
+ * Begin nor returning an incomplete sum can repair that command stream. */
+static void query_error(Query *q, HRESULT cause)
+{
+   q->error = cause;
+   trace_error(cause, __FILE__, __LINE__);
+   TG_ERROR(q->dev, D3DDDIERR_DEVICEREMOVED);
+}
+
+static bool query_usable(Query *q)
+{
+   if (SUCCEEDED(q->dev->lost) && SUCCEEDED(q->error))
+      return true;
+   TG_ERROR(q->dev, D3DDDIERR_DEVICEREMOVED);
+   return false;
+}
+
+static HRESULT pool_create(Device *dev, Query *q)
 {
    VkQueryPoolCreateInfo info = {VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
    if (q->type == D3D10DDI_QUERY_TIMESTAMP) {
@@ -41,26 +59,34 @@ static bool pool_create(Device *dev, Query *q)
       info.queryType = VK_QUERY_TYPE_OCCLUSION;
       info.queryCount = QUERY_SLOTS;
    }
-   if (dev->vk.CreateQueryPool(dev->vkdev, &info, nullptr, &q->pool) != VK_SUCCESS)
-      return false;
-   dev->vk.ResetQueryPool(dev->vkdev, q->pool, 0, info.queryCount);
-   return true;
+   VkQueryPool pool = VK_NULL_HANDLE;
+   VkResult result = dev->vk.CreateQueryPool(dev->vkdev, &info, nullptr, &pool);
+   if (result != VK_SUCCESS)
+      return resource_result(result);
+   dev->vk.ResetQueryPool(dev->vkdev, pool, 0, info.queryCount);
+   q->pool = pool;
+   return S_OK;
 }
 
 void query_pass_begin(Device *dev, VkCommandBuffer cmd)
 {
    for (Query *q : dev->activeQueries) {
-      if (FAILED(q->error))
-         continue;
+      if (!query_usable(q))
+         return;
       if (q->used == QUERY_SLOTS) {
          VkQueryPool previous = q->pool;
-         if (!pool_create(dev, q)) {
-            q->pool = previous;
-            q->error = E_OUTOFMEMORY;
-            TG_ERROR(dev, q->error);
-            continue;
+         try {
+            q->fullPools.push_back(previous);
+         } catch (const std::bad_alloc &) {
+            query_error(q, E_OUTOFMEMORY);
+            return;
          }
-         q->fullPools.push_back(previous);
+         HRESULT hr = pool_create(dev, q);
+         if (FAILED(hr)) {
+            q->fullPools.pop_back(); /* q->pool still owns the previous pool */
+            query_error(q, hr);
+            return;
+         }
          q->used = 0;
       }
       const VkQueryControlFlags flags = q->type == D3D10DDI_QUERY_OCCLUSION &&
@@ -89,6 +115,10 @@ static void APIENTRY CreateQuery(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_CRE
                                  D3D10DDI_HQUERY handle, D3D10DDI_HRTQUERY)
 {
    Device *dev = D(hDevice);
+   if (FAILED(dev->lost)) {
+      TG_ERROR(dev, D3DDDIERR_DEVICEREMOVED);
+      return;
+   }
    Query *q = new (handle.pDrvPrivate) Query();
    q->dev = dev;
    q->type = args->Query;
@@ -106,8 +136,8 @@ static void APIENTRY CreateQuery(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_CRE
    case D3D10DDI_QUERY_TIMESTAMP:
       if (!dev->caps->timestampValidBits)
          hr = E_NOTIMPL;
-      else if (!pool_create(dev, q))
-         hr = E_OUTOFMEMORY;
+      else
+         hr = pool_create(dev, q);
       break;
    case D3D10DDI_QUERY_PIPELINESTATS:
       if (!dev->caps->pipelineStatistics) {
@@ -117,8 +147,7 @@ static void APIENTRY CreateQuery(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_CRE
       /* fallthrough */
    case D3D10DDI_QUERY_OCCLUSION:
    case D3D10DDI_QUERY_OCCLUSIONPREDICATE:
-      if (!pool_create(dev, q))
-         hr = E_OUTOFMEMORY;
+      hr = pool_create(dev, q);
       break;
    default:
       /* Stream-output statistics and performance counters are not offered. */
@@ -126,8 +155,12 @@ static void APIENTRY CreateQuery(D3D10DDI_HDEVICE hDevice, const D3D10DDIARG_CRE
       break;
    }
    if (FAILED(hr)) {
-      q->error = hr;
-      TG_ERROR(dev, hr);
+      /* Runtime invalidates a failed handle and never calls DestroyQuery.
+       * Unsupported query/capability paths remain failures, not fake data
+       * or a fictitious OOM. Only allocation failure is recoverable here. */
+      q->~Query();
+      trace_error(hr, __FILE__, __LINE__);
+      TG_ERROR(dev, hr == E_OUTOFMEMORY ? hr : D3DDDIERR_DEVICEREMOVED);
    }
 }
 
@@ -157,6 +190,8 @@ static void APIENTRY QueryBegin(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY handle
 {
    Device *dev = D(hDevice);
    Query *q = Q(handle);
+   if (!query_usable(q))
+      return;
    if (!pass_query(q)) {
       q->state = QueryState::Active;
       return;
@@ -165,40 +200,53 @@ static void APIENTRY QueryBegin(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY handle
    for (VkQueryPool pool : q->fullPools)
       defer(dev, DeferredType::QueryPool, (uint64_t)pool, dev->lastSeq());
    q->fullPools.clear();
-   q->error = S_OK;
    if (q->used) {
       /* Earlier slots may still be written by queued commands. */
-      defer(dev, DeferredType::QueryPool, (uint64_t)q->pool, dev->lastSeq());
-      q->pool = VK_NULL_HANDLE;
-      if (!pool_create(dev, q)) {
-         q->error = E_OUTOFMEMORY;
-         TG_ERROR(dev, E_OUTOFMEMORY);
+      VkQueryPool previous = q->pool;
+      HRESULT hr = pool_create(dev, q);
+      if (FAILED(hr)) {
+         query_error(q, hr);
          return;
       }
+      defer(dev, DeferredType::QueryPool, (uint64_t)previous, dev->lastSeq());
    }
    q->used = 0;
    q->state = QueryState::Active;
    end_rendering(dev);            /* the next pass opens a slot for this query */
-   dev->activeQueries.push_back(q);
+   try {
+      dev->activeQueries.push_back(q);
+   } catch (const std::bad_alloc &) {
+      query_error(q, E_OUTOFMEMORY);
+   }
 }
 
 static void APIENTRY QueryEnd(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY handle)
 {
    Device *dev = D(hDevice);
    Query *q = Q(handle);
+   if (!query_usable(q))
+      return;
+   /* End without Begin is a new empty query, not the previous result. */
+   if (pass_query(q) && q->state != QueryState::Active) {
+      QueryBegin(hDevice, handle);
+      if (FAILED(dev->lost))
+         return;
+   }
    /* Deferred clears precede this event/timestamp in the D3D command stream. */
    flush_pending_clears(dev, nullptr);
+   if (FAILED(dev->lost))
+      return;
    if (pass_query(q)) {
       query_deactivate(dev, q);
    } else if (q->type == D3D10DDI_QUERY_TIMESTAMP && q->pool) {
       if (q->seq) {
-         defer(dev, DeferredType::QueryPool, (uint64_t)q->pool, dev->lastSeq());
-         q->pool = VK_NULL_HANDLE;
-         if (!pool_create(dev, q)) {
-            q->error = E_OUTOFMEMORY;
-            TG_ERROR(dev, E_OUTOFMEMORY);
+         VkQueryPool previous = q->pool;
+         HRESULT hr = pool_create(dev, q);
+         if (FAILED(hr)) {
+            query_error(q, hr);
             return;
          }
+         defer(dev, DeferredType::QueryPool, (uint64_t)previous, dev->lastSeq());
       }
       VkCommandBuffer cmd = cmd_begin(dev);
       if (!cmd)
@@ -215,15 +263,19 @@ static void APIENTRY QueryGetData(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY hand
 {
    Device *dev = D(hDevice);
    Query *q = Q(handle);
-   if (FAILED(dev->lost) || FAILED(q->error)) {
-      TG_ERROR(dev, FAILED(dev->lost) ? dev->lost : q->error);
+   if (!query_usable(q))
       return;
-   }
    if (q->seq > dev->submitted && !(flags & D3D10_DDI_GET_DATA_DO_NOT_FLUSH)) {
       HRESULT hr = flush(dev, false);
-      if (FAILED(hr)) { TG_ERROR(dev, hr); return; }
+      if (FAILED(dev->lost))
+         return;
+      if (FAILED(hr)) { query_error(q, hr); return; }
    }
-   if (q->state != QueryState::Ended || !sequence_done(dev, q->seq)) {
+   const bool done = q->state == QueryState::Ended && sequence_done(dev, q->seq);
+   /* completed() can discover removal. Do not overwrite it with pending. */
+   if (FAILED(dev->lost))
+      return;
+   if (!done) {
       /* Not an error: the runtime turns this into S_FALSE for the caller. */
       if (dev->um.pfnSetErrorCb)
          dev->um.pfnSetErrorCb(dev->hRTCoreLayer, DXGI_DDI_ERR_WASSTILLDRAWING);
@@ -260,15 +312,16 @@ static void APIENTRY QueryGetData(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY hand
       uint64_t total = 0;
       for (size_t p = 0; p <= q->fullPools.size(); p++) {
          const bool full = p < q->fullPools.size();
-         std::vector<uint64_t> slots(full ? QUERY_SLOTS : q->used);
-         if (slots.empty()) continue;
+         const uint32_t count = full ? QUERY_SLOTS : q->used;
+         if (!count) continue;
+         uint64_t slots[QUERY_SLOTS];
          VkResult result = dev->vk.GetQueryPoolResults(dev->vkdev, full ? q->fullPools[p] : q->pool,
-            0, (uint32_t)slots.size(), slots.size() * 8, slots.data(), 8, VK_QUERY_RESULT_64_BIT);
+            0, count, count * sizeof(slots[0]), slots, sizeof(slots[0]), VK_QUERY_RESULT_64_BIT);
          if (result != VK_SUCCESS) {
             TG_ERROR(dev, result == VK_NOT_READY ? DXGI_DDI_ERR_WASSTILLDRAWING : DXGI_ERROR_DEVICE_REMOVED);
             return;
          }
-         for (uint64_t v : slots) total += v;
+         for (uint32_t i = 0; i < count; i++) total += slots[i];
       }
       if (q->type == D3D10DDI_QUERY_OCCLUSION) {
          if (size >= sizeof(total))
@@ -284,9 +337,9 @@ static void APIENTRY QueryGetData(D3D10DDI_HDEVICE hDevice, D3D10DDI_HQUERY hand
          const bool full = p < q->fullPools.size();
          const uint32_t count = full ? QUERY_SLOTS : q->used;
          if (!count) continue;
-         std::vector<uint64_t> slots((size_t)count * 8);
+         uint64_t slots[QUERY_SLOTS * 8];
          VkResult result = dev->vk.GetQueryPoolResults(dev->vkdev, full ? q->fullPools[p] : q->pool,
-            0, count, slots.size() * 8, slots.data(), 64, VK_QUERY_RESULT_64_BIT);
+            0, count, count * 64, slots, 64, VK_QUERY_RESULT_64_BIT);
          if (result != VK_SUCCESS) {
             TG_ERROR(dev, result == VK_NOT_READY ? DXGI_DDI_ERR_WASSTILLDRAWING : DXGI_ERROR_DEVICE_REMOVED);
             return;

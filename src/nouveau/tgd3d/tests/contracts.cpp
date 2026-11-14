@@ -364,9 +364,158 @@ static void query_contract()
    completedValue = 1; lastError = S_OK;
    table.pfnQueryGetData({&dev}, {storage}, &value, sizeof(value), 0);
    CHECK(lastError == S_OK && value == 129);
+   /* A second End without Begin describes a fresh empty interval. */
+   table.pfnQueryEnd({&dev}, {storage});
+   value = UINT64_MAX;
+   table.pfnQueryGetData({&dev}, {storage}, &value, sizeof(value), 0);
+   CHECK(lastError == S_OK && value == 0);
    table.pfnDestroyQuery({&dev}, {storage}); retire(&dev);
    CHECK(dev.deferred.empty());
    std::puts("PASS: nonblocking query polling; all 129 render passes counted across pool rollover");
+}
+
+static unsigned queryPoolCalls, queryFailPoolCall, queryResultCalls, queryBeginCalls, timestampCalls;
+static VkResult queryPoolFailure, queryReadResult;
+
+static void query_backend(Device &dev)
+{
+   queryPoolCalls = queryFailPoolCall = queryResultCalls = queryBeginCalls = timestampCalls = 0;
+   queryPoolFailure = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+   queryReadResult = VK_NOT_READY;
+   dev.vk.CreateQueryPool = [](VkDevice, const VkQueryPoolCreateInfo *,
+                               const VkAllocationCallbacks *, VkQueryPool *out) {
+      ++queryPoolCalls;
+      if (queryPoolCalls == queryFailPoolCall) {
+         *out = VK_NULL_HANDLE;
+         return queryPoolFailure;
+      }
+      *out = handle<VkQueryPool>(queryPoolCalls);
+      return VK_SUCCESS;
+   };
+   dev.vk.CmdBeginQuery = [](VkCommandBuffer, VkQueryPool pool, uint32_t slot, VkQueryControlFlags) {
+      CHECK(pool && slot < QUERY_SLOTS); ++queryBeginCalls;
+   };
+   dev.vk.CmdWriteTimestamp = [](VkCommandBuffer, VkPipelineStageFlagBits, VkQueryPool pool, uint32_t) {
+      CHECK(pool); ++timestampCalls;
+   };
+   dev.vk.GetQueryPoolResults = [](VkDevice, VkQueryPool, uint32_t, uint32_t,
+                                   size_t, void *, VkDeviceSize, VkQueryResultFlags) {
+      ++queryResultCalls; return queryReadResult;
+   };
+}
+
+static void query_failure_contract()
+{
+   D3D10DDI_DEVICEFUNCS table = {}; query_fill_table(&table);
+   D3D10DDIARG_CREATEQUERY desc = {}; desc.Query = D3D10DDI_QUERY_OCCLUSION;
+   alignas(Query) BYTE storage[sizeof(Query)];
+   for (VkResult failure : {VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_OUT_OF_DEVICE_MEMORY, VK_ERROR_UNKNOWN}) {
+      reset(); Adapter adapter; Device dev = make_device(&adapter); query_backend(dev);
+      queryFailPoolCall = 1; queryPoolFailure = failure;
+      table.pfnCreateQuery({&dev}, &desc, {storage}, {});
+      const bool oom = failure != VK_ERROR_UNKNOWN;
+      CHECK(lastError == (oom ? E_OUTOFMEMORY : D3DDDIERR_DEVICEREMOVED));
+      CHECK(FAILED(dev.lost) == !oom && queryPoolCalls == 1 && dev.deferred.empty());
+      /* The failed handle is invalid: runtime does not call DestroyQuery. */
+      if (oom) {
+         lastError = S_OK;
+         table.pfnCreateQuery({&dev}, &desc, {storage}, {});
+         CHECK(lastError == S_OK && queryPoolCalls == 2);
+         table.pfnDestroyQuery({&dev}, {storage}); retire(&dev);
+      }
+   }
+   for (D3D10DDI_QUERY type : {D3D10DDI_QUERY_STREAMOUTPUTSTATS, D3D10DDI_QUERY_TIMESTAMP,
+                              D3D10DDI_QUERY_PIPELINESTATS}) {
+      reset(); Adapter adapter; Device dev = make_device(&adapter); query_backend(dev);
+      desc.Query = type;
+      table.pfnCreateQuery({&dev}, &desc, {storage}, {});
+      CHECK(lastError == D3DDDIERR_DEVICEREMOVED && FAILED(dev.lost) && !queryPoolCalls);
+   }
+   /* Pool replacement during Begin, timestamp End, and pass rollover must
+    * keep old GPU ownership while stopping the failed command stream. */
+   for (unsigned mode = 0; mode < 3; mode++) {
+      reset(); Adapter adapter; Device dev = make_device(&adapter); query_backend(dev);
+      adapter.vk.caps.timestampValidBits = 64;
+      desc.Query = mode == 1 ? D3D10DDI_QUERY_TIMESTAMP : D3D10DDI_QUERY_OCCLUSION;
+      table.pfnCreateQuery({&dev}, &desc, {storage}, {});
+      CHECK(lastError == S_OK);
+      dev.um.pfnSetErrorCb = [](D3D10DDI_HRTCORELAYER, HRESULT hr) {
+         CHECK(hr == D3DDDIERR_DEVICEREMOVED); ++setErrorCalls; lastError = hr;
+      };
+      queryFailPoolCall = 2;
+      if (mode == 1) {
+         table.pfnQueryEnd({&dev}, {storage});
+         table.pfnQueryEnd({&dev}, {storage});
+      } else {
+         table.pfnQueryBegin({&dev}, {storage});
+         VkCommandBuffer cmd = cmd_draw(&dev);
+         const unsigned count = mode == 2 ? QUERY_SLOTS : 1;
+         for (unsigned i = 0; i < count; i++) { query_pass_begin(&dev, cmd); query_pass_end(&dev, cmd); }
+         if (mode == 2) query_pass_begin(&dev, cmd);
+         else {
+            table.pfnQueryEnd({&dev}, {storage});
+            table.pfnQueryBegin({&dev}, {storage});
+         }
+      }
+      CHECK(lastError == D3DDDIERR_DEVICEREMOVED && FAILED(dev.lost));
+      Query *q = reinterpret_cast<Query *>(storage);
+      CHECK(q->pool == handle<VkQueryPool>(1) && q->fullPools.empty());
+      const unsigned begins = queryBeginCalls, timestamps = timestampCalls;
+      table.pfnQueryBegin({&dev}, {storage});
+      table.pfnQueryEnd({&dev}, {storage});
+      query_pass_begin(&dev, dev.cmd);
+      uint64_t value = UINT64_MAX;
+      table.pfnQueryGetData({&dev}, {storage}, &value, sizeof(value), 0);
+      CHECK(value == UINT64_MAX && !queryResultCalls && queryPoolCalls == 2);
+      CHECK(queryBeginCalls == begins && timestampCalls == timestamps);
+      CHECK(FAILED(flush(&dev, false)) && !submissions && !cpuWaits && !cpuSignals);
+      table.pfnDestroyQuery({&dev}, {storage}); retire(&dev);
+      CHECK(!dev.deferred.empty()); /* failed device does not fake completion */
+      retire(&dev, true); /* fixture teardown: no GPU was ever executed */
+   }
+   for (VkResult result : {VK_NOT_READY, VK_ERROR_OUT_OF_HOST_MEMORY, VK_ERROR_DEVICE_LOST}) {
+      reset(); Adapter adapter; Device dev = make_device(&adapter); query_backend(dev);
+      desc.Query = D3D10DDI_QUERY_OCCLUSION;
+      table.pfnCreateQuery({&dev}, &desc, {storage}, {});
+      table.pfnQueryBegin({&dev}, {storage});
+      VkCommandBuffer cmd = cmd_draw(&dev);
+      query_pass_begin(&dev, cmd); query_pass_end(&dev, cmd);
+      table.pfnQueryEnd({&dev}, {storage}); CHECK(SUCCEEDED(flush(&dev, false)));
+      completedValue = dev.submitted; queryReadResult = result;
+      uint64_t value = UINT64_MAX;
+      table.pfnQueryGetData({&dev}, {storage}, &value, sizeof(value), 0);
+      CHECK(value == UINT64_MAX && queryResultCalls == 1 && !cpuWaits);
+      CHECK(lastError == (result == VK_NOT_READY ? DXGI_DDI_ERR_WASSTILLDRAWING : D3DDDIERR_DEVICEREMOVED));
+      CHECK(FAILED(dev.lost) == (result != VK_NOT_READY));
+      table.pfnDestroyQuery({&dev}, {storage}); retire(&dev, true);
+   }
+   /* Completion failure must not be overwritten by WASSTILLDRAWING. */
+   reset(); Adapter adapter; Device dev = make_device(&adapter); query_backend(dev);
+   desc.Query = D3D10DDI_QUERY_EVENT;
+   table.pfnCreateQuery({&dev}, &desc, {storage}, {});
+   CHECK(cmd_draw(&dev)); table.pfnQueryEnd({&dev}, {storage});
+   CHECK(SUCCEEDED(flush(&dev, false)));
+   dev.vk.GetSemaphoreCounterValue = [](VkDevice, VkSemaphore, uint64_t *) { return VK_ERROR_DEVICE_LOST; };
+   uint64_t value = UINT64_MAX;
+   table.pfnQueryGetData({&dev}, {storage}, &value, sizeof(value), 0);
+   CHECK(lastError == D3DDDIERR_DEVICEREMOVED && value == UINT64_MAX && !queryResultCalls);
+   table.pfnDestroyQuery({&dev}, {storage}); retire(&dev, true);
+
+   /* Timestamp recording also reaches the command-buffer allocator. */
+   reset(); Adapter timestampAdapter; Device timestampDev = make_device(&timestampAdapter);
+   query_backend(timestampDev); timestampAdapter.vk.caps.timestampValidBits = 64;
+   desc.Query = D3D10DDI_QUERY_TIMESTAMP;
+   table.pfnCreateQuery({&timestampDev}, &desc, {storage}, {});
+   timestampDev.um.pfnSetErrorCb = [](D3D10DDI_HRTCORELAYER, HRESULT hr) {
+      CHECK(hr == D3DDDIERR_DEVICEREMOVED); lastError = hr;
+   };
+   timestampDev.vk.AllocateCommandBuffers = [](VkDevice, const VkCommandBufferAllocateInfo *, VkCommandBuffer *) {
+      return VK_ERROR_OUT_OF_HOST_MEMORY;
+   };
+   table.pfnQueryEnd({&timestampDev}, {storage});
+   CHECK(lastError == D3DDDIERR_DEVICEREMOVED && !timestampCalls && FAILED(timestampDev.lost));
+   table.pfnDestroyQuery({&timestampDev}, {storage}); retire(&timestampDev, true);
+   std::puts("PASS: query failures obey DDI error classes, preserve output/ownership and stop recording; End without Begin resets results");
 }
 
 static void shader_contract(const BYTE *dxbc, bool vertex, const char *outputPath,
@@ -665,6 +814,7 @@ int main(int argc, char **argv)
    device_error_contract();
    rotated_views(); descriptor_contract();
    query_contract();
+   query_failure_contract();
    shader_contract(g_VS, true, "tgd3d-vs.spv"); shader_contract(g_PS, false, "tgd3d-ps.spv");
    sampled_shader_contract(
       "Texture2D<float4> tex:register(t0); SamplerState samp:register(s0);"
